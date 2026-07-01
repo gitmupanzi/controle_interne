@@ -1,861 +1,514 @@
-# Projet d’analyse et de suivi du crédit
+# Analyste Credit
 
-## 1. Présentation du projet
+Application Streamlit de standardisation et d'analyse credit, orientee import Excel/CSV et restitution sur une meme plateforme.
 
-Ce projet vise à mettre en place un système structuré d’analyse, de suivi et de reporting des demandes de crédit au sein de l’organisation.
+Le projet permet de :
 
-Il permet d’appuyer la prise de décision sur l’octroi ou le refus de crédit, tout en améliorant le suivi des clients, la gestion des risques et la qualité des données utilisées dans le processus de crédit.
+- charger une base credit depuis un fichier televerse ou un fichier deja present dans `line_list/`
+- standardiser automatiquement une partie des colonnes et de certaines valeurs metier
+- produire une synthese standard avec KPI, graphiques, repartition par sexe, distribution par tranche d'age et pyramide age-sexe
+- regrouper les blocs operationnels dans un onglet `Surveillance`
+- exposer un onglet pedagogique sur les notions importantes du metier d'analyste credit
+- analyser le portefeuille, le risque, la qualite des donnees et exporter un pack de restitution
 
-L’objectif principal est de fournir aux équipes crédit, commerciales, recouvrement et direction des informations fiables, exploitables et actualisées pour réduire les risques financiers et améliorer la performance du portefeuille de crédit.
+## Presentation du projet
 
----
+Ce projet vise a mettre en place un systeme structure d'analyse, de suivi et de reporting des demandes de credit au sein de l'organisation.
 
-## 2. Contexte métier
+Il appuie la prise de decision sur l'octroi ou le refus de credit, tout en renforcant :
 
-Dans une institution financière ou une microfinance, l’analyse du crédit joue un rôle central dans la maîtrise des risques.
+- le suivi des clients
+- la gestion des risques
+- la qualite des donnees utilisees dans le processus credit
+- la production de tableaux de bord exploitables par les equipes
 
-Chaque demande de crédit doit être évaluée à partir des informations personnelles, financières et comportementales du client.
+L'objectif principal est de fournir aux equipes credit, commerciales, recouvrement et direction des informations fiables, exploitables et actualisees pour reduire les risques financiers et ameliorer la performance du portefeuille de credit.
 
-L’analyste crédit intervient pour :
+## Contexte metier
 
-- évaluer la solvabilité des clients ;
-- analyser les risques liés à chaque demande ;
-- formuler des recommandations d’octroi ou de refus ;
-- suivre les crédits approuvés ;
-- produire des rapports pour faciliter la prise de décision ;
-- contribuer à la qualité et à la traçabilité des dossiers clients.
+Dans une institution financiere ou une microfinance, l'analyse du credit joue un role central dans la maitrise des risques.
 
----
+Chaque demande de credit doit etre evaluee a partir :
 
-## 3. Objectifs du projet
+- des informations personnelles du client
+- des informations financieres
+- de l'historique de paiement
+- des garanties disponibles
+- du comportement de remboursement observe
 
-Les objectifs du projet sont les suivants :
+L'analyste credit intervient pour :
 
-- centraliser les informations liées aux demandes de crédit ;
-- améliorer l’analyse des dossiers clients ;
-- suivre les crédits accordés et les remboursements ;
-- détecter rapidement les retards ou risques de défaut ;
-- produire des tableaux de bord de suivi du portefeuille crédit ;
-- sécuriser et documenter les données liées aux clients ;
-- faciliter la collaboration entre les équipes crédit, recouvrement, relation client et direction.
+- evaluer la solvabilite des clients
+- analyser les risques lies a chaque demande
+- formuler des recommandations d'octroi ou de refus
+- suivre les credits approuves
+- produire des rapports pour faciliter la prise de decision
+- contribuer a la qualite et a la tracabilite des dossiers clients
 
----
+## Objectifs du projet
 
-## 4. Rôle de l’analyste crédit
+Les objectifs couverts par l'application sont les suivants :
 
-L’analyste crédit est responsable de l’évaluation de la capacité de remboursement des clients et de l’analyse des risques financiers associés aux demandes de crédit.
+- centraliser les informations liees aux demandes de credit
+- ameliorer l'analyse des dossiers clients
+- suivre les credits accordes et les remboursements
+- detecter rapidement les retards ou risques de defaut
+- produire des tableaux de bord de suivi du portefeuille credit
+- securiser et documenter les donnees liees aux clients
+- faciliter la collaboration entre les equipes credit, recouvrement, relation client et direction
 
-Son rôle global est d’aider l’organisation à accorder des crédits de manière responsable, tout en limitant les pertes financières et en soutenant la croissance de l’activité de crédit.
+## Demarrage rapide
 
----
+### Environnement utilise
 
-## 5. Responsabilités principales
-
-### 5.1 Évaluation des demandes de crédit
-
-L’analyste crédit analyse les dossiers de demande de crédit afin de déterminer si le client présente une capacité suffisante de remboursement.
-
-Les tâches principales sont :
-
-- analyser les informations personnelles et financières du client ;
-- vérifier les revenus, charges, activités et garanties éventuelles ;
-- examiner l’historique de paiement du client ;
-- contrôler la cohérence des documents fournis ;
-- identifier les informations manquantes ou incohérentes ;
-- évaluer la capacité de remboursement.
-
----
-
-### 5.2 Analyse des risques
-
-L’analyste crédit identifie les risques associés à chaque demande afin de limiter les défauts de paiement.
-
-Les tâches principales sont :
-
-- identifier les risques de non-remboursement ;
-- analyser le niveau d’endettement du client ;
-- utiliser des critères de scoring ou de notation ;
-- appliquer les politiques internes de crédit ;
-- proposer des mesures d’atténuation du risque ;
-- recommander des garanties ou conditions spécifiques si nécessaire.
-
----
-
-### 5.3 Recommandation de décision
-
-Après analyse du dossier, l’analyste crédit formule une recommandation claire et documentée.
-
-Les décisions possibles peuvent être :
-
-- crédit recommandé ;
-- crédit recommandé avec conditions ;
-- crédit à revoir ;
-- crédit non recommandé.
-
-La recommandation doit être basée sur des éléments objectifs, notamment :
-
-- la capacité de remboursement ;
-- le niveau de risque ;
-- l’historique du client ;
-- la conformité du dossier ;
-- la rentabilité potentielle ;
-- les politiques internes de crédit.
-
----
-
-### 5.4 Suivi du portefeuille crédit
-
-L’analyste crédit assure également le suivi des crédits déjà approuvés.
-
-Les tâches principales sont :
-
-- suivre les échéances de remboursement ;
-- identifier les retards de paiement ;
-- surveiller les comptes à risque ;
-- mettre à jour les informations clients ;
-- collaborer avec l’équipe de recouvrement ;
-- suivre l’évolution du portefeuille crédit ;
-- produire des alertes sur les dossiers sensibles.
-
----
-
-### 5.5 Reporting et documentation
-
-L’analyste crédit produit des rapports réguliers pour appuyer les décisions de gestion.
-
-Les livrables attendus sont :
-
-- rapports d’analyse de crédit ;
-- tableaux de bord de suivi ;
-- rapports sur les retards de paiement ;
-- synthèses sur le portefeuille crédit ;
-- statistiques sur les demandes approuvées et rejetées ;
-- rapports de performance par agence, produit ou période ;
-- documentation des décisions de crédit.
-
----
-
-## 6. Processus général d’analyse crédit
-
-Le processus de traitement d’un dossier de crédit suit les étapes suivantes :
-
-1. Réception de la demande de crédit.
-2. Collecte des informations du client.
-3. Vérification des documents fournis.
-4. Analyse financière et comportementale.
-5. Évaluation du risque.
-6. Calcul de la capacité de remboursement.
-7. Formulation d’une recommandation.
-8. Validation par les responsables concernés.
-9. Suivi du crédit après approbation.
-10. Reporting et mise à jour du dossier client.
-
----
-
-## 7. Données utilisées
-
-Les données exploitées dans le cadre du projet peuvent inclure :
-
-- identité du client ;
-- activité professionnelle ou commerciale ;
-- revenus déclarés ;
-- charges mensuelles ;
-- montant demandé ;
-- durée du crédit ;
-- taux d’intérêt ;
-- garanties proposées ;
-- historique des crédits ;
-- historique des paiements ;
-- retards de remboursement ;
-- statut du dossier ;
-- décisions de crédit ;
-- commentaires des analystes.
-
----
-
-## 8. Indicateurs de performance
-
-Les principaux indicateurs de suivi sont :
-
-- nombre de demandes de crédit reçues ;
-- nombre de crédits approuvés ;
-- nombre de crédits refusés ;
-- taux d’approbation ;
-- montant total demandé ;
-- montant total accordé ;
-- taux de remboursement ;
-- taux de retard ;
-- nombre de clients en défaut ;
-- portefeuille à risque ;
-- délai moyen de traitement des dossiers ;
-- performance par agent, agence ou produit ;
-- évolution mensuelle du portefeuille crédit.
-
----
-
-## 9. Critères de réussite du poste
-
-Le poste est considéré comme réussi lorsque :
-
-- les dossiers sont analysés avec rigueur et objectivité ;
-- les décisions sont bien documentées ;
-- les risques sont identifiés avant l’octroi du crédit ;
-- les retards de paiement sont détectés rapidement ;
-- les rapports sont produits dans les délais ;
-- les données clients sont fiables et bien organisées ;
-- les équipes disposent d’indicateurs clairs pour prendre des décisions ;
-- le portefeuille crédit est suivi de manière régulière ;
-- les règles internes de crédit sont respectées ;
-- la confidentialité des informations clients est garantie.
-
----
-
-## 10. Outils utilisés
-
-Les outils pouvant être utilisés dans le cadre du projet sont :
-
-- Excel pour le suivi, le nettoyage et l’analyse initiale des données ;
-- Power BI pour la visualisation et les tableaux de bord ;
-- Python pour l’automatisation, le nettoyage et l’analyse avancée ;
-- Zoho CRM ou Zoho CRM Plus pour la gestion des clients et des dossiers ;
-- système interne de gestion de crédit ;
-- base de données relationnelle selon les besoins du projet.
-
----
-
-## 11. Automatisations possibles
-
-Le projet peut évoluer vers plusieurs automatisations :
-
-- génération automatique des rapports de crédit ;
-- calcul automatique de la capacité de remboursement ;
-- scoring automatique des demandes ;
-- détection automatique des dossiers à risque ;
-- alertes sur les retards de paiement ;
-- mise à jour automatique des tableaux de bord ;
-- contrôle automatique des données manquantes ;
-- suivi automatisé des échéances de remboursement.
-
----
-
-## 12. Sécurité et confidentialité
-
-Les données manipulées dans ce projet sont sensibles.  
-Elles doivent être traitées avec confidentialité et conformément aux règles internes de l’organisation.
-
-Les bonnes pratiques à respecter sont :
-
-- limiter l’accès aux données aux personnes autorisées ;
-- éviter le partage non sécurisé des fichiers clients ;
-- protéger les informations personnelles et financières ;
-- documenter les modifications importantes ;
-- conserver une traçabilité des décisions ;
-- respecter les procédures internes de sécurité.
-
----
-
-## 13. Résultats attendus
-
-À terme, le projet doit permettre :
-
-- une meilleure qualité d’analyse des demandes de crédit ;
-- une réduction des risques de défaut ;
-- un meilleur suivi des remboursements ;
-- une amélioration de la prise de décision ;
-- une meilleure visibilité sur le portefeuille crédit ;
-- une collaboration plus efficace entre les services ;
-- une documentation claire et exploitable des dossiers clients.
-
----
-
-## 14. Structure technique du projet
-
-Le projet est organisé de manière à faciliter la gestion des données, l’automatisation des traitements, la production des rapports et le suivi des indicateurs de crédit.
-
-```bash
-projet-analyse-credit/
-│
-├── donnees/
-│   ├── brutes/
-│   ├── nettoyees/
-│   ├── traitees/
-│   └── exports/
-│
-├── scripts/
-│   ├── 01_importer_donnees.py
-│   ├── 02_nettoyer_donnees.py
-│   ├── 03_analyser_credit.py
-│   ├── 04_generer_indicateurs.py
-│   └── 05_exporter_rapports.py
-│
-├── carnets/
-│   └── exploration_credit.ipynb
-│
-├── tableaux_de_bord/
-│   ├── powerbi/
-│   └── excel/
-│
-├── rapports/
-│   ├── journaliers/
-│   ├── hebdomadaires/
-│   └── mensuels/
-│
-├── documentation/
-│   ├── dictionnaire_donnees.md
-│   ├── regles_metier.md
-│   └── processus_credit.md
-│
-├── configuration/
-│   └── config.yaml
-│
-├── journaux/
-│   └── pipeline.log
-│
-├── requirements.txt
-├── README.md
-└── .gitignore
-```
-
----
-
-## 15. Description des dossiers
-
-### `donnees/brutes/`
-
-Ce dossier contient les fichiers sources reçus avant traitement.
-
-Exemples :
-
-- fichiers Excel exportés du système de crédit ;
-- fichiers clients ;
-- fichiers de remboursement ;
-- fichiers de suivi des agents ;
-- exports Zoho CRM ou autre système utilisé.
-
-Les fichiers de ce dossier ne doivent pas être modifiés directement.
-
----
-
-### `donnees/nettoyees/`
-
-Ce dossier contient les données nettoyées après correction des erreurs de format, des valeurs manquantes et des incohérences.
-
-Exemples de traitements :
-
-- correction des noms de colonnes ;
-- uniformisation des dates ;
-- suppression des doublons ;
-- nettoyage des montants ;
-- harmonisation des statuts de dossier ;
-- contrôle des valeurs manquantes.
-
----
-
-### `donnees/traitees/`
-
-Ce dossier contient les données prêtes pour l’analyse et le reporting.
-
-Ces données peuvent être utilisées pour :
-
-- les tableaux de bord ;
-- les rapports hebdomadaires ;
-- les analyses de performance ;
-- le suivi du portefeuille crédit ;
-- les indicateurs de risque.
-
----
-
-### `donnees/exports/`
-
-Ce dossier contient les fichiers générés automatiquement.
-
-Exemples :
-
-- rapport final en Excel ;
-- fichiers CSV consolidés ;
-- données préparées pour Power BI ;
-- synthèses mensuelles ;
-- listes des clients à risque.
-
----
-
-### `scripts/`
-
-Ce dossier contient les scripts Python utilisés pour automatiser le traitement des données.
-
-Les scripts sont organisés par étape :
-
-| Script | Rôle |
-|---|---|
-| `01_importer_donnees.py` | Importer les fichiers sources |
-| `02_nettoyer_donnees.py` | Nettoyer et standardiser les données |
-| `03_analyser_credit.py` | Analyser les dossiers de crédit |
-| `04_generer_indicateurs.py` | Générer les indicateurs de performance |
-| `05_exporter_rapports.py` | Exporter les rapports finaux |
-
----
-
-### `carnets/`
-
-Ce dossier contient les notebooks utilisés pour les analyses exploratoires.
-
-Il permet de tester rapidement :
-
-- les tendances ;
-- les anomalies ;
-- les distributions ;
-- les relations entre variables ;
-- les premières visualisations.
-
-Les notebooks ne remplacent pas les scripts standards.  
-Les traitements validés doivent être transférés dans le dossier `scripts/`.
-
----
-
-### `tableaux_de_bord/`
-
-Ce dossier contient les fichiers liés aux tableaux de bord.
-
-Il peut contenir :
-
-- fichiers Power BI ;
-- fichiers Excel de reporting ;
-- maquettes de dashboard ;
-- modèles de graphiques ;
-- captures de rapports.
-
----
-
-### `rapports/`
-
-Ce dossier contient les rapports produits par période.
-
-Organisation recommandée :
-
-```bash
-rapports/
-├── journaliers/
-├── hebdomadaires/
-└── mensuels/
-```
-
-Exemples de rapports :
-
-- rapport journalier des demandes de crédit ;
-- rapport hebdomadaire du portefeuille ;
-- rapport mensuel des remboursements ;
-- rapport des clients en retard ;
-- rapport des crédits à risque.
-
----
-
-### `documentation/`
-
-Ce dossier contient la documentation métier et technique du projet.
-
-Documents recommandés :
-
-| Fichier | Description |
-|---|---|
-| `dictionnaire_donnees.md` | Description des variables utilisées |
-| `regles_metier.md` | Règles de calcul et de validation |
-| `processus_credit.md` | Description du processus de traitement crédit |
-
----
-
-### `configuration/`
-
-Ce dossier contient les fichiers de configuration.
-
-Exemples :
-
-- chemin des fichiers sources ;
-- noms des feuilles Excel ;
-- paramètres de connexion ;
-- seuils de risque ;
-- règles de scoring ;
-- paramètres d’export.
-
----
-
-### `journaux/`
-
-Ce dossier contient les journaux d’exécution des scripts.
-
-Il permet de suivre :
-
-- les erreurs ;
-- les fichiers traités ;
-- la date d’exécution ;
-- les lignes rejetées ;
-- les anomalies détectées.
-
----
-
-## 16. Exemple de dictionnaire de données
-
-| Variable | Description | Exemple |
-|---|---|---|
-| `client_id` | Identifiant unique du client | CLT-0001 |
-| `nom_client` | Nom complet du client | Jean Kasongo |
-| `montant_demande` | Montant demandé par le client | 500000 |
-| `montant_accorde` | Montant accordé après analyse | 300000 |
-| `date_demande` | Date de soumission du dossier | 2026-07-01 |
-| `date_decision` | Date de décision du comité crédit | 2026-07-03 |
-| `statut_dossier` | Statut de la demande | Approuvé |
-| `revenu_mensuel` | Revenu mensuel estimé du client | 800000 |
-| `charge_mensuelle` | Charges mensuelles du client | 250000 |
-| `capacite_remboursement` | Capacité estimée de remboursement | 150000 |
-| `score_credit` | Score de risque calculé | 75 |
-| `niveau_risque` | Niveau de risque du dossier | Moyen |
-| `retard_jours` | Nombre de jours de retard | 15 |
-| `statut_remboursement` | État du remboursement | En retard |
-
----
-
-## 17. Règles métier principales
-
-Les règles métier permettent d’assurer une analyse cohérente des dossiers de crédit.
-
-### 17.1 Capacité de remboursement
-
-La capacité de remboursement peut être calculée selon la formule suivante :
+Le projet est actuellement exploite avec Python depuis :
 
 ```text
-Capacité de remboursement = Revenu mensuel - Charges mensuelles
+C:\ProgramData\anaconda3
 ```
 
-Une demande peut être considérée comme risquée si la mensualité proposée dépasse une partie importante de cette capacité.
+### Installation des dependances
 
----
+```powershell
+& 'C:\ProgramData\anaconda3\python.exe' -m pip install -r requirements.txt
+```
 
-### 17.2 Taux d’endettement
+### Lancer l'application
+
+```powershell
+& 'C:\ProgramData\anaconda3\python.exe' -m streamlit run .\analyste_credit.py
+```
+
+### Lancer les tests
+
+```powershell
+& 'C:\ProgramData\anaconda3\python.exe' -m unittest discover -s tests -v
+```
+
+## Source de donnees
+
+L'application supporte aujourd'hui :
+
+- un televersement local `.xlsx`, `.xls` ou `.csv`
+- un fichier inclus dans `line_list/`
+
+Exemple deja present dans le projet :
+
+- `line_list/base_donnees_brute_credit.xlsx`
+
+References de standardisation presentes :
+
+- `data/Rename_columns.xlsx`
+- `data/Replace_values.xlsx`
+
+## Ce que fait l'application
+
+L'interface combine plusieurs briques sur une meme page :
+
+- chargement de la source et choix de feuille Excel
+- standardisation des colonnes credit
+- filtres par statut, agence, produit et periode
+- synthese standard toujours visible en haut de page
+- onglets detailles en bas
+- export CSV et pack Excel
+
+Variables derivees actuellement calculees :
+
+- `capacite_remboursement`
+- `taux_endettement`
+- `mensualite_estimee`
+- `niveau_risque_calcule`
+- `mois_demande`
+
+Variables metier integrees a la standardisation :
+
+- `sexe`
+- `age`
+
+## Organisation actuelle de l'interface
+
+### Synthese standard
+
+La zone haute de la page conserve les indicateurs et graphiques standard. Elle inclut notamment :
+
+- KPI de production, risque et remboursement
+- `Distribution des statuts de dossier`
+- `Evolution mensuelle des demandes`
+- `Distribution des niveaux de risque`
+- `Distribution par tranche d'age`
+- `Repartition par sexe`
+- `Pyramide age-sexe`
+
+Une option laterale permet aussi :
+
+- `Afficher annotations (valeurs)`
+- definir un seuil minimal d'affichage des annotations
+
+### Onglets detailles
+
+L'application expose aujourd'hui :
+
+- `Vue d'ensemble active`
+- `Notions importantes`
+- `Surveillance`
+- `Portefeuille`
+- `Risque`
+- `Qualite`
+- `Export`
+- `Methodologie`
+
+### Logique des onglets
+
+- `Vue d'ensemble active` : confirme que la synthese haute reste visible pendant la navigation
+- `Notions importantes` : explique le role de l'analyste credit, les notions essentielles, le processus credit, les KPI et les bonnes pratiques
+- `Surveillance` : actions prioritaires, top agences, top produits, dossiers a suivre en priorite, apercu des dossiers
+- `Portefeuille` : production par produit, agent, agence, lecture agence x statut
+- `Risque` : distributions de risque, remboursement, classes de retard, watchlist
+- `Qualite` : anomalies, valeurs manquantes et mapping source -> standard
+- `Export` : export CSV et pack Excel
+- `Methodologie` : conventions et logique de calcul
+
+## Donnees attendues
+
+Les analyses sont plus solides si la base contient au minimum :
+
+- un identifiant client
+- un identifiant dossier
+- une date de demande
+- un montant demande
+- un statut de dossier
+
+Colonnes tres utiles selon les modules :
+
+- `montant_accorde`
+- `revenu_mensuel`
+- `charge_mensuelle`
+- `score_credit`
+- `retard_jours`
+- `statut_remboursement`
+- `agence`
+- `agent_credit`
+- `type_produit`
+- `date_decision`
+- `duree_credit_mois`
+- `sexe`
+- `age`
+
+Donnees souvent utiles au niveau metier :
+
+- identite du client
+- activite professionnelle ou commerciale
+- garanties proposees
+- commentaires des analystes
+- historique des credits
+- historique des paiements
+
+## Conventions de mapping
+
+Exemples de colonnes reconnues automatiquement :
+
+- `ID Client`, `id_client`, `code_client` -> `client_id`
+- `Numero Dossier`, `reference_dossier` -> `dossier_id`
+- `Montant demande` -> `montant_demande`
+- `Montant accorde` -> `montant_accorde`
+- `Revenu mensuel` -> `revenu_mensuel`
+- `Charges mensuelles` -> `charge_mensuelle`
+- `Statut dossier` -> `statut_dossier`
+- `Statut remboursement` -> `statut_remboursement`
+- `Sexe` -> `sexe`
+- `Age` -> `age`
+
+Normalisations utiles deja appliquees :
+
+- statuts dossier
+- statuts remboursement
+- valeurs de sexe comme `M`, `F`, `Masculin`, `Feminin`
+
+## Regles metier principales
+
+### Capacite de remboursement
 
 ```text
-Taux d’endettement = Charges mensuelles / Revenu mensuel
+Capacite de remboursement = Revenu mensuel - Charges mensuelles
 ```
 
-Exemple d’interprétation :
+### Taux d'endettement
 
-| Taux d’endettement | Niveau de risque |
-|---|---|
-| 0 % à 30 % | Faible |
-| 31 % à 50 % | Moyen |
-| Plus de 50 % | Élevé |
+```text
+Taux d'endettement = Charges mensuelles / Revenu mensuel
+```
 
----
+Interpretation usuelle :
 
-### 17.3 Niveau de risque
+```text
+0 % a 30 %   -> risque faible
+31 % a 50 %  -> risque moyen
+plus de 50 % -> risque eleve
+```
 
-Le niveau de risque peut être classé selon plusieurs critères :
+### Mensualite estimee
 
-- revenu mensuel ;
-- stabilité de l’activité ;
-- historique de remboursement ;
-- garanties disponibles ;
-- montant demandé ;
-- durée du crédit ;
-- taux d’endettement ;
-- retards antérieurs.
+```text
+Mensualite estimee = Montant accorde / Duree du credit en mois
+```
 
-Exemple de classification :
+### Niveau de risque calcule
 
-| Score crédit | Niveau de risque |
-|---|---|
-| 80 à 100 | Faible |
-| 50 à 79 | Moyen |
-| 0 à 49 | Élevé |
+Priorite actuelle :
 
----
+1. niveau de risque deja present
+2. score credit
+3. taux d'endettement
+4. retard en jours
 
-### 17.4 Statut du dossier
+Interpretation usuelle du score credit :
 
-Les statuts recommandés sont :
+```text
+80 a 100 -> risque faible
+50 a 79  -> risque moyen
+0 a 49   -> risque eleve
+```
 
-- `Reçu`
+### Statuts du dossier a suivre
+
+Les statuts metier les plus importants dans le projet sont :
+
+- `Recu`
+- `A completer`
 - `En analyse`
-- `À compléter`
-- `Approuvé`
-- `Rejeté`
-- `Décaissé`
+- `Approuve`
+- `Rejete`
+- `Decaisse`
 - `En remboursement`
 - `En retard`
-- `Clôturé`
+- `Cloture`
 
----
+## Role et responsabilites principales
 
-## 18. Indicateurs techniques à produire
+### Evaluation des demandes de credit
 
-Les scripts doivent permettre de générer automatiquement les indicateurs suivants.
+- analyser les informations personnelles et financieres du client
+- verifier les revenus, charges, activites et garanties
+- examiner l'historique de paiement
+- controler la coherence des documents fournis
+- identifier les informations manquantes ou incoherentes
+- evaluer la capacite de remboursement
 
-### 18.1 Indicateurs de demande
+### Analyse des risques
 
-- nombre total de demandes ;
-- nombre de demandes en attente ;
-- nombre de demandes approuvées ;
-- nombre de demandes rejetées ;
-- montant total demandé ;
-- montant total accordé ;
-- délai moyen de traitement.
+- identifier les risques de non-remboursement
+- analyser le niveau d'endettement
+- utiliser les scores ou notations disponibles
+- appliquer les politiques internes de credit
+- proposer des mesures d'attenuation du risque
 
----
+### Recommandation de decision
 
-### 18.2 Indicateurs de risque
+Les recommandations possibles peuvent etre :
 
-- nombre de dossiers à risque faible ;
-- nombre de dossiers à risque moyen ;
-- nombre de dossiers à risque élevé ;
-- taux de rejet ;
-- taux d’endettement moyen ;
-- score crédit moyen ;
-- nombre de dossiers avec données incomplètes.
+- credit recommande
+- credit recommande avec conditions
+- credit a revoir
+- credit non recommande
 
----
+### Suivi du portefeuille credit
 
-### 18.3 Indicateurs de remboursement
+- suivre les echeances de remboursement
+- identifier les retards de paiement
+- surveiller les comptes a risque
+- collaborer avec l'equipe de recouvrement
+- produire des alertes sur les dossiers sensibles
 
-- montant total remboursé ;
-- montant restant dû ;
-- nombre de clients à jour ;
-- nombre de clients en retard ;
-- nombre de jours moyens de retard ;
-- taux de remboursement ;
-- portefeuille à risque.
+### Reporting et documentation
 
----
+- rapports d'analyse de credit
+- tableaux de bord de suivi
+- rapports sur les retards de paiement
+- syntheses sur le portefeuille credit
+- statistiques sur les demandes approuvees et rejetees
+- rapports de performance par agence, produit ou periode
+- documentation des decisions de credit
 
-### 18.4 Indicateurs par dimension
+## Processus general d'analyse credit
 
-Les indicateurs doivent pouvoir être analysés par :
+1. Reception de la demande de credit.
+2. Collecte des informations du client.
+3. Verification des documents fournis.
+4. Analyse financiere et comportementale.
+5. Evaluation du risque.
+6. Calcul de la capacite de remboursement.
+7. Formulation d'une recommandation.
+8. Validation par les responsables concernes.
+9. Suivi du credit apres approbation.
+10. Reporting et mise a jour du dossier client.
 
-- agence ;
-- agent de crédit ;
-- type de produit ;
-- sexe du client ;
-- tranche d’âge ;
-- activité économique ;
-- période ;
-- niveau de risque ;
-- statut du dossier.
+## Indicateurs de performance a suivre
 
----
+### Indicateurs de demande
 
-## 19. Pipeline de traitement des données
+- nombre total de demandes
+- nombre de demandes en attente
+- nombre de demandes approuvees
+- nombre de demandes rejetees
+- montant total demande
+- montant total accorde
+- delai moyen de traitement
 
-Le pipeline standard du projet suit les étapes suivantes :
+### Indicateurs de risque
 
-```text
-Importation des fichiers sources
-        ↓
-Nettoyage des données
-        ↓
-Contrôle qualité
-        ↓
-Analyse crédit
-        ↓
-Calcul des indicateurs
-        ↓
-Export des rapports
-        ↓
-Mise à jour du tableau de bord
-```
+- nombre de dossiers a risque faible
+- nombre de dossiers a risque moyen
+- nombre de dossiers a risque eleve
+- taux de rejet
+- taux d'endettement moyen
+- score credit moyen
+- nombre de dossiers avec donnees incompletes
 
----
+### Indicateurs de remboursement
 
-## 20. Contrôles qualité des données
+- montant total rembourse
+- montant restant du
+- nombre de clients a jour
+- nombre de clients en retard
+- nombre de jours moyens de retard
+- portefeuille a risque
 
-Avant toute analyse, les contrôles suivants doivent être appliqués :
+### Indicateurs par dimension
 
-- vérifier les identifiants clients manquants ;
-- détecter les doublons ;
-- vérifier les dates invalides ;
-- contrôler les montants négatifs ou vides ;
-- vérifier les dossiers sans statut ;
-- contrôler les crédits approuvés sans montant accordé ;
-- identifier les clients sans information financière ;
-- vérifier les incohérences entre montant demandé et montant accordé ;
-- identifier les remboursements sans référence de crédit.
+Les analyses doivent pouvoir etre relues par :
 
----
+- agence
+- agent de credit
+- type de produit
+- sexe du client
+- tranche d'age
+- activite economique
+- periode
+- niveau de risque
+- statut du dossier
 
-## 21. Exemple de commandes d’exécution
+## Controles qualite integres
 
-Installation des dépendances Python :
+Le projet verifie notamment :
 
-```bash
-pip install -r requirements.txt
-```
+- clients sans identifiant
+- dossiers sans identifiant
+- dossiers dupliques
+- dossiers sans statut
+- montants negatifs
+- montants accordes superieurs au montant demande
+- donnees financieres manquantes
+- capacite de remboursement negative
+- retards negatifs
+- dossiers approuves incoherents
 
-Exécution du pipeline complet :
+## Exports disponibles
 
-```bash
-python scripts/01_importer_donnees.py
-python scripts/02_nettoyer_donnees.py
-python scripts/03_analyser_credit.py
-python scripts/04_generer_indicateurs.py
-python scripts/05_exporter_rapports.py
-```
+L'onglet `Export` permet de telecharger :
 
-Exécution d’un script spécifique :
+- les donnees standardisees en CSV
+- un pack Excel contenant :
+  - donnees standardisees
+  - controles qualite
+  - mapping des colonnes
 
-```bash
-python scripts/03_analyser_credit.py
-```
-
----
-
-## 22. Dépendances Python recommandées
-
-Le fichier `requirements.txt` peut contenir :
-
-```text
-pandas
-numpy
-openpyxl
-xlsxwriter
-python-dotenv
-pyyaml
-matplotlib
-```
-
-Selon l’évolution du projet, d’autres bibliothèques peuvent être ajoutées :
+## Structure du projet
 
 ```text
-scikit-learn
-sqlalchemy
-psycopg2
-plotly
-streamlit
+analyste_credit/
+|-- analyste_credit.py
+|-- README.md
+|-- requirements.txt
+|-- credit_app/
+|   |-- app_loader.py
+|   |-- core.py
+|   |-- domain.py
+|   |-- ui.py
+|   |-- tabs/
+|   |   |-- overview.py
+|   |   |-- analyste_credit.py
+|   |   |-- surveillance.py
+|   |   |-- portfolio.py
+|   |   |-- risk.py
+|   |   |-- quality.py
+|   |   |-- export.py
+|   |   |-- methodology.py
+|-- data/
+|   |-- Rename_columns.xlsx
+|   |-- Replace_values.xlsx
+|-- line_list/
+|   |-- base_donnees_brute_credit.xlsx
+|-- tests/
+|   |-- test_credit_domain.py
 ```
 
----
+## Fichiers principaux
 
-## 23. Convention de nommage des fichiers
+- application principale : [analyste_credit.py](./analyste_credit.py)
+- chargement des fichiers : [credit_app/app_loader.py](./credit_app/app_loader.py)
+- logique metier : [credit_app/domain.py](./credit_app/domain.py)
+- styles et helpers UI : [credit_app/ui.py](./credit_app/ui.py)
+- synthese standard : [credit_app/tabs/overview.py](./credit_app/tabs/overview.py)
+- notions importantes : [credit_app/tabs/analyste_credit.py](./credit_app/tabs/analyste_credit.py)
+- surveillance : [credit_app/tabs/surveillance.py](./credit_app/tabs/surveillance.py)
+- portefeuille : [credit_app/tabs/portfolio.py](./credit_app/tabs/portfolio.py)
+- risque : [credit_app/tabs/risk.py](./credit_app/tabs/risk.py)
+- qualite : [credit_app/tabs/quality.py](./credit_app/tabs/quality.py)
 
-Les fichiers doivent être nommés de manière claire et standardisée.
+## Tests et etat actuel
 
-Format recommandé :
+Les tests couvrent aujourd'hui les briques critiques :
+
+- standardisation des colonnes
+- variables derivees
+- controles qualite
+- synthese metier
+- watchlist
+- distributions sexe / age
+- pyramide age-sexe
+- chargement du fichier Excel inclus
+
+Commande de verification utilisee :
+
+```powershell
+& 'C:\ProgramData\anaconda3\python.exe' -m unittest discover -s tests -v
+```
+
+Etat verifie pendant la mise a jour :
+
+- application Streamlit demarre correctement
+- tests `8/8` OK
+
+## Confidentialite et securite
+
+Les donnees manipulees dans ce projet sont sensibles et doivent etre traitees avec confidentialite.
+
+Bonnes pratiques a respecter :
+
+- limiter l'acces aux donnees aux personnes autorisees
+- eviter le partage non securise des fichiers clients
+- proteger les informations personnelles et financieres
+- documenter les modifications importantes
+- conserver une tracabilite des decisions
+- respecter les procedures internes de securite
+
+## Limites et point d'attention
+
+- la qualite des analyses depend fortement des colonnes disponibles dans la source
+- certaines regles de risque restent heuristiques et devront etre adaptees a votre institution
+- le warning Streamlit suivant peut encore apparaitre selon l'installation locale Anaconda :
 
 ```text
-type_fichier_credit_YYYY_MM_DD.xlsx
+Failed to scan component manifests: 'NoneType' object has no attribute 'lower'
 ```
 
-Exemples :
+Ce warning vient de la distribution Streamlit installee, pas de la logique metier du projet, et n'empeche pas le lancement de l'application.
 
-```text
-demandes_credit_2026_07_01.xlsx
-remboursements_credit_2026_07_01.xlsx
-rapport_portefeuille_2026_07_01.xlsx
-clients_retard_2026_07_01.xlsx
-```
+## Prochaines evolutions possibles
 
----
-
-## 24. Bonnes pratiques Git
-
-Chaque modification importante doit être suivie avec Git.
-
-Exemples de messages de commit :
-
-```bash
-git add .
-git commit -m "Ajout du pipeline de nettoyage des données crédit"
-git commit -m "Ajout des indicateurs de remboursement"
-git commit -m "Correction du calcul du taux d’endettement"
-git commit -m "Mise à jour du dictionnaire de données"
-```
-
----
-
-## 25. Fichiers à exclure avec `.gitignore`
-
-Le fichier `.gitignore` doit empêcher l’envoi des fichiers sensibles ou temporaires dans le dépôt.
-
-Exemple :
-
-```gitignore
-# Environnements Python
-venv/
-.env
-__pycache__/
-*.pyc
-
-# Données sensibles
-donnees/brutes/
-donnees/nettoyees/
-donnees/traitees/
-donnees/exports/
-
-# Rapports confidentiels
-rapports/
-
-# Fichiers temporaires
-*.tmp
-*.log
-~$*.xlsx
-
-# Fichiers système
-.DS_Store
-Thumbs.db
-```
-
----
-
-## 26. Confidentialité des données
-
-Les données clients ne doivent pas être publiées dans le dépôt Git.
-
-Le dépôt doit contenir uniquement :
-
-- les scripts ;
-- la documentation ;
-- les modèles de fichiers ;
-- les exemples anonymisés ;
-- les fichiers de configuration sans mot de passe ;
-- les règles métier ;
-- les modèles de rapports.
-
-Les données réelles doivent rester dans un environnement sécurisé.
-
----
-
-## 27. Évolutions prévues
-
-Les améliorations futures possibles sont :
-
-- connexion directe à une base de données ;
-- intégration avec Zoho CRM ou Zoho CRM Plus ;
-- automatisation du scoring crédit ;
-- création d’un tableau de bord Power BI dynamique ;
-- génération automatique des rapports PDF ou Excel ;
-- alertes automatiques sur les retards ;
-- analyse prédictive du risque de défaut ;
-- suivi de la performance par agent ou agence ;
-- intégration avec un système de notification interne.
-
----
-
-## 28. Résumé technique
-
-Ce projet combine l’analyse métier du crédit avec des outils informatiques pour améliorer la qualité des décisions, automatiser les traitements et renforcer le suivi du portefeuille.
-
-Il repose sur :
-
-- une structure claire des données ;
-- des scripts Python réutilisables ;
-- des règles métier documentées ;
-- des indicateurs de performance ;
-- des tableaux de bord ;
-- une gestion sécurisée des informations clients.
-
-L’approche permet de passer d’un suivi manuel à un système plus structuré, automatisé et orienté décision.
-
----
-
-## 29. Conclusion
-
-Ce projet contribue à renforcer la gestion du crédit au sein de l’organisation.
-
-Il permet de combiner l’analyse financière, la gestion des risques, le suivi client et l’exploitation des données pour prendre des décisions plus fiables et plus responsables.
-
-L’analyste crédit joue ainsi un rôle clé dans la protection financière de l’organisation, tout en accompagnant les clients dans l’accès au financement.
+- tranches d'age plus fines pour la pyramide age-sexe
+- parametres de scoring credit plus metier
+- chargement multi-fichiers et consolidation
+- mapping interactif des colonnes non reconnues
+- rapports PDF ou exports de synthese
+- enrichissement du bloc de surveillance
