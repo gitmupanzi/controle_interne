@@ -23,25 +23,25 @@ def render_export_tab(df: pd.DataFrame, quality_df: pd.DataFrame, mapping_df: pd
     render_panel_title("Export")
 
     if df.empty:
-        st.warning("Aucune donnee a exporter avec les filtres actuels.")
+        st.warning("Aucune donnée à exporter avec les filtres actuels.")
         return
 
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
     renamed_columns = int((mapping_df["colonne_source"] != mapping_df["colonne_standard"]).sum()) if not mapping_df.empty else 0
     render_kpi_cards(
         [
-            ("Lignes exportees", f"{len(df):,}".replace(",", " "), "Perimetre filtre", "blue"),
-            ("Colonnes exportees", str(df.shape[1]), "Donnees standardisees", "navy"),
-            ("Feuilles Excel", "3", "Donnees, qualite, mapping", "green"),
-            ("Colonnes reconnues", str(renamed_columns), "Traitees automatiquement", "orange"),
+            ("Lignes exportées", f"{len(df):,}".replace(",", " "), "Périmètre filtré", "blue"),
+            ("Colonnes exportées", str(df.shape[1]), "Données standardisées", "navy"),
+            ("Feuilles Excel", "3", "Données, qualité, mapping", "green"),
+            ("Colonnes reconnues", str(renamed_columns), "Traitées automatiquement", "orange"),
         ]
     )
 
     render_summary_box(
         "Pack de restitution",
         [
-            "L'export reprend les donnees standardisees, les controles qualite et le mapping des colonnes.",
-            f"Horodatage de generation : {generated_at}.",
+            "L'export reprend les données standardisées, les contrôles qualité et le mapping des colonnes.",
+            f"Horodatage de génération : {generated_at}.",
         ],
     )
 
@@ -49,7 +49,7 @@ def render_export_tab(df: pd.DataFrame, quality_df: pd.DataFrame, mapping_df: pd
     excel_bytes = _to_excel_bytes(df, quality_df, mapping_df)
 
     st.download_button(
-        "Telecharger les donnees standardisees (CSV)",
+        "Télécharger les données standardisées (CSV)",
         data=csv_bytes,
         file_name="analyste_credit_donnees_standardisees.csv",
         mime="text/csv",
@@ -57,7 +57,7 @@ def render_export_tab(df: pd.DataFrame, quality_df: pd.DataFrame, mapping_df: pd
     )
 
     st.download_button(
-        "Telecharger le pack d'analyse (Excel)",
+        "Télécharger le pack d'analyse (Excel)",
         data=excel_bytes,
         file_name="analyste_credit_pack_analyse.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -68,8 +68,8 @@ def render_export_tab(df: pd.DataFrame, quality_df: pd.DataFrame, mapping_df: pd
         """
         Le pack Excel contient :
 
-        - les donnees standardisees filtrees
-        - les controles qualite
+        - les données standardisées filtrées
+        - les contrôles qualité
         - le mapping des colonnes source -> standard
         """
     )

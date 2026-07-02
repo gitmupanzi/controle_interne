@@ -181,53 +181,53 @@ NUMERIC_COLUMNS = [
 
 DATE_COLUMNS = ["date_demande", "date_decision"]
 STATUS_FLOW_ORDER = [
-    "Recu",
-    "A completer",
+    "Reçu",
+    "À compléter",
     "En analyse",
-    "Approuve",
-    "Decaisse",
+    "Approuvé",
+    "Décaissé",
     "En remboursement",
     "En retard",
-    "Cloture",
-    "Rejete",
+    "Clôturé",
+    "Rejeté",
 ]
 
 STATUS_DOSSIER_MAP = {
-    "recu": "Recu",
-    "reçu": "Recu",
+    "recu": "Reçu",
+    "reçu": "Reçu",
     "en analyse": "En analyse",
     "en cours": "En analyse",
-    "a completer": "A completer",
-    "à completer": "A completer",
-    "approuve": "Approuve",
-    "approuvé": "Approuve",
-    "accorde": "Approuve",
-    "rejete": "Rejete",
-    "rejeté": "Rejete",
-    "refuse": "Rejete",
-    "refusé": "Rejete",
-    "decaisse": "Decaisse",
-    "décaissé": "Decaisse",
+    "a completer": "À compléter",
+    "à completer": "À compléter",
+    "approuve": "Approuvé",
+    "approuvé": "Approuvé",
+    "accorde": "Approuvé",
+    "rejete": "Rejeté",
+    "rejeté": "Rejeté",
+    "refuse": "Rejeté",
+    "refusé": "Rejeté",
+    "decaisse": "Décaissé",
+    "décaissé": "Décaissé",
     "en remboursement": "En remboursement",
     "en retard": "En retard",
-    "cloture": "Cloture",
-    "clôturé": "Cloture",
+    "cloture": "Clôturé",
+    "clôturé": "Clôturé",
 }
 
 STATUS_REMBOURSEMENT_MAP = {
-    "a jour": "A jour",
-    "à jour": "A jour",
-    "normal": "A jour",
-    "non decaisse": "Non decaisse",
-    "non décaissé": "Non decaisse",
-    "non decaissé": "Non decaisse",
+    "a jour": "À jour",
+    "à jour": "À jour",
+    "normal": "À jour",
+    "non decaisse": "Non décaissé",
+    "non décaissé": "Non décaissé",
+    "non decaissé": "Non décaissé",
     "en retard": "En retard",
     "impaye": "En retard",
     "impayé": "En retard",
-    "solde": "Solde",
-    "soldé": "Solde",
-    "cloture": "Solde",
-    "clôturé": "Solde",
+    "solde": "Soldé",
+    "soldé": "Soldé",
+    "cloture": "Soldé",
+    "clôturé": "Soldé",
 }
 
 SEX_VALUE_MAP = {
@@ -236,10 +236,17 @@ SEX_VALUE_MAP = {
     "male": "Masculin",
     "homme": "Masculin",
     "h": "Masculin",
-    "f": "Feminin",
-    "feminin": "Feminin",
-    "female": "Feminin",
-    "femme": "Feminin",
+    "f": "Féminin",
+    "feminin": "Féminin",
+    "female": "Féminin",
+    "femme": "Féminin",
+}
+
+RISK_LEVEL_MAP = {
+    "faible": "Faible",
+    "moyen": "Moyen",
+    "eleve": "Élevé",
+    "non renseigne": "Non renseigné",
 }
 
 
@@ -319,7 +326,8 @@ def _normalize_series_values(series: pd.Series, mapping: dict[str, str]) -> pd.S
 def derive_risk_level(row: pd.Series) -> str:
     explicit_level = row.get("niveau_risque")
     if pd.notna(explicit_level) and str(explicit_level).strip():
-        return str(explicit_level).strip().title()
+        normalized_level = normalize_text(explicit_level)
+        return RISK_LEVEL_MAP.get(normalized_level, str(explicit_level).strip().title())
 
     score = row.get("score_credit")
     if pd.notna(score):
@@ -327,7 +335,7 @@ def derive_risk_level(row: pd.Series) -> str:
             return "Faible"
         if score >= 50:
             return "Moyen"
-        return "Eleve"
+        return "Élevé"
 
     debt_ratio = row.get("taux_endettement")
     if pd.notna(debt_ratio):
@@ -335,7 +343,7 @@ def derive_risk_level(row: pd.Series) -> str:
             return "Faible"
         if debt_ratio <= 0.50:
             return "Moyen"
-        return "Eleve"
+        return "Élevé"
 
     delay = row.get("retard_jours")
     if pd.notna(delay):
@@ -343,9 +351,9 @@ def derive_risk_level(row: pd.Series) -> str:
             return "Faible"
         if delay <= 30:
             return "Moyen"
-        return "Eleve"
+        return "Élevé"
 
-    return "Non renseigne"
+    return "Non renseigné"
 
 
 def build_standardized_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
@@ -442,7 +450,7 @@ def build_quality_checks(df: pd.DataFrame) -> pd.DataFrame:
         add_check("Clients sans identifiant", df["client_id"].isna() | (df["client_id"].astype(str).str.strip() == ""))
     if "dossier_id" in df.columns:
         duplicate_mask = df["dossier_id"].duplicated(keep=False) & df["dossier_id"].notna()
-        add_check("Dossiers dupliques", duplicate_mask)
+        add_check("Dossiers dupliqués", duplicate_mask)
         add_check(
             "Dossiers sans identifiant",
             df["dossier_id"].isna() | (df["dossier_id"].astype(str).str.strip() == ""),
@@ -453,20 +461,20 @@ def build_quality_checks(df: pd.DataFrame) -> pd.DataFrame:
             df["statut_dossier"].isna() | (df["statut_dossier"].astype(str).str.strip() == ""),
         )
     if "montant_demande" in df.columns:
-        add_check("Montants demandes negatifs", df["montant_demande"] < 0)
+        add_check("Montants demandés négatifs", df["montant_demande"] < 0)
     if "montant_accorde" in df.columns:
-        add_check("Montants accordes negatifs", df["montant_accorde"] < 0)
+        add_check("Montants accordés négatifs", df["montant_accorde"] < 0)
     if {"montant_demande", "montant_accorde"}.issubset(df.columns):
-        add_check("Montants accordes superieurs au demande", df["montant_accorde"] > df["montant_demande"])
+        add_check("Montants accordés supérieurs au demandé", df["montant_accorde"] > df["montant_demande"])
     if {"revenu_mensuel", "charge_mensuelle"}.issubset(df.columns):
         add_check(
-            "Donnees financieres manquantes",
+            "Données financières manquantes",
             df["revenu_mensuel"].isna() | df["charge_mensuelle"].isna(),
         )
     if "retard_jours" in df.columns:
-        add_check("Retards negatifs", df["retard_jours"] < 0)
+        add_check("Retards négatifs", df["retard_jours"] < 0)
     if "capacite_remboursement" in df.columns:
-        add_check("Capacite de remboursement negative", df["capacite_remboursement"] < 0)
+        add_check("Capacité de remboursement négative", df["capacite_remboursement"] < 0)
 
     return pd.DataFrame(checks)
 
@@ -520,7 +528,7 @@ def filter_dataframe(
 
 
 def build_summary_metrics(df: pd.DataFrame) -> dict[str, object]:
-    approved_statuses = {"Approuve", "Decaisse", "En remboursement", "En retard", "Cloture"}
+    approved_statuses = {"Approuvé", "Décaissé", "En remboursement", "En retard", "Clôturé"}
 
     approved_count = int(
         df["statut_dossier"].isin(approved_statuses).sum()
@@ -603,10 +611,10 @@ def build_frequency_table(df: pd.DataFrame, column: str, top_n: int | None = Non
 
     base = (
         df[column]
-        .fillna("Non renseigne")
+        .fillna("Non renseigné")
         .astype("string")
         .str.strip()
-        .replace("", "Non renseigne")
+        .replace("", "Non renseigné")
         .value_counts(dropna=False)
         .reset_index()
     )
@@ -626,8 +634,8 @@ def build_sex_distribution(df: pd.DataFrame) -> pd.DataFrame:
     if distribution.empty:
         return distribution
 
-    distribution["sexe"] = distribution["sexe"].replace({"Non renseigne": "Inconnu"})
-    order_map = {"Masculin": 0, "Feminin": 1, "Inconnu": 2}
+    distribution["sexe"] = distribution["sexe"].replace({"Non renseigne": "Inconnu", "Non renseigné": "Inconnu"})
+    order_map = {"Masculin": 0, "Féminin": 1, "Inconnu": 2}
     distribution["_ordre"] = distribution["sexe"].map(order_map).fillna(99)
     return (
         distribution.sort_values(["_ordre", "nombre_lignes"], ascending=[True, False])
@@ -641,7 +649,7 @@ def build_age_bucket_table(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["tranche_age", "nombre_lignes", "part_lignes"])
 
     ages = pd.to_numeric(df["age"], errors="coerce")
-    labels = pd.Series("Non renseigne", index=df.index, dtype="string")
+    labels = pd.Series("Non renseigné", index=df.index, dtype="string")
     labels = labels.mask((ages >= 0) & (ages <= 17), "0-17")
     labels = labels.mask((ages >= 18) & (ages <= 24), "18-24")
     labels = labels.mask((ages >= 25) & (ages <= 34), "25-34")
@@ -662,7 +670,7 @@ def build_age_bucket_table(df: pd.DataFrame) -> pd.DataFrame:
         "45-54": 4,
         "55-64": 5,
         "65+": 6,
-        "Non renseigne": 7,
+        "Non renseigné": 7,
     }
     distribution["_ordre"] = distribution["tranche_age"].map(order_map).fillna(99)
     return (
@@ -674,16 +682,16 @@ def build_age_bucket_table(df: pd.DataFrame) -> pd.DataFrame:
 
 def build_age_sex_pyramid_table(df: pd.DataFrame) -> pd.DataFrame:
     if "age" not in df.columns or "sexe" not in df.columns:
-        return pd.DataFrame(columns=["tranche_age", "Masculin", "Feminin"])
+        return pd.DataFrame(columns=["tranche_age", "Masculin", "Féminin"])
 
     age_distribution = build_age_bucket_table(df)
     if age_distribution.empty:
-        return pd.DataFrame(columns=["tranche_age", "Masculin", "Feminin"])
+        return pd.DataFrame(columns=["tranche_age", "Masculin", "Féminin"])
 
     age_order = age_distribution["tranche_age"].tolist()
     base = df.copy()
     ages = pd.to_numeric(base["age"], errors="coerce")
-    labels = pd.Series("Non renseigne", index=base.index, dtype="string")
+    labels = pd.Series("Non renseigné", index=base.index, dtype="string")
     labels = labels.mask((ages >= 0) & (ages <= 17), "0-17")
     labels = labels.mask((ages >= 18) & (ages <= 24), "18-24")
     labels = labels.mask((ages >= 25) & (ages <= 34), "25-34")
@@ -698,7 +706,7 @@ def build_age_sex_pyramid_table(df: pd.DataFrame) -> pd.DataFrame:
         .fillna("Inconnu")
         .astype("string")
         .replace({"Non renseigne": "Inconnu"})
-        .where(lambda s: s.isin(["Masculin", "Feminin"]), "Inconnu")
+        .where(lambda s: s.isin(["Masculin", "Féminin"]), "Inconnu")
     )
 
     grouped = (
@@ -707,17 +715,17 @@ def build_age_sex_pyramid_table(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index(name="nombre_lignes")
     )
     if grouped.empty:
-        return pd.DataFrame(columns=["tranche_age", "Masculin", "Feminin"])
+        return pd.DataFrame(columns=["tranche_age", "Masculin", "Féminin"])
 
     pivot = (
         grouped.pivot(index="tranche_age", columns="sexe_pyramide", values="nombre_lignes")
         .fillna(0)
         .reset_index()
     )
-    for column in ["Masculin", "Feminin"]:
+    for column in ["Masculin", "Féminin"]:
         if column not in pivot.columns:
             pivot[column] = 0
-    return pivot[["tranche_age", "Masculin", "Feminin"]]
+    return pivot[["tranche_age", "Masculin", "Féminin"]]
 
 
 def build_group_summary_table(
@@ -756,7 +764,7 @@ def build_group_summary_table(
         else base.get("retard_jours", pd.Series(0, index=base.index)).fillna(0) > 0
     )
     elevated_risk_mask = (
-        base["niveau_risque_calcule"].eq("Eleve")
+        base["niveau_risque_calcule"].eq("Élevé")
         if "niveau_risque_calcule" in base.columns
         else pd.Series(False, index=base.index)
     )
@@ -787,7 +795,7 @@ def build_status_flow_table(df: pd.DataFrame) -> pd.DataFrame:
 
     flow = (
         df["statut_dossier"]
-        .fillna("Non renseigne")
+        .fillna("Non renseigné")
         .astype("string")
         .value_counts(dropna=False)
         .rename_axis("statut_dossier")
@@ -804,8 +812,8 @@ def build_delay_bucket_table(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["classe_retard", "nombre_dossiers"])
 
     delays = pd.to_numeric(df["retard_jours"], errors="coerce")
-    labels = pd.Series("Non renseigne", index=df.index, dtype="string")
-    labels = labels.mask(delays.fillna(-1) <= 0, "A jour")
+    labels = pd.Series("Non renseigné", index=df.index, dtype="string")
+    labels = labels.mask(delays.fillna(-1) <= 0, "À jour")
     labels = labels.mask((delays > 0) & (delays <= 7), "1-7 jours")
     labels = labels.mask((delays > 7) & (delays <= 30), "8-30 jours")
     labels = labels.mask((delays > 30) & (delays <= 90), "31-90 jours")
@@ -817,12 +825,12 @@ def build_delay_bucket_table(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index(name="nombre_dossiers")
     )
     order = {
-        "A jour": 0,
+        "À jour": 0,
         "1-7 jours": 1,
         "8-30 jours": 2,
         "31-90 jours": 3,
         "Plus de 90 jours": 4,
-        "Non renseigne": 5,
+        "Non renseigné": 5,
     }
     counts["_ordre"] = counts["classe_retard"].map(order).fillna(99)
     return counts.sort_values(["_ordre", "nombre_dossiers"], ascending=[True, False]).drop(columns="_ordre")
@@ -840,7 +848,7 @@ def build_risk_group_table(df: pd.DataFrame, group_column: str, top_n: int = 8) 
             columns=[group_column, "dossiers", "risque_eleve", "retard", "montant_demande_total", "score_credit_moyen"]
         )
 
-    base["_risque_eleve"] = base.get("niveau_risque_calcule", pd.Series("", index=base.index)).eq("Eleve").astype(int)
+    base["_risque_eleve"] = base.get("niveau_risque_calcule", pd.Series("", index=base.index)).eq("Élevé").astype(int)
     if "statut_remboursement" in base.columns:
         base["_retard"] = base["statut_remboursement"].eq("En retard").astype(int)
     elif "retard_jours" in base.columns:
@@ -867,7 +875,7 @@ def build_operational_snapshot(df: pd.DataFrame) -> dict[str, object]:
     metrics = build_summary_metrics(df)
 
     high_risk_count = (
-        int(df["niveau_risque_calcule"].eq("Eleve").sum())
+        int(df["niveau_risque_calcule"].eq("Élevé").sum())
         if "niveau_risque_calcule" in df.columns
         else 0
     )
@@ -900,7 +908,7 @@ def build_operational_snapshot(df: pd.DataFrame) -> dict[str, object]:
     def top_label(column: str) -> str:
         freq = build_frequency_table(df, column, top_n=1)
         if freq.empty:
-            return "Non renseigne"
+            return "Non renseigné"
         return str(freq.iloc[0][column])
 
     montant_moyen_demande = (
@@ -935,30 +943,30 @@ def build_priority_actions(df: pd.DataFrame) -> list[str]:
         )
     if snapshot["high_risk_count"]:
         actions.append(
-            f"Revoir les {snapshot['high_risk_count']} dossier(s) classes en risque eleve avant nouvelle decision."
+            f"Revoir les {snapshot['high_risk_count']} dossier(s) classés en risque élevé avant nouvelle décision."
         )
     if snapshot["negative_capacity_count"]:
         actions.append(
-            f"Verifier les {snapshot['negative_capacity_count']} dossier(s) avec capacite de remboursement negative."
+            f"Vérifier les {snapshot['negative_capacity_count']} dossier(s) avec capacité de remboursement négative."
         )
     if snapshot["incomplete_financial_count"]:
         actions.append(
-            f"Completer les informations financieres manquantes sur {snapshot['incomplete_financial_count']} dossier(s)."
+            f"Compléter les informations financières manquantes sur {snapshot['incomplete_financial_count']} dossier(s)."
         )
     if snapshot["taux_retard"] is not None and snapshot["taux_retard"] >= 0.15:
-        actions.append("Renforcer le suivi recouvrement sur le perimetre courant en raison d'un taux de retard eleve.")
-    if snapshot["top_agence"] != "Non renseigne":
-        actions.append(f"Controler en premier le portefeuille de l'agence {snapshot['top_agence']}.")
+        actions.append("Renforcer le suivi du recouvrement sur le périmètre courant en raison d'un taux de retard élevé.")
+    if snapshot["top_agence"] != "Non renseigné":
+        actions.append(f"Contrôler en premier le portefeuille de l'agence {snapshot['top_agence']}.")
 
     if not actions:
-        actions.append("Aucun signal critique majeur n'est detecte sur le perimetre courant.")
+        actions.append("Aucun signal critique majeur n'est détecté sur le périmètre courant.")
     return actions[:6]
 
 
 def build_overview_narrative(df: pd.DataFrame) -> str:
     snapshot = build_operational_snapshot(df)
     if df.empty:
-        return "Aucune donnee n'est disponible pour produire une synthese."
+        return "Aucune donnée n'est disponible pour produire une synthèse."
 
     parts = [
         f"Le perimetre courant couvre {snapshot['nombre_dossiers']} dossier(s)",
@@ -974,26 +982,26 @@ def build_overview_narrative(df: pd.DataFrame) -> str:
 
     parts.append(".")
 
-    if snapshot["top_agence"] != "Non renseigne":
+    if snapshot["top_agence"] != "Non renseigné":
         parts.append(f"L'agence la plus active est {snapshot['top_agence']}.")
-    if snapshot["top_produit"] != "Non renseigne":
+    if snapshot["top_produit"] != "Non renseigné":
         parts.append(f"Le produit dominant est {snapshot['top_produit']}.")
-    if snapshot["top_agent"] != "Non renseigne":
-        parts.append(f"L'agent le plus expose dans le perimetre est {snapshot['top_agent']}.")
+    if snapshot["top_agent"] != "Non renseigné":
+        parts.append(f"L'agent le plus exposé dans le périmètre est {snapshot['top_agent']}.")
 
     risk_sentence = []
     if snapshot["high_risk_count"]:
-        risk_sentence.append(f"{snapshot['high_risk_count']} dossier(s) sont en risque eleve")
+        risk_sentence.append(f"{snapshot['high_risk_count']} dossier(s) sont en risque élevé")
     if snapshot["medium_risk_count"]:
         risk_sentence.append(f"{snapshot['medium_risk_count']} sont en risque moyen")
     if snapshot["delayed_count"]:
-        risk_sentence.append(f"{snapshot['delayed_count']} presentent deja un retard")
+        risk_sentence.append(f"{snapshot['delayed_count']} présentent déjà un retard")
     if risk_sentence:
         parts.append("Sur le plan du risque, " + ", ".join(risk_sentence) + ".")
 
     if snapshot["incomplete_financial_count"]:
         parts.append(
-            f"{snapshot['incomplete_financial_count']} dossier(s) ont des informations financieres incompletes."
+            f"{snapshot['incomplete_financial_count']} dossier(s) ont des informations financières incomplètes."
         )
 
     return " ".join(parts)
@@ -1007,9 +1015,9 @@ def build_watchlist(df: pd.DataFrame) -> pd.DataFrame:
     alert_reasons = pd.Series("", index=df.index, dtype="string")
 
     if "niveau_risque_calcule" in df.columns:
-        high_risk_mask = df["niveau_risque_calcule"].eq("Eleve")
+        high_risk_mask = df["niveau_risque_calcule"].eq("Élevé")
         watch_mask = watch_mask | high_risk_mask
-        alert_reasons = alert_reasons.mask(high_risk_mask, alert_reasons + "Risque eleve; ")
+        alert_reasons = alert_reasons.mask(high_risk_mask, alert_reasons + "Risque élevé; ")
     if "retard_jours" in df.columns:
         overdue_mask = df["retard_jours"].fillna(0) > 30
         watch_mask = watch_mask | overdue_mask
@@ -1018,13 +1026,13 @@ def build_watchlist(df: pd.DataFrame) -> pd.DataFrame:
         negative_capacity_mask = df["capacite_remboursement"].fillna(0) < 0
         watch_mask = watch_mask | negative_capacity_mask
         alert_reasons = alert_reasons.mask(
-            negative_capacity_mask, alert_reasons + "Capacite negative; "
+            negative_capacity_mask, alert_reasons + "Capacité négative; "
         )
     if {"revenu_mensuel", "charge_mensuelle"}.issubset(df.columns):
         incomplete_financial_mask = df["revenu_mensuel"].isna() | df["charge_mensuelle"].isna()
         watch_mask = watch_mask | incomplete_financial_mask
         alert_reasons = alert_reasons.mask(
-            incomplete_financial_mask, alert_reasons + "Donnees financieres incompletes; "
+            incomplete_financial_mask, alert_reasons + "Données financières incomplètes; "
         )
 
     columns = [

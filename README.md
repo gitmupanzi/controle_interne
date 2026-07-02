@@ -1,73 +1,29 @@
-# Analyste Credit
+# Analyste Crédit
 
-Application Streamlit de standardisation et d'analyse credit, orientee import Excel/CSV et restitution sur une meme plateforme.
+Application Streamlit d'analyse et de suivi du crédit, orientée import Excel/CSV et restitution sur une même plateforme.
 
-Le projet permet de :
+## Présentation
 
-- charger une base credit depuis un fichier televerse ou un fichier deja present dans `line_list/`
-- standardiser automatiquement une partie des colonnes et de certaines valeurs metier
-- produire une synthese standard avec KPI, graphiques, repartition par sexe, distribution par tranche d'age et pyramide age-sexe
-- regrouper les blocs operationnels dans un onglet `Surveillance`
-- exposer un onglet pedagogique sur les notions importantes du metier d'analyste credit
-- analyser le portefeuille, le risque, la qualite des donnees et exporter un pack de restitution
+L'application permet de :
 
-## Presentation du projet
+- charger une base crédit depuis un fichier téléversé ou un fichier déjà présent dans `line_list/`
+- standardiser automatiquement une partie des colonnes et des valeurs métier
+- produire une synthèse standard avec KPI, graphiques, répartition par sexe, distribution par tranche d'âge et pyramide âge-sexe
+- regrouper les blocs opérationnels dans l'onglet `Surveillance`
+- exposer un onglet pédagogique `Notions importantes`
+- analyser le portefeuille, le risque, la qualité des données et exporter un pack de restitution
 
-Ce projet vise a mettre en place un systeme structure d'analyse, de suivi et de reporting des demandes de credit au sein de l'organisation.
+L'objectif est de fournir aux équipes crédit, commerciales, recouvrement et direction des informations fiables pour mieux piloter le portefeuille et réduire les risques.
 
-Il appuie la prise de decision sur l'octroi ou le refus de credit, tout en renforcant :
+## Démarrage rapide
 
-- le suivi des clients
-- la gestion des risques
-- la qualite des donnees utilisees dans le processus credit
-- la production de tableaux de bord exploitables par les equipes
-
-L'objectif principal est de fournir aux equipes credit, commerciales, recouvrement et direction des informations fiables, exploitables et actualisees pour reduire les risques financiers et ameliorer la performance du portefeuille de credit.
-
-## Contexte metier
-
-Dans une institution financiere ou une microfinance, l'analyse du credit joue un role central dans la maitrise des risques.
-
-Chaque demande de credit doit etre evaluee a partir :
-
-- des informations personnelles du client
-- des informations financieres
-- de l'historique de paiement
-- des garanties disponibles
-- du comportement de remboursement observe
-
-L'analyste credit intervient pour :
-
-- evaluer la solvabilite des clients
-- analyser les risques lies a chaque demande
-- formuler des recommandations d'octroi ou de refus
-- suivre les credits approuves
-- produire des rapports pour faciliter la prise de decision
-- contribuer a la qualite et a la tracabilite des dossiers clients
-
-## Objectifs du projet
-
-Les objectifs couverts par l'application sont les suivants :
-
-- centraliser les informations liees aux demandes de credit
-- ameliorer l'analyse des dossiers clients
-- suivre les credits accordes et les remboursements
-- detecter rapidement les retards ou risques de defaut
-- produire des tableaux de bord de suivi du portefeuille credit
-- securiser et documenter les donnees liees aux clients
-- faciliter la collaboration entre les equipes credit, recouvrement, relation client et direction
-
-## Demarrage rapide
-
-### Environnement utilise
-
-Le projet est actuellement exploite avec Python depuis :
+### Environnement Python utilisé
 
 ```text
 C:\ProgramData\anaconda3
 ```
 
-### Installation des dependances
+### Installer les dépendances
 
 ```powershell
 & 'C:\ProgramData\anaconda3\python.exe' -m pip install -r requirements.txt
@@ -85,100 +41,74 @@ C:\ProgramData\anaconda3
 & 'C:\ProgramData\anaconda3\python.exe' -m unittest discover -s tests -v
 ```
 
-## Source de donnees
+## Sources de données
 
-L'application supporte aujourd'hui :
+L'application supporte :
 
-- un televersement local `.xlsx`, `.xls` ou `.csv`
+- un téléversement local `.xlsx`, `.xls` ou `.csv`
 - un fichier inclus dans `line_list/`
 
-Exemple deja present dans le projet :
+Exemple inclus :
 
 - `line_list/base_donnees_brute_credit.xlsx`
 
-References de standardisation presentes :
+Références de standardisation :
 
 - `data/Rename_columns.xlsx`
 - `data/Replace_values.xlsx`
 
-## Ce que fait l'application
+## Interface actuelle
 
-L'interface combine plusieurs briques sur une meme page :
+### Zone haute
 
-- chargement de la source et choix de feuille Excel
-- standardisation des colonnes credit
-- filtres par statut, agence, produit et periode
-- synthese standard toujours visible en haut de page
-- onglets detailles en bas
-- export CSV et pack Excel
-
-Variables derivees actuellement calculees :
-
-- `capacite_remboursement`
-- `taux_endettement`
-- `mensualite_estimee`
-- `niveau_risque_calcule`
-- `mois_demande`
-
-Variables metier integrees a la standardisation :
-
-- `sexe`
-- `age`
-
-## Organisation actuelle de l'interface
-
-### Synthese standard
-
-La zone haute de la page conserve les indicateurs et graphiques standard. Elle inclut notamment :
+La zone haute conserve la synthèse standard visible pendant toute la navigation :
 
 - KPI de production, risque et remboursement
 - `Distribution des statuts de dossier`
-- `Evolution mensuelle des demandes`
+- `Évolution mensuelle des demandes`
 - `Distribution des niveaux de risque`
-- `Distribution par tranche d'age`
-- `Repartition par sexe`
-- `Pyramide age-sexe`
+- `Distribution par tranche d'âge`
+- `Répartition par sexe`
+- `Pyramide âge-sexe`
 
-Une option laterale permet aussi :
+Une option latérale permet aussi :
 
 - `Afficher annotations (valeurs)`
-- definir un seuil minimal d'affichage des annotations
+- définir un seuil minimal d'affichage des annotations
 
-### Onglets detailles
-
-L'application expose aujourd'hui :
+### Onglets disponibles
 
 - `Vue d'ensemble active`
 - `Notions importantes`
 - `Surveillance`
 - `Portefeuille`
 - `Risque`
-- `Qualite`
+- `Qualité`
 - `Export`
-- `Methodologie`
+- `Méthodologie`
 
 ### Logique des onglets
 
-- `Vue d'ensemble active` : confirme que la synthese haute reste visible pendant la navigation
-- `Notions importantes` : explique le role de l'analyste credit, les notions essentielles, le processus credit, les KPI et les bonnes pratiques
-- `Surveillance` : actions prioritaires, top agences, top produits, dossiers a suivre en priorite, apercu des dossiers
-- `Portefeuille` : production par produit, agent, agence, lecture agence x statut
-- `Risque` : distributions de risque, remboursement, classes de retard, watchlist
-- `Qualite` : anomalies, valeurs manquantes et mapping source -> standard
+- `Vue d'ensemble active` : confirme que la synthèse haute reste visible pendant la navigation
+- `Notions importantes` : rappelle les notions métier, les KPI et les bonnes pratiques d'analyse crédit
+- `Surveillance` : actions prioritaires, top agences, top produits, dossiers à suivre en priorité, aperçu des dossiers
+- `Portefeuille` : production par produit, agent, agence et lecture croisée agence x statut
+- `Risque` : distributions de risque, remboursement, classes de retard et watchlist
+- `Qualité` : anomalies, valeurs manquantes et mapping source -> standard
 - `Export` : export CSV et pack Excel
-- `Methodologie` : conventions et logique de calcul
+- `Méthodologie` : conventions, formules et logique de calcul
 
-## Donnees attendues
+## Données attendues
 
 Les analyses sont plus solides si la base contient au minimum :
 
 - un identifiant client
 - un identifiant dossier
 - une date de demande
-- un montant demande
+- un montant demandé
 - un statut de dossier
 
-Colonnes tres utiles selon les modules :
+Colonnes particulièrement utiles :
 
 - `montant_accorde`
 - `revenu_mensuel`
@@ -194,42 +124,29 @@ Colonnes tres utiles selon les modules :
 - `sexe`
 - `age`
 
-Donnees souvent utiles au niveau metier :
+## Variables dérivées
 
-- identite du client
-- activite professionnelle ou commerciale
-- garanties proposees
-- commentaires des analystes
-- historique des credits
-- historique des paiements
+Variables calculées actuellement :
 
-## Conventions de mapping
+- `capacite_remboursement`
+- `taux_endettement`
+- `mensualite_estimee`
+- `niveau_risque_calcule`
+- `mois_demande`
 
-Exemples de colonnes reconnues automatiquement :
+Variables métier standardisées :
 
-- `ID Client`, `id_client`, `code_client` -> `client_id`
-- `Numero Dossier`, `reference_dossier` -> `dossier_id`
-- `Montant demande` -> `montant_demande`
-- `Montant accorde` -> `montant_accorde`
-- `Revenu mensuel` -> `revenu_mensuel`
-- `Charges mensuelles` -> `charge_mensuelle`
-- `Statut dossier` -> `statut_dossier`
-- `Statut remboursement` -> `statut_remboursement`
-- `Sexe` -> `sexe`
-- `Age` -> `age`
+- `statut_dossier`
+- `statut_remboursement`
+- `sexe`
+- `age`
 
-Normalisations utiles deja appliquees :
+## Conventions métier principales
 
-- statuts dossier
-- statuts remboursement
-- valeurs de sexe comme `M`, `F`, `Masculin`, `Feminin`
-
-## Regles metier principales
-
-### Capacite de remboursement
+### Capacité de remboursement
 
 ```text
-Capacite de remboursement = Revenu mensuel - Charges mensuelles
+Capacité de remboursement = Revenu mensuel - Charges mensuelles
 ```
 
 ### Taux d'endettement
@@ -238,178 +155,60 @@ Capacite de remboursement = Revenu mensuel - Charges mensuelles
 Taux d'endettement = Charges mensuelles / Revenu mensuel
 ```
 
-Interpretation usuelle :
+Lecture usuelle :
 
 ```text
-0 % a 30 %   -> risque faible
-31 % a 50 %  -> risque moyen
-plus de 50 % -> risque eleve
+0 % à 30 %   -> risque faible
+31 % à 50 %  -> risque moyen
+plus de 50 % -> risque élevé
 ```
 
-### Mensualite estimee
+### Mensualité estimée
 
 ```text
-Mensualite estimee = Montant accorde / Duree du credit en mois
+Mensualité estimée = Montant accordé / Durée du crédit en mois
 ```
 
-### Niveau de risque calcule
+### Priorité de calcul du risque
 
-Priorite actuelle :
-
-1. niveau de risque deja present
-2. score credit
+1. niveau de risque déjà présent
+2. score crédit
 3. taux d'endettement
 4. retard en jours
 
-Interpretation usuelle du score credit :
+### Statuts métier suivis
 
-```text
-80 a 100 -> risque faible
-50 a 79  -> risque moyen
-0 a 49   -> risque eleve
-```
-
-### Statuts du dossier a suivre
-
-Les statuts metier les plus importants dans le projet sont :
-
-- `Recu`
-- `A completer`
+- `Reçu`
+- `À compléter`
 - `En analyse`
-- `Approuve`
-- `Rejete`
-- `Decaisse`
+- `Approuvé`
+- `Rejeté`
+- `Décaissé`
 - `En remboursement`
 - `En retard`
-- `Cloture`
+- `Clôturé`
 
-## Role et responsabilites principales
+## Contrôles qualité intégrés
 
-### Evaluation des demandes de credit
-
-- analyser les informations personnelles et financieres du client
-- verifier les revenus, charges, activites et garanties
-- examiner l'historique de paiement
-- controler la coherence des documents fournis
-- identifier les informations manquantes ou incoherentes
-- evaluer la capacite de remboursement
-
-### Analyse des risques
-
-- identifier les risques de non-remboursement
-- analyser le niveau d'endettement
-- utiliser les scores ou notations disponibles
-- appliquer les politiques internes de credit
-- proposer des mesures d'attenuation du risque
-
-### Recommandation de decision
-
-Les recommandations possibles peuvent etre :
-
-- credit recommande
-- credit recommande avec conditions
-- credit a revoir
-- credit non recommande
-
-### Suivi du portefeuille credit
-
-- suivre les echeances de remboursement
-- identifier les retards de paiement
-- surveiller les comptes a risque
-- collaborer avec l'equipe de recouvrement
-- produire des alertes sur les dossiers sensibles
-
-### Reporting et documentation
-
-- rapports d'analyse de credit
-- tableaux de bord de suivi
-- rapports sur les retards de paiement
-- syntheses sur le portefeuille credit
-- statistiques sur les demandes approuvees et rejetees
-- rapports de performance par agence, produit ou periode
-- documentation des decisions de credit
-
-## Processus general d'analyse credit
-
-1. Reception de la demande de credit.
-2. Collecte des informations du client.
-3. Verification des documents fournis.
-4. Analyse financiere et comportementale.
-5. Evaluation du risque.
-6. Calcul de la capacite de remboursement.
-7. Formulation d'une recommandation.
-8. Validation par les responsables concernes.
-9. Suivi du credit apres approbation.
-10. Reporting et mise a jour du dossier client.
-
-## Indicateurs de performance a suivre
-
-### Indicateurs de demande
-
-- nombre total de demandes
-- nombre de demandes en attente
-- nombre de demandes approuvees
-- nombre de demandes rejetees
-- montant total demande
-- montant total accorde
-- delai moyen de traitement
-
-### Indicateurs de risque
-
-- nombre de dossiers a risque faible
-- nombre de dossiers a risque moyen
-- nombre de dossiers a risque eleve
-- taux de rejet
-- taux d'endettement moyen
-- score credit moyen
-- nombre de dossiers avec donnees incompletes
-
-### Indicateurs de remboursement
-
-- montant total rembourse
-- montant restant du
-- nombre de clients a jour
-- nombre de clients en retard
-- nombre de jours moyens de retard
-- portefeuille a risque
-
-### Indicateurs par dimension
-
-Les analyses doivent pouvoir etre relues par :
-
-- agence
-- agent de credit
-- type de produit
-- sexe du client
-- tranche d'age
-- activite economique
-- periode
-- niveau de risque
-- statut du dossier
-
-## Controles qualite integres
-
-Le projet verifie notamment :
+Le projet vérifie notamment :
 
 - clients sans identifiant
-- dossiers sans identifiant
-- dossiers dupliques
+- dossiers dupliqués
 - dossiers sans statut
-- montants negatifs
-- montants accordes superieurs au montant demande
-- donnees financieres manquantes
-- capacite de remboursement negative
-- retards negatifs
-- dossiers approuves incoherents
+- montants négatifs
+- montants accordés supérieurs au montant demandé
+- données financières manquantes
+- capacité de remboursement négative
+- retards négatifs
 
 ## Exports disponibles
 
-L'onglet `Export` permet de telecharger :
+L'onglet `Export` permet de télécharger :
 
-- les donnees standardisees en CSV
+- les données standardisées en CSV
 - un pack Excel contenant :
-  - donnees standardisees
-  - controles qualite
+  - données standardisées
+  - contrôles qualité
   - mapping des colonnes
 
 ## Structure du projet
@@ -444,71 +243,51 @@ analyste_credit/
 
 ## Fichiers principaux
 
-- application principale : [analyste_credit.py](./analyste_credit.py)
-- chargement des fichiers : [credit_app/app_loader.py](./credit_app/app_loader.py)
-- logique metier : [credit_app/domain.py](./credit_app/domain.py)
-- styles et helpers UI : [credit_app/ui.py](./credit_app/ui.py)
-- synthese standard : [credit_app/tabs/overview.py](./credit_app/tabs/overview.py)
-- notions importantes : [credit_app/tabs/analyste_credit.py](./credit_app/tabs/analyste_credit.py)
-- surveillance : [credit_app/tabs/surveillance.py](./credit_app/tabs/surveillance.py)
-- portefeuille : [credit_app/tabs/portfolio.py](./credit_app/tabs/portfolio.py)
-- risque : [credit_app/tabs/risk.py](./credit_app/tabs/risk.py)
-- qualite : [credit_app/tabs/quality.py](./credit_app/tabs/quality.py)
+- application principale : [analyste_credit.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/analyste_credit.py)
+- logique métier : [credit_app/domain.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/domain.py)
+- styles et composants UI : [credit_app/ui.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/ui.py)
+- synthèse standard : [credit_app/tabs/overview.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/tabs/overview.py)
+- notions importantes : [credit_app/tabs/analyste_credit.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/tabs/analyste_credit.py)
+- surveillance : [credit_app/tabs/surveillance.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/tabs/surveillance.py)
+- portefeuille : [credit_app/tabs/portfolio.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/tabs/portfolio.py)
+- risque : [credit_app/tabs/risk.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/tabs/risk.py)
+- qualité : [credit_app/tabs/quality.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/tabs/quality.py)
 
-## Tests et etat actuel
+## Vérification
 
-Les tests couvrent aujourd'hui les briques critiques :
+Les tests couvrent notamment :
 
-- standardisation des colonnes
-- variables derivees
-- controles qualite
-- synthese metier
-- watchlist
-- distributions sexe / age
-- pyramide age-sexe
-- chargement du fichier Excel inclus
+- la standardisation des colonnes
+- les variables dérivées
+- les contrôles qualité
+- la synthèse métier
+- la watchlist
+- les distributions sexe / âge
+- la pyramide âge-sexe
+- le chargement du fichier Excel inclus
 
-Commande de verification utilisee :
+## Confidentialité
 
-```powershell
-& 'C:\ProgramData\anaconda3\python.exe' -m unittest discover -s tests -v
-```
+Les données manipulées dans ce projet sont sensibles et doivent être traitées avec confidentialité.
 
-Etat verifie pendant la mise a jour :
+Bonnes pratiques :
 
-- application Streamlit demarre correctement
-- tests `8/8` OK
-
-## Confidentialite et securite
-
-Les donnees manipulees dans ce projet sont sensibles et doivent etre traitees avec confidentialite.
-
-Bonnes pratiques a respecter :
-
-- limiter l'acces aux donnees aux personnes autorisees
-- eviter le partage non securise des fichiers clients
-- proteger les informations personnelles et financieres
+- limiter l'accès aux données aux personnes autorisées
+- éviter le partage non sécurisé des fichiers clients
+- protéger les informations personnelles et financières
 - documenter les modifications importantes
-- conserver une tracabilite des decisions
-- respecter les procedures internes de securite
+- conserver une traçabilité des décisions
 
-## Limites et point d'attention
+## Limites actuelles
 
-- la qualite des analyses depend fortement des colonnes disponibles dans la source
-- certaines regles de risque restent heuristiques et devront etre adaptees a votre institution
-- le warning Streamlit suivant peut encore apparaitre selon l'installation locale Anaconda :
+- la qualité des analyses dépend fortement des colonnes disponibles dans la source
+- certaines règles de risque restent heuristiques et doivent être adaptées à votre institution
+- selon l'installation locale Streamlit/Anaconda, un warning de scan de composants peut encore apparaître sans bloquer l'application
 
-```text
-Failed to scan component manifests: 'NoneType' object has no attribute 'lower'
-```
+## Évolutions possibles
 
-Ce warning vient de la distribution Streamlit installee, pas de la logique metier du projet, et n'empeche pas le lancement de l'application.
-
-## Prochaines evolutions possibles
-
-- tranches d'age plus fines pour la pyramide age-sexe
-- parametres de scoring credit plus metier
+- tranches d'âge plus fines pour la pyramide âge-sexe
+- paramètres de scoring crédit plus métier
 - chargement multi-fichiers et consolidation
 - mapping interactif des colonnes non reconnues
-- rapports PDF ou exports de synthese
-- enrichissement du bloc de surveillance
+- rapports PDF ou exports de synthèse

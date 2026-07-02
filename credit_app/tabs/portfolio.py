@@ -17,7 +17,7 @@ from credit_app.ui import render_kpi_cards, render_panel_title, render_summary_b
 
 def render_portfolio_tab(df: pd.DataFrame) -> None:
     if df.empty:
-        st.warning("Aucune donnee disponible pour cet onglet.")
+        st.warning("Aucune donnée disponible pour cet onglet.")
         return
 
     snapshot = build_operational_snapshot(df)
@@ -29,18 +29,18 @@ def render_portfolio_tab(df: pd.DataFrame) -> None:
     render_kpi_cards(
         [
             ("Agences", f"{agency_count:,}".replace(",", " "), "Couverture active", "blue"),
-            ("Produits", f"{product_count:,}".replace(",", " "), "Gammes presentes", "navy"),
+            ("Produits", f"{product_count:,}".replace(",", " "), "Gammes présentes", "navy"),
             ("Agents", f"{agent_count:,}".replace(",", " "), "Acteurs visibles", "green"),
             (
-                "Montant demande",
+                "Montant demandé",
                 format_currency(snapshot["montant_demande_total"]),
-                "Perimetre courant",
+                "Périmètre courant",
                 "orange",
             ),
             (
-                "Montant accorde",
+                "Montant accordé",
                 format_currency(snapshot["montant_accorde_total"]),
-                "Production engagee",
+                "Production engagée",
                 "green",
             ),
             (
@@ -64,7 +64,7 @@ def render_portfolio_tab(df: pd.DataFrame) -> None:
     with col1:
         product_amounts = build_grouped_amounts(df, "type_produit")
         if not product_amounts.empty:
-            render_panel_title("Montant demande par produit")
+            render_panel_title("Montant demandé par produit")
             fig = px.bar(
                 product_amounts,
                 x="type_produit",
@@ -80,7 +80,7 @@ def render_portfolio_tab(df: pd.DataFrame) -> None:
     with col2:
         agent_amounts = build_grouped_amounts(df, "agent_credit")
         if not agent_amounts.empty:
-            render_panel_title("Top agents par montant demande")
+            render_panel_title("Top agents par montant demandé")
             fig = px.bar(
                 agent_amounts,
                 x="agent_credit",
@@ -129,12 +129,12 @@ def render_portfolio_tab(df: pd.DataFrame) -> None:
             aggfunc="sum",
             fill_value=0,
         )
-        render_panel_title("Lecture croisee agence x statut")
+        render_panel_title("Lecture croisée agence x statut")
         st.dataframe(pivot, width="stretch")
 
     watchlist = build_watchlist(df)
-    render_panel_title("Dossiers sensibles a suivre")
+    render_panel_title("Dossiers sensibles à suivre")
     if watchlist.empty:
-        st.success("Aucun dossier sensible n'a ete detecte selon les regles actuelles.")
+        st.success("Aucun dossier sensible n'a été détecté selon les règles actuelles.")
     else:
         st.dataframe(watchlist.head(200), width="stretch", hide_index=True)

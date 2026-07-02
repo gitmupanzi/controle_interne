@@ -84,7 +84,7 @@ from credit_app.ui import (
 
 def configure_page() -> None:
     st.set_page_config(
-        page_title="Analyste Credit",
+        page_title="Analyste Crédit",
         page_icon="AC",
         layout="wide",
         initial_sidebar_state="expanded",
@@ -173,10 +173,10 @@ def main() -> None:
     render_professional_header()
 
     available_files = list_available_line_list_files()
-    st.sidebar.header("Source des donnees")
+    st.sidebar.header("Source des données")
     source_mode = st.sidebar.selectbox(
-        "Source de donnees",
-        ["Televerser un fichier", "Charger un fichier inclus"],
+        "Source de données",
+        ["Téléverser un fichier", "Charger un fichier inclus"],
         index=1 if available_files else 0,
         key="credit_source_mode",
     )
@@ -186,11 +186,11 @@ def main() -> None:
     sheet_name = None
     filename = None
 
-    if source_mode == "Televerser un fichier":
+    if source_mode == "Téléverser un fichier":
         uploaded_file = st.sidebar.file_uploader(
-            "Base credit",
+            "Base crédit",
             type=["xlsx", "xls", "csv"],
-            help="Formats acceptes : Excel ou CSV.",
+            help="Formats acceptés : Excel ou CSV.",
         )
     else:
         if available_files:
@@ -208,18 +208,18 @@ def main() -> None:
                 if local_sheets:
                     sheet_name = st.sidebar.selectbox("Feuille Excel", local_sheets, index=0, key="local_sheet_name")
         else:
-            st.sidebar.warning("Aucun fichier `.xlsx`, `.xls` ou `.csv` n'a ete trouve dans `line_list/`.")
+            st.sidebar.warning("Aucun fichier `.xlsx`, `.xls` ou `.csv` n'a été trouvé dans `line_list/`.")
 
-    with st.sidebar.expander("Reference et stockage", expanded=False):
+    with st.sidebar.expander("Référence et stockage", expanded=False):
         st.caption(
-            f"Reference de renommage active : `data/Rename_columns.xlsx` ({get_reference_column_count()} alias)"
+            f"Référence de renommage active : `data/Rename_columns.xlsx` ({get_reference_column_count()} alias)"
         )
-        st.caption("Vous pouvez deposer vos fichiers de travail dans `line_list/` pour les relire ensuite sans televersement.")
+        st.caption("Vous pouvez déposer vos fichiers de travail dans `line_list/` pour les relire ensuite sans téléversement.")
 
-    if source_mode == "Televerser un fichier" and uploaded_file is None:
+    if source_mode == "Téléverser un fichier" and uploaded_file is None:
         selected_local_path = None
 
-    if source_mode == "Televerser un fichier":
+    if source_mode == "Téléverser un fichier":
         source_ready = uploaded_file is not None
     else:
         source_ready = selected_local_path is not None
@@ -227,17 +227,17 @@ def main() -> None:
     if not source_ready:
         render_context_row(
             [
-                ("Source", "Aucun fichier charge"),
+                ("Source", "Aucun fichier chargé"),
                 ("Formats", "Excel ou CSV"),
-                ("Analyses", "Portefeuille, risque, qualite"),
-                ("Mode", "Televersement ou fichier inclus"),
+                ("Analyses", "Portefeuille, risque, qualité"),
+                ("Mode", "Téléversement ou fichier inclus"),
             ]
         )
         render_summary_box(
             "Base attendue",
             [
-                "Chargez un fichier Excel ou CSV ou utilisez un fichier deja place dans line_list/.",
-                "L'application reconnait automatiquement plusieurs variantes de colonnes metier.",
+                "Chargez un fichier Excel ou CSV ou utilisez un fichier déjà placé dans line_list/.",
+                "L'application reconnaît automatiquement plusieurs variantes de colonnes métier.",
                 "Le renommage externe de data/Rename_columns.xlsx est aussi pris en compte.",
             ],
         )
@@ -258,7 +258,7 @@ def main() -> None:
         render_footer()
         return
 
-    if source_mode == "Televerser un fichier":
+    if source_mode == "Téléverser un fichier":
         file_bytes = uploaded_file.getvalue()
         filename = uploaded_file.name
         sheet_name = None
@@ -268,15 +268,15 @@ def main() -> None:
             if sheets:
                 sheet_name = st.sidebar.selectbox("Feuille Excel", sheets, index=0)
 
-        with st.spinner("Preparation de la base en cours..."):
+        with st.spinner("Préparation de la base en cours..."):
             payload = prepare_dataset(file_bytes, filename, sheet_name)
     else:
-        with st.spinner("Preparation de la base en cours..."):
+        with st.spinner("Préparation de la base en cours..."):
             payload = prepare_dataset_from_path(str(selected_local_path), sheet_name)
 
     raw_df = payload["raw_df"]
     standardized_df = payload["standardized_df"]
-    source_label = "Televersement" if source_mode == "Televerser un fichier" else "Fichier inclus"
+    source_label = "Téléversement" if source_mode == "Téléverser un fichier" else "Fichier inclus"
 
     render_context_row(
         [
@@ -284,10 +284,10 @@ def main() -> None:
             ("Mode", source_label),
             ("Lignes brutes", f"{len(raw_df):,}".replace(",", " ")),
             ("Colonnes source", str(raw_df.shape[1])),
-            ("Reference", "Rename_columns.xlsx"),
+            ("Référence", "Rename_columns.xlsx"),
         ]
     )
-    with st.expander("Source analytique et fichiers utilises", expanded=False):
+    with st.expander("Source analytique et fichiers utilisés", expanded=False):
         st.write(f"Mode de chargement : **{source_label}**")
         st.write(f"Fichier actif : **{filename}**")
         if source_mode == "Charger un fichier inclus" and selected_local_path is not None:
@@ -295,11 +295,11 @@ def main() -> None:
         if sheet_name:
             st.write(f"Feuille active : **{sheet_name}**")
         st.write(
-            f"Reference de renommage : **data/Rename_columns.xlsx** avec **{get_reference_column_count()}** alias charges."
+            f"Référence de renommage : **data/Rename_columns.xlsx** avec **{get_reference_column_count()}** alias chargés."
         )
 
     st.sidebar.header("Filtres")
-    st.sidebar.button("Reinitialiser les filtres", key="credit_reset_filters", on_click=_reset_sidebar_filters, width="stretch")
+    st.sidebar.button("Réinitialiser les filtres", key="credit_reset_filters", on_click=_reset_sidebar_filters, width="stretch")
 
     status_options = sorted(
         value for value in standardized_df.get("statut_dossier", pd.Series(dtype="object")).dropna().unique()
@@ -334,11 +334,11 @@ def main() -> None:
     )
     selected_products = _resolve_multiselect_selection(selected_products_values)
 
-    st.sidebar.header("Periode")
+    st.sidebar.header("Période")
     start_date = None
     end_date = None
     use_period_filter = st.sidebar.checkbox(
-        "Filtrer sur la periode de demande",
+        "Filtrer sur la période de demande",
         value=True,
         key="credit_filter_use_period",
     )
@@ -347,7 +347,7 @@ def main() -> None:
         if not valid_dates.empty:
             default_range = (valid_dates.min().date(), valid_dates.max().date())
             picked_range = st.sidebar.date_input(
-                "Periode de demande",
+                "Période de demande",
                 value=st.session_state.get("credit_period_range", default_range),
                 min_value=default_range[0],
                 max_value=default_range[1],
@@ -383,18 +383,18 @@ def main() -> None:
         [
             ("Source", filename),
             ("Lignes brutes", f"{len(raw_df):,}".replace(",", " ")),
-            ("Lignes analysees", f"{len(filtered_df):,}".replace(",", " ")),
-            ("Colonnes standardisees", format_context_value(standardized_df.shape[1])),
+            ("Lignes analysées", f"{len(filtered_df):,}".replace(",", " ")),
+            ("Colonnes standardisées", format_context_value(standardized_df.shape[1])),
             ("Colonnes reconnues", format_context_value(recognized_columns)),
         ]
     )
     st.caption(
-        f"Fichier source : {filename} | Lignes brutes : {len(raw_df):,} | Lignes analysees : {len(filtered_df):,}"
+        f"Fichier source : {filename} | Lignes brutes : {len(raw_df):,} | Lignes analysées : {len(filtered_df):,}"
     )
 
-    with st.sidebar.expander("Resume des filtres actifs", expanded=True):
+    with st.sidebar.expander("Résumé des filtres actifs", expanded=True):
         st.write(f"Fichier : **{filename}**")
-        st.write(f"Lignes analysees : **{len(filtered_df):,}**".replace(",", " "))
+        st.write(f"Lignes analysées : **{len(filtered_df):,}**".replace(",", " "))
         st.write(
             "Statut : **"
             + ("Toutes" if selected_status is None else ", ".join(selected_status[:4]))
@@ -411,15 +411,15 @@ def main() -> None:
             + "**"
         )
         if start_date and end_date:
-            st.write(f"Periode : **{start_date.isoformat()} -> {end_date.isoformat()}**")
+            st.write(f"Période : **{start_date.isoformat()} -> {end_date.isoformat()}**")
         else:
-            st.write("Periode : **toute la base**")
+            st.write("Période : **toute la base**")
 
-    with st.sidebar.expander("Perimetre actif", expanded=False):
+    with st.sidebar.expander("Périmètre actif", expanded=False):
         st.write(f"Clients uniques : **{standardized_df['client_id'].nunique():,}**".replace(",", " ") if "client_id" in standardized_df.columns else "Clients uniques : **-**")
-        st.write(f"Agences detectees : **{len(agency_options)}**")
-        st.write(f"Produits detectes : **{len(product_options)}**")
-        st.write(f"Statuts detectes : **{len(status_options)}**")
+        st.write(f"Agences détectées : **{len(agency_options)}**")
+        st.write(f"Produits détectés : **{len(product_options)}**")
+        st.write(f"Statuts détectés : **{len(status_options)}**")
 
     with st.sidebar.expander("Options d'affichage", expanded=False):
         st.checkbox(
@@ -438,23 +438,23 @@ def main() -> None:
             disabled=not st.session_state.get("credit_annot_vals", False),
         )
         st.button(
-            "Reinitialiser options d'affichage",
+            "Réinitialiser les options d'affichage",
             key="credit_reset_display_options",
             on_click=_reset_display_options,
             width="stretch",
         )
 
-    render_panel_title("Synthese standard")
+    render_panel_title("Synthèse standard")
     render_summary_box(
         "Vue d'ensemble active",
         [
-            "Les indicateurs standard et les graphiques standard restent affiches dans cette partie haute de la page.",
-            "Utilisez les filtres lateraux pour mettre a jour la synthese, puis descendez vers les onglets detaillees pour approfondir l'analyse.",
+            "Les indicateurs standard et les graphiques standard restent affichés dans cette partie haute de la page.",
+            "Utilisez les filtres latéraux pour mettre à jour la synthèse, puis descendez vers les onglets détaillés pour approfondir l'analyse.",
         ],
     )
     render_overview_tab(filtered_df, filtered_monthly_df)
 
-    render_panel_title("Analyses detaillees par onglet")
+    render_panel_title("Analyses détaillées par onglet")
     tabs = st.tabs(
         [
             "Vue d'ensemble active",
@@ -462,19 +462,19 @@ def main() -> None:
             "Surveillance",
             "Portefeuille",
             "Risque",
-            "Qualite",
+            "Qualité",
             "Export",
-            "Methodologie",
+            "Méthodologie",
         ]
     )
 
     with tabs[0]:
         render_summary_box(
-            "Vue d'ensemble deja affichee",
+            "Vue d'ensemble déjà affichée",
             [
-                "La synthese principale est conservee plus haut dans la page.",
+                "La synthèse principale est conservée plus haut dans la page.",
                 "Cet onglet confirme que les KPI et graphiques standard restent visibles pendant la navigation.",
-                "Les blocs de suivi operationnel sont regroupes dans l'onglet Surveillance.",
+                "Les blocs de suivi opérationnel sont regroupés dans l'onglet Surveillance.",
             ],
         )
     with tabs[1]:

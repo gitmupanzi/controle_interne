@@ -12,34 +12,34 @@ def _build_concepts_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
-                "Notion": "Capacite de remboursement",
-                "Definition": "Marge theorique du client apres deduction des charges mensuelles.",
-                "Lecture utile": "Une capacite negative ou trop faible invite a revoir la decision ou les conditions du credit.",
+                "Notion": "Capacité de remboursement",
+                "Definition": "Marge théorique du client après déduction des charges mensuelles.",
+                "Lecture utile": "Une capacité négative ou trop faible invite à revoir la décision ou les conditions du crédit.",
             },
             {
                 "Notion": "Taux d'endettement",
                 "Definition": "Part des charges mensuelles dans le revenu mensuel.",
-                "Lecture utile": "Un taux eleve signale une pression financiere plus forte et un risque de defaut plus important.",
+                "Lecture utile": "Un taux élevé signale une pression financière plus forte et un risque de défaut plus important.",
             },
             {
                 "Notion": "Niveau de risque",
-                "Definition": "Classement du dossier selon le risque deja present, le score credit, l'endettement et les retards.",
+                "Definition": "Classement du dossier selon le risque déjà présent, le score crédit, l'endettement et les retards.",
                 "Lecture utile": "Permet de prioriser les revues avant l'octroi et pendant le suivi.",
             },
             {
                 "Notion": "Statut du dossier",
-                "Definition": "Etape de vie du dossier : recu, en analyse, approuve, rejete, decaisse, en remboursement, en retard, cloture.",
-                "Lecture utile": "Aide a suivre le pipeline et les points de blocage dans le processus de credit.",
+                "Definition": "Étape de vie du dossier : reçu, en analyse, approuvé, rejeté, décaissé, en remboursement, en retard, clôturé.",
+                "Lecture utile": "Aide à suivre le pipeline et les points de blocage dans le processus de crédit.",
             },
             {
                 "Notion": "Statut de remboursement",
-                "Definition": "Situation du remboursement apres decaissement.",
-                "Lecture utile": "Permet d'identifier les clients a jour, en retard ou soldes.",
+                "Definition": "Situation du remboursement après décaissement.",
+                "Lecture utile": "Permet d'identifier les clients à jour, en retard ou soldés.",
             },
             {
                 "Notion": "Watchlist",
-                "Definition": "Liste des dossiers signales par les regles de surveillance.",
-                "Lecture utile": "Concentre les cas a verifier rapidement : risque eleve, retard long, capacite negative ou donnees incompletes.",
+                "Definition": "Liste des dossiers signalés par les règles de surveillance.",
+                "Lecture utile": "Concentre les cas à vérifier rapidement : risque élevé, retard long, capacité négative ou données incomplètes.",
             },
         ]
     )
@@ -48,12 +48,12 @@ def _build_concepts_table() -> pd.DataFrame:
 def _build_role_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Bloc": "Evaluation des demandes", "Points cles": "Verifier les revenus, charges, garanties, coherence du dossier et capacite de remboursement."},
-            {"Bloc": "Analyse des risques", "Points cles": "Mesurer l'endettement, les retards, le score, les fragilites et les mesures d'attenuation."},
-            {"Bloc": "Recommandation", "Points cles": "Formuler une decision argumentee : recommande, recommande avec conditions, a revoir, non recommande."},
-            {"Bloc": "Suivi du portefeuille", "Points cles": "Surveiller les echeances, les retards, les dossiers sensibles et les comptes a risque."},
-            {"Bloc": "Reporting", "Points cles": "Produire des tableaux de bord par agence, produit, periode, risque et remboursement."},
-            {"Bloc": "Qualite des donnees", "Points cles": "Detecter doublons, incoherences, valeurs manquantes et documenter les corrections."},
+            {"Bloc": "Évaluation des demandes", "Points cles": "Vérifier les revenus, charges, garanties, cohérence du dossier et capacité de remboursement."},
+            {"Bloc": "Analyse des risques", "Points cles": "Mesurer l'endettement, les retards, le score, les fragilités et les mesures d'atténuation."},
+            {"Bloc": "Recommandation", "Points cles": "Formuler une décision argumentée : recommandé, recommandé avec conditions, à revoir, non recommandé."},
+            {"Bloc": "Suivi du portefeuille", "Points cles": "Surveiller les échéances, les retards, les dossiers sensibles et les comptes à risque."},
+            {"Bloc": "Reporting", "Points cles": "Produire des tableaux de bord par agence, produit, période, risque et remboursement."},
+            {"Bloc": "Qualité des données", "Points cles": "Détecter les doublons, incohérences, valeurs manquantes et documenter les corrections."},
         ]
     )
 
@@ -61,15 +61,15 @@ def _build_role_table() -> pd.DataFrame:
 def _build_process_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Etape": 1, "Processus": "Reception de la demande de credit"},
+            {"Etape": 1, "Processus": "Réception de la demande de crédit"},
             {"Etape": 2, "Processus": "Collecte des informations du client"},
             {"Etape": 3, "Processus": "Verification des documents fournis"},
             {"Etape": 4, "Processus": "Analyse financiere et comportementale"},
-            {"Etape": 5, "Processus": "Evaluation du risque"},
-            {"Etape": 6, "Processus": "Calcul de la capacite de remboursement"},
+            {"Etape": 5, "Processus": "Évaluation du risque"},
+            {"Etape": 6, "Processus": "Calcul de la capacité de remboursement"},
             {"Etape": 7, "Processus": "Formulation d'une recommandation"},
             {"Etape": 8, "Processus": "Validation par les responsables concernes"},
-            {"Etape": 9, "Processus": "Suivi du credit apres approbation"},
+            {"Etape": 9, "Processus": "Suivi du crédit après approbation"},
             {"Etape": 10, "Processus": "Reporting et mise a jour du dossier client"},
         ]
     )
@@ -78,10 +78,10 @@ def _build_process_table() -> pd.DataFrame:
 def _build_kpi_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Famille": "Demande", "Indicateurs": "Nombre de demandes, taux d'approbation, montant demande, montant accorde, delai de traitement"},
-            {"Famille": "Risque", "Indicateurs": "Dossiers a risque eleve, taux d'endettement moyen, score moyen, dossiers incomplets"},
+            {"Famille": "Demande", "Indicateurs": "Nombre de demandes, taux d'approbation, montant demandé, montant accordé, délai de traitement"},
+            {"Famille": "Risque", "Indicateurs": "Dossiers à risque élevé, taux d'endettement moyen, score moyen, dossiers incomplets"},
             {"Famille": "Remboursement", "Indicateurs": "Clients a jour, clients en retard, retard moyen, retard > 30 jours, portefeuille a risque"},
-            {"Famille": "Pilotage", "Indicateurs": "Performance par agence, agent, produit, sexe, tranche d'age et periode"},
+            {"Famille": "Pilotage", "Indicateurs": "Performance par agence, agent, produit, sexe, tranche d'âge et période"},
             {"Famille": "Qualite", "Indicateurs": "Doublons, valeurs manquantes, montants incoherents, statuts manquants"},
         ]
     )
@@ -295,15 +295,15 @@ def _render_hero() -> None:
     st.markdown(
         """
 <div class="analyst-hero">
-  <div class="analyst-hero-badge">Guide metier</div>
-  <h2>NOTIONS IMPORTANTES POUR L'ANALYSE ET LE SUIVI DU CREDIT</h2>
+  <div class="analyst-hero-badge">Guide métier</div>
+  <h2>NOTIONS IMPORTANTES POUR L'ANALYSE ET LE SUIVI DU CRÉDIT</h2>
   <p>
-    Cet onglet aide a relire correctement les indicateurs du dashboard, a comprendre
-    le role de l'analyste credit, et a structurer les decisions autour du risque,
-    de la capacite de remboursement, du suivi du portefeuille et de la qualite des donnees.
+    Cet onglet aide à relire correctement les indicateurs du dashboard, à comprendre
+    le rôle de l'analyste crédit, et à structurer les décisions autour du risque,
+    de la capacité de remboursement, du suivi du portefeuille et de la qualité des données.
   </p>
   <div class="analyst-chip-row">
-    <span class="analyst-chip">Analyse credit</span>
+    <span class="analyst-chip">Analyse crédit</span>
     <span class="analyst-chip">Gestion du risque</span>
     <span class="analyst-chip">Suivi portefeuille</span>
     <span class="analyst-chip">Documentation et reporting</span>
@@ -318,14 +318,14 @@ def _render_learning_path() -> None:
     st.markdown(
         """
 <div class="analyst-path">
-  <div class="analyst-path-title">Parcours conseille</div>
+  <div class="analyst-path-title">Parcours conseillé</div>
   <div class="analyst-stepper">
     <div class="analyst-step">1. Comprendre le dossier</div>
-    <div class="analyst-step">2. Mesurer la capacite</div>
+    <div class="analyst-step">2. Mesurer la capacité</div>
     <div class="analyst-step">3. Lire le risque</div>
     <div class="analyst-step">4. Formuler la recommandation</div>
     <div class="analyst-step">5. Suivre le portefeuille</div>
-    <div class="analyst-step">6. Verifier la qualite</div>
+    <div class="analyst-step">6. Vérifier la qualité</div>
   </div>
 </div>
         """,
@@ -356,7 +356,7 @@ def _render_formula_cards() -> None:
         {
             "label": "Capacite de remboursement",
             "formula": "Revenu mensuel - Charges mensuelles",
-            "why": "Donne une premiere lecture de la marge theorique disponible pour rembourser le credit.",
+            "why": "Donne une première lecture de la marge théorique disponible pour rembourser le crédit.",
         },
         {
             "label": "Taux d'endettement",
@@ -365,22 +365,22 @@ def _render_formula_cards() -> None:
         },
         {
             "label": "Mensualite estimee",
-            "formula": "Montant accorde / Duree du credit en mois",
+            "formula": "Montant accordé / Durée du crédit en mois",
             "why": "Approximation simple de l'effort mensuel attendu sur le dossier.",
         },
         {
             "label": "Taux d'approbation",
             "formula": "Dossiers favorables / total dossiers",
-            "why": "Permet de suivre la dynamique de decision sur le perimetre analyse.",
+            "why": "Permet de suivre la dynamique de décision sur le périmètre analysé.",
         },
         {
             "label": "Taux de retard",
             "formula": "Dossiers en retard / total dossiers",
-            "why": "Mesure la fragilite du portefeuille sur le perimetre courant.",
+            "why": "Mesure la fragilité du portefeuille sur le périmètre courant.",
         },
         {
             "label": "Watchlist",
-            "formula": "Risque eleve + retards longs + capacite negative + donnees incompletes",
+            "formula": "Risque élevé + retards longs + capacité négative + données incomplètes",
             "why": "Sert a prioriser les cas qui demandent une revue rapide ou une action immediate.",
         },
     ]
@@ -408,24 +408,24 @@ def render_analyste_credit_tab() -> None:
     _render_card_grid(
         [
             {
-                "label": "Finalite",
-                "value": "Decider juste",
-                "subtitle": "Aider l'organisation a accorder les credits de maniere responsable et documentee.",
+            "label": "Finalité",
+            "value": "Décider juste",
+            "subtitle": "Aider l'organisation à accorder les crédits de manière responsable et documentée.",
             },
             {
                 "label": "Axes couverts",
                 "value": "4 blocs",
-                "subtitle": "Demande, risque, remboursement et qualite des donnees.",
+                "subtitle": "Demande, risque, remboursement et qualité des données.",
             },
             {
-                "label": "Lecture cle",
-                "value": "Risque + capacite",
+                "label": "Lecture clé",
+                "value": "Risque + capacité",
                 "subtitle": "Un dossier ne se lit jamais sur un seul indicateur.",
             },
             {
-                "label": "Reflexe",
-                "value": "Verifier",
-                "subtitle": "Toujours relire le contexte, les pieces et la coherence des donnees.",
+                "label": "Réflexe",
+                "value": "Vérifier",
+                "subtitle": "Toujours relire le contexte, les pièces et la cohérence des données.",
             },
         ]
     )
@@ -433,23 +433,23 @@ def render_analyste_credit_tab() -> None:
     _render_learning_path()
 
     render_summary_box(
-        "Finalite du projet",
+        "Finalité du projet",
         [
-            "Cette application aide les equipes credit, commerciales, recouvrement et direction a prendre des decisions plus fiables.",
-            "Elle centralise l'analyse des demandes, le suivi du portefeuille, la lecture du risque et la qualite des donnees dans une meme interface.",
-            "L'objectif est de reduire les risques financiers tout en ameliorant la performance du portefeuille credit.",
+            "Cette application aide les équipes crédit, commerciales, recouvrement et direction à prendre des décisions plus fiables.",
+            "Elle centralise l'analyse des demandes, le suivi du portefeuille, la lecture du risque et la qualité des données dans une même interface.",
+            "L'objectif est de réduire les risques financiers tout en améliorant la performance du portefeuille crédit.",
         ],
     )
 
     top_left, top_right = st.columns(2)
     with top_left:
-        render_panel_title("Contexte metier")
+        render_panel_title("Contexte métier")
         render_summary_box(
-            "Pourquoi l'analyse credit est centrale",
+            "Pourquoi l'analyse crédit est centrale",
             [
-                "Chaque demande doit etre evaluee a partir des informations personnelles, financieres et comportementales du client.",
-                "L'analyste credit intervient avant l'octroi, mais aussi pendant le suivi des credits approuves.",
-                "La qualite des donnees et la tracabilite des decisions sont essentielles pour limiter les pertes et documenter les choix.",
+                "Chaque demande doit être évaluée à partir des informations personnelles, financières et comportementales du client.",
+                "L'analyste crédit intervient avant l'octroi, mais aussi pendant le suivi des crédits approuvés.",
+                "La qualité des données et la traçabilité des décisions sont essentielles pour limiter les pertes et documenter les choix.",
             ],
         )
     with top_right:
@@ -457,35 +457,35 @@ def render_analyste_credit_tab() -> None:
         render_summary_box(
             "Ce que l'organisation recherche",
             [
-                "Mieux analyser les demandes de credit.",
-                "Detecter plus vite les retards et les dossiers a risque.",
+                "Mieux analyser les demandes de crédit.",
+                "Détecter plus vite les retards et les dossiers à risque.",
                 "Produire des tableaux de bord clairs pour le pilotage.",
-                "Faciliter la collaboration entre credit, recouvrement, relation client et direction.",
+                "Faciliter la collaboration entre crédit, recouvrement, relation client et direction.",
             ],
         )
 
     render_panel_title("Formules de lecture rapide")
     _render_formula_cards()
 
-    render_panel_title("Role de l'analyste credit")
+    render_panel_title("Rôle de l'analyste crédit")
     st.dataframe(_build_role_table(), width="stretch", hide_index=True, height=320)
 
-    render_panel_title("Processus general d'analyse credit")
+    render_panel_title("Processus général d'analyse crédit")
     st.dataframe(_build_process_table(), width="stretch", hide_index=True, height=410)
 
     concepts_left, concepts_right = st.columns((1.25, 1))
     with concepts_left:
-        render_panel_title("Notions importantes a bien lire")
+        render_panel_title("Notions importantes à bien lire")
         st.dataframe(_build_concepts_table(), width="stretch", hide_index=True, height=360)
     with concepts_right:
         render_panel_title("Bonnes pratiques de lecture")
         render_summary_box(
-            "Reflexes utiles",
+            "Réflexes utiles",
             [
-                "Relire un indicateur avec son perimetre filtre.",
-                "Verifier la qualite des donnees avant de conclure.",
-                "Ne pas lire un risque eleve sans regarder aussi la capacite, l'endettement et les retards.",
-                "Documenter la recommandation avec des elements objectifs.",
+                "Relire un indicateur avec son périmètre filtré.",
+                "Vérifier la qualité des données avant de conclure.",
+                "Ne pas lire un risque élevé sans regarder aussi la capacité, l'endettement et les retards.",
+                "Documenter la recommandation avec des éléments objectifs.",
                 "Prioriser les dossiers watchlist et les retards longs.",
             ],
         )
@@ -493,24 +493,24 @@ def render_analyste_credit_tab() -> None:
         render_summary_box(
             "Regles essentielles",
             [
-                "Limiter l'acces aux donnees aux personnes autorisees.",
-                "Eviter le partage non securise des fichiers clients.",
-                "Proteger les informations personnelles et financieres.",
-                "Conserver une tracabilite des modifications et des decisions.",
+                "Limiter l'accès aux données aux personnes autorisées.",
+                "Éviter le partage non sécurisé des fichiers clients.",
+                "Protéger les informations personnelles et financières.",
+                "Conserver une traçabilité des modifications et des décisions.",
             ],
         )
 
-    render_panel_title("Indicateurs de performance a suivre")
+    render_panel_title("Indicateurs de performance à suivre")
     st.dataframe(_build_kpi_table(), width="stretch", hide_index=True, height=260)
 
     render_panel_title("Automatisations possibles")
     render_summary_box(
-        "Pistes d'evolution",
+        "Pistes d'évolution",
         [
-            "Generation automatique des rapports de credit.",
+            "Génération automatique des rapports de crédit.",
             "Scoring automatique des demandes.",
-            "Alertes sur les retards de paiement et les dossiers a risque.",
-            "Controle automatique des donnees manquantes.",
-            "Mise a jour automatisee des tableaux de bord et des exports.",
+            "Alertes sur les retards de paiement et les dossiers à risque.",
+            "Contrôle automatique des données manquantes.",
+            "Mise à jour automatisée des tableaux de bord et des exports.",
         ],
     )

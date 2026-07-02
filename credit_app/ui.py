@@ -356,11 +356,11 @@ def render_professional_header() -> None:
     st.markdown(
         """
 <div class="credit-hero">
-  <div class="credit-hero-badge">Plateforme credit</div>
-  <h1>Analyste Credit</h1>
+  <div class="credit-hero-badge">Plateforme crédit</div>
+  <h1>Analyste Crédit</h1>
   <p>
-    Standardisez une base Excel ou CSV, appliquez une lecture metier credit commune
-    et restituez les analyses portefeuille, risque, remboursement et qualite dans
+    Standardisez une base Excel ou CSV, appliquez une lecture métier crédit commune
+    et restituez les analyses portefeuille, risque, remboursement et qualité dans
     une interface unique.
   </p>
 </div>
@@ -373,7 +373,7 @@ def render_footer() -> None:
     st.markdown(
         """
 <div class="credit-footer">
-  Analyste Credit
+  Analyste Crédit
 </div>
         """,
         unsafe_allow_html=True,

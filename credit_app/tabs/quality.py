@@ -27,28 +27,28 @@ def render_quality_tab(
     )
     standardized_rate = (renamed_columns / len(mapping_df)) if len(mapping_df) else 0.0
 
-    render_panel_title("Qualite et standardisation")
+    render_panel_title("Qualité et standardisation")
     render_kpi_cards(
         [
             ("Colonnes source", str(raw_df.shape[1]), "Avant standardisation", "blue"),
-            ("Colonnes standard", str(standardized_df.shape[1]), "Apres harmonisation", "navy"),
-            ("Anomalies", f"{total_anomalies:,}".replace(",", " "), "Somme des controles", "red"),
+            ("Colonnes standard", str(standardized_df.shape[1]), "Après harmonisation", "navy"),
+            ("Anomalies", f"{total_anomalies:,}".replace(",", " "), "Somme des contrôles", "red"),
             ("Colonnes critiques", str(missing_critical), "Missing >= 30%", "orange"),
             ("Colonnes reconnues", str(renamed_columns), "Renommage automatique", "green"),
             ("Taux de mapping", f"{standardized_rate * 100:.1f}%", "Couverture des aliases", "slate"),
         ]
     )
     render_summary_box(
-        "Lecture qualite",
+        "Lecture qualité",
         [
-            "Cet onglet consolide anomalies, missing et mapping des colonnes source.",
-            f"{missing_critical} colonne(s) presentent au moins 30% de valeurs manquantes.",
-            "Le mapping combine les aliases internes et la reference externe data/Rename_columns.xlsx.",
+            "Cet onglet consolide les anomalies, les valeurs manquantes et le mapping des colonnes source.",
+            f"{missing_critical} colonne(s) présentent au moins 30% de valeurs manquantes.",
+            "Le mapping combine les alias internes et la référence externe data/Rename_columns.xlsx.",
         ],
     )
 
     if not quality_df.empty:
-        render_panel_title("Controles qualite")
+        render_panel_title("Contrôles qualité")
         st.dataframe(quality_df, width="stretch", hide_index=True)
 
         fig = px.bar(
@@ -65,7 +65,7 @@ def render_quality_tab(
 
     with chart_left:
         if not missing_df.empty:
-            render_panel_title("Colonnes les plus incompletes")
+            render_panel_title("Colonnes les plus incomplètes")
             missing_top = missing_df.head(12).copy()
             fig = px.bar(
                 missing_top,
@@ -83,7 +83,7 @@ def render_quality_tab(
             render_panel_title("Couverture du mapping")
             mapping_status = pd.DataFrame(
                 {
-                    "statut_mapping": ["Colonnes reconnues", "Colonnes conservees"],
+                    "statut_mapping": ["Colonnes reconnues", "Colonnes conservées"],
                     "nombre_colonnes": [
                         renamed_columns,
                         max(len(mapping_df) - renamed_columns, 0),
@@ -98,7 +98,7 @@ def render_quality_tab(
                 color="statut_mapping",
                 color_discrete_map={
                     "Colonnes reconnues": "#1f7a5c",
-                    "Colonnes conservees": "#7b8794",
+                    "Colonnes conservées": "#7b8794",
                 },
             )
             fig.update_layout(height=360)

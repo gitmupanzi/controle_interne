@@ -11,11 +11,11 @@ from credit_app.ui import render_panel_title, render_summary_box
 def _build_standardization_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Bloc": "Mapping des colonnes", "Principe": "Plusieurs variantes de noms sont reconnues automatiquement.", "Impact": "Permet de charger des bases heterogenes sans exiger un schema unique strict."},
-            {"Bloc": "Reference externe", "Principe": "`data/Rename_columns.xlsx` est utilise quand une correspondance utile existe.", "Impact": "Etend le mapping interne avec les conventions locales du projet."},
-            {"Bloc": "Dates", "Principe": "Les dates sont converties si possible.", "Impact": "Active les filtres de periode et les analyses temporelles."},
-            {"Bloc": "Numeriques", "Principe": "Les colonnes montants, score, retards, duree et age sont nettoyees puis converties.", "Impact": "Fiabilise les calculs et limite les erreurs de type."},
-            {"Bloc": "Valeurs metier", "Principe": "Les statuts et certaines valeurs comme le sexe sont harmonises.", "Impact": "Permet des regroupements plus propres dans les graphiques et tableaux."},
+            {"Bloc": "Mapping des colonnes", "Principe": "Plusieurs variantes de noms sont reconnues automatiquement.", "Impact": "Permet de charger des bases hétérogènes sans exiger un schéma unique strict."},
+            {"Bloc": "Référence externe", "Principe": "`data/Rename_columns.xlsx` est utilisé quand une correspondance utile existe.", "Impact": "Étend le mapping interne avec les conventions locales du projet."},
+            {"Bloc": "Dates", "Principe": "Les dates sont converties si possible.", "Impact": "Active les filtres de période et les analyses temporelles."},
+            {"Bloc": "Numériques", "Principe": "Les colonnes montants, score, retards, durée et âge sont nettoyées puis converties.", "Impact": "Fiabilise les calculs et limite les erreurs de type."},
+            {"Bloc": "Valeurs métier", "Principe": "Les statuts et certaines valeurs comme le sexe sont harmonisés.", "Impact": "Permet des regroupements plus propres dans les graphiques et tableaux."},
         ]
     )
 
@@ -23,10 +23,10 @@ def _build_standardization_table() -> pd.DataFrame:
 def _build_risk_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Priorite": 1, "Source": "Niveau de risque deja present", "Lecture": "Si la base contient deja un niveau de risque exploitable, il est privilegie."},
-            {"Priorite": 2, "Source": "Score credit", "Lecture": "Le score alimente une classification simple en faible, moyen ou eleve."},
-            {"Priorite": 3, "Source": "Taux d'endettement", "Lecture": "Le ratio charges / revenu sert de lecture de pression financiere."},
-            {"Priorite": 4, "Source": "Retard en jours", "Lecture": "Les retards restent un signal fort de vigilance, surtout au-dela de 30 jours."},
+            {"Priorite": 1, "Source": "Niveau de risque déjà présent", "Lecture": "Si la base contient déjà un niveau de risque exploitable, il est privilégié."},
+            {"Priorite": 2, "Source": "Score crédit", "Lecture": "Le score alimente une classification simple en faible, moyen ou élevé."},
+            {"Priorite": 3, "Source": "Taux d'endettement", "Lecture": "Le ratio charges / revenu sert de lecture de pression financière."},
+            {"Priorite": 4, "Source": "Retard en jours", "Lecture": "Les retards restent un signal fort de vigilance, surtout au-delà de 30 jours."},
         ]
     )
 
@@ -34,13 +34,13 @@ def _build_risk_table() -> pd.DataFrame:
 def _build_quality_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Controle": "Identifiants clients manquants", "Pourquoi c'est important": "Evite les dossiers non tracables."},
-            {"Controle": "Identifiants dossiers manquants ou dupliques", "Pourquoi c'est important": "Protege les analyses contre les surcomptes et les confusions."},
-            {"Controle": "Montants negatifs", "Pourquoi c'est important": "Signale des erreurs de saisie ou de signe."},
-            {"Controle": "Montant accorde > montant demande", "Pourquoi c'est important": "Repere des incoherences metier."},
-            {"Controle": "Informations financieres manquantes", "Pourquoi c'est important": "Fragilise la lecture de capacite et d'endettement."},
-            {"Controle": "Capacite de remboursement negative", "Pourquoi c'est important": "Oriente rapidement vers les dossiers potentiellement fragiles."},
-            {"Controle": "Retards negatifs", "Pourquoi c'est important": "Signale des erreurs temporelles dans les donnees."},
+            {"Controle": "Identifiants clients manquants", "Pourquoi c'est important": "Évite les dossiers non traçables."},
+            {"Controle": "Identifiants dossiers manquants ou dupliqués", "Pourquoi c'est important": "Protège les analyses contre les surcomptes et les confusions."},
+            {"Controle": "Montants négatifs", "Pourquoi c'est important": "Signale des erreurs de saisie ou de signe."},
+            {"Controle": "Montant accordé > montant demandé", "Pourquoi c'est important": "Repère des incohérences métier."},
+            {"Controle": "Informations financières manquantes", "Pourquoi c'est important": "Fragilise la lecture de capacité et d'endettement."},
+            {"Controle": "Capacité de remboursement négative", "Pourquoi c'est important": "Oriente rapidement vers les dossiers potentiellement fragiles."},
+            {"Controle": "Retards négatifs", "Pourquoi c'est important": "Signale des erreurs temporelles dans les données."},
         ]
     )
 
@@ -251,18 +251,18 @@ def _render_hero() -> None:
     st.markdown(
         """
 <div class="method-hero">
-  <div class="method-hero-badge">Methodologie</div>
-  <h2>CONVENTIONS, REGLES DE CALCUL ET LIMITES D'INTERPRETATION</h2>
+  <div class="method-hero-badge">Méthodologie</div>
+  <h2>CONVENTIONS, RÈGLES DE CALCUL ET LIMITES D'INTERPRÉTATION</h2>
   <p>
-    Cette page explique comment l'application standardise les donnees, calcule les variables
-    derivees, classe le risque et applique ses controles qualite. Elle aide a relire les
-    resultats avec les bons repères techniques et metiers.
+    Cette page explique comment l'application standardise les données, calcule les variables
+    dérivées, classe le risque et applique ses contrôles qualité. Elle aide à relire les
+    résultats avec les bons repères techniques et métiers.
   </p>
   <div class="method-chip-row">
     <span class="method-chip">Standardisation</span>
     <span class="method-chip">Formules</span>
     <span class="method-chip">Risque</span>
-    <span class="method-chip">Qualite</span>
+    <span class="method-chip">Qualité</span>
   </div>
 </div>
         """,
@@ -291,24 +291,24 @@ def _render_card_grid(cards: list[dict[str, str]]) -> None:
 def _render_formula_cards() -> None:
     formulas = [
         {
-            "label": "Capacite",
+            "label": "Capacité",
             "formula": "Revenu mensuel - Charges mensuelles",
-            "why": "Mesure simple de la marge theorique de remboursement.",
+            "why": "Mesure simple de la marge théorique de remboursement.",
         },
         {
             "label": "Endettement",
             "formula": "Charges mensuelles / Revenu mensuel",
-            "why": "Aide a lire la pression financiere sur le client.",
+            "why": "Aide à lire la pression financière sur le client.",
         },
         {
-            "label": "Mensualite estimee",
-            "formula": "Montant accorde / Duree du credit en mois",
+            "label": "Mensualité estimée",
+            "formula": "Montant accordé / Durée du crédit en mois",
             "why": "Donne une approximation simple de l'effort mensuel attendu.",
         },
         {
             "label": "Risque simple",
-            "formula": "Risque declare -> Score -> Endettement -> Retard",
-            "why": "Ordre de priorite applique pour la classification automatique.",
+            "formula": "Risque déclaré -> Score -> Endettement -> Retard",
+            "why": "Ordre de priorité appliqué pour la classification automatique.",
         },
     ]
     blocks: list[str] = []
@@ -337,9 +337,9 @@ def _render_path() -> None:
     <div class="method-step">1. Charger la base</div>
     <div class="method-step">2. Renommer les colonnes</div>
     <div class="method-step">3. Nettoyer les types</div>
-    <div class="method-step">4. Deriver les variables</div>
+    <div class="method-step">4. Dériver les variables</div>
     <div class="method-step">5. Classer le risque</div>
-    <div class="method-step">6. Controler la qualite</div>
+    <div class="method-step">6. Contrôler la qualité</div>
   </div>
 </div>
         """,
@@ -354,24 +354,24 @@ def render_methodology_tab() -> None:
     _render_card_grid(
         [
             {
-                "label": "Point de depart",
-                "value": "Base heterogene",
-                "subtitle": "L'application part de fichiers Excel ou CSV qui ne suivent pas toujours le meme schema.",
+                "label": "Point de départ",
+                "value": "Base hétérogène",
+                "subtitle": "L'application part de fichiers Excel ou CSV qui ne suivent pas toujours le même schéma.",
             },
             {
                 "label": "Objectif",
                 "value": "Lire ensemble",
-                "subtitle": "Rendre comparables les analyses portefeuille, risque, remboursement et qualite.",
+                "subtitle": "Rendre comparables les analyses portefeuille, risque, remboursement et qualité.",
             },
             {
-                "label": "Reflexe",
-                "value": "Verifier le mapping",
-                "subtitle": "Le sens des indicateurs depend de la bonne reconnaissance des colonnes sources.",
+                "label": "Réflexe",
+                "value": "Vérifier le mapping",
+                "subtitle": "Le sens des indicateurs dépend de la bonne reconnaissance des colonnes sources.",
             },
             {
                 "label": "Limite",
                 "value": "Heuristique",
-                "subtitle": "Certaines regles restent simples et doivent etre adaptees a votre institution.",
+                "subtitle": "Certaines règles restent simples et doivent être adaptées à votre institution.",
             },
         ]
     )
@@ -381,9 +381,9 @@ def render_methodology_tab() -> None:
     render_summary_box(
         "Cadre de lecture",
         [
-            "Cette page documente les conventions appliquees par l'application.",
-            "Elle rassemble les definitions, conventions et limites utiles a la lecture des analyses.",
-            "Elle aide a distinguer ce qui releve d'une regle de calcul automatique et ce qui reste du ressort de l'analyse humaine.",
+            "Cette page documente les conventions appliquées par l'application.",
+            "Elle rassemble les définitions, conventions et limites utiles à la lecture des analyses.",
+            "Elle aide à distinguer ce qui relève d'une règle de calcul automatique et ce qui reste du ressort de l'analyse humaine.",
         ],
     )
 
@@ -398,16 +398,16 @@ def render_methodology_tab() -> None:
         render_panel_title("Classification simple du risque")
         st.dataframe(_build_risk_table(), width="stretch", hide_index=True, height=250)
     with right:
-        render_panel_title("Controles qualite appliques")
+        render_panel_title("Contrôles qualité appliqués")
         st.dataframe(_build_quality_table(), width="stretch", hide_index=True, height=250)
 
     render_panel_title("Limites actuelles")
     render_summary_box(
         "Points d'attention",
         [
-            "La qualite de l'analyse depend directement de la qualite du fichier source.",
-            "Les aliases de colonnes peuvent etre enrichis selon vos bases reelles.",
-            "Les regles de scoring et d'octroi doivent etre adaptees a votre institution.",
-            "L'outil ne remplace pas les validations humaines du comite credit.",
+            "La qualité de l'analyse dépend directement de la qualité du fichier source.",
+            "Les alias de colonnes peuvent être enrichis selon vos bases réelles.",
+            "Les règles de scoring et d'octroi doivent être adaptées à votre institution.",
+            "L'outil ne remplace pas les validations humaines du comité crédit.",
         ],
     )

@@ -45,7 +45,7 @@ class CreditDomainTests(unittest.TestCase):
         self.assertEqual(standardized.loc[0, "capacite_remboursement"], 400)
         self.assertAlmostEqual(standardized.loc[0, "taux_endettement"], 0.2)
         self.assertEqual(standardized.loc[0, "niveau_risque_calcule"], "Faible")
-        self.assertEqual(standardized.loc[0, "statut_dossier"], "Approuve")
+        self.assertEqual(standardized.loc[0, "statut_dossier"], "Approuvé")
 
     def test_quality_checks_detect_inconsistencies(self) -> None:
         raw = pd.DataFrame(
@@ -63,10 +63,10 @@ class CreditDomainTests(unittest.TestCase):
         checks = dict(zip(quality_df["controle"], quality_df["nombre_lignes"]))
 
         self.assertEqual(checks["Clients sans identifiant"], 1)
-        self.assertEqual(checks["Dossiers dupliques"], 2)
-        self.assertEqual(checks["Montants accordes negatifs"], 1)
-        self.assertEqual(checks["Montants accordes superieurs au demande"], 1)
-        self.assertEqual(checks["Capacite de remboursement negative"], 1)
+        self.assertEqual(checks["Dossiers dupliqués"], 2)
+        self.assertEqual(checks["Montants accordés négatifs"], 1)
+        self.assertEqual(checks["Montants accordés supérieurs au demandé"], 1)
+        self.assertEqual(checks["Capacité de remboursement négative"], 1)
 
     def test_summary_metrics_returns_core_indicators(self) -> None:
         raw = pd.DataFrame(
@@ -104,8 +104,8 @@ class CreditDomainTests(unittest.TestCase):
                 "charge_mensuelle": [100, 250, 50],
                 "score_credit": [82, 40, 55],
                 "retard_jours": [0, 45, 10],
-                "statut_dossier": ["Approuve", "En remboursement", "Rejete"],
-                "statut_remboursement": ["A jour", "En retard", "En retard"],
+                "statut_dossier": ["Approuvé", "En remboursement", "Rejeté"],
+                "statut_remboursement": ["À jour", "En retard", "En retard"],
             }
         )
         standardized, _ = build_standardized_dataframe(raw)
@@ -125,7 +125,7 @@ class CreditDomainTests(unittest.TestCase):
             {
                 "client_id": ["C1", "C2", "C3", "C4"],
                 "dossier_id": ["D1", "D2", "D3", "D4"],
-                "statut_dossier": ["Recu", "Approuve", "En remboursement", "Rejete"],
+                "statut_dossier": ["Reçu", "Approuvé", "En remboursement", "Rejeté"],
                 "retard_jours": [0, 5, 45, None],
                 "revenu_mensuel": [500, 400, 300, None],
                 "charge_mensuelle": [100, 150, 350, None],
@@ -138,10 +138,10 @@ class CreditDomainTests(unittest.TestCase):
         delay_buckets = build_delay_bucket_table(standardized)
         watchlist = build_watchlist(standardized)
 
-        self.assertEqual(flow.iloc[0]["statut_dossier"], "Recu")
+        self.assertEqual(flow.iloc[0]["statut_dossier"], "Reçu")
         self.assertIn("31-90 jours", delay_buckets["classe_retard"].tolist())
         self.assertIn("motif_alerte", watchlist.columns)
-        self.assertTrue(any("Risque eleve" in str(value) or "Capacite negative" in str(value) for value in watchlist["motif_alerte"]))
+        self.assertTrue(any("Risque élevé" in str(value) or "Capacité négative" in str(value) for value in watchlist["motif_alerte"]))
 
     def test_sex_and_age_distributions_are_standardized_and_ordered(self) -> None:
         raw = pd.DataFrame(
@@ -158,7 +158,7 @@ class CreditDomainTests(unittest.TestCase):
         self.assertEqual(mapping["Sexe"], "sexe")
         self.assertEqual(mapping["Age"], "age")
         self.assertIn("Masculin", sex_distribution["sexe"].tolist())
-        self.assertIn("Feminin", sex_distribution["sexe"].tolist())
+        self.assertIn("Féminin", sex_distribution["sexe"].tolist())
         self.assertEqual(age_distribution["tranche_age"].tolist()[:3], ["18-24", "35-44", "55-64"])
 
     def test_age_sex_pyramid_table_builds_expected_counts(self) -> None:
@@ -176,9 +176,9 @@ class CreditDomainTests(unittest.TestCase):
         row_18_24 = pyramid.loc[pyramid["tranche_age"] == "18-24"].iloc[0]
         row_35_44 = pyramid.loc[pyramid["tranche_age"] == "35-44"].iloc[0]
         self.assertEqual(int(row_18_24["Masculin"]), 1)
-        self.assertEqual(int(row_18_24["Feminin"]), 1)
+        self.assertEqual(int(row_18_24["Féminin"]), 1)
         self.assertEqual(int(row_35_44["Masculin"]), 1)
-        self.assertEqual(int(row_35_44["Feminin"]), 1)
+        self.assertEqual(int(row_35_44["Féminin"]), 1)
 
     def test_included_credit_workbook_loads_and_standardizes(self) -> None:
         sample_path = Path("line_list/base_donnees_brute_credit.xlsx")
@@ -195,7 +195,7 @@ class CreditDomainTests(unittest.TestCase):
         self.assertIn("sexe", standardized.columns)
         self.assertIn("age", standardized.columns)
         self.assertIn("capacite_remboursement", standardized.columns)
-        self.assertIn("Non decaisse", standardized["statut_remboursement"].astype(str).unique().tolist())
+        self.assertIn("Non décaissé", standardized["statut_remboursement"].astype(str).unique().tolist())
 
 
 if __name__ == "__main__":

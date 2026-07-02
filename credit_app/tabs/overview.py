@@ -22,7 +22,7 @@ from credit_app.ui import render_kpi_cards, render_panel_title, render_summary_b
 
 def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
     if df.empty:
-        st.warning("Aucune ligne ne correspond aux filtres selectionnes.")
+        st.warning("Aucune ligne ne correspond aux filtres sélectionnés.")
         return
 
     metrics = build_summary_metrics(df)
@@ -30,9 +30,9 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
     render_panel_title("Vue d'ensemble")
     render_kpi_cards(
         [
-            ("Dossiers", f"{metrics['nombre_dossiers']:,}".replace(",", " "), "Perimetre filtre", "blue"),
+            ("Dossiers", f"{metrics['nombre_dossiers']:,}".replace(",", " "), "Périmètre filtré", "blue"),
             (
-                "Montant demande",
+                "Montant demandé",
                 format_currency(metrics["montant_demande_total"]),
                 "Somme des demandes",
                 "navy",
@@ -40,7 +40,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
             (
                 "Taux d'approbation",
                 format_percent(metrics["taux_approbation"]),
-                "Decision favorable ou active",
+                "Décision favorable ou active",
                 "green",
             ),
             ("Taux de retard", format_percent(metrics["taux_retard"]), "Dossiers en retard", "orange"),
@@ -51,15 +51,15 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
                 "blue",
             ),
             (
-                "Montant accorde",
+                "Montant accordé",
                 format_currency(metrics["montant_accorde_total"]),
-                "Montants engages",
+                "Montants engagés",
                 "green",
             ),
             (
                 "Retard moyen",
                 "-" if metrics["retard_moyen_jours"] is None else f"{metrics['retard_moyen_jours']:.1f} j",
-                "Sur les dossiers documentes",
+                "Sur les dossiers documentés",
                 "orange",
             ),
             (
@@ -69,13 +69,13 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
                 "slate",
             ),
             (
-                "Risque eleve",
+                "Risque élevé",
                 f"{snapshot['high_risk_count']:,}".replace(",", " "),
-                "Dossiers a forte vigilance",
+                "Dossiers à forte vigilance",
                 "red",
             ),
             (
-                "Capacite negative",
+                "Capacité négative",
                 f"{snapshot['negative_capacity_count']:,}".replace(",", " "),
                 "Remboursement potentiellement fragile",
                 "orange",
@@ -83,23 +83,23 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
             (
                 "Retard > 30 j",
                 f"{snapshot['overdue_30_count']:,}".replace(",", " "),
-                "Recouvrement a prioriser",
+                "Recouvrement à prioriser",
                 "red",
             ),
             (
                 "Ticket moyen",
                 format_currency(snapshot["montant_moyen_demande"]),
-                "Montant demande moyen",
+                "Montant demandé moyen",
                 "navy",
             ),
         ]
     )
     render_summary_box(
-        "Lecture operationnelle",
+        "Lecture opérationnelle",
         [
-            f"{metrics['nombre_dossiers']:,}".replace(",", " ") + " dossiers sont inclus dans le perimetre courant.",
-            "Les graphiques ci-dessous servent a orienter la decision avant lecture detaillee.",
-            "Les tableaux de suivi et les listes d'action sont regroupes plus bas dans l'onglet Surveillance.",
+            f"{metrics['nombre_dossiers']:,}".replace(",", " ") + " dossiers sont inclus dans le périmètre courant.",
+            "Les graphiques ci-dessous servent à orienter la décision avant lecture détaillée.",
+            "Les tableaux de suivi et les listes d'action sont regroupés plus bas dans l'onglet Surveillance.",
         ],
     )
 
@@ -127,7 +127,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
 
     with right:
         if not monthly_df.empty:
-            render_panel_title("Evolution mensuelle des demandes")
+            render_panel_title("Évolution mensuelle des demandes")
             fig = px.line(
                 monthly_df,
                 x="mois_demande",
@@ -158,8 +158,8 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
                 color_discrete_map={
                     "Faible": "#1f7a5c",
                     "Moyen": "#d9a441",
-                    "Eleve": "#c05621",
-                    "Non renseigne": "#7b8794",
+                    "Élevé": "#c05621",
+                    "Non renseigné": "#7b8794",
                 },
             )
             fig.update_layout(height=340)
@@ -168,7 +168,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
     with risk_right:
         age_df = build_age_bucket_table(df)
         if not age_df.empty:
-            render_panel_title("Distribution par tranche d'age")
+            render_panel_title("Distribution par tranche d'âge")
             age_order = age_df["tranche_age"].tolist()
             fig = px.bar(
                 age_df,
@@ -176,7 +176,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
                 y="nombre_lignes",
                 color="tranche_age",
                 category_orders={"tranche_age": age_order},
-                color_discrete_map={label: "#d77a0f" for label in age_df["tranche_age"].tolist()} | {"Non renseigne": "#a7a9ac"},
+                color_discrete_map={label: "#d77a0f" for label in age_df["tranche_age"].tolist()} | {"Non renseigné": "#a7a9ac"},
             )
             fig.update_traces(marker_line_color="rgba(255,255,255,0.55)", marker_line_width=1.2)
             fig.update_layout(height=340, showlegend=False, xaxis_tickangle=-25)
@@ -187,7 +187,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
     with demo_left:
         sex_df = build_sex_distribution(df)
         if not sex_df.empty:
-            render_panel_title("Repartition par sexe")
+            render_panel_title("Répartition par sexe")
             fig = px.pie(
                 sex_df,
                 names="sexe",
@@ -196,7 +196,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
                 color="sexe",
                 color_discrete_map={
                     "Masculin": "#1c2333",
-                    "Feminin": "#d71920",
+                    "Féminin": "#d71920",
                     "Inconnu": "#a7a9ac",
                 },
             )
@@ -206,11 +206,11 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
     with demo_right:
         pyramid_df = build_age_sex_pyramid_table(df)
         if not pyramid_df.empty:
-            render_panel_title("Pyramide age-sexe")
+            render_panel_title("Pyramide âge-sexe")
             annotate_values = bool(st.session_state.get("credit_annot_vals", False))
             annotation_threshold = float(st.session_state.get("credit_annot_min", 1))
             male_values = [-float(value) for value in pyramid_df["Masculin"].tolist()]
-            female_values = [float(value) for value in pyramid_df["Feminin"].tolist()]
+            female_values = [float(value) for value in pyramid_df["Féminin"].tolist()]
             male_text = [
                 f"{int(abs(value))}" if annotate_values and abs(value) >= annotation_threshold else ""
                 for value in male_values
@@ -237,7 +237,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
                 go.Bar(
                     y=pyramid_df["tranche_age"],
                     x=female_values,
-                    name="Feminin",
+                    name="Féminin",
                     orientation="h",
                     marker=dict(color="#e11d1d"),
                     text=female_text,
@@ -263,7 +263,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
                     ] if max_value else None,
                     title="Nombre de dossiers",
                 ),
-                yaxis=dict(title="Tranche d'age", categoryorder="array", categoryarray=pyramid_df["tranche_age"].tolist()),
+                yaxis=dict(title="Tranche d'âge", categoryorder="array", categoryarray=pyramid_df["tranche_age"].tolist()),
                 legend=dict(orientation="h"),
             )
             st_plot(fig, key="overview_age_sex_pyramid", height=360, annotate_values=False)
