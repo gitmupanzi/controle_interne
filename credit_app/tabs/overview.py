@@ -94,21 +94,6 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
             ),
         ]
     )
-    render_summary_box(
-        "Lecture opérationnelle",
-        [
-            f"{metrics['nombre_dossiers']:,}".replace(",", " ") + " dossiers sont inclus dans le périmètre courant.",
-            "Les graphiques ci-dessous servent à orienter la décision avant lecture détaillée.",
-            "Les tableaux de suivi et les listes d'action sont regroupés plus bas dans l'onglet Surveillance.",
-        ],
-    )
-
-    render_panel_title("Briefing automatique")
-    render_summary_box(
-        "Narratif standard",
-        [build_overview_narrative(df)],
-    )
-
     left, right = st.columns((1.1, 1))
 
     with left:

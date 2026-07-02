@@ -55,6 +55,12 @@ from credit_app.app_loader import (
     load_dataframe_from_bytes,
     load_dataframe_from_path,
 )
+from credit_app.cycles import (
+    DEFAULT_CYCLE_KEY,
+    build_cycle_coverage_summary,
+    get_cycle_spec,
+    list_cycle_keys,
+)
 from credit_app.domain import (
     build_mapping_frame,
     build_missing_values_frame,
@@ -63,6 +69,7 @@ from credit_app.domain import (
     build_standardized_dataframe,
     filter_dataframe,
     get_reference_column_count,
+    normalize_text,
 )
 from credit_app.tabs.analyste_credit import render_analyste_credit_tab
 from credit_app.tabs.export import render_export_tab
@@ -84,8 +91,8 @@ from credit_app.ui import (
 
 def configure_page() -> None:
     st.set_page_config(
-        page_title="Analyste Crédit",
-        page_icon="AC",
+        page_title="Contrôle interne IMF",
+        page_icon="CI",
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -173,6 +180,21 @@ def main() -> None:
     render_professional_header()
 
     available_files = list_available_line_list_files()
+    cycle_options = list_cycle_keys()
+    default_cycle_index = cycle_options.index(DEFAULT_CYCLE_KEY) if DEFAULT_CYCLE_KEY in cycle_options else 0
+    st.sidebar.header("Référentiel de contrôle")
+    selected_cycle_key = st.sidebar.selectbox(
+        "Type de cycle",
+        options=cycle_options,
+        index=default_cycle_index,
+        format_func=lambda key: get_cycle_spec(key)["label"],
+        key="credit_cycle_key",
+    )
+    selected_cycle = get_cycle_spec(selected_cycle_key)
+    with st.sidebar.expander("Repère du cycle", expanded=False):
+        st.caption(selected_cycle["summary"])
+        st.caption(selected_cycle["control_objective"])
+
     st.sidebar.header("Source des données")
     source_mode = st.sidebar.selectbox(
         "Source de données",
@@ -227,6 +249,7 @@ def main() -> None:
     if not source_ready:
         render_context_row(
             [
+                ("Cycle", selected_cycle["label"]),
                 ("Source", "Aucun fichier chargé"),
                 ("Formats", "Excel ou CSV"),
                 ("Analyses", "Portefeuille, risque, qualité"),
@@ -236,6 +259,7 @@ def main() -> None:
         render_summary_box(
             "Base attendue",
             [
+                selected_cycle["summary"],
                 "Chargez un fichier Excel ou CSV ou utilisez un fichier déjà placé dans line_list/.",
                 "L'application reconnaît automatiquement plusieurs variantes de colonnes métier.",
                 "Le renommage externe de data/Rename_columns.xlsx est aussi pris en compte.",
@@ -277,9 +301,11 @@ def main() -> None:
     raw_df = payload["raw_df"]
     standardized_df = payload["standardized_df"]
     source_label = "Téléversement" if source_mode == "Téléverser un fichier" else "Fichier inclus"
+    cycle_coverage = build_cycle_coverage_summary(standardized_df, selected_cycle_key)
 
     render_context_row(
         [
+            ("Cycle", selected_cycle["label"]),
             ("Source", filename),
             ("Mode", source_label),
             ("Lignes brutes", f"{len(raw_df):,}".replace(",", " ")),
@@ -297,6 +323,8 @@ def main() -> None:
         st.write(
             f"Référence de renommage : **data/Rename_columns.xlsx** avec **{get_reference_column_count()}** alias chargés."
         )
+        st.write(f"Cycle actif : **{selected_cycle['label']}**")
+        st.write(f"Couverture du référentiel : **{cycle_coverage['detected_count']}/{cycle_coverage['total']}** champs clés détectés.")
 
     st.sidebar.header("Filtres")
     st.sidebar.button("Réinitialiser les filtres", key="credit_reset_filters", on_click=_reset_sidebar_filters, width="stretch")
@@ -372,6 +400,19 @@ def main() -> None:
         start_date=start_date,
         end_date=end_date,
     )
+    cycle_filter_applied = False
+    if "cycle_activite" in filtered_df.columns:
+        selected_cycle_normalized_values = {
+            normalize_text(selected_cycle["label"]),
+            normalize_text(selected_cycle_key),
+            normalize_text(str(selected_cycle["label"]).replace("Cycle ", "")),
+        }
+        cycle_mask = filtered_df["cycle_activite"].apply(
+            lambda value: normalize_text(value) in selected_cycle_normalized_values if pd.notna(value) else False
+        )
+        if bool(cycle_mask.any()):
+            filtered_df = filtered_df.loc[cycle_mask].reset_index(drop=True)
+            cycle_filter_applied = True
     filtered_monthly_df = build_monthly_series(filtered_df)
 
     recognized_columns = sum(
@@ -394,6 +435,7 @@ def main() -> None:
 
     with st.sidebar.expander("Résumé des filtres actifs", expanded=True):
         st.write(f"Fichier : **{filename}**")
+        st.write(f"Cycle : **{selected_cycle['label']}**")
         st.write(f"Lignes analysées : **{len(filtered_df):,}**".replace(",", " "))
         st.write(
             "Statut : **"
@@ -414,6 +456,15 @@ def main() -> None:
             st.write(f"Période : **{start_date.isoformat()} -> {end_date.isoformat()}**")
         else:
             st.write("Période : **toute la base**")
+
+    with st.sidebar.expander("Couverture du cycle", expanded=False):
+        st.write(cycle_coverage["summary"])
+        if cycle_coverage["missing_fields"]:
+            st.caption(
+                "Champs encore absents : "
+                + ", ".join(cycle_coverage["missing_fields"][:8])
+                + (" ..." if len(cycle_coverage["missing_fields"]) > 8 else "")
+            )
 
     with st.sidebar.expander("Périmètre actif", expanded=False):
         st.write(f"Clients uniques : **{standardized_df['client_id'].nunique():,}**".replace(",", " ") if "client_id" in standardized_df.columns else "Clients uniques : **-**")
@@ -446,10 +497,12 @@ def main() -> None:
 
     render_panel_title("Synthèse standard")
     render_summary_box(
-        "Vue d'ensemble active",
+        f"Référentiel actif : {selected_cycle['label']}",
         [
-            "Les indicateurs standard et les graphiques standard restent affichés dans cette partie haute de la page.",
-            "Utilisez les filtres latéraux pour mettre à jour la synthèse, puis descendez vers les onglets détaillés pour approfondir l'analyse.",
+            selected_cycle["summary"],
+            selected_cycle["control_objective"],
+            cycle_coverage["summary"],
+            "Le filtre cycle est appliqué directement sur les données standardisées." if cycle_filter_applied else "Le cycle pilote actuellement la lecture métier et s'appliquera aussi au filtrage dès qu'une colonne `cycle_activite` sera disponible.",
         ],
     )
     render_overview_tab(filtered_df, filtered_monthly_df)
@@ -478,7 +531,7 @@ def main() -> None:
             ],
         )
     with tabs[1]:
-        render_analyste_credit_tab()
+        render_analyste_credit_tab(selected_cycle_key, standardized_df)
     with tabs[2]:
         render_surveillance_tab(filtered_df)
     with tabs[3]:
@@ -496,7 +549,7 @@ def main() -> None:
     with tabs[6]:
         render_export_tab(filtered_df, payload["quality_df"], payload["mapping_df"])
     with tabs[7]:
-        render_methodology_tab()
+        render_methodology_tab(selected_cycle_key, standardized_df)
 
     render_footer()
 

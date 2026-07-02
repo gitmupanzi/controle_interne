@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from credit_app.app_loader import load_dataframe_from_path
+from credit_app.cycles import build_cycle_coverage_summary, get_cycle_spec
 from credit_app.domain import (
     build_age_bucket_table,
     build_age_sex_pyramid_table,
@@ -194,8 +195,50 @@ class CreditDomainTests(unittest.TestCase):
         self.assertIn("statut_remboursement", standardized.columns)
         self.assertIn("sexe", standardized.columns)
         self.assertIn("age", standardized.columns)
+        self.assertIn("activite_economique", standardized.columns)
         self.assertIn("capacite_remboursement", standardized.columns)
         self.assertIn("Non décaissé", standardized["statut_remboursement"].astype(str).unique().tolist())
+
+    def test_cycle_reference_matches_credit_dataset(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "ID Client": ["C1"],
+                "Numero Dossier": ["D1"],
+                "Agence": ["Kin 1"],
+                "Agent Credit": ["Agent A"],
+                "Type Produit": ["PME"],
+                "Date Demande": ["2026-01-05"],
+                "Date Decision": ["2026-01-06"],
+                "Montant demande": [1000],
+                "Montant accorde": [900],
+                "Revenu mensuel": [500],
+                "Charges mensuelles": [100],
+                "Score Credit": [82],
+                "Statut dossier": ["approuve"],
+                "Statut remboursement": ["a jour"],
+                "Retard jours": [0],
+                "Activite economique": ["Commerce"],
+                "Garantie": ["Caution"],
+                "Commentaire brut": ["RAS"],
+            }
+        )
+
+        standardized, _ = build_standardized_dataframe(raw)
+        coverage = build_cycle_coverage_summary(standardized, "credit")
+        cycle_spec = get_cycle_spec("credit")
+
+        self.assertEqual(cycle_spec["label"], "Cycle crédit")
+        self.assertGreaterEqual(coverage["detected_count"], 10)
+        self.assertIn("commentaire", standardized.columns)
+
+    def test_specialized_cycle_specs_are_available(self) -> None:
+        likelemba_spec = get_cycle_spec("likelemba")
+        money_provider_spec = get_cycle_spec("money_provider")
+
+        self.assertEqual(likelemba_spec["label"], "Likelemba solidaire")
+        self.assertIn("nom_groupe", likelemba_spec["expected_columns"])
+        self.assertEqual(money_provider_spec["label"], "Money Provider")
+        self.assertIn("numero_reference", money_provider_spec["expected_columns"])
 
 
 if __name__ == "__main__":

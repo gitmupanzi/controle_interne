@@ -1,6 +1,6 @@
-# Analyste Crédit
+# Contrôle interne IMF
 
-Application Streamlit d'analyse et de suivi du crédit, orientée import Excel/CSV et restitution sur une même plateforme.
+Application Streamlit de contrôle interne, de suivi des cycles d'activité et d'analyse métier, orientée import Excel/CSV et restitution sur une même plateforme.
 
 ## Présentation
 
@@ -13,7 +13,7 @@ L'application permet de :
 - exposer un onglet pédagogique `Notions importantes`
 - analyser le portefeuille, le risque, la qualité des données et exporter un pack de restitution
 
-L'objectif est de fournir aux équipes crédit, commerciales, recouvrement et direction des informations fiables pour mieux piloter le portefeuille et réduire les risques.
+L'objectif est de fournir à la direction, au contrôle interne, à la conformité et aux responsables opérationnels des informations fiables pour mieux piloter les cycles, renforcer les contrôles et réduire les risques.
 
 ## Démarrage rapide
 

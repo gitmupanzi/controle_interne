@@ -5,6 +5,16 @@ import html
 import pandas as pd
 import streamlit as st
 
+from credit_app.cycles import (
+    build_cycle_control_table,
+    build_cycle_coverage_summary,
+    build_cycle_expected_fields_table,
+    get_cycle_spec,
+)
+from credit_app.control_references import (
+    build_control_levels_table,
+    build_risk_cartography_table,
+)
 from credit_app.ui import render_panel_title, render_summary_box
 
 
@@ -401,9 +411,44 @@ def _render_formula_cards() -> None:
     st.markdown(f"<div class='analyst-formula-grid'>{''.join(blocks)}</div>", unsafe_allow_html=True)
 
 
-def render_analyste_credit_tab() -> None:
+def render_analyste_credit_tab(cycle_key: str = "credit", standardized_df: pd.DataFrame | None = None) -> None:
     _inject_analyst_tab_styles()
     _render_hero()
+    cycle_spec = get_cycle_spec(cycle_key)
+    cycle_coverage = build_cycle_coverage_summary(standardized_df, cycle_key)
+
+    render_summary_box(
+        f"Cycle sélectionné : {cycle_spec['label']}",
+        [
+            cycle_spec["summary"],
+            cycle_spec["control_objective"],
+            cycle_coverage["summary"],
+        ],
+    )
+
+    cycle_left, cycle_right = st.columns((1.1, 1))
+    with cycle_left:
+        render_panel_title("Points de contrôle du cycle")
+        st.dataframe(build_cycle_control_table(cycle_key), width="stretch", hide_index=True, height=250)
+    with cycle_right:
+        render_panel_title("Champs attendus pour ce cycle")
+        st.dataframe(
+            build_cycle_expected_fields_table(
+                cycle_key,
+                available_columns=standardized_df.columns.tolist() if standardized_df is not None else [],
+            ),
+            width="stretch",
+            hide_index=True,
+            height=250,
+        )
+
+    control_left, control_right = st.columns((1.15, 1))
+    with control_left:
+        render_panel_title("Niveaux de contrôle à garder en tête")
+        st.dataframe(build_control_levels_table(), width="stretch", hide_index=True, height=220)
+    with control_right:
+        render_panel_title("Risques majeurs de l'institution")
+        st.dataframe(build_risk_cartography_table()[["Famille de risque", "Niveau brut"]], width="stretch", hide_index=True, height=220)
 
     _render_card_grid(
         [

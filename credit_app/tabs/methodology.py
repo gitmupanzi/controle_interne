@@ -5,6 +5,18 @@ import html
 import pandas as pd
 import streamlit as st
 
+from credit_app.cycles import (
+    build_cycle_control_table,
+    build_cycle_coverage_summary,
+    build_cycle_expected_fields_table,
+    get_cycle_spec,
+)
+from credit_app.control_references import (
+    build_control_levels_table,
+    build_control_principles_table,
+    build_reporting_chain_table,
+    build_risk_cartography_table,
+)
 from credit_app.ui import render_panel_title, render_summary_box
 
 
@@ -347,9 +359,11 @@ def _render_path() -> None:
     )
 
 
-def render_methodology_tab() -> None:
+def render_methodology_tab(cycle_key: str = "credit", standardized_df: pd.DataFrame | None = None) -> None:
     _inject_methodology_styles()
     _render_hero()
+    cycle_spec = get_cycle_spec(cycle_key)
+    cycle_coverage = build_cycle_coverage_summary(standardized_df, cycle_key)
 
     _render_card_grid(
         [
@@ -386,6 +400,45 @@ def render_methodology_tab() -> None:
             "Elle aide à distinguer ce qui relève d'une règle de calcul automatique et ce qui reste du ressort de l'analyse humaine.",
         ],
     )
+
+    render_summary_box(
+        f"Référentiel du cycle : {cycle_spec['label']}",
+        [
+            cycle_spec["summary"],
+            cycle_spec["control_objective"],
+            cycle_coverage["summary"],
+        ],
+    )
+
+    cycle_left, cycle_right = st.columns((1.1, 1))
+    with cycle_left:
+        render_panel_title("Contrôles attendus par cycle")
+        st.dataframe(build_cycle_control_table(cycle_key), width="stretch", hide_index=True, height=250)
+    with cycle_right:
+        render_panel_title("Présence des champs clés")
+        st.dataframe(
+            build_cycle_expected_fields_table(
+                cycle_key,
+                available_columns=standardized_df.columns.tolist() if standardized_df is not None else [],
+            ),
+            width="stretch",
+            hide_index=True,
+            height=250,
+        )
+
+    governance_left, governance_right = st.columns((1, 1))
+    with governance_left:
+        render_panel_title("Niveaux de contrôle")
+        st.dataframe(build_control_levels_table(), width="stretch", hide_index=True, height=250)
+    with governance_right:
+        render_panel_title("Principes directeurs")
+        st.dataframe(build_control_principles_table(), width="stretch", hide_index=True, height=250)
+
+    render_panel_title("Chaîne de reporting et de suivi")
+    st.dataframe(build_reporting_chain_table(), width="stretch", hide_index=True, height=240)
+
+    render_panel_title("Cartographie synthétique des risques")
+    st.dataframe(build_risk_cartography_table(), width="stretch", hide_index=True, height=280)
 
     render_panel_title("Principes de standardisation")
     st.dataframe(_build_standardization_table(), width="stretch", hide_index=True, height=280)
