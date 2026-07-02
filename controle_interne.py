@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from datetime import date
 
 import pandas as pd
@@ -58,6 +59,7 @@ from credit_app.app_loader import (
 from credit_app.cycles import (
     DEFAULT_CYCLE_KEY,
     build_cycle_coverage_summary,
+    get_cycle_analysis_preset,
     get_cycle_spec,
     list_cycle_keys,
 )
@@ -68,6 +70,7 @@ from credit_app.domain import (
     build_quality_checks,
     build_standardized_dataframe,
     filter_dataframe,
+    get_cycle_primary_date_column,
     get_reference_column_count,
     normalize_text,
 )
@@ -79,15 +82,81 @@ from credit_app.tabs.portfolio import render_portfolio_tab
 from credit_app.tabs.quality import render_quality_tab
 from credit_app.tabs.risk import render_risk_tab
 from credit_app.tabs.surveillance import render_surveillance_tab
-from credit_app.ui import (
-    format_context_value,
-    inject_professional_credit_css,
-    render_context_row,
-    render_footer,
-    render_panel_title,
-    render_professional_header,
-    render_summary_box,
-)
+import credit_app.ui as credit_ui
+
+format_context_value = credit_ui.format_context_value
+inject_professional_credit_css = credit_ui.inject_professional_credit_css
+render_context_row = credit_ui.render_context_row
+render_footer = credit_ui.render_footer
+render_panel_title = credit_ui.render_panel_title
+render_professional_header = credit_ui.render_professional_header
+render_summary_box = credit_ui.render_summary_box
+
+
+def _fallback_render_sidebar_intro_card(
+    kicker: str,
+    title: str,
+    lines: list[str],
+    *,
+    container: object | None = None,
+) -> None:
+    target = container or st.sidebar
+    rendered_lines = "".join(f"<div>{html.escape(str(line))}</div>" for line in lines)
+    target.markdown(
+        f"""
+<div style="padding:0.95rem 1rem;border-radius:18px;background:linear-gradient(125deg,#0b2c63 0%,#1553a1 100%);color:#fff;margin-bottom:0.8rem;">
+  <div style="font-size:0.68rem;letter-spacing:0.12em;text-transform:uppercase;font-weight:800;opacity:0.82;margin-bottom:0.25rem;">{html.escape(str(kicker))}</div>
+  <div style="font-size:1rem;font-weight:800;line-height:1.15;margin-bottom:0.3rem;">{html.escape(str(title))}</div>
+  <div style="font-size:0.78rem;line-height:1.35;opacity:0.95;">{rendered_lines}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _fallback_render_sidebar_section(
+    title: str,
+    subtitle: str | None = None,
+    *,
+    container: object | None = None,
+) -> None:
+    target = container or st.sidebar
+    subtitle_html = f"<div style='color:#55708f;font-size:0.75rem;line-height:1.3;margin-bottom:0.28rem;'>{html.escape(str(subtitle))}</div>" if subtitle else ""
+    target.markdown(
+        f"""
+<div style="margin:0.7rem 0 0.45rem;">
+  <div style="color:#0b2c63;font-size:0.88rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:800;margin-bottom:0.12rem;">{html.escape(str(title))}</div>
+  {subtitle_html}
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _fallback_render_sidebar_stat_grid(
+    items: list[tuple[str, str]],
+    *,
+    container: object | None = None,
+) -> None:
+    target = container or st.sidebar
+    blocks = "".join(
+        f"""
+<div style="background:rgba(255,255,255,0.80);border:1px solid rgba(11,44,99,0.08);border-radius:16px;padding:0.55rem 0.65rem;">
+  <div style="color:#5d7390;font-size:0.62rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:800;margin-bottom:0.18rem;">{html.escape(str(label))}</div>
+  <div style="color:#0b2c63;font-size:0.95rem;font-weight:800;line-height:1.1;">{html.escape(str(value))}</div>
+</div>
+"""
+        for label, value in items
+    )
+    target.markdown(
+        f"<div style='display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.45rem;margin-bottom:0.65rem;'>{blocks}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+render_sidebar_intro_card = getattr(credit_ui, "render_sidebar_intro_card", _fallback_render_sidebar_intro_card)
+render_sidebar_section = getattr(credit_ui, "render_sidebar_section", _fallback_render_sidebar_section)
+render_sidebar_stat_grid = getattr(credit_ui, "render_sidebar_stat_grid", _fallback_render_sidebar_stat_grid)
 
 def configure_page() -> None:
     st.set_page_config(
@@ -155,15 +224,13 @@ def _resolve_multiselect_selection(values: list[str]) -> list[str] | None:
 
 
 def _reset_sidebar_filters() -> None:
-    for key in [
-        "credit_status_sel",
-        "credit_agency_sel",
-        "credit_product_sel",
-        "credit_filter_use_period",
-        "credit_period_range",
-    ]:
-        if key in st.session_state:
-            del st.session_state[key]
+    for key in list(st.session_state.keys()):
+        if key.startswith("credit_filter_sel_") or key in {
+            "credit_filter_use_period",
+            "credit_period_range",
+        }:
+            if key in st.session_state:
+                del st.session_state[key]
 
 
 def _reset_display_options() -> None:
@@ -175,6 +242,81 @@ def _reset_display_options() -> None:
             del st.session_state[key]
 
 
+def _date_filter_label(date_column: str | None) -> str:
+    labels = {
+        "date_demande": "Période de demande",
+        "date_decision": "Période de décision",
+        "date_operation": "Période d'opération",
+        "date_entree": "Période d'entrée",
+        "date_activation": "Période d'activation",
+        "date_revocation": "Période de révocation",
+        "date_sauvegarde": "Période de sauvegarde",
+    }
+    return labels.get(str(date_column), "Période analytique")
+
+
+def _filter_column_label(column_name: str) -> str:
+    labels = {
+        "statut_dossier": "Statut du dossier",
+        "statut_remboursement": "Statut de remboursement",
+        "agence": "Agence",
+        "type_produit": "Produit",
+        "agent_credit": "Agent de crédit",
+        "nom_groupe": "Groupe",
+        "activite_economique": "Activité économique",
+        "statut_compte": "Statut du compte",
+        "type_operation": "Type d'opération",
+        "compte_id": "Compte",
+        "caissier": "Caissier",
+        "banque": "Banque",
+        "compte_bancaire": "Compte bancaire",
+        "devise": "Devise",
+        "journal": "Journal",
+        "compte_comptable": "Compte comptable",
+        "centre_cout": "Centre de coût",
+        "fonction": "Fonction",
+        "statut_agent": "Statut de l'agent",
+        "application_source": "Application",
+        "profil_acces": "Profil d'accès",
+        "niveau_habilitation": "Niveau d'habilitation",
+        "type_sauvegarde": "Type de sauvegarde",
+        "support_sauvegarde": "Support de sauvegarde",
+        "statut_test_reprise": "Statut du test de reprise",
+        "operateur": "Opérateur",
+        "tresorier": "Trésorier",
+    }
+    return labels.get(column_name, column_name.replace("_", " ").capitalize())
+
+
+def _build_cycle_sidebar_filters(
+    df: pd.DataFrame,
+    cycle_key: str,
+) -> dict[str, list[str] | None]:
+    preset = get_cycle_analysis_preset(cycle_key)
+    candidate_columns = preset.get("filter_columns", [])
+    selected_filters: dict[str, list[str] | None] = {}
+
+    for column_name in candidate_columns:
+        if column_name not in df.columns:
+            continue
+        options = sorted(value for value in df[column_name].dropna().unique())
+        if not options:
+            continue
+        widget_key = f"credit_filter_sel_{column_name}"
+        widget_options = _normalize_multiselect_with_all(widget_key, options)
+        selected_values = st.sidebar.multiselect(
+            f"{_filter_column_label(column_name)} ({len(options)})",
+            widget_options,
+            key=widget_key,
+        )
+        selected_filters[column_name] = _resolve_multiselect_selection(selected_values)
+    return selected_filters
+
+
+def _count_active_sidebar_filters(selected_filters: dict[str, list[str] | None]) -> int:
+    return sum(1 for values in selected_filters.values() if values)
+
+
 def main() -> None:
     configure_page()
     render_professional_header()
@@ -182,7 +324,15 @@ def main() -> None:
     available_files = list_available_line_list_files()
     cycle_options = list_cycle_keys()
     default_cycle_index = cycle_options.index(DEFAULT_CYCLE_KEY) if DEFAULT_CYCLE_KEY in cycle_options else 0
-    st.sidebar.header("Référentiel de contrôle")
+    render_sidebar_intro_card(
+        "Pilotage",
+        "Centre de contrôle",
+        [
+            "Choisissez un cycle, chargez une base et appliquez les filtres métier du périmètre actif.",
+            "Les KPI standard et les analyses détaillées se synchronisent automatiquement avec le cycle sélectionné.",
+        ],
+    )
+    render_sidebar_section("Référentiel de contrôle", "Sélection du cycle à analyser.")
     selected_cycle_key = st.sidebar.selectbox(
         "Type de cycle",
         options=cycle_options,
@@ -195,7 +345,7 @@ def main() -> None:
         st.caption(selected_cycle["summary"])
         st.caption(selected_cycle["control_objective"])
 
-    st.sidebar.header("Source des données")
+    render_sidebar_section("Source des données", "Téléversez un fichier ou utilisez une base déjà stockée.")
     source_mode = st.sidebar.selectbox(
         "Source de données",
         ["Téléverser un fichier", "Charger un fichier inclus"],
@@ -326,56 +476,26 @@ def main() -> None:
         st.write(f"Cycle actif : **{selected_cycle['label']}**")
         st.write(f"Couverture du référentiel : **{cycle_coverage['detected_count']}/{cycle_coverage['total']}** champs clés détectés.")
 
-    st.sidebar.header("Filtres")
+    render_sidebar_section("Filtres métier", "Les dimensions proposées dépendent du cycle actif.")
     st.sidebar.button("Réinitialiser les filtres", key="credit_reset_filters", on_click=_reset_sidebar_filters, width="stretch")
 
-    status_options = sorted(
-        value for value in standardized_df.get("statut_dossier", pd.Series(dtype="object")).dropna().unique()
-    )
-    status_widget_options = _normalize_multiselect_with_all("credit_status_sel", status_options)
-    selected_status_values = st.sidebar.multiselect(
-        f"Statut du dossier ({len(status_options)})",
-        status_widget_options,
-        key="credit_status_sel",
-    )
-    selected_status = _resolve_multiselect_selection(selected_status_values)
+    selected_column_filters = _build_cycle_sidebar_filters(standardized_df, selected_cycle_key)
 
-    agency_options = sorted(
-        value for value in standardized_df.get("agence", pd.Series(dtype="object")).dropna().unique()
-    )
-    agency_widget_options = _normalize_multiselect_with_all("credit_agency_sel", agency_options)
-    selected_agencies_values = st.sidebar.multiselect(
-        f"Agence ({len(agency_options)})",
-        agency_widget_options,
-        key="credit_agency_sel",
-    )
-    selected_agencies = _resolve_multiselect_selection(selected_agencies_values)
-
-    product_options = sorted(
-        value for value in standardized_df.get("type_produit", pd.Series(dtype="object")).dropna().unique()
-    )
-    product_widget_options = _normalize_multiselect_with_all("credit_product_sel", product_options)
-    selected_products_values = st.sidebar.multiselect(
-        f"Produit ({len(product_options)})",
-        product_widget_options,
-        key="credit_product_sel",
-    )
-    selected_products = _resolve_multiselect_selection(selected_products_values)
-
-    st.sidebar.header("Période")
+    render_sidebar_section("Période", "Filtrage temporel sur la date pilote du cycle.")
     start_date = None
     end_date = None
+    selected_date_column = get_cycle_primary_date_column(standardized_df, selected_cycle_key)
     use_period_filter = st.sidebar.checkbox(
-        "Filtrer sur la période de demande",
+        f"Filtrer sur {_date_filter_label(selected_date_column).lower()}",
         value=True,
         key="credit_filter_use_period",
     )
-    if "date_demande" in standardized_df.columns:
-        valid_dates = standardized_df["date_demande"].dropna()
+    if selected_date_column and selected_date_column in standardized_df.columns:
+        valid_dates = pd.to_datetime(standardized_df[selected_date_column], errors="coerce").dropna()
         if not valid_dates.empty:
             default_range = (valid_dates.min().date(), valid_dates.max().date())
             picked_range = st.sidebar.date_input(
-                "Période de demande",
+                _date_filter_label(selected_date_column),
                 value=st.session_state.get("credit_period_range", default_range),
                 min_value=default_range[0],
                 max_value=default_range[1],
@@ -394,11 +514,10 @@ def main() -> None:
 
     filtered_df = filter_dataframe(
         standardized_df,
-        statuses=selected_status,
-        agencies=selected_agencies,
-        products=selected_products,
         start_date=start_date,
         end_date=end_date,
+        date_column=selected_date_column,
+        column_filters=selected_column_filters,
     )
     cycle_filter_applied = False
     if "cycle_activite" in filtered_df.columns:
@@ -434,30 +553,46 @@ def main() -> None:
     )
 
     with st.sidebar.expander("Résumé des filtres actifs", expanded=True):
+        active_filter_count = _count_active_sidebar_filters(selected_column_filters)
+        cycle_filter_columns = [
+            column
+            for column in get_cycle_analysis_preset(selected_cycle_key).get("filter_columns", [])
+            if column in standardized_df.columns
+        ]
+        render_sidebar_stat_grid(
+            [
+                ("Lignes", f"{len(filtered_df):,}".replace(",", " ")),
+                ("Filtres", str(active_filter_count)),
+                ("Cycle", selected_cycle["label"]),
+                ("Source", source_label),
+            ],
+            container=st,
+        )
         st.write(f"Fichier : **{filename}**")
         st.write(f"Cycle : **{selected_cycle['label']}**")
         st.write(f"Lignes analysées : **{len(filtered_df):,}**".replace(",", " "))
-        st.write(
-            "Statut : **"
-            + ("Toutes" if selected_status is None else ", ".join(selected_status[:4]))
-            + "**"
-        )
-        st.write(
-            "Agence : **"
-            + ("Toutes" if selected_agencies is None else ", ".join(selected_agencies[:4]))
-            + "**"
-        )
-        st.write(
-            "Produit : **"
-            + ("Toutes" if selected_products is None else ", ".join(selected_products[:4]))
-            + "**"
-        )
+        for column_name in cycle_filter_columns:
+            selected_values = selected_column_filters.get(column_name)
+            if selected_values is None:
+                summary_value = "Toutes"
+            else:
+                summary_value = ", ".join(selected_values[:4])
+                if len(selected_values) > 4:
+                    summary_value += " ..."
+            st.write(f"{_filter_column_label(column_name)} : **{summary_value}**")
         if start_date and end_date:
             st.write(f"Période : **{start_date.isoformat()} -> {end_date.isoformat()}**")
         else:
             st.write("Période : **toute la base**")
 
     with st.sidebar.expander("Couverture du cycle", expanded=False):
+        render_sidebar_stat_grid(
+            [
+                ("Champs détectés", f"{cycle_coverage['detected_count']}/{cycle_coverage['total']}"),
+                ("Couverture", f"{cycle_coverage['coverage_rate'] * 100:.0f}%"),
+            ],
+            container=st,
+        )
         st.write(cycle_coverage["summary"])
         if cycle_coverage["missing_fields"]:
             st.caption(
@@ -467,12 +602,23 @@ def main() -> None:
             )
 
     with st.sidebar.expander("Périmètre actif", expanded=False):
-        st.write(f"Clients uniques : **{standardized_df['client_id'].nunique():,}**".replace(",", " ") if "client_id" in standardized_df.columns else "Clients uniques : **-**")
-        st.write(f"Agences détectées : **{len(agency_options)}**")
-        st.write(f"Produits détectés : **{len(product_options)}**")
-        st.write(f"Statuts détectés : **{len(status_options)}**")
+        perimeter_items = []
+        if "client_id" in standardized_df.columns:
+            perimeter_items.append(("Clients", f"{standardized_df['client_id'].nunique():,}".replace(",", " ")))
+        perimeter_items.append(("Colonnes", str(standardized_df.shape[1])))
+        perimeter_items.append(("Lignes", f"{len(standardized_df):,}".replace(",", " ")))
+        render_sidebar_stat_grid(perimeter_items[:4], container=st)
+        st.write(
+            f"Clients uniques : **{standardized_df['client_id'].nunique():,}**".replace(",", " ")
+            if "client_id" in standardized_df.columns
+            else "Clients uniques : **-**"
+        )
+        for column_name in cycle_filter_columns[:4]:
+            detected_count = int(standardized_df[column_name].dropna().nunique()) if column_name in standardized_df.columns else 0
+            st.write(f"{_filter_column_label(column_name)} détectés : **{detected_count:,}**".replace(",", " "))
 
     with st.sidebar.expander("Options d'affichage", expanded=False):
+        render_sidebar_section("Affichage", "Contrôle des annotations et de la lisibilité graphique.", container=st)
         st.checkbox(
             "Afficher annotations (valeurs)",
             value=True,
@@ -505,7 +651,7 @@ def main() -> None:
             "Le filtre cycle est appliqué directement sur les données standardisées." if cycle_filter_applied else "Le cycle pilote actuellement la lecture métier et s'appliquera aussi au filtrage dès qu'une colonne `cycle_activite` sera disponible.",
         ],
     )
-    render_overview_tab(filtered_df, filtered_monthly_df)
+    render_overview_tab(filtered_df, filtered_monthly_df, selected_cycle_key)
 
     render_panel_title("Analyses détaillées par onglet")
     tabs = st.tabs(
@@ -533,11 +679,11 @@ def main() -> None:
     with tabs[1]:
         render_analyste_credit_tab(selected_cycle_key, standardized_df)
     with tabs[2]:
-        render_surveillance_tab(filtered_df)
+        render_surveillance_tab(filtered_df, selected_cycle_key)
     with tabs[3]:
-        render_portfolio_tab(filtered_df)
+        render_portfolio_tab(filtered_df, selected_cycle_key)
     with tabs[4]:
-        render_risk_tab(filtered_df)
+        render_risk_tab(filtered_df, selected_cycle_key)
     with tabs[5]:
         render_quality_tab(
             raw_df=raw_df,

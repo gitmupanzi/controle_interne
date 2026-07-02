@@ -45,6 +45,12 @@ def inject_professional_credit_css() -> None:
         border-right: 1px solid rgba(11, 44, 99, 0.08);
     }
 
+    section[data-testid="stSidebar"] > div {
+        background:
+            radial-gradient(circle at top right, rgba(43, 116, 202, 0.08), transparent 28%),
+            linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.02) 100%);
+    }
+
     section[data-testid="stSidebar"] label,
     section[data-testid="stSidebar"] .stMarkdown,
     section[data-testid="stSidebar"] .stCaption,
@@ -55,6 +61,7 @@ def inject_professional_credit_css() -> None:
     section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
         background: rgba(255, 255, 255, 0.76);
         border: 1px dashed rgba(21, 83, 161, 0.24);
+        border-radius: 16px;
     }
 
     section[data-testid="stSidebar"] h2,
@@ -74,6 +81,133 @@ def inject_professional_credit_css() -> None:
     section[data-testid="stSidebar"] [data-testid="stExpander"] details summary {
         background: rgba(255, 255, 255, 0.62);
         border-radius: 16px;
+    }
+
+    section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+    section[data-testid="stSidebar"] [data-baseweb="tag"] {
+        border-radius: 14px;
+    }
+
+    section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+    section[data-testid="stSidebar"] input,
+    section[data-testid="stSidebar"] textarea {
+        background: rgba(255, 255, 255, 0.92) !important;
+        border: 1px solid rgba(11, 44, 99, 0.10) !important;
+        box-shadow: 0 8px 18px rgba(11, 44, 99, 0.05);
+    }
+
+    section[data-testid="stSidebar"] [data-baseweb="tag"] {
+        background: rgba(21, 83, 161, 0.10) !important;
+        border: 1px solid rgba(21, 83, 161, 0.12) !important;
+        color: #0f438f !important;
+        font-weight: 700;
+    }
+
+    section[data-testid="stSidebar"] .stCheckbox {
+        background: rgba(255,255,255,0.72);
+        border: 1px solid rgba(11, 44, 99, 0.08);
+        border-radius: 14px;
+        padding: 0.35rem 0.55rem 0.15rem;
+    }
+
+    .credit-sidebar-card {
+        background:
+            linear-gradient(140deg, rgba(255,255,255,0.94) 0%, rgba(238,245,255,0.96) 100%);
+        border: 1px solid rgba(11, 44, 99, 0.10);
+        border-radius: 20px;
+        box-shadow: 0 14px 28px rgba(11, 44, 99, 0.08);
+        padding: 0.95rem 1rem;
+        margin-bottom: 0.8rem;
+    }
+
+    .credit-sidebar-card.sidebar-intro {
+        background:
+            linear-gradient(125deg, rgba(11,44,99,0.96) 0%, rgba(21,83,161,0.94) 55%, rgba(44,117,200,0.92) 100%);
+        color: #ffffff;
+        box-shadow: 0 18px 34px rgba(11, 44, 99, 0.22);
+    }
+
+    .credit-sidebar-kicker {
+        font-size: 0.68rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        font-weight: 800;
+        opacity: 0.78;
+        margin-bottom: 0.25rem;
+    }
+
+    .credit-sidebar-title {
+        color: #0b2c63;
+        font-size: 1rem;
+        font-weight: 800;
+        line-height: 1.15;
+        margin-bottom: 0.25rem;
+    }
+
+    .credit-sidebar-card.sidebar-intro .credit-sidebar-title {
+        color: #ffffff;
+    }
+
+    .credit-sidebar-subtitle {
+        color: #43607f;
+        font-size: 0.78rem;
+        line-height: 1.35;
+        margin-bottom: 0.15rem;
+    }
+
+    .credit-sidebar-card.sidebar-intro .credit-sidebar-subtitle,
+    .credit-sidebar-card.sidebar-intro .credit-sidebar-kicker {
+        color: rgba(255,255,255,0.92);
+    }
+
+    .credit-sidebar-section {
+        margin: 0.7rem 0 0.45rem;
+    }
+
+    .credit-sidebar-section .section-title {
+        color: #0b2c63;
+        font-size: 0.88rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 800;
+        margin-bottom: 0.12rem;
+    }
+
+    .credit-sidebar-section .section-subtitle {
+        color: #55708f;
+        font-size: 0.75rem;
+        line-height: 1.3;
+        margin-bottom: 0.28rem;
+    }
+
+    .credit-sidebar-stats {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.45rem;
+        margin-bottom: 0.65rem;
+    }
+
+    .credit-sidebar-stat {
+        background: rgba(255,255,255,0.80);
+        border: 1px solid rgba(11, 44, 99, 0.08);
+        border-radius: 16px;
+        padding: 0.55rem 0.65rem;
+    }
+
+    .credit-sidebar-stat .label {
+        color: #5d7390;
+        font-size: 0.62rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-weight: 800;
+        margin-bottom: 0.18rem;
+    }
+
+    .credit-sidebar-stat .value {
+        color: #0b2c63;
+        font-size: 0.95rem;
+        font-weight: 800;
+        line-height: 1.1;
     }
 
     .credit-hero {
@@ -367,6 +501,68 @@ def render_professional_header() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_sidebar_intro_card(
+    kicker: str,
+    title: str,
+    lines: list[str],
+    *,
+    container: Any | None = None,
+) -> None:
+    content = "".join(f"<div class='credit-sidebar-subtitle'>{html.escape(str(line))}</div>" for line in lines)
+    target = container or st.sidebar
+    target.markdown(
+        f"""
+<div class="credit-sidebar-card sidebar-intro">
+  <div class="credit-sidebar-kicker">{html.escape(str(kicker))}</div>
+  <div class="credit-sidebar-title">{html.escape(str(title))}</div>
+  {content}
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_sidebar_section(
+    title: str,
+    subtitle: str | None = None,
+    *,
+    container: Any | None = None,
+) -> None:
+    subtitle_html = (
+        f"<div class='section-subtitle'>{html.escape(str(subtitle))}</div>"
+        if subtitle
+        else ""
+    )
+    target = container or st.sidebar
+    target.markdown(
+        f"""
+<div class="credit-sidebar-section">
+  <div class="section-title">{html.escape(str(title))}</div>
+  {subtitle_html}
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_sidebar_stat_grid(
+    items: list[tuple[str, str]],
+    *,
+    container: Any | None = None,
+) -> None:
+    blocks = "".join(
+        f"""
+<div class="credit-sidebar-stat">
+  <div class="label">{html.escape(str(label))}</div>
+  <div class="value">{html.escape(str(value))}</div>
+</div>
+"""
+        for label, value in items
+    )
+    target = container or st.sidebar
+    target.markdown(f"<div class='credit-sidebar-stats'>{blocks}</div>", unsafe_allow_html=True)
 
 
 def render_footer() -> None:

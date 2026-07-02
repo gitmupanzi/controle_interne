@@ -1,19 +1,41 @@
 # Contrôle interne IMF
 
-Application Streamlit de contrôle interne, de suivi des cycles d'activité et d'analyse métier, orientée import Excel/CSV et restitution sur une même plateforme.
+Plateforme Streamlit de contrôle interne pour IMF, orientée import Excel/CSV, standardisation métier et restitution sur une interface unique.
 
 ## Présentation
 
-L'application permet de :
+L’application permet de :
 
-- charger une base crédit depuis un fichier téléversé ou un fichier déjà présent dans `line_list/`
-- standardiser automatiquement une partie des colonnes et des valeurs métier
-- produire une synthèse standard avec KPI, graphiques, répartition par sexe, distribution par tranche d'âge et pyramide âge-sexe
-- regrouper les blocs opérationnels dans l'onglet `Surveillance`
-- exposer un onglet pédagogique `Notions importantes`
-- analyser le portefeuille, le risque, la qualité des données et exporter un pack de restitution
+- charger une base `.xlsx`, `.xls` ou `.csv`
+- standardiser automatiquement des colonnes métier hétérogènes
+- piloter plusieurs cycles d’activité dans une même plateforme
+- conserver une synthèse standard visible pendant la navigation
+- produire des analyses par onglet : surveillance, portefeuille, risque, qualité, export et méthodologie
+- générer des watchlists et des actions prioritaires selon le cycle actif
 
-L'objectif est de fournir à la direction, au contrôle interne, à la conformité et aux responsables opérationnels des informations fiables pour mieux piloter les cycles, renforcer les contrôles et réduire les risques.
+L’objectif est de fournir à la direction, au contrôle interne, à la conformité et aux responsables opérationnels une lecture fiable des risques, anomalies, volumes et points de contrôle.
+
+## Cycles couverts
+
+La plateforme gère actuellement les cycles suivants :
+
+- `Crédit`
+- `Likelemba solidaire`
+- `Épargne`
+- `Caisse et guichet`
+- `Trésorerie et banque`
+- `Comptable et financier`
+- `Ressources humaines et administration`
+- `Sécurité du système d’information`
+- `Sauvegarde et continuité d’activité`
+- `Money Provider`
+
+Chaque cycle dispose :
+
+- d’un référentiel de champs attendus
+- de filtres latéraux adaptés
+- d’une vue d’ensemble contextualisée
+- de règles de watchlist et de surveillance métier
 
 ## Démarrage rapide
 
@@ -29,10 +51,10 @@ C:\ProgramData\anaconda3
 & 'C:\ProgramData\anaconda3\python.exe' -m pip install -r requirements.txt
 ```
 
-### Lancer l'application
+### Lancer l’application
 
 ```powershell
-& 'C:\ProgramData\anaconda3\python.exe' -m streamlit run .\analyste_credit.py
+& 'C:\ProgramData\anaconda3\python.exe' -m streamlit run .\controle_interne.py
 ```
 
 ### Lancer les tests
@@ -43,10 +65,10 @@ C:\ProgramData\anaconda3
 
 ## Sources de données
 
-L'application supporte :
+L’application supporte :
 
-- un téléversement local `.xlsx`, `.xls` ou `.csv`
-- un fichier inclus dans `line_list/`
+- le téléversement local de fichiers Excel ou CSV
+- la relecture de fichiers déjà déposés dans `line_list/`
 
 Exemple inclus :
 
@@ -55,30 +77,40 @@ Exemple inclus :
 Références de standardisation :
 
 - `data/Rename_columns.xlsx`
-- `data/Replace_values.xlsx`
+
+Documents de référence métier disponibles dans le projet :
+
+- `SOP/`
 
 ## Interface actuelle
 
 ### Zone haute
 
-La zone haute conserve la synthèse standard visible pendant toute la navigation :
+La zone haute conserve une synthèse standard visible pendant toute la navigation. Selon le cycle et les colonnes disponibles, elle affiche notamment :
 
-- KPI de production, risque et remboursement
-- `Distribution des statuts de dossier`
-- `Évolution mensuelle des demandes`
-- `Distribution des niveaux de risque`
-- `Distribution par tranche d'âge`
-- `Répartition par sexe`
-- `Pyramide âge-sexe`
+- des KPI métier
+- une distribution principale
+- une évolution mensuelle
+- des regroupements opérationnels
+- la répartition par sexe
+- la distribution par tranche d’âge
+- la pyramide âge-sexe
 
-Une option latérale permet aussi :
+### Sidebar
 
-- `Afficher annotations (valeurs)`
-- définir un seuil minimal d'affichage des annotations
+Le panneau latéral permet de :
+
+- choisir le cycle actif
+- choisir la source des données
+- appliquer des filtres dynamiques adaptés au cycle
+- filtrer sur la période pilote du cycle
+- consulter le résumé des filtres actifs
+- visualiser la couverture du référentiel de cycle
+- activer l’option `Afficher annotations (valeurs)`
 
 ### Onglets disponibles
 
-- `Vue d'ensemble active`
+- `Vue d’ensemble active`
 - `Notions importantes`
 - `Surveillance`
 - `Portefeuille`
@@ -87,106 +119,59 @@ Une option latérale permet aussi :
 - `Export`
 - `Méthodologie`
 
-### Logique des onglets
+## Logique des onglets
 
-- `Vue d'ensemble active` : confirme que la synthèse haute reste visible pendant la navigation
-- `Notions importantes` : rappelle les notions métier, les KPI et les bonnes pratiques d'analyse crédit
-- `Surveillance` : actions prioritaires, top agences, top produits, dossiers à suivre en priorité, aperçu des dossiers
-- `Portefeuille` : production par produit, agent, agence et lecture croisée agence x statut
-- `Risque` : distributions de risque, remboursement, classes de retard et watchlist
-- `Qualité` : anomalies, valeurs manquantes et mapping source -> standard
-- `Export` : export CSV et pack Excel
-- `Méthodologie` : conventions, formules et logique de calcul
+- `Vue d’ensemble active` : confirme que la synthèse haute reste visible pendant la navigation.
+- `Notions importantes` : rappelle les notions métier, les définitions, les indicateurs et les bonnes pratiques de lecture.
+- `Surveillance` : regroupe les actions prioritaires, les classements actifs, la watchlist et l’aperçu filtré.
+- `Portefeuille` : montre les volumes, regroupements, croisements et répartitions métier du cycle.
+- `Risque` : consolide les alertes, distributions, motifs d’anomalie et watchlists.
+- `Qualité` : expose anomalies, valeurs manquantes et mapping source → standard.
+- `Export` : permet de télécharger les données standardisées et un pack Excel.
+- `Méthodologie` : documente conventions, champs attendus, couverture et logique de calcul.
 
 ## Données attendues
 
-Les analyses sont plus solides si la base contient au minimum :
+La plateforme reste souple, mais les analyses sont meilleures si les bases contiennent des champs proches du référentiel du cycle actif.
 
-- un identifiant client
-- un identifiant dossier
-- une date de demande
-- un montant demandé
-- un statut de dossier
+Exemples de colonnes utiles selon les cas :
 
-Colonnes particulièrement utiles :
-
+- `client_id`
+- `dossier_id`
+- `date_demande`
+- `date_operation`
+- `montant_demande`
 - `montant_accorde`
-- `revenu_mensuel`
-- `charge_mensuelle`
-- `score_credit`
-- `retard_jours`
+- `montant_operation`
+- `statut_dossier`
 - `statut_remboursement`
 - `agence`
-- `agent_credit`
 - `type_produit`
-- `date_decision`
-- `duree_credit_mois`
+- `agent_credit`
+- `operateur`
+- `tresorier`
+- `journal`
+- `compte_bancaire`
+- `statut_compte`
 - `sexe`
 - `age`
 
-## Variables dérivées
+## Standardisation métier
 
-Variables calculées actuellement :
+Le moteur métier :
+
+- renomme automatiquement une partie des colonnes reconnues
+- convertit les colonnes numériques et dates utiles
+- normalise certains statuts et valeurs métier
+- dérive des variables calculées lorsqu’elles sont possibles
+
+Variables dérivées actuellement :
 
 - `capacite_remboursement`
 - `taux_endettement`
 - `mensualite_estimee`
 - `niveau_risque_calcule`
 - `mois_demande`
-
-Variables métier standardisées :
-
-- `statut_dossier`
-- `statut_remboursement`
-- `sexe`
-- `age`
-
-## Conventions métier principales
-
-### Capacité de remboursement
-
-```text
-Capacité de remboursement = Revenu mensuel - Charges mensuelles
-```
-
-### Taux d'endettement
-
-```text
-Taux d'endettement = Charges mensuelles / Revenu mensuel
-```
-
-Lecture usuelle :
-
-```text
-0 % à 30 %   -> risque faible
-31 % à 50 %  -> risque moyen
-plus de 50 % -> risque élevé
-```
-
-### Mensualité estimée
-
-```text
-Mensualité estimée = Montant accordé / Durée du crédit en mois
-```
-
-### Priorité de calcul du risque
-
-1. niveau de risque déjà présent
-2. score crédit
-3. taux d'endettement
-4. retard en jours
-
-### Statuts métier suivis
-
-- `Reçu`
-- `À compléter`
-- `En analyse`
-- `Approuvé`
-- `Rejeté`
-- `Décaissé`
-- `En remboursement`
-- `En retard`
-- `Clôturé`
 
 ## Contrôles qualité intégrés
 
@@ -201,26 +186,37 @@ Le projet vérifie notamment :
 - capacité de remboursement négative
 - retards négatifs
 
+Selon le cycle actif, des watchlists spécifiques peuvent aussi être construites, par exemple :
+
+- référence manquante
+- opérateur non renseigné
+- écart de caisse
+- écart de rapprochement
+- écriture non équilibrée
+- test de reprise non documenté
+
 ## Exports disponibles
 
-L'onglet `Export` permet de télécharger :
+L’onglet `Export` permet de télécharger :
 
 - les données standardisées en CSV
 - un pack Excel contenant :
-  - données standardisées
-  - contrôles qualité
-  - mapping des colonnes
+  - les données standardisées
+  - les contrôles qualité
+  - le mapping des colonnes
 
 ## Structure du projet
 
 ```text
-analyste_credit/
-|-- analyste_credit.py
+controle_interne/
+|-- controle_interne.py
 |-- README.md
 |-- requirements.txt
 |-- credit_app/
 |   |-- app_loader.py
 |   |-- core.py
+|   |-- cycles.py
+|   |-- control_references.py
 |   |-- domain.py
 |   |-- ui.py
 |   |-- tabs/
@@ -234,24 +230,26 @@ analyste_credit/
 |   |   |-- methodology.py
 |-- data/
 |   |-- Rename_columns.xlsx
-|   |-- Replace_values.xlsx
 |-- line_list/
 |   |-- base_donnees_brute_credit.xlsx
+|-- SOP/
 |-- tests/
 |   |-- test_credit_domain.py
 ```
 
 ## Fichiers principaux
 
-- application principale : [analyste_credit.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/analyste_credit.py)
-- logique métier : [credit_app/domain.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/domain.py)
-- styles et composants UI : [credit_app/ui.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/ui.py)
-- synthèse standard : [credit_app/tabs/overview.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/tabs/overview.py)
-- notions importantes : [credit_app/tabs/analyste_credit.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/tabs/analyste_credit.py)
-- surveillance : [credit_app/tabs/surveillance.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/tabs/surveillance.py)
-- portefeuille : [credit_app/tabs/portfolio.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/tabs/portfolio.py)
-- risque : [credit_app/tabs/risk.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/tabs/risk.py)
-- qualité : [credit_app/tabs/quality.py](/C:/Users/Benjamin%20MUPANZI/Documents/analyste_credit/credit_app/tabs/quality.py)
+- application principale : [controle_interne.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/controle_interne.py)
+- logique métier : [credit_app/domain.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/domain.py)
+- cycles et presets : [credit_app/cycles.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/cycles.py)
+- composants UI : [credit_app/ui.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/ui.py)
+- synthèse standard : [credit_app/tabs/overview.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/overview.py)
+- notions importantes : [credit_app/tabs/analyste_credit.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/analyste_credit.py)
+- surveillance : [credit_app/tabs/surveillance.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/surveillance.py)
+- portefeuille : [credit_app/tabs/portfolio.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/portfolio.py)
+- risque : [credit_app/tabs/risk.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/risk.py)
+- qualité : [credit_app/tabs/quality.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/quality.py)
+- méthodologie : [credit_app/tabs/methodology.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/methodology.py)
 
 ## Vérification
 
@@ -261,10 +259,12 @@ Les tests couvrent notamment :
 - les variables dérivées
 - les contrôles qualité
 - la synthèse métier
-- la watchlist
+- les watchlists
 - les distributions sexe / âge
 - la pyramide âge-sexe
 - le chargement du fichier Excel inclus
+- la logique des séries par cycle
+- les watchlists et filtres génériques hors crédit
 
 ## Confidentialité
 
@@ -272,22 +272,23 @@ Les données manipulées dans ce projet sont sensibles et doivent être traitée
 
 Bonnes pratiques :
 
-- limiter l'accès aux données aux personnes autorisées
-- éviter le partage non sécurisé des fichiers clients
+- limiter l’accès aux données aux personnes autorisées
+- éviter le partage non sécurisé des fichiers
 - protéger les informations personnelles et financières
 - documenter les modifications importantes
-- conserver une traçabilité des décisions
+- conserver une traçabilité des décisions et des corrections
 
 ## Limites actuelles
 
 - la qualité des analyses dépend fortement des colonnes disponibles dans la source
-- certaines règles de risque restent heuristiques et doivent être adaptées à votre institution
-- selon l'installation locale Streamlit/Anaconda, un warning de scan de composants peut encore apparaître sans bloquer l'application
+- certaines règles de risque et d’alerte restent heuristiques
+- certains cycles seront encore meilleurs avec des bases plus riches et plus normalisées
+- selon l’installation locale Streamlit/Anaconda, un warning de cache ou de composants peut apparaître sans bloquer l’application
 
 ## Évolutions possibles
 
-- tranches d'âge plus fines pour la pyramide âge-sexe
-- paramètres de scoring crédit plus métier
-- chargement multi-fichiers et consolidation
 - mapping interactif des colonnes non reconnues
-- rapports PDF ou exports de synthèse
+- chargement multi-fichiers et consolidation
+- exports PDF ou rapports de synthèse
+- règles de contrôle encore plus fines par cycle
+- tableaux de bord historiques par période ou par campagne de contrôle

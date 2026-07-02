@@ -6,94 +6,415 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from credit_app.core import format_currency, format_percent
+from credit_app.cycles import get_cycle_spec
 from credit_app.domain import (
     build_age_bucket_table,
     build_age_sex_pyramid_table,
+    build_cycle_period_series,
     build_frequency_table,
     build_grouped_amounts,
     build_operational_snapshot,
-    build_overview_narrative,
     build_sex_distribution,
     build_status_distribution,
     build_summary_metrics,
+    get_cycle_primary_date_column,
 )
 from credit_app.ui import render_kpi_cards, render_panel_title, render_summary_box, st_plot
 
+CREDIT_LIKE_CYCLES = {"credit", "likelemba"}
 
-def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
-    if df.empty:
-        st.warning("Aucune ligne ne correspond aux filtres sélectionnés.")
-        return
+GENERIC_OVERVIEW_CONFIG = {
+    "epargne": {
+        "record_label": "Opérations",
+        "record_subtitle": "Lignes analysées",
+        "amount_columns": ["montant_operation"],
+        "amount_label": "Montant traité",
+        "amount_subtitle": "Total des mouvements",
+        "entity_columns": ["compte_id", "client_id"],
+        "entity_label": "Comptes / clients",
+        "entity_subtitle": "Base couverte",
+        "site_columns": ["agence"],
+        "site_label": "Agences actives",
+        "site_subtitle": "Points de service",
+        "primary_columns": ["type_operation", "statut_compte"],
+        "primary_title": "Distribution des types d'opération",
+        "secondary_columns": ["statut_compte", "client_id"],
+        "secondary_title": "Répartition secondaire",
+        "group_columns": ["agence"],
+        "group_title": "Volume par agence",
+        "actor_columns": [],
+        "timeline_title": "Évolution mensuelle des opérations",
+        "balance_columns": ["solde_compte", "solde_final"],
+        "balance_label": "Solde moyen",
+        "balance_subtitle": "Position observée",
+        "alert_columns": [],
+    },
+    "caisse": {
+        "record_label": "Mouvements caisse",
+        "record_subtitle": "Lignes analysées",
+        "amount_columns": ["montant_operation"],
+        "amount_label": "Volume traité",
+        "amount_subtitle": "Flux de caisse",
+        "entity_columns": ["caissier"],
+        "entity_label": "Caissiers actifs",
+        "entity_subtitle": "Acteurs couverts",
+        "site_columns": ["agence"],
+        "site_label": "Agences actives",
+        "site_subtitle": "Guichets suivis",
+        "primary_columns": ["type_operation"],
+        "primary_title": "Distribution des mouvements de caisse",
+        "secondary_columns": ["caissier"],
+        "secondary_title": "Top caissiers actifs",
+        "group_columns": ["agence"],
+        "group_title": "Volumes par agence",
+        "actor_columns": ["caissier"],
+        "actor_label": "Caissiers",
+        "actor_subtitle": "Effectif actif",
+        "timeline_title": "Évolution mensuelle des mouvements",
+        "balance_columns": ["encaisse_fin_jour"],
+        "balance_label": "Encaisse moyenne",
+        "balance_subtitle": "Fin de journée",
+        "alert_columns": ["ecart_caisse"],
+        "alert_label": "Écarts détectés",
+        "alert_subtitle": "Écarts de caisse non nuls",
+    },
+    "tresorerie": {
+        "record_label": "Mouvements de trésorerie",
+        "record_subtitle": "Lignes analysées",
+        "amount_columns": ["montant_operation"],
+        "amount_label": "Montant traité",
+        "amount_subtitle": "Flux suivis",
+        "entity_columns": ["compte_bancaire"],
+        "entity_label": "Comptes bancaires",
+        "entity_subtitle": "Comptes suivis",
+        "site_columns": ["banque"],
+        "site_label": "Banques actives",
+        "site_subtitle": "Relations bancaires",
+        "primary_columns": ["banque", "devise"],
+        "primary_title": "Distribution des banques / devises",
+        "secondary_columns": ["compte_bancaire", "devise"],
+        "secondary_title": "Répartition secondaire",
+        "group_columns": ["banque"],
+        "group_title": "Volumes par banque",
+        "actor_columns": [],
+        "timeline_title": "Évolution mensuelle de la trésorerie",
+        "balance_columns": ["solde_banque"],
+        "balance_label": "Solde moyen",
+        "balance_subtitle": "Position bancaire",
+        "alert_columns": ["ecart_rapprochement"],
+        "alert_label": "Écarts de rapprochement",
+        "alert_subtitle": "Écarts non nuls",
+    },
+    "comptable": {
+        "record_label": "Écritures",
+        "record_subtitle": "Lignes analysées",
+        "amount_columns": ["montant_debit", "montant_credit"],
+        "amount_label": "Volume comptable",
+        "amount_subtitle": "Débit + crédit",
+        "entity_columns": ["piece_id"],
+        "entity_label": "Pièces",
+        "entity_subtitle": "Pièces uniques",
+        "site_columns": ["journal"],
+        "site_label": "Journaux actifs",
+        "site_subtitle": "Journaux couverts",
+        "primary_columns": ["journal"],
+        "primary_title": "Distribution des journaux",
+        "secondary_columns": ["compte_comptable", "centre_cout"],
+        "secondary_title": "Comptes les plus actifs",
+        "group_columns": ["journal"],
+        "group_title": "Volumes par journal",
+        "actor_columns": [],
+        "timeline_title": "Évolution mensuelle des écritures",
+        "balance_columns": [],
+        "alert_columns": [],
+    },
+    "rh_admin": {
+        "record_label": "Enregistrements RH",
+        "record_subtitle": "Lignes analysées",
+        "amount_columns": ["salaire"],
+        "amount_label": "Masse salariale",
+        "amount_subtitle": "Montant documenté",
+        "entity_columns": ["agent_id"],
+        "entity_label": "Agents",
+        "entity_subtitle": "Agents uniques",
+        "site_columns": ["agence"],
+        "site_label": "Agences actives",
+        "site_subtitle": "Sites couverts",
+        "primary_columns": ["fonction", "statut_agent"],
+        "primary_title": "Distribution des fonctions",
+        "secondary_columns": ["statut_agent", "immobilisation_id"],
+        "secondary_title": "Répartition secondaire",
+        "group_columns": ["agence"],
+        "group_title": "Répartition par agence",
+        "actor_columns": [],
+        "timeline_title": "Évolution mensuelle des enregistrements RH",
+        "balance_columns": [],
+        "alert_columns": [],
+    },
+    "si": {
+        "record_label": "Accès et habilitations",
+        "record_subtitle": "Lignes analysées",
+        "amount_columns": [],
+        "entity_columns": ["agent_id"],
+        "entity_label": "Agents",
+        "entity_subtitle": "Agents couverts",
+        "site_columns": ["application_source"],
+        "site_label": "Applications",
+        "site_subtitle": "Périmètres suivis",
+        "primary_columns": ["profil_acces", "niveau_habilitation"],
+        "primary_title": "Distribution des profils d'accès",
+        "secondary_columns": ["niveau_habilitation", "application_source"],
+        "secondary_title": "Répartition secondaire",
+        "group_columns": ["application_source"],
+        "group_title": "Volumes par application",
+        "actor_columns": [],
+        "timeline_title": "Évolution mensuelle des habilitations",
+        "balance_columns": [],
+        "alert_columns": ["date_revocation"],
+        "alert_label": "Révocations tracées",
+        "alert_subtitle": "Comptes avec date de révocation",
+    },
+    "continuite": {
+        "record_label": "Sauvegardes / tests",
+        "record_subtitle": "Lignes analysées",
+        "amount_columns": [],
+        "entity_columns": ["support_sauvegarde"],
+        "entity_label": "Supports",
+        "entity_subtitle": "Supports documentés",
+        "site_columns": ["type_sauvegarde"],
+        "site_label": "Types actifs",
+        "site_subtitle": "Catégories suivies",
+        "primary_columns": ["type_sauvegarde"],
+        "primary_title": "Distribution des sauvegardes",
+        "secondary_columns": ["statut_test_reprise", "incident_majeur"],
+        "secondary_title": "Répartition des tests / incidents",
+        "group_columns": ["support_sauvegarde"],
+        "group_title": "Répartition par support",
+        "actor_columns": [],
+        "timeline_title": "Évolution mensuelle des sauvegardes",
+        "balance_columns": [],
+        "alert_columns": ["incident_majeur"],
+        "alert_label": "Incidents majeurs",
+        "alert_subtitle": "Incidents renseignés",
+    },
+    "money_provider": {
+        "record_label": "Transactions",
+        "record_subtitle": "Lignes analysées",
+        "amount_columns": ["montant_operation"],
+        "amount_label": "Volume traité",
+        "amount_subtitle": "Cash-in / cash-out / transferts",
+        "entity_columns": ["numero_reference", "client_id"],
+        "entity_label": "Références / clients",
+        "entity_subtitle": "Base couverte",
+        "site_columns": ["agence"],
+        "site_label": "Agences actives",
+        "site_subtitle": "Points de service",
+        "primary_columns": ["type_operation"],
+        "primary_title": "Distribution des types d'opération",
+        "secondary_columns": ["operateur", "tresorier"],
+        "secondary_title": "Top opérateurs actifs",
+        "group_columns": ["agence"],
+        "group_title": "Volumes par agence",
+        "actor_columns": ["operateur", "tresorier"],
+        "actor_label": "Opérateurs / trésoriers",
+        "actor_subtitle": "Acteurs documentés",
+        "timeline_title": "Évolution mensuelle des transactions",
+        "balance_columns": ["solde_final", "solde_initial"],
+        "balance_label": "Solde moyen",
+        "balance_subtitle": "Position documentée",
+        "alert_columns": ["telephone"],
+        "alert_label": "Téléphones renseignés",
+        "alert_subtitle": "Transactions avec contact",
+    },
+}
 
+
+def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for column in candidates:
+        if column in df.columns:
+            return column
+    return None
+
+
+def _prepare_amount_frame(
+    df: pd.DataFrame,
+    amount_columns: list[str],
+    derived_name: str = "_montant_cycle",
+) -> tuple[pd.DataFrame, str | None]:
+    present_columns = [column for column in amount_columns if column in df.columns]
+    if not present_columns:
+        return df, None
+    if len(present_columns) == 1:
+        return df, present_columns[0]
+
+    amount_frame = df.copy()
+    amount_frame[derived_name] = (
+        amount_frame[present_columns]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .sum(axis=1)
+    )
+    return amount_frame, derived_name
+
+
+def _format_period_span(df: pd.DataFrame, date_column: str | None) -> str:
+    if not date_column or date_column not in df.columns:
+        return "-"
+    dates = pd.to_datetime(df[date_column], errors="coerce").dropna()
+    if dates.empty:
+        return "-"
+    return f"{dates.min():%Y-%m-%d} -> {dates.max():%Y-%m-%d}"
+
+
+def _top_label(df: pd.DataFrame, candidates: list[str]) -> str:
+    column = _first_existing_column(df, candidates)
+    if not column:
+        return "-"
+    freq = build_frequency_table(df, column, top_n=1)
+    if freq.empty:
+        return "-"
+    return str(freq.iloc[0][column])
+
+
+def _unique_count(df: pd.DataFrame, candidates: list[str]) -> int | None:
+    column = _first_existing_column(df, candidates)
+    if not column:
+        return None
+    values = df[column].dropna().astype("string").str.strip()
+    values = values[values != ""]
+    return int(values.nunique())
+
+
+def _non_empty_count(df: pd.DataFrame, candidates: list[str]) -> int | None:
+    column = _first_existing_column(df, candidates)
+    if not column:
+        return None
+    series = df[column]
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return int(series.notna().sum())
+    if pd.api.types.is_numeric_dtype(series):
+        return int(series.notna().sum())
+    text_values = series.astype("string").str.strip()
+    return int(text_values.fillna("").ne("").sum())
+
+
+def _non_zero_or_documented_alert_count(df: pd.DataFrame, candidates: list[str]) -> int | None:
+    column = _first_existing_column(df, candidates)
+    if not column:
+        return None
+    series = df[column]
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return int(series.notna().sum())
+    numeric_series = pd.to_numeric(series, errors="coerce")
+    if numeric_series.notna().any():
+        return int(numeric_series.fillna(0).ne(0).sum())
+    text_values = series.astype("string").str.strip()
+    return int(text_values.fillna("").ne("").sum())
+
+
+def _mean_numeric_value(df: pd.DataFrame, candidates: list[str]) -> float | None:
+    frame, amount_column = _prepare_amount_frame(df, candidates, derived_name="_mean_cycle")
+    if not amount_column:
+        return None
+    values = pd.to_numeric(frame[amount_column], errors="coerce").dropna()
+    if values.empty:
+        return None
+    return float(values.mean())
+
+
+def _sum_numeric_value(df: pd.DataFrame, candidates: list[str]) -> float | None:
+    frame, amount_column = _prepare_amount_frame(df, candidates, derived_name="_sum_cycle")
+    if not amount_column:
+        return None
+    values = pd.to_numeric(frame[amount_column], errors="coerce").dropna()
+    if values.empty:
+        return None
+    return float(values.sum())
+
+
+def _build_credit_like_cards(df: pd.DataFrame, cycle_key: str) -> list[tuple[str, str, str, str]]:
     metrics = build_summary_metrics(df)
     snapshot = build_operational_snapshot(df)
-    render_panel_title("Vue d'ensemble")
-    render_kpi_cards(
-        [
-            ("Dossiers", f"{metrics['nombre_dossiers']:,}".replace(",", " "), "Périmètre filtré", "blue"),
+    cards = [
+        ("Dossiers", f"{metrics['nombre_dossiers']:,}".replace(",", " "), "Périmètre filtré", "blue"),
+        (
+            "Montant demandé",
+            format_currency(metrics["montant_demande_total"]),
+            "Somme des demandes",
+            "navy",
+        ),
+        (
+            "Taux d'approbation",
+            format_percent(metrics["taux_approbation"]),
+            "Décision favorable ou active",
+            "green",
+        ),
+        ("Taux de retard", format_percent(metrics["taux_retard"]), "Dossiers en retard", "orange"),
+        (
+            "Clients uniques",
+            "-" if metrics["nombre_clients"] is None else f"{metrics['nombre_clients']:,}".replace(",", " "),
+            "Base client couverte",
+            "blue",
+        ),
+        (
+            "Montant accordé",
+            format_currency(metrics["montant_accorde_total"]),
+            "Montants engagés",
+            "green",
+        ),
+        (
+            "Retard moyen",
+            "-" if metrics["retard_moyen_jours"] is None else f"{metrics['retard_moyen_jours']:.1f} j",
+            "Sur les dossiers documentés",
+            "orange",
+        ),
+        (
+            "Endettement moyen",
+            format_percent(metrics["taux_endettement_moyen"]),
+            "Charges / revenu",
+            "slate",
+        ),
+        (
+            "Risque élevé",
+            f"{snapshot['high_risk_count']:,}".replace(",", " "),
+            "Dossiers à forte vigilance",
+            "red",
+        ),
+        (
+            "Capacité négative",
+            f"{snapshot['negative_capacity_count']:,}".replace(",", " "),
+            "Remboursement potentiellement fragile",
+            "orange",
+        ),
+        (
+            "Retard > 30 j",
+            f"{snapshot['overdue_30_count']:,}".replace(",", " "),
+            "Recouvrement à prioriser",
+            "red",
+        ),
+        (
+            "Ticket moyen",
+            format_currency(snapshot["montant_moyen_demande"]),
+            "Montant demandé moyen",
+            "navy",
+        ),
+    ]
+    if cycle_key == "likelemba" and "nom_groupe" in df.columns:
+        group_count = _unique_count(df, ["nom_groupe"])
+        cards.insert(
+            4,
             (
-                "Montant demandé",
-                format_currency(metrics["montant_demande_total"]),
-                "Somme des demandes",
-                "navy",
-            ),
-            (
-                "Taux d'approbation",
-                format_percent(metrics["taux_approbation"]),
-                "Décision favorable ou active",
-                "green",
-            ),
-            ("Taux de retard", format_percent(metrics["taux_retard"]), "Dossiers en retard", "orange"),
-            (
-                "Clients uniques",
-                "-" if metrics["nombre_clients"] is None else f"{metrics['nombre_clients']:,}".replace(",", " "),
-                "Base client couverte",
-                "blue",
-            ),
-            (
-                "Montant accordé",
-                format_currency(metrics["montant_accorde_total"]),
-                "Montants engagés",
-                "green",
-            ),
-            (
-                "Retard moyen",
-                "-" if metrics["retard_moyen_jours"] is None else f"{metrics['retard_moyen_jours']:.1f} j",
-                "Sur les dossiers documentés",
-                "orange",
-            ),
-            (
-                "Endettement moyen",
-                format_percent(metrics["taux_endettement_moyen"]),
-                "Charges / revenu",
+                "Groupes actifs",
+                "-" if group_count is None else f"{group_count:,}".replace(",", " "),
+                "Groupes solidaires documentés",
                 "slate",
             ),
-            (
-                "Risque élevé",
-                f"{snapshot['high_risk_count']:,}".replace(",", " "),
-                "Dossiers à forte vigilance",
-                "red",
-            ),
-            (
-                "Capacité négative",
-                f"{snapshot['negative_capacity_count']:,}".replace(",", " "),
-                "Remboursement potentiellement fragile",
-                "orange",
-            ),
-            (
-                "Retard > 30 j",
-                f"{snapshot['overdue_30_count']:,}".replace(",", " "),
-                "Recouvrement à prioriser",
-                "red",
-            ),
-            (
-                "Ticket moyen",
-                format_currency(snapshot["montant_moyen_demande"]),
-                "Montant demandé moyen",
-                "navy",
-            ),
-        ]
-    )
+        )
+    return cards
+
+
+def _render_credit_like_overview(df: pd.DataFrame, monthly_df: pd.DataFrame, cycle_key: str) -> None:
+    render_kpi_cards(_build_credit_like_cards(df, cycle_key))
     left, right = st.columns((1.1, 1))
 
     with left:
@@ -108,15 +429,20 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
             )
             fig.update_traces(marker_line_color="rgba(255,255,255,0.45)", marker_line_width=1.1)
             fig.update_layout(height=380, showlegend=False)
-            st_plot(fig, key="overview_status_distribution", height=380)
+            st_plot(fig, key=f"overview_status_distribution_{cycle_key}", height=380)
 
     with right:
-        if not monthly_df.empty:
-            render_panel_title("Évolution mensuelle des demandes")
+        effective_monthly_df = monthly_df if not monthly_df.empty else build_cycle_period_series(df, cycle_key)
+        x_column = "mois_demande" if "mois_demande" in effective_monthly_df.columns else "periode"
+        if not effective_monthly_df.empty and x_column in effective_monthly_df.columns:
+            title = "Évolution mensuelle des demandes"
+            if cycle_key == "likelemba":
+                title = "Évolution mensuelle des dossiers du groupe"
+            render_panel_title(title)
             fig = px.line(
-                monthly_df,
-                x="mois_demande",
-                y="nombre_dossiers",
+                effective_monthly_df,
+                x=x_column,
+                y="nombre_lignes" if "nombre_lignes" in effective_monthly_df.columns else "nombre_dossiers",
                 markers=True,
             )
             fig.update_traces(
@@ -126,7 +452,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
                 marker=dict(size=7),
             )
             fig.update_layout(height=380)
-            st_plot(fig, key="overview_monthly_line", height=380)
+            st_plot(fig, key=f"overview_monthly_line_{cycle_key}", height=380)
 
     risk_left, risk_right = st.columns((1, 1.2))
 
@@ -148,7 +474,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
                 },
             )
             fig.update_layout(height=340)
-            st_plot(fig, key="overview_risk_pie", height=340)
+            st_plot(fig, key=f"overview_risk_pie_{cycle_key}", height=340)
 
     with risk_right:
         age_df = build_age_bucket_table(df)
@@ -165,7 +491,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
             )
             fig.update_traces(marker_line_color="rgba(255,255,255,0.55)", marker_line_width=1.2)
             fig.update_layout(height=340, showlegend=False, xaxis_tickangle=-25)
-            st_plot(fig, key="overview_age_buckets", height=340)
+            st_plot(fig, key=f"overview_age_buckets_{cycle_key}", height=340)
 
     demo_left, demo_right = st.columns((1, 1.2))
 
@@ -186,7 +512,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
                 },
             )
             fig.update_layout(height=360)
-            st_plot(fig, key="overview_sex_pie", height=360)
+            st_plot(fig, key=f"overview_sex_pie_{cycle_key}", height=360)
 
     with demo_right:
         pyramid_df = build_age_sex_pyramid_table(df)
@@ -230,9 +556,7 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
                     cliponaxis=False,
                 )
             )
-            max_value = max(
-                [abs(value) for value in male_values + female_values] + [0]
-            )
+            max_value = max([abs(value) for value in male_values + female_values] + [0])
             fig.update_layout(
                 barmode="relative",
                 height=360,
@@ -251,4 +575,365 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame) -> None:
                 yaxis=dict(title="Tranche d'âge", categoryorder="array", categoryarray=pyramid_df["tranche_age"].tolist()),
                 legend=dict(orientation="h"),
             )
-            st_plot(fig, key="overview_age_sex_pyramid", height=360, annotate_values=False)
+            st_plot(fig, key=f"overview_age_sex_pyramid_{cycle_key}", height=360, annotate_values=False)
+
+
+def _build_generic_cycle_cards(df: pd.DataFrame, cycle_key: str) -> list[tuple[str, str, str, str]]:
+    config = GENERIC_OVERVIEW_CONFIG.get(cycle_key, GENERIC_OVERVIEW_CONFIG["money_provider"])
+    cards: list[tuple[str, str, str, str]] = [
+        (
+            config["record_label"],
+            f"{len(df):,}".replace(",", " "),
+            config["record_subtitle"],
+            "slate",
+        )
+    ]
+
+    total_amount = _sum_numeric_value(df, config.get("amount_columns", []))
+    if total_amount is not None:
+        cards.append(
+            (
+                config["amount_label"],
+                format_currency(total_amount),
+                config["amount_subtitle"],
+                "slate",
+            )
+        )
+
+    entity_count = _unique_count(df, config.get("entity_columns", []))
+    if entity_count is not None:
+        cards.append(
+            (
+                config["entity_label"],
+                f"{entity_count:,}".replace(",", " "),
+                config["entity_subtitle"],
+                "slate",
+            )
+        )
+
+    site_count = _unique_count(df, config.get("site_columns", []))
+    if site_count is not None:
+        cards.append(
+            (
+                config["site_label"],
+                f"{site_count:,}".replace(",", " "),
+                config["site_subtitle"],
+                "slate",
+            )
+        )
+
+    primary_top = _top_label(df, config.get("primary_columns", []))
+    if primary_top != "-":
+        cards.append(("Dominante", primary_top, "Catégorie la plus fréquente", "slate"))
+
+    date_column = get_cycle_primary_date_column(df, cycle_key)
+    cards.append(("Période", _format_period_span(df, date_column), "Fenêtre analytique", "slate"))
+
+    mean_amount = _mean_numeric_value(df, config.get("amount_columns", []))
+    if mean_amount is not None:
+        cards.append(("Montant moyen", format_currency(mean_amount), "Moyenne observée", "slate"))
+
+    actor_columns = config.get("actor_columns", [])
+    actor_count = _unique_count(df, actor_columns)
+    if actor_columns and actor_count is not None:
+        cards.append(
+            (
+                config.get("actor_label", "Acteurs"),
+                f"{actor_count:,}".replace(",", " "),
+                config.get("actor_subtitle", "Acteurs documentés"),
+                "slate",
+            )
+        )
+
+    alert_columns = config.get("alert_columns", [])
+    alert_count = _non_zero_or_documented_alert_count(df, alert_columns)
+    if alert_columns and alert_count is not None:
+        cards.append(
+            (
+                config.get("alert_label", "Alertes"),
+                f"{alert_count:,}".replace(",", " "),
+                config.get("alert_subtitle", "Lignes concernées"),
+                "slate",
+            )
+        )
+
+    balance_columns = config.get("balance_columns", [])
+    mean_balance = _mean_numeric_value(df, balance_columns)
+    if balance_columns and mean_balance is not None:
+        cards.append(
+            (
+                config.get("balance_label", "Solde moyen"),
+                format_currency(mean_balance),
+                config.get("balance_subtitle", "Position observée"),
+                "slate",
+            )
+        )
+
+    return cards[:10]
+
+
+def _render_frequency_bar(
+    df: pd.DataFrame,
+    column: str,
+    title: str,
+    key: str,
+    horizontal: bool = False,
+) -> None:
+    freq_df = build_frequency_table(df, column, top_n=10)
+    if freq_df.empty:
+        st.info("Aucune distribution exploitable n'est disponible sur ce bloc.")
+        return
+
+    render_panel_title(title)
+    if horizontal:
+        fig = px.bar(
+            freq_df.sort_values("nombre_lignes", ascending=True),
+            x="nombre_lignes",
+            y=column,
+            orientation="h",
+            color_discrete_sequence=["#2b74ca"],
+        )
+    else:
+        fig = px.bar(
+            freq_df,
+            x=column,
+            y="nombre_lignes",
+            color_discrete_sequence=["#2b74ca"],
+        )
+        fig.update_layout(xaxis_tickangle=-25)
+    fig.update_traces(marker_line_color="rgba(255,255,255,0.45)", marker_line_width=1.1)
+    fig.update_layout(height=360, showlegend=False)
+    st_plot(fig, key=key, height=360)
+
+
+def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
+    config = GENERIC_OVERVIEW_CONFIG.get(cycle_key, GENERIC_OVERVIEW_CONFIG["money_provider"])
+    cycle_spec = get_cycle_spec(cycle_key)
+    render_kpi_cards(_build_generic_cycle_cards(df, cycle_key))
+
+    date_column = get_cycle_primary_date_column(df, cycle_key)
+    primary_column = _first_existing_column(df, config.get("primary_columns", []))
+    group_column = _first_existing_column(df, config.get("group_columns", []))
+    secondary_column = _first_existing_column(
+        df,
+        [
+            column
+            for column in config.get("secondary_columns", [])
+            if column not in {primary_column, group_column}
+        ],
+    )
+    period_df = build_cycle_period_series(df, cycle_key)
+    amount_frame, amount_column = _prepare_amount_frame(df, config.get("amount_columns", []))
+
+    render_summary_box(
+        f"Lecture du {cycle_spec['label']}",
+        [
+            cycle_spec["summary"],
+            cycle_spec["control_objective"],
+            f"Date pilote retenue : `{date_column}`." if date_column else "Aucune date pilote détectée dans la base active.",
+            f"Champ dominant analysé : `{primary_column}`." if primary_column else "Aucun champ dominant exploitable n'a été détecté.",
+        ],
+    )
+
+    top_left, top_right = st.columns((1.05, 1))
+
+    with top_left:
+        if primary_column:
+            _render_frequency_bar(
+                df,
+                primary_column,
+                config["primary_title"],
+                key=f"overview_primary_{cycle_key}",
+            )
+        else:
+            st.info("Aucune dimension principale n'est disponible pour ce cycle.")
+
+    with top_right:
+        if not period_df.empty:
+            render_panel_title(config["timeline_title"])
+            fig = px.line(
+                period_df,
+                x="periode",
+                y="nombre_lignes",
+                markers=True,
+            )
+            fig.update_traces(
+                line_color="#2b74ca",
+                marker_color="#2b74ca",
+                line=dict(width=3),
+                marker=dict(size=7),
+            )
+            fig.update_layout(height=360, xaxis_tickangle=-25)
+            st_plot(fig, key=f"overview_period_{cycle_key}", height=360)
+        else:
+            st.info("Aucune série temporelle n'a pu être construite pour ce cycle.")
+
+    mid_left, mid_right = st.columns((1.05, 1))
+
+    with mid_left:
+        if group_column and amount_column:
+            grouped_df = build_grouped_amounts(amount_frame, group_column, amount_column=amount_column, top_n=10)
+            if not grouped_df.empty:
+                render_panel_title(config["group_title"])
+                fig = px.bar(
+                    grouped_df.sort_values(amount_column, ascending=True),
+                    x=amount_column,
+                    y=group_column,
+                    orientation="h",
+                    color_discrete_sequence=["#4b84d7"],
+                )
+                fig.update_traces(marker_line_color="rgba(255,255,255,0.45)", marker_line_width=1.1)
+                fig.update_layout(height=360, showlegend=False)
+                st_plot(fig, key=f"overview_group_amount_{cycle_key}", height=360)
+            else:
+                st.info("Aucun regroupement monétaire n'est disponible pour ce cycle.")
+        elif group_column:
+            _render_frequency_bar(
+                df,
+                group_column,
+                config["group_title"],
+                key=f"overview_group_freq_{cycle_key}",
+                horizontal=True,
+            )
+        else:
+            st.info("Aucun regroupement secondaire n'est disponible pour ce cycle.")
+
+    with mid_right:
+        if secondary_column:
+            _render_frequency_bar(
+                df,
+                secondary_column,
+                config["secondary_title"],
+                key=f"overview_secondary_{cycle_key}",
+                horizontal=True,
+            )
+        else:
+            render_summary_box(
+                "Lecture complémentaire",
+                [
+                    f"{len(df):,}".replace(",", " ") + " ligne(s) sont actuellement retenues dans ce cycle.",
+                    "Ajoutez davantage de champs métier pour enrichir les comparaisons secondaires.",
+                ],
+            )
+
+    sex_df = build_sex_distribution(df)
+    pyramid_df = build_age_sex_pyramid_table(df)
+    age_df = build_age_bucket_table(df)
+    if not sex_df.empty or not pyramid_df.empty or not age_df.empty:
+        demo_left, demo_right = st.columns((1, 1.2))
+        with demo_left:
+            if not sex_df.empty:
+                render_panel_title("Répartition par sexe")
+                fig = px.pie(
+                    sex_df,
+                    names="sexe",
+                    values="nombre_lignes",
+                    hole=0.55,
+                    color="sexe",
+                    color_discrete_map={
+                        "Masculin": "#1c2333",
+                        "Féminin": "#d71920",
+                        "Inconnu": "#a7a9ac",
+                    },
+                )
+                fig.update_layout(height=360)
+                st_plot(fig, key=f"overview_generic_sex_{cycle_key}", height=360)
+            elif not age_df.empty:
+                render_panel_title("Distribution par tranche d'âge")
+                fig = px.bar(
+                    age_df,
+                    x="tranche_age",
+                    y="nombre_lignes",
+                    color_discrete_sequence=["#d77a0f"],
+                )
+                fig.update_layout(height=360, showlegend=False, xaxis_tickangle=-25)
+                st_plot(fig, key=f"overview_generic_age_{cycle_key}", height=360)
+
+        with demo_right:
+            if not pyramid_df.empty:
+                render_panel_title("Pyramide âge-sexe")
+                annotate_values = bool(st.session_state.get("credit_annot_vals", False))
+                annotation_threshold = float(st.session_state.get("credit_annot_min", 1))
+                male_values = [-float(value) for value in pyramid_df["Masculin"].tolist()]
+                female_values = [float(value) for value in pyramid_df["Féminin"].tolist()]
+                male_text = [
+                    f"{int(abs(value))}" if annotate_values and abs(value) >= annotation_threshold else ""
+                    for value in male_values
+                ]
+                female_text = [
+                    f"{int(value)}" if annotate_values and value >= annotation_threshold else ""
+                    for value in female_values
+                ]
+
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Bar(
+                        y=pyramid_df["tranche_age"],
+                        x=male_values,
+                        name="Masculin",
+                        orientation="h",
+                        marker=dict(color="#1c2333"),
+                        text=male_text,
+                        textposition="outside",
+                        cliponaxis=False,
+                    )
+                )
+                fig.add_trace(
+                    go.Bar(
+                        y=pyramid_df["tranche_age"],
+                        x=female_values,
+                        name="Féminin",
+                        orientation="h",
+                        marker=dict(color="#e11d1d"),
+                        text=female_text,
+                        textposition="outside",
+                        cliponaxis=False,
+                    )
+                )
+                max_value = max([abs(value) for value in male_values + female_values] + [0])
+                fig.update_layout(
+                    barmode="relative",
+                    height=360,
+                    xaxis=dict(
+                        range=[-max_value * 1.15, max_value * 1.15] if max_value else None,
+                        tickvals=[-max_value, -max_value / 2, 0, max_value / 2, max_value] if max_value else None,
+                        ticktext=[
+                            f"{int(max_value)}",
+                            f"{int(max_value / 2)}",
+                            "0",
+                            f"{int(max_value / 2)}",
+                            f"{int(max_value)}",
+                        ] if max_value else None,
+                        title="Nombre de lignes",
+                    ),
+                    yaxis=dict(title="Tranche d'âge", categoryorder="array", categoryarray=pyramid_df["tranche_age"].tolist()),
+                    legend=dict(orientation="h"),
+                )
+                st_plot(
+                    fig,
+                    key=f"overview_generic_pyramid_{cycle_key}",
+                    height=360,
+                    annotate_values=False,
+                )
+            elif not age_df.empty:
+                render_panel_title("Distribution par tranche d'âge")
+                fig = px.bar(
+                    age_df,
+                    x="tranche_age",
+                    y="nombre_lignes",
+                    color_discrete_sequence=["#d77a0f"],
+                )
+                fig.update_layout(height=360, showlegend=False, xaxis_tickangle=-25)
+                st_plot(fig, key=f"overview_generic_age_bis_{cycle_key}", height=360)
+
+
+def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame, cycle_key: str = "credit") -> None:
+    if df.empty:
+        st.warning("Aucune ligne ne correspond aux filtres sélectionnés.")
+        return
+
+    render_panel_title("Vue d'ensemble")
+    if cycle_key in CREDIT_LIKE_CYCLES:
+        _render_credit_like_overview(df, monthly_df, cycle_key)
+        return
+    _render_generic_cycle_overview(df, cycle_key)

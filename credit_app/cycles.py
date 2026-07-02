@@ -174,6 +174,109 @@ CYCLE_SPECS: dict[str, dict[str, Any]] = {
     },
 }
 
+DEFAULT_ANALYSIS_PRESET: dict[str, Any] = {
+    "record_label": "Lignes",
+    "id_columns": ["dossier_id", "client_id"],
+    "group_columns": ["agence", "type_produit", "agent_credit"],
+    "status_columns": ["statut_dossier", "statut_remboursement"],
+    "amount_columns": ["montant_demande", "montant_accorde"],
+    "actor_columns": ["agent_credit"],
+    "filter_columns": ["statut_dossier", "agence", "type_produit", "agent_credit"],
+}
+
+CYCLE_ANALYSIS_PRESETS: dict[str, dict[str, Any]] = {
+    "credit": {
+        "record_label": "Dossiers",
+        "id_columns": ["dossier_id", "client_id"],
+        "group_columns": ["agence", "type_produit", "agent_credit"],
+        "status_columns": ["statut_dossier", "statut_remboursement"],
+        "amount_columns": ["montant_demande", "montant_accorde"],
+        "actor_columns": ["agent_credit"],
+        "filter_columns": ["statut_dossier", "statut_remboursement", "agence", "type_produit", "agent_credit"],
+    },
+    "likelemba": {
+        "record_label": "Dossiers solidaires",
+        "id_columns": ["dossier_id", "client_id", "nom_groupe"],
+        "group_columns": ["nom_groupe", "agence", "activite_economique"],
+        "status_columns": ["statut_dossier", "statut_remboursement"],
+        "amount_columns": ["montant_demande", "montant_accorde"],
+        "actor_columns": ["agent_credit"],
+        "filter_columns": ["statut_dossier", "statut_remboursement", "nom_groupe", "agence", "activite_economique"],
+    },
+    "epargne": {
+        "record_label": "Opérations d'épargne",
+        "id_columns": ["compte_id", "client_id"],
+        "group_columns": ["agence", "type_operation", "statut_compte"],
+        "status_columns": ["statut_compte"],
+        "amount_columns": ["montant_operation", "solde_compte"],
+        "actor_columns": [],
+        "filter_columns": ["statut_compte", "agence", "type_operation", "compte_id"],
+    },
+    "caisse": {
+        "record_label": "Mouvements de caisse",
+        "id_columns": ["agence", "caissier"],
+        "group_columns": ["agence", "caissier", "type_operation"],
+        "status_columns": ["type_operation"],
+        "amount_columns": ["montant_operation", "encaisse_fin_jour"],
+        "actor_columns": ["caissier"],
+        "filter_columns": ["agence", "caissier", "type_operation"],
+    },
+    "tresorerie": {
+        "record_label": "Mouvements de trésorerie",
+        "id_columns": ["compte_bancaire", "banque"],
+        "group_columns": ["banque", "compte_bancaire", "devise"],
+        "status_columns": ["devise"],
+        "amount_columns": ["montant_operation", "solde_banque"],
+        "actor_columns": [],
+        "filter_columns": ["banque", "compte_bancaire", "devise"],
+    },
+    "comptable": {
+        "record_label": "Écritures comptables",
+        "id_columns": ["piece_id"],
+        "group_columns": ["journal", "compte_comptable", "centre_cout"],
+        "status_columns": ["journal"],
+        "amount_columns": ["montant_debit", "montant_credit"],
+        "actor_columns": [],
+        "filter_columns": ["journal", "compte_comptable", "centre_cout"],
+    },
+    "rh_admin": {
+        "record_label": "Enregistrements RH",
+        "id_columns": ["agent_id", "immobilisation_id"],
+        "group_columns": ["agence", "fonction", "statut_agent"],
+        "status_columns": ["statut_agent"],
+        "amount_columns": ["salaire"],
+        "actor_columns": [],
+        "filter_columns": ["agence", "fonction", "statut_agent"],
+    },
+    "si": {
+        "record_label": "Habilitations SI",
+        "id_columns": ["agent_id"],
+        "group_columns": ["application_source", "profil_acces", "niveau_habilitation"],
+        "status_columns": ["profil_acces", "niveau_habilitation"],
+        "amount_columns": [],
+        "actor_columns": [],
+        "filter_columns": ["application_source", "profil_acces", "niveau_habilitation"],
+    },
+    "continuite": {
+        "record_label": "Sauvegardes et tests",
+        "id_columns": ["date_sauvegarde"],
+        "group_columns": ["type_sauvegarde", "support_sauvegarde", "statut_test_reprise"],
+        "status_columns": ["statut_test_reprise", "incident_majeur"],
+        "amount_columns": [],
+        "actor_columns": [],
+        "filter_columns": ["type_sauvegarde", "support_sauvegarde", "statut_test_reprise"],
+    },
+    "money_provider": {
+        "record_label": "Transactions",
+        "id_columns": ["numero_reference", "client_id"],
+        "group_columns": ["agence", "type_operation", "operateur", "tresorier"],
+        "status_columns": ["type_operation"],
+        "amount_columns": ["montant_operation", "solde_final"],
+        "actor_columns": ["operateur", "tresorier"],
+        "filter_columns": ["agence", "type_operation", "operateur", "tresorier"],
+    },
+}
+
 
 def list_cycle_keys() -> list[str]:
     return list(CYCLE_SPECS.keys())
@@ -183,6 +286,12 @@ def get_cycle_spec(cycle_key: str | None) -> dict[str, Any]:
     if cycle_key and cycle_key in CYCLE_SPECS:
         return CYCLE_SPECS[cycle_key]
     return CYCLE_SPECS[DEFAULT_CYCLE_KEY]
+
+
+def get_cycle_analysis_preset(cycle_key: str | None) -> dict[str, Any]:
+    preset = dict(DEFAULT_ANALYSIS_PRESET)
+    preset.update(CYCLE_ANALYSIS_PRESETS.get(cycle_key or DEFAULT_CYCLE_KEY, {}))
+    return preset
 
 
 def build_cycle_control_table(cycle_key: str) -> pd.DataFrame:

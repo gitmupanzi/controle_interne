@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from credit_app.core import safe_divide
+from credit_app.cycles import get_cycle_analysis_preset
 
 
 COLUMN_ALIASES = {
@@ -279,9 +280,28 @@ NUMERIC_COLUMNS = [
     "score_credit",
     "retard_jours",
     "age",
+    "montant_operation",
+    "solde_initial",
+    "solde_final",
+    "montant_debit",
+    "montant_credit",
+    "solde_compte",
+    "encaisse_fin_jour",
+    "ecart_caisse",
+    "solde_banque",
+    "ecart_rapprochement",
+    "salaire",
 ]
 
-DATE_COLUMNS = ["date_demande", "date_decision"]
+DATE_COLUMNS = [
+    "date_demande",
+    "date_decision",
+    "date_operation",
+    "date_entree",
+    "date_activation",
+    "date_revocation",
+    "date_sauvegarde",
+]
 STATUS_FLOW_ORDER = [
     "Reçu",
     "À compléter",
@@ -349,6 +369,19 @@ RISK_LEVEL_MAP = {
     "moyen": "Moyen",
     "eleve": "Élevé",
     "non renseigne": "Non renseigné",
+}
+
+CYCLE_DATE_PRIORITY = {
+    "credit": ["date_demande", "date_decision"],
+    "likelemba": ["date_demande", "date_decision"],
+    "epargne": ["date_operation", "date_demande"],
+    "caisse": ["date_operation"],
+    "tresorerie": ["date_operation"],
+    "comptable": ["date_operation"],
+    "money_provider": ["date_operation"],
+    "rh_admin": ["date_entree", "date_operation"],
+    "si": ["date_activation", "date_revocation"],
+    "continuite": ["date_sauvegarde"],
 }
 
 
@@ -601,6 +634,100 @@ def build_monthly_series(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _first_existing_column(
+    df: pd.DataFrame,
+    candidates: Iterable[str],
+) -> str | None:
+    for column in candidates:
+        if column in df.columns:
+            return column
+    return None
+
+
+def get_first_existing_column(
+    df: pd.DataFrame,
+    candidates: Iterable[str],
+) -> str | None:
+    return _first_existing_column(df, candidates)
+
+
+def get_cycle_primary_date_column(df: pd.DataFrame, cycle_key: str | None = None) -> str | None:
+    cycle_candidates = CYCLE_DATE_PRIORITY.get(str(cycle_key or ""), [])
+    generic_candidates = [
+        "date_demande",
+        "date_operation",
+        "date_decision",
+        "date_entree",
+        "date_activation",
+        "date_revocation",
+        "date_sauvegarde",
+    ]
+    return _first_existing_column(df, [*cycle_candidates, *generic_candidates])
+
+
+def build_period_series(
+    df: pd.DataFrame,
+    date_column: str,
+    amount_column: str | None = None,
+) -> pd.DataFrame:
+    empty = pd.DataFrame(columns=["periode", "nombre_lignes", "montant_total"])
+    empty.attrs["date_column"] = date_column
+    empty.attrs["amount_column"] = amount_column
+
+    if date_column not in df.columns:
+        return empty
+
+    base = df.copy()
+    base[date_column] = pd.to_datetime(base[date_column], errors="coerce")
+    base = base.dropna(subset=[date_column])
+    if base.empty:
+        return empty
+
+    base["periode"] = base[date_column].dt.to_period("M").astype(str)
+    if amount_column and amount_column in base.columns:
+        grouped = (
+            base.groupby("periode", dropna=False)
+            .agg(
+                nombre_lignes=("periode", "size"),
+                montant_total=(amount_column, "sum"),
+            )
+            .reset_index()
+            .sort_values("periode")
+        )
+    else:
+        grouped = (
+            base.groupby("periode", dropna=False)
+            .agg(nombre_lignes=("periode", "size"))
+            .reset_index()
+            .sort_values("periode")
+        )
+        grouped["montant_total"] = pd.NA
+
+    grouped.attrs["date_column"] = date_column
+    grouped.attrs["amount_column"] = amount_column if amount_column in base.columns else None
+    return grouped
+
+
+def build_cycle_period_series(df: pd.DataFrame, cycle_key: str | None = None) -> pd.DataFrame:
+    date_column = get_cycle_primary_date_column(df, cycle_key)
+    if not date_column:
+        empty = pd.DataFrame(columns=["periode", "nombre_lignes", "montant_total"])
+        empty.attrs["date_column"] = None
+        empty.attrs["amount_column"] = None
+        return empty
+
+    amount_candidates = [
+        "montant_demande",
+        "montant_operation",
+        "montant_accorde",
+        "montant_debit",
+        "montant_credit",
+        "salaire",
+    ]
+    amount_column = _first_existing_column(df, amount_candidates)
+    return build_period_series(df, date_column=date_column, amount_column=amount_column)
+
+
 def filter_dataframe(
     df: pd.DataFrame,
     statuses: Iterable[str] | None = None,
@@ -608,23 +735,30 @@ def filter_dataframe(
     products: Iterable[str] | None = None,
     start_date: object | None = None,
     end_date: object | None = None,
+    date_column: str | None = "date_demande",
+    column_filters: dict[str, Iterable[str] | None] | None = None,
 ) -> pd.DataFrame:
     filtered = df.copy()
 
-    if statuses and "statut_dossier" in filtered.columns:
-        filtered = filtered[filtered["statut_dossier"].isin(statuses)]
+    effective_filters: dict[str, Iterable[str] | None] = {}
+    if column_filters:
+        effective_filters.update(column_filters)
+    if statuses:
+        effective_filters["statut_dossier"] = statuses
+    if agencies:
+        effective_filters["agence"] = agencies
+    if products:
+        effective_filters["type_produit"] = products
 
-    if agencies and "agence" in filtered.columns:
-        filtered = filtered[filtered["agence"].isin(agencies)]
+    for column_name, selected_values in effective_filters.items():
+        if selected_values and column_name in filtered.columns:
+            filtered = filtered[filtered[column_name].isin(selected_values)]
 
-    if products and "type_produit" in filtered.columns:
-        filtered = filtered[filtered["type_produit"].isin(products)]
+    if date_column and date_column in filtered.columns and start_date is not None:
+        filtered = filtered[filtered[date_column].dt.date >= start_date]
 
-    if "date_demande" in filtered.columns and start_date is not None:
-        filtered = filtered[filtered["date_demande"].dt.date >= start_date]
-
-    if "date_demande" in filtered.columns and end_date is not None:
-        filtered = filtered[filtered["date_demande"].dt.date <= end_date]
+    if date_column and date_column in filtered.columns and end_date is not None:
+        filtered = filtered[filtered[date_column].dt.date <= end_date]
 
     return filtered.reset_index(drop=True)
 
@@ -891,6 +1025,66 @@ def build_group_summary_table(
     return summary
 
 
+def _build_amount_reference_frame(
+    df: pd.DataFrame,
+    amount_columns: Iterable[str] | None = None,
+    derived_name: str = "_montant_reference",
+) -> tuple[pd.DataFrame, str | None]:
+    present_columns = [column for column in (amount_columns or []) if column in df.columns]
+    if not present_columns:
+        return df, None
+    if len(present_columns) == 1:
+        return df, present_columns[0]
+
+    amount_frame = df.copy()
+    amount_frame[derived_name] = (
+        amount_frame[present_columns]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .sum(axis=1)
+    )
+    return amount_frame, derived_name
+
+
+def build_activity_table(
+    df: pd.DataFrame,
+    group_column: str,
+    amount_columns: Iterable[str] | None = None,
+    alert_index: pd.Index | None = None,
+    top_n: int = 8,
+) -> pd.DataFrame:
+    if group_column not in df.columns or df.empty:
+        return pd.DataFrame(columns=[group_column, "lignes", "montant_total", "alertes"])
+
+    base = df.dropna(subset=[group_column]).copy()
+    if base.empty:
+        return pd.DataFrame(columns=[group_column, "lignes", "montant_total", "alertes"])
+
+    working_df, amount_column = _build_amount_reference_frame(base, amount_columns)
+    if alert_index is None:
+        working_df["_alerte"] = 0
+    else:
+        working_df["_alerte"] = working_df.index.isin(alert_index).astype(int)
+
+    aggregations: dict[str, tuple[str, str]] = {
+        "lignes": (group_column, "size"),
+        "alertes": ("_alerte", "sum"),
+    }
+    if amount_column:
+        aggregations["montant_total"] = (amount_column, "sum")
+
+    summary = (
+        working_df.groupby(group_column, dropna=False)
+        .agg(**aggregations)
+        .reset_index()
+    )
+    if "montant_total" not in summary.columns:
+        summary["montant_total"] = pd.NA
+
+    sort_columns = ["montant_total", "alertes", "lignes"] if amount_column else ["alertes", "lignes"]
+    return summary.sort_values(sort_columns, ascending=False).head(top_n).reset_index(drop=True)
+
+
 def build_status_flow_table(df: pd.DataFrame) -> pd.DataFrame:
     if "statut_dossier" not in df.columns or df.empty:
         return pd.DataFrame(columns=["statut_dossier", "nombre_dossiers"])
@@ -1065,6 +1259,39 @@ def build_priority_actions(df: pd.DataFrame) -> list[str]:
     return actions[:6]
 
 
+def build_cycle_priority_actions(df: pd.DataFrame, cycle_key: str) -> list[str]:
+    if cycle_key in {"credit", "likelemba"}:
+        return build_priority_actions(df)
+
+    watchlist = build_cycle_watchlist(df, cycle_key)
+    actions: list[str] = []
+
+    if not watchlist.empty and "motif_alerte" in watchlist.columns:
+        exploded_reasons = (
+            watchlist["motif_alerte"]
+            .astype("string")
+            .str.split("; ")
+            .explode()
+            .dropna()
+        )
+        exploded_reasons = exploded_reasons[exploded_reasons.ne("")]
+        for reason, count in exploded_reasons.value_counts().head(4).items():
+            actions.append(f"Traiter {int(count)} ligne(s) marquées : {reason.lower()}.")
+
+    preset = get_cycle_analysis_preset(cycle_key)
+    top_group_column = _first_existing_column(df, preset.get("group_columns", []))
+    if top_group_column:
+        top_group = build_frequency_table(df, top_group_column, top_n=1)
+        if not top_group.empty:
+            actions.append(
+                f"Prioriser la revue du périmètre `{top_group_column}` le plus actif : {top_group.iloc[0][top_group_column]}."
+            )
+
+    if not actions:
+        actions.append("Aucun signal critique majeur n'est détecté sur le périmètre courant.")
+    return actions[:6]
+
+
 def build_overview_narrative(df: pd.DataFrame) -> str:
     snapshot = build_operational_snapshot(df)
     if df.empty:
@@ -1163,4 +1390,136 @@ def build_watchlist(df: pd.DataFrame) -> pd.DataFrame:
     sort_columns = [column for column in ["retard_jours", "montant_accorde"] if column in columns]
     if sort_columns:
         return watchlist.sort_values(by=sort_columns, ascending=False)
+    return watchlist
+
+
+def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
+    if cycle_key in {"credit", "likelemba"}:
+        return build_watchlist(df)
+    if df.empty:
+        return df
+
+    watch_mask = pd.Series(False, index=df.index)
+    alert_reasons = pd.Series("", index=df.index, dtype="string")
+
+    def mark(mask: pd.Series, label: str) -> None:
+        nonlocal watch_mask, alert_reasons
+        normalized_mask = mask.fillna(False)
+        watch_mask = watch_mask | normalized_mask
+        alert_reasons = alert_reasons.mask(normalized_mask, alert_reasons + label + "; ")
+
+    def missing_text(column: str) -> pd.Series:
+        if column not in df.columns:
+            return pd.Series(False, index=df.index)
+        return df[column].isna() | df[column].astype("string").str.strip().fillna("").eq("")
+
+    if "niveau_risque_calcule" in df.columns:
+        mark(df["niveau_risque_calcule"].eq("Élevé"), "Risque élevé")
+
+    if cycle_key == "epargne":
+        if "compte_id" in df.columns:
+            mark(missing_text("compte_id"), "Compte non renseigné")
+        if "type_operation" in df.columns:
+            mark(missing_text("type_operation"), "Type d'opération manquant")
+        if "statut_compte" in df.columns:
+            sensitive_statuses = {"bloque", "bloqué", "dormant", "inactif"}
+            status_mask = df["statut_compte"].apply(
+                lambda value: normalize_text(value) in sensitive_statuses if pd.notna(value) else False
+            )
+            mark(status_mask, "Compte sensible")
+        if "solde_compte" in df.columns:
+            mark(pd.to_numeric(df["solde_compte"], errors="coerce") < 0, "Solde négatif")
+    elif cycle_key == "caisse":
+        if "caissier" in df.columns:
+            mark(missing_text("caissier"), "Caissier non renseigné")
+        if "ecart_caisse" in df.columns:
+            mark(pd.to_numeric(df["ecart_caisse"], errors="coerce").fillna(0).ne(0), "Écart de caisse")
+        if "encaisse_fin_jour" in df.columns:
+            mark(pd.to_numeric(df["encaisse_fin_jour"], errors="coerce") < 0, "Encaisse négative")
+    elif cycle_key == "tresorerie":
+        if "banque" in df.columns:
+            mark(missing_text("banque"), "Banque non renseignée")
+        if "compte_bancaire" in df.columns:
+            mark(missing_text("compte_bancaire"), "Compte bancaire manquant")
+        if "ecart_rapprochement" in df.columns:
+            mark(
+                pd.to_numeric(df["ecart_rapprochement"], errors="coerce").fillna(0).ne(0),
+                "Écart de rapprochement",
+            )
+        if "solde_banque" in df.columns:
+            mark(pd.to_numeric(df["solde_banque"], errors="coerce") < 0, "Solde bancaire négatif")
+    elif cycle_key == "comptable":
+        if "piece_id" in df.columns:
+            mark(missing_text("piece_id"), "Pièce comptable manquante")
+        if "journal" in df.columns:
+            mark(missing_text("journal"), "Journal non renseigné")
+        if {"montant_debit", "montant_credit"}.issubset(df.columns):
+            debit = pd.to_numeric(df["montant_debit"], errors="coerce").fillna(0)
+            credit = pd.to_numeric(df["montant_credit"], errors="coerce").fillna(0)
+            mark((debit - credit).abs() > 0.01, "Écriture non équilibrée")
+    elif cycle_key == "rh_admin":
+        if "agent_id" in df.columns:
+            mark(missing_text("agent_id"), "Agent non renseigné")
+        if "fonction" in df.columns:
+            mark(missing_text("fonction"), "Fonction manquante")
+        if "salaire" in df.columns:
+            salaire = pd.to_numeric(df["salaire"], errors="coerce")
+            mark(salaire.isna() | (salaire <= 0), "Salaire non documenté")
+    elif cycle_key == "si":
+        if "agent_id" in df.columns:
+            mark(missing_text("agent_id"), "Agent non renseigné")
+        if "profil_acces" in df.columns:
+            mark(missing_text("profil_acces"), "Profil d'accès manquant")
+        if "niveau_habilitation" in df.columns:
+            mark(missing_text("niveau_habilitation"), "Niveau d'habilitation manquant")
+    elif cycle_key == "continuite":
+        if "type_sauvegarde" in df.columns:
+            mark(missing_text("type_sauvegarde"), "Type de sauvegarde manquant")
+        if "support_sauvegarde" in df.columns:
+            mark(missing_text("support_sauvegarde"), "Support non renseigné")
+        if "statut_test_reprise" in df.columns:
+            mark(missing_text("statut_test_reprise"), "Test de reprise non documenté")
+        if "incident_majeur" in df.columns:
+            incident_text = df["incident_majeur"].astype("string").str.strip().fillna("")
+            mark(incident_text.ne("") & incident_text.ne("Non"), "Incident majeur déclaré")
+    elif cycle_key == "money_provider":
+        if "numero_reference" in df.columns:
+            mark(missing_text("numero_reference"), "Référence manquante")
+        if "operateur" in df.columns:
+            mark(missing_text("operateur"), "Opérateur non renseigné")
+        if "tresorier" in df.columns:
+            mark(missing_text("tresorier"), "Trésorier non renseigné")
+        if "telephone" in df.columns:
+            mark(missing_text("telephone"), "Téléphone non renseigné")
+        if "journal_transaction" in df.columns:
+            mark(missing_text("journal_transaction"), "Journal de transaction manquant")
+        if "solde_final" in df.columns:
+            mark(pd.to_numeric(df["solde_final"], errors="coerce") < 0, "Solde final négatif")
+
+    if not bool(watch_mask.any()):
+        return pd.DataFrame(columns=["motif_alerte"])
+
+    preset = get_cycle_analysis_preset(cycle_key)
+    candidate_columns = [
+        *preset.get("id_columns", []),
+        *preset.get("group_columns", []),
+        *preset.get("actor_columns", []),
+        *preset.get("status_columns", []),
+        *preset.get("amount_columns", []),
+        "niveau_risque_calcule",
+        "commentaire",
+    ]
+    columns = [column for column in dict.fromkeys(candidate_columns) if column in df.columns]
+    watchlist = df.loc[watch_mask, columns].copy()
+    watchlist["motif_alerte"] = (
+        alert_reasons.loc[watchlist.index].astype("string").str.rstrip("; ").replace("", "A surveiller")
+    )
+
+    numeric_sort_candidates = [
+        column
+        for column in ["montant_demande", "montant_accorde", "montant_operation", "solde_final", "solde_banque", "encaisse_fin_jour"]
+        if column in watchlist.columns
+    ]
+    if numeric_sort_candidates:
+        return watchlist.sort_values(by=numeric_sort_candidates[0], ascending=False)
     return watchlist
