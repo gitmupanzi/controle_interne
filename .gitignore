@@ -10,3 +10,5 @@ exports/
 
 Thumbs.db
 .DS_Store
+
+line_list/

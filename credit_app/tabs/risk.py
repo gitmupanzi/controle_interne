@@ -11,12 +11,21 @@ from credit_app.domain import (
     build_cycle_priority_actions,
     build_cycle_watchlist,
     build_delay_bucket_table,
+    build_epargne_phone_quality_table,
     build_frequency_table,
     build_operational_snapshot,
     build_risk_distribution,
     get_first_existing_column,
 )
-from credit_app.ui import render_kpi_cards, render_panel_title, render_summary_box, st_plot
+from credit_app.ui import (
+    render_kpi_cards,
+    render_panel_title,
+    render_summary_box,
+    st_plot,
+    style_standard_donut,
+    style_standard_histogram,
+    style_standard_vertical_bar,
+)
 
 
 def _resolve_amount_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
@@ -95,14 +104,14 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
                     "Non renseigné": "#7b8794",
                 },
             )
-            fig.update_layout(height=360)
+            style_standard_vertical_bar(fig, height=360, tickangle=0)
             st_plot(fig, key=f"risk_distribution_{cycle_key}", height=360)
         elif status_column:
             status_df = build_frequency_table(df, status_column, top_n=10)
             if not status_df.empty:
                 render_panel_title(f"Distribution de {status_column.replace('_', ' ')}")
                 fig = px.bar(status_df, x=status_column, y="nombre_lignes", color_discrete_sequence=["#2b74ca"])
-                fig.update_layout(height=360, showlegend=False, xaxis_tickangle=-25)
+                style_standard_vertical_bar(fig, height=360, tickangle=-25)
                 st_plot(fig, key=f"risk_status_distribution_{cycle_key}", height=360)
 
     with right:
@@ -116,7 +125,7 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
                     nbins=20,
                     color_discrete_sequence=["#102a43"],
                 )
-                fig.update_layout(height=360)
+                style_standard_histogram(fig, height=360)
                 st_plot(fig, key=f"risk_debt_hist_{cycle_key}", height=360)
         elif amount_column:
             amount_base = df.dropna(subset=[amount_column]).copy()
@@ -128,7 +137,7 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
                     nbins=20,
                     color_discrete_sequence=["#102a43"],
                 )
-                fig.update_layout(height=360)
+                style_standard_histogram(fig, height=360)
                 st_plot(fig, key=f"risk_amount_hist_{cycle_key}", height=360)
 
     lower_left, lower_right = st.columns(2)
@@ -149,7 +158,7 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
                 hole=0.45,
                 color_discrete_sequence=["#1f7a5c", "#d9a441", "#c05621", "#7b8794"],
             )
-            fig.update_layout(height=360)
+            style_standard_donut(fig, height=360)
             st_plot(fig, key=f"risk_reimbursement_pie_{cycle_key}", height=360)
         elif status_column:
             status_df = build_frequency_table(df, status_column, top_n=8)
@@ -162,47 +171,85 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
                     hole=0.45,
                     color_discrete_sequence=["#2b74ca", "#4b84d7", "#9fbce8", "#dbe8f9"],
                 )
-                fig.update_layout(height=360)
+                style_standard_donut(fig, height=360)
                 st_plot(fig, key=f"risk_status_pie_{cycle_key}", height=360)
 
     with lower_right:
-        delay_df = build_delay_bucket_table(df)
-        if not delay_df.empty:
-            render_panel_title("Classes de retard")
-            fig = px.bar(
-                delay_df,
-                x="classe_retard",
-                y="nombre_dossiers",
-                color="classe_retard",
-                color_discrete_map={
-                    "À jour": "#1f7a5c",
-                    "1-7 jours": "#d9a441",
-                    "8-30 jours": "#e78a1f",
-                    "31-90 jours": "#cf4752",
-                    "Plus de 90 jours": "#9b2c2c",
-                    "Non renseigné": "#7b8794",
-                },
-            )
-            fig.update_layout(height=360, showlegend=False)
-            st_plot(fig, key=f"risk_delay_buckets_{cycle_key}", height=360)
-        elif not watchlist.empty and "motif_alerte" in watchlist.columns:
-            reason_df = watchlist["motif_alerte"].astype("string").str.split("; ").explode().dropna().to_frame("motif_alerte")
-            reason_df = (
-                reason_df.groupby("motif_alerte", dropna=False)
-                .size()
-                .reset_index(name="nombre_lignes")
-                .sort_values("nombre_lignes", ascending=False)
-            )
-            if not reason_df.empty:
-                render_panel_title("Motifs d'alerte")
-                fig = px.bar(
-                    reason_df,
-                    x="motif_alerte",
-                    y="nombre_lignes",
-                    color_discrete_sequence=["#c05621"],
+        if cycle_key == "epargne":
+            phone_df = build_epargne_phone_quality_table(df)
+            if not phone_df.empty:
+                render_panel_title("Qualité des téléphones")
+                fig = px.pie(
+                    phone_df,
+                    names="qualite_telephone",
+                    values="nombre_lignes",
+                    hole=0.55,
+                    color="qualite_telephone",
+                    color_discrete_map={
+                        "Format international": "#2b74ca",
+                        "Format local": "#4b84d7",
+                        "Autre format": "#d77a0f",
+                        "Manquant": "#a7a9ac",
+                    },
                 )
-                fig.update_layout(height=360, showlegend=False, xaxis_tickangle=-25)
-                st_plot(fig, key=f"risk_alert_reasons_{cycle_key}", height=360)
+                style_standard_donut(fig, height=360)
+                st_plot(fig, key="risk_epargne_phone_quality", height=360)
+            elif not watchlist.empty and "motif_alerte" in watchlist.columns:
+                reason_df = watchlist["motif_alerte"].astype("string").str.split("; ").explode().dropna().to_frame("motif_alerte")
+                reason_df = (
+                    reason_df.groupby("motif_alerte", dropna=False)
+                    .size()
+                    .reset_index(name="nombre_lignes")
+                    .sort_values("nombre_lignes", ascending=False)
+                )
+                if not reason_df.empty:
+                    render_panel_title("Motifs d'alerte")
+                    fig = px.bar(
+                        reason_df,
+                        x="motif_alerte",
+                        y="nombre_lignes",
+                        color_discrete_sequence=["#c05621"],
+                    )
+                    style_standard_vertical_bar(fig, height=360, tickangle=-25)
+                    st_plot(fig, key=f"risk_alert_reasons_{cycle_key}", height=360)
+        else:
+            delay_df = build_delay_bucket_table(df)
+            if not delay_df.empty:
+                render_panel_title("Classes de retard")
+                fig = px.bar(
+                    delay_df,
+                    x="classe_retard",
+                    y="nombre_dossiers",
+                    color="classe_retard",
+                    color_discrete_map={
+                        "À jour": "#1f7a5c",
+                        "1-7 jours": "#d9a441",
+                        "8-30 jours": "#e78a1f",
+                        "31-90 jours": "#cf4752",
+                        "Plus de 90 jours": "#9b2c2c",
+                        "Non renseigné": "#7b8794",
+                    },
+                )
+                style_standard_vertical_bar(fig, height=360, tickangle=0)
+                st_plot(fig, key=f"risk_delay_buckets_{cycle_key}", height=360)
+            elif not watchlist.empty and "motif_alerte" in watchlist.columns:
+                reason_df = watchlist["motif_alerte"].astype("string").str.split("; ").explode().dropna().to_frame("motif_alerte")
+                reason_df = (
+                    reason_df.groupby("motif_alerte", dropna=False)
+                    .size()
+                    .reset_index(name="nombre_lignes")
+                    .sort_values("nombre_lignes", ascending=False)
+                )
+                if not reason_df.empty:
+                    render_panel_title("Motifs d'alerte")
+                    fig = px.bar(
+                        reason_df,
+                        x="motif_alerte",
+                        y="nombre_lignes",
+                        color_discrete_sequence=["#c05621"],
+                    )
+                    style_standard_vertical_bar(fig, height=360, tickangle=-25)
+                    st_plot(fig, key=f"risk_alert_reasons_{cycle_key}", height=360)
 
     if primary_group:
         group_risk = build_activity_table(

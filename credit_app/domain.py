@@ -1,274 +1,24 @@
 from __future__ import annotations
 
-import unicodedata
+import logging
 from collections.abc import Iterable
-from pathlib import Path
 
 import pandas as pd
 
+from credit_app.colonne_valeur.colonne_nettoyage import (
+    build_effective_column_mapping,
+    get_reference_mapping_count,
+    normalize_column_label,
+    resolve_standard_column_name,
+)
+from credit_app.colonne_valeur.valeurs_nettoyage import (
+    DEFAULT_MAPPING_FILE as VALUE_MAPPING_FILE,
+    replace_specific_values_critere,
+)
 from credit_app.core import safe_divide
 from credit_app.cycles import get_cycle_analysis_preset
 
-
-COLUMN_ALIASES = {
-    "client_id": [
-        "client_id",
-        "id_client",
-        "id client",
-        "code_client",
-        "numero_client",
-        "num_client",
-        "reference_client",
-    ],
-    "dossier_id": [
-        "dossier_id",
-        "id_dossier",
-        "id dossier",
-        "numero_dossier",
-        "num_dossier",
-        "reference_dossier",
-        "ref_dossier",
-        "numero dossier",
-    ],
-    "nom_client": [
-        "nom_client",
-        "nom client",
-        "client",
-        "nom",
-        "nom_complet",
-        "full_name",
-    ],
-    "date_demande": [
-        "date_demande",
-        "date demande",
-        "date_de_demande",
-        "date soumission",
-        "date dossier",
-    ],
-    "date_decision": [
-        "date_decision",
-        "date decision",
-        "date_validation",
-        "date approbation",
-    ],
-    "montant_demande": [
-        "montant_demande",
-        "montant demande",
-        "montant sollicite",
-        "montant_solicite",
-        "montant credit demande",
-    ],
-    "montant_accorde": [
-        "montant_accorde",
-        "montant accorde",
-        "montant valide",
-        "montant decaisse",
-        "montant credit accorde",
-    ],
-    "revenu_mensuel": [
-        "revenu_mensuel",
-        "revenu mensuel",
-        "salaire",
-        "revenu",
-        "revenus_mensuels",
-        "chiffre_affaire_mensuel",
-    ],
-    "charge_mensuelle": [
-        "charge_mensuelle",
-        "charge mensuelle",
-        "charges_mensuelles",
-        "charges",
-        "depenses_mensuelles",
-    ],
-    "duree_credit_mois": [
-        "duree_credit_mois",
-        "duree_mois",
-        "duree",
-        "duree_credit",
-        "nombre_mois",
-    ],
-    "taux_interet": [
-        "taux_interet",
-        "taux interet",
-        "interet",
-        "taux",
-    ],
-    "garantie": [
-        "garantie",
-        "type_garantie",
-        "garanties",
-        "surete",
-    ],
-    "score_credit": [
-        "score_credit",
-        "score credit",
-        "score",
-        "credit_score",
-        "notation",
-    ],
-    "niveau_risque": [
-        "niveau_risque",
-        "niveau risque",
-        "risque",
-        "classe_risque",
-    ],
-    "retard_jours": [
-        "retard_jours",
-        "jours_retard",
-        "retard",
-        "nombre_jours_retard",
-        "days_past_due",
-    ],
-    "statut_dossier": [
-        "statut_dossier",
-        "statut dossier",
-        "decision",
-        "etat_dossier",
-        "status_dossier",
-    ],
-    "statut_remboursement": [
-        "statut_remboursement",
-        "statut remboursement",
-        "etat_remboursement",
-        "status_remboursement",
-        "etat_paiement",
-    ],
-    "agence": [
-        "agence",
-        "branch",
-        "succursale",
-        "bureau",
-    ],
-    "agent_credit": [
-        "agent_credit",
-        "agent credit",
-        "charge_portefeuille",
-        "gestionnaire",
-        "officier_credit",
-    ],
-    "type_produit": [
-        "type_produit",
-        "produit",
-        "type_credit",
-        "categorie_produit",
-    ],
-    "sexe": [
-        "sexe",
-        "sex",
-        "genre",
-        "gender",
-        "sexe client",
-        "sexe_client",
-    ],
-    "age": [
-        "age",
-        "age client",
-        "age_client",
-        "age du client",
-    ],
-    "activite_economique": [
-        "activite_economique",
-        "activite economique",
-        "activité économique",
-        "activite client",
-        "profession",
-        "secteur_activite",
-    ],
-    "telephone": [
-        "telephone",
-        "téléphone",
-        "numero telephone",
-        "num telephone",
-        "contact",
-    ],
-    "adresse": [
-        "adresse",
-        "adresse client",
-        "localisation_client",
-        "residence",
-    ],
-    "commentaire": [
-        "commentaire",
-        "commentaire brut",
-        "commentaire_brut",
-        "observation",
-        "observations",
-        "notes",
-    ],
-    "cycle_activite": [
-        "cycle_activite",
-        "cycle activite",
-        "cycle d'activite",
-        "type cycle",
-        "type de cycle",
-        "cycle",
-    ],
-    "nom_groupe": [
-        "nom_groupe",
-        "nom groupe",
-        "groupe",
-        "groupe solidaire",
-        "nom du groupe",
-    ],
-    "date_operation": [
-        "date_operation",
-        "date operation",
-        "date_transaction",
-        "date transaction",
-        "date de l'operation",
-    ],
-    "type_operation": [
-        "type_operation",
-        "type operation",
-        "operation",
-        "nature_operation",
-        "nature operation",
-    ],
-    "montant_operation": [
-        "montant_operation",
-        "montant operation",
-        "montant_transaction",
-        "montant transaction",
-    ],
-    "numero_reference": [
-        "numero_reference",
-        "num_reference",
-        "numero de reference",
-        "reference_transaction",
-        "reference",
-    ],
-    "operateur": [
-        "operateur",
-        "opérateur",
-        "agent operateur",
-        "agent opérateur",
-        "operateur money provider",
-    ],
-    "tresorier": [
-        "tresorier",
-        "trésorier",
-        "caissier tresorerie",
-        "caissier trésorerie",
-    ],
-    "journal_transaction": [
-        "journal_transaction",
-        "journal transaction",
-        "journal des transactions",
-        "registre_transaction",
-    ],
-    "solde_initial": [
-        "solde_initial",
-        "solde initial",
-        "solde debut",
-        "solde début",
-    ],
-    "solde_final": [
-        "solde_final",
-        "solde final",
-        "solde cloture",
-        "solde clôture",
-    ],
-}
+logger = logging.getLogger(__name__)
 
 NUMERIC_COLUMNS = [
     "montant_demande",
@@ -384,61 +134,54 @@ CYCLE_DATE_PRIORITY = {
     "continuite": ["date_sauvegarde"],
 }
 
+VALUE_CLEANING_CRITERIA = {
+    "sexe": "Sexe",
+    "activite_economique": "Profession",
+    "zone_geographique": "Province",
+    "unite_age": "Unite_age",
+    "statut_test_reprise": "Boolean",
+    "incident_majeur": "Boolean",
+}
+
 
 def normalize_text(value: object) -> str:
-    text = "" if value is None else str(value)
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(char for char in text if not unicodedata.combining(char))
-    return " ".join(text.replace("_", " ").strip().lower().split())
+    return normalize_column_label(value)
 
 
-def _build_alias_lookup() -> dict[str, str]:
-    lookup: dict[str, str] = {}
-    for canonical, aliases in COLUMN_ALIASES.items():
-        for alias in aliases:
-            lookup[normalize_text(alias)] = canonical
-    return lookup
+def _apply_reference_value_cleaning(df: pd.DataFrame) -> pd.DataFrame:
+    active_criteria = {
+        column_name: variable_name
+        for column_name, variable_name in VALUE_CLEANING_CRITERIA.items()
+        if column_name in df.columns
+    }
+    if not active_criteria:
+        return df
 
-
-ALIAS_LOOKUP = _build_alias_lookup()
-RENAME_REFERENCE_PATH = Path("data/Rename_columns.xlsx")
+    try:
+        return replace_specific_values_critere(
+            df,
+            critere=active_criteria,
+            mapping_file=VALUE_MAPPING_FILE,
+            regex_mode=True,
+            clean_before=True,
+            strip_lower=True,
+        )
+    except FileNotFoundError:
+        logger.warning("Fichier de nettoyage des valeurs introuvable : %s", VALUE_MAPPING_FILE)
+    except Exception:
+        logger.exception("Le nettoyage des valeurs depuis %s a échoué.", VALUE_MAPPING_FILE)
+    return df
 
 
 def standardize_column_name(column_name: str) -> str:
-    normalized = normalize_text(column_name)
-    reference_mapped = REFERENCE_COLUMN_LOOKUP.get(normalized)
-    if reference_mapped:
-        reference_normalized = normalize_text(reference_mapped)
-        return ALIAS_LOOKUP.get(reference_normalized, str(reference_mapped).strip())
-    return ALIAS_LOOKUP.get(normalized, column_name.strip())
+    return resolve_standard_column_name(column_name, REFERENCE_COLUMN_LOOKUP)
 
 
-def _load_reference_column_lookup() -> dict[str, str]:
-    if not RENAME_REFERENCE_PATH.exists():
-        return {}
-    try:
-        df = pd.read_excel(RENAME_REFERENCE_PATH)
-    except Exception:
-        return {}
-
-    required_columns = {"Original", "Renamed"}
-    if not required_columns.issubset(df.columns):
-        return {}
-
-    lookup: dict[str, str] = {}
-    for original, renamed in df[["Original", "Renamed"]].dropna().itertuples(index=False):
-        original_key = normalize_text(original)
-        renamed_value = str(renamed).strip()
-        if original_key and renamed_value:
-            lookup[original_key] = renamed_value
-    return lookup
-
-
-REFERENCE_COLUMN_LOOKUP = _load_reference_column_lookup()
+REFERENCE_COLUMN_LOOKUP = build_effective_column_mapping()
 
 
 def get_reference_column_count() -> int:
-    return len(REFERENCE_COLUMN_LOOKUP)
+    return get_reference_mapping_count()
 
 
 def _coerce_numeric(series: pd.Series) -> pd.Series:
@@ -495,6 +238,7 @@ def build_standardized_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[s
     standardized = df.copy()
     mapping = {column: standardize_column_name(column) for column in standardized.columns}
     standardized = standardized.rename(columns=mapping)
+    standardized = _apply_reference_value_cleaning(standardized)
 
     for column in NUMERIC_COLUMNS:
         if column in standardized.columns:
@@ -964,6 +708,252 @@ def build_age_sex_pyramid_table(df: pd.DataFrame) -> pd.DataFrame:
     return pivot[["tranche_age", "Masculin", "Féminin"]]
 
 
+def build_epargne_dormancy_table(df: pd.DataFrame) -> pd.DataFrame:
+    columns = ["classe_inactivite", "nombre_lignes", "part_lignes"]
+    if "date_operation" not in df.columns:
+        return pd.DataFrame(columns=columns)
+
+    dates = pd.to_datetime(df["date_operation"], errors="coerce")
+    valid_dates = dates.dropna()
+    if valid_dates.empty:
+        return pd.DataFrame(columns=columns)
+
+    reference_date = valid_dates.max()
+    inactivity_days = (reference_date - dates).dt.days
+    classes = pd.Series("Non documenté", index=df.index, dtype="string")
+    non_null_mask = inactivity_days.notna()
+    classes.loc[non_null_mask] = pd.cut(
+        inactivity_days.loc[non_null_mask],
+        bins=[-1, 30, 90, 180, 365, float("inf")],
+        labels=["<= 30 j", "31-90 j", "91-180 j", "181-365 j", "> 365 j"],
+        include_lowest=True,
+    ).astype("string")
+
+    summary = (
+        classes.fillna("Non documenté")
+        .value_counts(dropna=False)
+        .rename_axis("classe_inactivite")
+        .reset_index(name="nombre_lignes")
+    )
+    summary["part_lignes"] = summary["nombre_lignes"] / max(len(df), 1)
+    summary["_ordre"] = summary["classe_inactivite"].map(
+        {
+            "<= 30 j": 0,
+            "31-90 j": 1,
+            "91-180 j": 2,
+            "181-365 j": 3,
+            "> 365 j": 4,
+            "Non documenté": 5,
+        }
+    ).fillna(99)
+    return summary.sort_values("_ordre").drop(columns="_ordre").reset_index(drop=True)
+
+
+def build_epargne_multi_account_table(df: pd.DataFrame) -> pd.DataFrame:
+    columns = ["classe_comptes", "nombre_clients", "part_clients"]
+    if not {"client_id", "compte_id"}.issubset(df.columns):
+        return pd.DataFrame(columns=columns)
+
+    account_counts = (
+        df.dropna(subset=["client_id", "compte_id"])
+        .groupby("client_id")["compte_id"]
+        .nunique()
+    )
+    if account_counts.empty:
+        return pd.DataFrame(columns=columns)
+
+    classes = account_counts.apply(
+        lambda value: (
+            "1 compte"
+            if value <= 1
+            else "2 comptes"
+            if value == 2
+            else "3-4 comptes"
+            if value <= 4
+            else "5+ comptes"
+        )
+    )
+    summary = (
+        classes.value_counts()
+        .rename_axis("classe_comptes")
+        .reset_index(name="nombre_clients")
+    )
+    summary["part_clients"] = summary["nombre_clients"] / max(len(account_counts), 1)
+    summary["_ordre"] = summary["classe_comptes"].map(
+        {"1 compte": 0, "2 comptes": 1, "3-4 comptes": 2, "5+ comptes": 3}
+    ).fillna(99)
+    return summary.sort_values("_ordre").drop(columns="_ordre").reset_index(drop=True)
+
+
+def build_epargne_multi_account_clients(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
+    columns = ["client_id", "nombre_comptes", "solde_total"]
+    if not {"client_id", "compte_id"}.issubset(df.columns):
+        return pd.DataFrame(columns=columns)
+
+    working_df = df.dropna(subset=["client_id", "compte_id"]).copy()
+    if working_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    grouped = (
+        working_df.groupby("client_id", dropna=False)
+        .agg(
+            nombre_comptes=("compte_id", "nunique"),
+            solde_total=(
+                "solde_compte",
+                lambda series: pd.to_numeric(series, errors="coerce").fillna(0).sum(),
+            ),
+        )
+        .reset_index()
+        .sort_values(["nombre_comptes", "solde_total"], ascending=[False, False])
+    )
+    return grouped.head(top_n).reset_index(drop=True)
+
+
+def build_epargne_product_concentration_table(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
+    columns = ["type_produit", "nombre_comptes", "solde_total", "part_solde"]
+    if "type_produit" not in df.columns or "solde_compte" not in df.columns:
+        return pd.DataFrame(columns=columns)
+
+    working_df = df.dropna(subset=["type_produit"]).copy()
+    if working_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    grouped = (
+        working_df.assign(solde_compte=pd.to_numeric(working_df["solde_compte"], errors="coerce").fillna(0))
+        .groupby("type_produit", dropna=False)
+        .agg(
+            nombre_comptes=("type_produit", "size"),
+            solde_total=("solde_compte", "sum"),
+        )
+        .reset_index()
+        .sort_values("solde_total", ascending=False)
+    )
+    total_balance = grouped["solde_total"].sum()
+    grouped["part_solde"] = grouped["solde_total"].apply(
+        lambda value: safe_divide(value, total_balance) if total_balance else 0.0
+    )
+    return grouped.head(top_n).reset_index(drop=True)
+
+
+def build_epargne_agent_portfolio_table(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
+    columns = ["agent_credit", "nombre_comptes", "nombre_clients", "solde_total", "solde_moyen"]
+    if "agent_credit" not in df.columns:
+        return pd.DataFrame(columns=columns)
+
+    working_df = df.dropna(subset=["agent_credit"]).copy()
+    if working_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    grouped = (
+        working_df.assign(solde_compte=pd.to_numeric(working_df.get("solde_compte"), errors="coerce").fillna(0))
+        .groupby("agent_credit", dropna=False)
+        .agg(
+            nombre_comptes=("agent_credit", "size"),
+            nombre_clients=("client_id", "nunique") if "client_id" in working_df.columns else ("agent_credit", "size"),
+            solde_total=("solde_compte", "sum"),
+        )
+        .reset_index()
+        .sort_values(["solde_total", "nombre_comptes"], ascending=[False, False])
+    )
+    grouped["solde_moyen"] = grouped.apply(
+        lambda row: safe_divide(row["solde_total"], row["nombre_comptes"]),
+        axis=1,
+    )
+    return grouped.head(top_n).reset_index(drop=True)
+
+
+def build_epargne_phone_quality_table(df: pd.DataFrame) -> pd.DataFrame:
+    columns = ["qualite_telephone", "nombre_lignes", "part_lignes"]
+    if "telephone" not in df.columns:
+        return pd.DataFrame(columns=columns)
+
+    phone_series = df["telephone"].astype("string")
+    digits = phone_series.fillna("").str.replace(r"\D", "", regex=True)
+    quality = pd.Series("Autre format", index=df.index, dtype="string")
+    quality.loc[phone_series.isna() | phone_series.fillna("").str.strip().eq("")] = "Manquant"
+    quality.loc[digits.str.match(r"^243\d{9}$", na=False)] = "Format international"
+    quality.loc[digits.str.match(r"^0\d{9}$", na=False)] = "Format local"
+
+    summary = (
+        quality.value_counts(dropna=False)
+        .rename_axis("qualite_telephone")
+        .reset_index(name="nombre_lignes")
+    )
+    summary["part_lignes"] = summary["nombre_lignes"] / max(len(df), 1)
+    summary["_ordre"] = summary["qualite_telephone"].map(
+        {
+            "Format international": 0,
+            "Format local": 1,
+            "Autre format": 2,
+            "Manquant": 3,
+        }
+    ).fillna(99)
+    return summary.sort_values("_ordre").drop(columns="_ordre").reset_index(drop=True)
+
+
+def build_epargne_kyc_completeness_table(df: pd.DataFrame) -> pd.DataFrame:
+    columns = ["classe_completude", "nombre_lignes", "part_lignes"]
+    tracked_fields = [
+        column_name
+        for column_name in ["telephone", "zone_geographique", "sexe", "categorie", "date_operation"]
+        if column_name in df.columns
+    ]
+    if not tracked_fields:
+        return pd.DataFrame(columns=columns)
+
+    missing_counts = df[tracked_fields].isna().sum(axis=1)
+    classes = missing_counts.apply(
+        lambda value: (
+            "0 champ manquant"
+            if value == 0
+            else "1 champ manquant"
+            if value == 1
+            else "2 champs manquants"
+            if value == 2
+            else "3+ champs manquants"
+        )
+    )
+    summary = (
+        classes.value_counts()
+        .rename_axis("classe_completude")
+        .reset_index(name="nombre_lignes")
+    )
+    summary["part_lignes"] = summary["nombre_lignes"] / max(len(df), 1)
+    summary["_ordre"] = summary["classe_completude"].map(
+        {
+            "0 champ manquant": 0,
+            "1 champ manquant": 1,
+            "2 champs manquants": 2,
+            "3+ champs manquants": 3,
+        }
+    ).fillna(99)
+    return summary.sort_values("_ordre").drop(columns="_ordre").reset_index(drop=True)
+
+
+def build_provenance_summary_table(df: pd.DataFrame) -> pd.DataFrame:
+    columns = ["Provenance", "nombre_lignes", "nombre_clients", "nombre_comptes", "solde_total"]
+    if "Provenance" not in df.columns:
+        return pd.DataFrame(columns=columns)
+
+    working_df = df.dropna(subset=["Provenance"]).copy()
+    if working_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    grouped = (
+        working_df.assign(solde_compte=pd.to_numeric(working_df.get("solde_compte"), errors="coerce").fillna(0))
+        .groupby("Provenance", dropna=False)
+        .agg(
+            nombre_lignes=("Provenance", "size"),
+            nombre_clients=("client_id", "nunique") if "client_id" in working_df.columns else ("Provenance", "size"),
+            nombre_comptes=("compte_id", "nunique") if "compte_id" in working_df.columns else ("Provenance", "size"),
+            solde_total=("solde_compte", "sum"),
+        )
+        .reset_index()
+        .sort_values("nombre_lignes", ascending=False)
+    )
+    return grouped.reset_index(drop=True)
+
+
 def build_group_summary_table(
     df: pd.DataFrame,
     group_column: str,
@@ -1342,6 +1332,7 @@ def build_watchlist(df: pd.DataFrame) -> pd.DataFrame:
 
     watch_mask = pd.Series(False, index=df.index)
     alert_reasons = pd.Series("", index=df.index, dtype="string")
+    extra_watchlist_columns: dict[str, pd.Series] = {}
 
     if "niveau_risque_calcule" in df.columns:
         high_risk_mask = df["niveau_risque_calcule"].eq("Élevé")
@@ -1401,6 +1392,7 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
 
     watch_mask = pd.Series(False, index=df.index)
     alert_reasons = pd.Series("", index=df.index, dtype="string")
+    extra_watchlist_columns: dict[str, pd.Series] = {}
 
     def mark(mask: pd.Series, label: str) -> None:
         nonlocal watch_mask, alert_reasons
@@ -1421,6 +1413,8 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
             mark(missing_text("compte_id"), "Compte non renseigné")
         if "type_operation" in df.columns:
             mark(missing_text("type_operation"), "Type d'opération manquant")
+        if "type_produit" in df.columns:
+            mark(missing_text("type_produit"), "Produit d'épargne manquant")
         if "statut_compte" in df.columns:
             sensitive_statuses = {"bloque", "bloqué", "dormant", "inactif"}
             status_mask = df["statut_compte"].apply(
@@ -1428,7 +1422,87 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
             )
             mark(status_mask, "Compte sensible")
         if "solde_compte" in df.columns:
-            mark(pd.to_numeric(df["solde_compte"], errors="coerce") < 0, "Solde négatif")
+            solde_compte = pd.to_numeric(df["solde_compte"], errors="coerce")
+            extra_watchlist_columns["solde_compte"] = solde_compte
+            mark(solde_compte < 0, "Solde négatif")
+        if "date_operation" in df.columns:
+            dates = pd.to_datetime(df["date_operation"], errors="coerce")
+            extra_watchlist_columns["date_operation"] = dates
+            if dates.notna().any():
+                reference_date = dates.max()
+                jours_inactivite = (reference_date - dates).dt.days
+                extra_watchlist_columns["jours_inactivite"] = jours_inactivite
+                inactive_90_mask = dates.notna() & (jours_inactivite >= 90)
+                inactive_180_mask = dates.notna() & (jours_inactivite >= 180)
+                mark(inactive_90_mask, "Compte inactif >= 90 j")
+                mark(inactive_180_mask, "Compte très inactif >= 180 j")
+                if "solde_compte" in df.columns:
+                    positive_balances = solde_compte[solde_compte > 0]
+                    if not positive_balances.empty:
+                        threshold = float(positive_balances.quantile(0.90))
+                        mark(inactive_90_mask & solde_compte.ge(threshold), "Dormance sur solde significatif")
+        if "telephone" in df.columns:
+            phone_text = df["telephone"].astype("string")
+            phone_digits = phone_text.fillna("").str.replace(r"\D", "", regex=True)
+            extra_watchlist_columns["telephone"] = phone_text
+            phone_missing_mask = missing_text("telephone")
+            phone_invalid_mask = ~phone_missing_mask & ~phone_digits.str.match(r"^(243\d{9}|0\d{9})$", na=False)
+            mark(phone_missing_mask, "Téléphone manquant")
+            mark(phone_invalid_mask, "Téléphone non fiable")
+        tracked_kyc_fields = [
+            column_name
+            for column_name in ["telephone", "zone_geographique", "sexe", "categorie", "date_operation"]
+            if column_name in df.columns
+        ]
+        if tracked_kyc_fields:
+            kyc_missing_count = pd.Series(0, index=df.index, dtype="int64")
+            for column_name in tracked_kyc_fields:
+                if column_name == "date_operation":
+                    kyc_missing_count = kyc_missing_count.add(
+                        pd.to_datetime(df[column_name], errors="coerce").isna().astype("int64"),
+                        fill_value=0,
+                    )
+                else:
+                    kyc_missing_count = kyc_missing_count.add(
+                        missing_text(column_name).astype("int64"),
+                        fill_value=0,
+                    )
+            extra_watchlist_columns["kyc_missing_count"] = kyc_missing_count
+            mark(kyc_missing_count >= 2, "KYC incomplet (2+ champs)")
+        if {"client_id", "compte_id"}.issubset(df.columns):
+            comptes_par_client = (
+                df.dropna(subset=["client_id", "compte_id"])
+                .groupby("client_id")["compte_id"]
+                .nunique()
+            )
+            nombre_comptes_client = df["client_id"].map(comptes_par_client).fillna(0)
+            extra_watchlist_columns["nombre_comptes_client"] = nombre_comptes_client
+            mark(nombre_comptes_client >= 3, "Client multi-comptes (>= 3)")
+        if {"sexe", "categorie"}.issubset(df.columns):
+            sexe_normalise = df["sexe"].astype("string").map(normalize_text)
+            categorie_normalisee = (
+                df["categorie"]
+                .astype("string")
+                .map(normalize_text)
+                .replace({"f": "feminin", "m": "masculin"})
+            )
+            incoherence_mask = (
+                sexe_normalise.notna()
+                & categorie_normalisee.notna()
+                & sexe_normalise.ne("")
+                & categorie_normalisee.ne("")
+                & sexe_normalise.ne(categorie_normalisee)
+            )
+            mark(incoherence_mask, "Incohérence sexe / catégorie")
+        if {"Provenance", "compte_id"}.issubset(df.columns):
+            extractions_par_compte = (
+                df.dropna(subset=["Provenance", "compte_id"])
+                .groupby("compte_id")["Provenance"]
+                .nunique()
+            )
+            nombre_extractions_compte = df["compte_id"].map(extractions_par_compte).fillna(0)
+            extra_watchlist_columns["nombre_extractions_compte"] = nombre_extractions_compte
+            mark(nombre_extractions_compte > 1, "Compte présent dans plusieurs extractions")
     elif cycle_key == "caisse":
         if "caissier" in df.columns:
             mark(missing_text("caissier"), "Caissier non renseigné")
@@ -1509,15 +1583,41 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
         "niveau_risque_calcule",
         "commentaire",
     ]
+    if cycle_key == "epargne":
+        candidate_columns.extend(["nom_client", "telephone", "Provenance"])
+    candidate_columns.extend(extra_watchlist_columns.keys())
     columns = [column for column in dict.fromkeys(candidate_columns) if column in df.columns]
     watchlist = df.loc[watch_mask, columns].copy()
+    for column_name, values in extra_watchlist_columns.items():
+        watchlist[column_name] = values.loc[watchlist.index]
     watchlist["motif_alerte"] = (
         alert_reasons.loc[watchlist.index].astype("string").str.rstrip("; ").replace("", "A surveiller")
     )
 
+    if cycle_key == "epargne":
+        watchlist["_abs_solde_compte"] = pd.to_numeric(
+            watchlist.get("solde_compte"),
+            errors="coerce",
+        ).abs()
+        epargne_sort_columns = [
+            column_name
+            for column_name in ["jours_inactivite", "_abs_solde_compte", "nombre_comptes_client"]
+            if column_name in watchlist.columns
+        ]
+        if epargne_sort_columns:
+            watchlist = watchlist.sort_values(by=epargne_sort_columns, ascending=False)
+        return watchlist.drop(columns="_abs_solde_compte", errors="ignore")
+
     numeric_sort_candidates = [
         column
-        for column in ["montant_demande", "montant_accorde", "montant_operation", "solde_final", "solde_banque", "encaisse_fin_jour"]
+        for column in [
+            "montant_demande",
+            "montant_accorde",
+            "montant_operation",
+            "solde_final",
+            "solde_banque",
+            "encaisse_fin_jour",
+        ]
         if column in watchlist.columns
     ]
     if numeric_sort_candidates:

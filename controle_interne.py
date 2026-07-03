@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import html
+import tempfile
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 
@@ -55,6 +57,10 @@ from credit_app.app_loader import (
     list_available_line_list_files,
     load_dataframe_from_bytes,
     load_dataframe_from_path,
+)
+from credit_app.compilation.fichiers_compilation import (
+    charger_fichiers_excel,
+    extraire_attr_dataframe,
 )
 from credit_app.cycles import (
     DEFAULT_CYCLE_KEY,
@@ -180,6 +186,39 @@ def prepare_dataset_from_path(file_path: str, sheet_name: str | None) -> dict:
     return _prepare_payload_from_dataframe(raw_df)
 
 
+@st.cache_data(show_spinner=False)
+def prepare_compiled_dataset_from_paths(file_paths: tuple[str, ...], sheet_name: str) -> dict:
+    raw_df, compilation_log_df = charger_fichiers_excel(
+        liste_fichiers=list(file_paths),
+        sheet_name=sheet_name,
+        colonne_source="Provenance",
+        suffixer_doublons=False,
+        renommer_variable=True,
+        variables_brute=False,
+        sheet_log=True,
+        log_only_changed=True,
+    )
+    payload = _prepare_payload_from_dataframe(raw_df)
+    payload["compilation_log_df"] = compilation_log_df
+    payload["compiled_files"] = list(file_paths)
+    payload["column_collisions_df"] = extraire_attr_dataframe(raw_df.attrs.get("column_collisions", []))
+    payload["column_provenance"] = raw_df.attrs.get("column_provenance", {})
+    return payload
+
+
+@st.cache_data(show_spinner=False)
+def prepare_compiled_dataset_from_uploads(uploaded_items: tuple[tuple[str, bytes], ...], sheet_name: str) -> dict:
+    with tempfile.TemporaryDirectory(prefix="controle_interne_compile_") as temp_dir:
+        temp_paths: list[str] = []
+        for filename, file_bytes in uploaded_items:
+            temp_path = Path(temp_dir) / filename
+            temp_path.write_bytes(file_bytes)
+            temp_paths.append(str(temp_path))
+        payload = prepare_compiled_dataset_from_paths(tuple(temp_paths), sheet_name)
+    payload["compiled_files"] = [filename for filename, _ in uploaded_items]
+    return payload
+
+
 def _prepare_payload_from_dataframe(raw_df: pd.DataFrame) -> dict:
     standardized_df, mapping = build_standardized_dataframe(raw_df)
     quality_df = build_quality_checks(standardized_df)
@@ -192,6 +231,30 @@ def _prepare_payload_from_dataframe(raw_df: pd.DataFrame) -> dict:
         "missing_df": missing_df,
         "mapping_df": mapping_df,
     }
+
+
+def _get_common_excel_sheets(file_paths: list[Path]) -> list[str]:
+    common_sheets: set[str] | None = None
+    for file_path in file_paths:
+        if file_path.suffix.lower() not in {".xlsx", ".xls"}:
+            continue
+        try:
+            sheet_names = set(get_excel_sheet_names_from_path(file_path))
+        except Exception:
+            continue
+        common_sheets = sheet_names if common_sheets is None else (common_sheets & sheet_names)
+    return sorted(common_sheets or [])
+
+
+def _get_common_excel_sheets_from_uploads(uploaded_items: list[tuple[str, bytes]]) -> list[str]:
+    common_sheets: set[str] | None = None
+    for _, file_bytes in uploaded_items:
+        try:
+            sheet_names = set(get_excel_sheet_names(file_bytes))
+        except Exception:
+            continue
+        common_sheets = sheet_names if common_sheets is None else (common_sheets & sheet_names)
+    return sorted(common_sheets or [])
 
 
 def _preferred_included_file_index(file_names: list[str]) -> int:
@@ -284,6 +347,11 @@ def _filter_column_label(column_name: str) -> str:
         "statut_test_reprise": "Statut du test de reprise",
         "operateur": "Opérateur",
         "tresorier": "Trésorier",
+        "type_client": "Type de client",
+        "zone_geographique": "Zone géographique",
+        "categorie": "Catégorie",
+        "sexe": "Sexe",
+        "compte_id": "Compte",
     }
     return labels.get(column_name, column_name.replace("_", " ").capitalize())
 
@@ -322,6 +390,9 @@ def main() -> None:
     render_professional_header()
 
     available_files = list_available_line_list_files()
+    available_excel_files = [
+        path for path in available_files if path.suffix.lower() in {".xlsx", ".xls"}
+    ]
     cycle_options = list_cycle_keys()
     default_cycle_index = cycle_options.index(DEFAULT_CYCLE_KEY) if DEFAULT_CYCLE_KEY in cycle_options else 0
     render_sidebar_intro_card(
@@ -346,15 +417,24 @@ def main() -> None:
         st.caption(selected_cycle["control_objective"])
 
     render_sidebar_section("Source des données", "Téléversez un fichier ou utilisez une base déjà stockée.")
+    if "credit_source_mode" not in st.session_state:
+        st.session_state["credit_source_mode"] = "Téléverser un fichier"
     source_mode = st.sidebar.selectbox(
         "Source de données",
-        ["Téléverser un fichier", "Charger un fichier inclus"],
-        index=1 if available_files else 0,
+        [
+            "Téléverser un fichier",
+            "Téléverser plusieurs fichiers",
+            "Charger un fichier inclus",
+            "Compiler plusieurs fichiers inclus",
+        ],
+        index=0,
         key="credit_source_mode",
     )
 
     uploaded_file = None
+    uploaded_files = []
     selected_local_path = None
+    selected_compilation_paths: list[Path] = []
     sheet_name = None
     filename = None
 
@@ -364,7 +444,38 @@ def main() -> None:
             type=["xlsx", "xls", "csv"],
             help="Formats acceptés : Excel ou CSV.",
         )
-    else:
+    elif source_mode == "Téléverser plusieurs fichiers":
+        uploaded_files = st.sidebar.file_uploader(
+            "Bases à compiler",
+            type=["xlsx", "xls"],
+            accept_multiple_files=True,
+            help="Sélectionnez plusieurs fichiers Excel détaillés partageant la même feuille métier.",
+        ) or []
+        if uploaded_files:
+            common_sheets = _get_common_excel_sheets_from_uploads(
+                [(file.name, file.getvalue()) for file in uploaded_files]
+            )
+            if common_sheets:
+                sheet_name = st.sidebar.selectbox(
+                    "Feuille commune",
+                    common_sheets,
+                    index=0,
+                    key="credit_upload_compile_sheet_name",
+                )
+            else:
+                sheet_name = st.sidebar.text_input(
+                    "Nom de la feuille commune",
+                    value="",
+                    key="credit_upload_compile_sheet_name_manual",
+                    help="À renseigner uniquement si la feuille n'a pas pu être détectée automatiquement.",
+                ).strip() or None
+            filename = f"Compilation de {len(uploaded_files)} fichiers téléversés"
+            st.sidebar.caption(
+                f"{len(uploaded_files)} fichier(s) téléversé(s) pour une compilation unique."
+            )
+        else:
+            st.sidebar.caption("Téléversez au moins deux fichiers Excel détaillés pour lancer une compilation.")
+    elif source_mode == "Charger un fichier inclus":
         if available_files:
             available_names = [path.name for path in available_files]
             selected_name = st.sidebar.selectbox(
@@ -381,6 +492,54 @@ def main() -> None:
                     sheet_name = st.sidebar.selectbox("Feuille Excel", local_sheets, index=0, key="local_sheet_name")
         else:
             st.sidebar.warning("Aucun fichier `.xlsx`, `.xls` ou `.csv` n'a été trouvé dans `line_list/`.")
+    else:
+        if len(available_excel_files) >= 2:
+            compile_filter = st.sidebar.text_input(
+                "Filtre nom fichier",
+                value="",
+                key="credit_compile_filter",
+                help="Permet de limiter la liste avant sélection des fichiers à compiler.",
+            )
+            filtered_compile_paths = [
+                path
+                for path in available_excel_files
+                if compile_filter.strip().lower() in path.name.lower()
+            ]
+            selected_compile_names = st.sidebar.multiselect(
+                "Fichiers à compiler",
+                [path.name for path in filtered_compile_paths],
+                key="credit_compile_files",
+                help="Sélectionnez au moins deux fichiers Excel détaillés partageant la même feuille métier.",
+            )
+            selected_compilation_paths = [
+                path for path in filtered_compile_paths if path.name in selected_compile_names
+            ]
+            if selected_compilation_paths:
+                common_sheets = _get_common_excel_sheets(selected_compilation_paths)
+                if common_sheets:
+                    sheet_name = st.sidebar.selectbox(
+                        "Feuille commune",
+                        common_sheets,
+                        index=0,
+                        key="credit_compile_sheet_name",
+                    )
+                else:
+                    sheet_name = st.sidebar.text_input(
+                        "Nom de la feuille commune",
+                        value="",
+                        key="credit_compile_sheet_name_manual",
+                        help="À renseigner uniquement si la feuille n'a pas pu être détectée automatiquement.",
+                    ).strip() or None
+                filename = f"Compilation de {len(selected_compilation_paths)} fichiers"
+                st.sidebar.caption(
+                    f"{len(selected_compilation_paths)} fichier(s) sélectionné(s) pour une compilation unique."
+                )
+            else:
+                st.sidebar.caption("Sélectionnez plusieurs fichiers détaillés pour créer une base compilée.")
+        elif available_excel_files:
+            st.sidebar.warning("Au moins deux fichiers Excel sont nécessaires pour lancer une compilation.")
+        else:
+            st.sidebar.warning("Aucun fichier Excel n'a été trouvé dans `line_list/` pour la compilation.")
 
     with st.sidebar.expander("Référence et stockage", expanded=False):
         st.caption(
@@ -393,41 +552,31 @@ def main() -> None:
 
     if source_mode == "Téléverser un fichier":
         source_ready = uploaded_file is not None
-    else:
+    elif source_mode == "Téléverser plusieurs fichiers":
+        source_ready = len(uploaded_files) >= 2 and bool(sheet_name)
+    elif source_mode == "Charger un fichier inclus":
         source_ready = selected_local_path is not None
+    else:
+        source_ready = len(selected_compilation_paths) >= 2 and bool(sheet_name)
 
     if not source_ready:
         render_context_row(
             [
                 ("Cycle", selected_cycle["label"]),
                 ("Source", "Aucun fichier chargé"),
-                ("Formats", "Excel ou CSV"),
+                ("Formats", "Excel, CSV ou compilation Excel"),
                 ("Analyses", "Portefeuille, risque, qualité"),
-                ("Mode", "Téléversement ou fichier inclus"),
+                ("Mode", "Téléversement simple, téléversement multiple ou compilation"),
             ]
         )
         render_summary_box(
             "Base attendue",
             [
                 selected_cycle["summary"],
-                "Chargez un fichier Excel ou CSV ou utilisez un fichier déjà placé dans line_list/.",
+                "Chargez un fichier Excel ou CSV, utilisez un fichier déjà placé dans line_list/ ou compilez plusieurs bases détaillées.",
                 "L'application reconnaît automatiquement plusieurs variantes de colonnes métier.",
                 "Le renommage externe de data/Rename_columns.xlsx est aussi pris en compte.",
             ],
-        )
-        st.markdown(
-            """
-### Colonnes utiles
-
-- `client_id`, `code_client`, `id client`
-- `dossier_id`, `numero_dossier`, `reference dossier`
-- `montant_demande`, `montant_accorde`
-- `revenu_mensuel`, `charge_mensuelle`
-- `score_credit`, `retard_jours`
-- `statut_dossier`, `statut_remboursement`
-- `agence`, `agent_credit`, `type_produit`
-- `date_demande`, `date_decision`
-            """
         )
         render_footer()
         return
@@ -444,13 +593,28 @@ def main() -> None:
 
         with st.spinner("Préparation de la base en cours..."):
             payload = prepare_dataset(file_bytes, filename, sheet_name)
-    else:
+    elif source_mode == "Téléverser plusieurs fichiers":
+        uploaded_items = tuple((file.name, file.getvalue()) for file in uploaded_files)
+        with st.spinner("Compilation et préparation des fichiers téléversés en cours..."):
+            payload = prepare_compiled_dataset_from_uploads(uploaded_items, sheet_name or "")
+    elif source_mode == "Charger un fichier inclus":
         with st.spinner("Préparation de la base en cours..."):
             payload = prepare_dataset_from_path(str(selected_local_path), sheet_name)
+    else:
+        compiled_paths = tuple(str(path) for path in selected_compilation_paths)
+        with st.spinner("Compilation et préparation des bases en cours..."):
+            payload = prepare_compiled_dataset_from_paths(compiled_paths, sheet_name or "")
 
     raw_df = payload["raw_df"]
     standardized_df = payload["standardized_df"]
-    source_label = "Téléversement" if source_mode == "Téléverser un fichier" else "Fichier inclus"
+    if source_mode == "Téléverser un fichier":
+        source_label = "Téléversement"
+    elif source_mode == "Téléverser plusieurs fichiers":
+        source_label = "Téléversement multi-fichiers"
+    elif source_mode == "Charger un fichier inclus":
+        source_label = "Fichier inclus"
+    else:
+        source_label = "Compilation multi-fichiers"
     cycle_coverage = build_cycle_coverage_summary(standardized_df, selected_cycle_key)
 
     render_context_row(
@@ -468,6 +632,10 @@ def main() -> None:
         st.write(f"Fichier actif : **{filename}**")
         if source_mode == "Charger un fichier inclus" and selected_local_path is not None:
             st.write(f"Chemin local : `{selected_local_path}`")
+        if source_mode in {"Téléverser plusieurs fichiers", "Compiler plusieurs fichiers inclus"}:
+            st.write(f"Fichiers compilés : **{len(payload.get('compiled_files', []))}**")
+            for compiled_file in payload.get("compiled_files", []):
+                st.write(f"- `{compiled_file}`")
         if sheet_name:
             st.write(f"Feuille active : **{sheet_name}**")
         st.write(
@@ -475,6 +643,12 @@ def main() -> None:
         )
         st.write(f"Cycle actif : **{selected_cycle['label']}**")
         st.write(f"Couverture du référentiel : **{cycle_coverage['detected_count']}/{cycle_coverage['total']}** champs clés détectés.")
+        compilation_log_df = payload.get("compilation_log_df")
+        if isinstance(compilation_log_df, pd.DataFrame) and not compilation_log_df.empty:
+            st.write(f"Journal de compilation : **{len(compilation_log_df)}** transformation(s) de colonnes.")
+        collision_df = payload.get("column_collisions_df")
+        if isinstance(collision_df, pd.DataFrame) and not collision_df.empty:
+            st.write(f"Collisions de colonnes détectées : **{len(collision_df)}**")
 
     render_sidebar_section("Filtres métier", "Les dimensions proposées dépendent du cycle actif.")
     st.sidebar.button("Réinitialiser les filtres", key="credit_reset_filters", on_click=_reset_sidebar_filters, width="stretch")
@@ -691,6 +865,7 @@ def main() -> None:
             quality_df=payload["quality_df"],
             missing_df=payload["missing_df"],
             mapping_df=payload["mapping_df"],
+            cycle_key=selected_cycle_key,
         )
     with tabs[6]:
         render_export_tab(filtered_df, payload["quality_df"], payload["mapping_df"])

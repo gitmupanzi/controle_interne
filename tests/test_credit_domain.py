@@ -15,9 +15,17 @@ from credit_app.domain import (
     build_cycle_priority_actions,
     build_cycle_watchlist,
     build_delay_bucket_table,
+    build_epargne_agent_portfolio_table,
+    build_epargne_dormancy_table,
+    build_epargne_kyc_completeness_table,
+    build_epargne_multi_account_clients,
+    build_epargne_multi_account_table,
+    build_epargne_phone_quality_table,
+    build_epargne_product_concentration_table,
     build_operational_snapshot,
     build_overview_narrative,
     build_priority_actions,
+    build_provenance_summary_table,
     build_quality_checks,
     build_sex_distribution,
     build_status_flow_table,
@@ -26,10 +34,14 @@ from credit_app.domain import (
     build_watchlist,
     filter_dataframe,
     get_cycle_primary_date_column,
+    get_reference_column_count,
 )
 
 
 class CreditDomainTests(unittest.TestCase):
+    def test_reference_mapping_file_is_loaded(self) -> None:
+        self.assertGreaterEqual(get_reference_column_count(), 100)
+
     def test_standardization_maps_columns_and_derives_metrics(self) -> None:
         raw = pd.DataFrame(
             {
@@ -168,6 +180,73 @@ class CreditDomainTests(unittest.TestCase):
         self.assertIn("Féminin", sex_distribution["sexe"].tolist())
         self.assertEqual(age_distribution["tranche_age"].tolist()[:3], ["18-24", "35-44", "55-64"])
 
+    def test_excel_value_cleaning_is_applied_to_standard_columns(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "Sexe": ["garçon", "fem"],
+                "Activité économique": ["cultivatrice", "comerce"],
+                "Localité": ["haut_katanga", "kinshasa"],
+            }
+        )
+
+        standardized, _ = build_standardized_dataframe(raw)
+
+        self.assertEqual(standardized["sexe"].tolist(), ["Masculin", "Féminin"])
+        self.assertEqual(
+            standardized["activite_economique"].tolist(),
+            ["Agriculteur(trice)/Cultivateur(trice)", "Commerçant(e)"],
+        )
+        self.assertEqual(standardized["zone_geographique"].tolist(), ["Haut Katanga", "Kinshasa"])
+
+    def test_excel_value_cleaning_supports_boolean_and_age_units(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "Age": [30, 6],
+                "Unité d'âge": ["an", "moi"],
+                "Statut test reprise": ["oui", "n0n"],
+                "Incident majeur": ["true", "false"],
+            }
+        )
+
+        standardized, mapping = build_standardized_dataframe(raw)
+
+        self.assertEqual(mapping["Unité d'âge"], "unite_age")
+        self.assertEqual(mapping["Statut test reprise"], "statut_test_reprise")
+        self.assertEqual(mapping["Incident majeur"], "incident_majeur")
+        self.assertEqual(standardized["unite_age"].tolist(), ["ans", "mois"])
+        self.assertEqual(standardized["statut_test_reprise"].tolist(), ["Oui", "Non"])
+        self.assertEqual(standardized["incident_majeur"].tolist(), ["Oui", "Non"])
+
+    def test_reference_mapping_covers_internal_control_cycles(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "Nom caissier": ["A"],
+                "Compte bancaire": ["001"],
+                "Numéro pièce": ["PC-1"],
+                "Matricule agent": ["AG-1"],
+                "Profil d'accès": ["Lecture"],
+                "Support sauvegarde": ["Disque externe"],
+            }
+        )
+
+        standardized, mapping = build_standardized_dataframe(raw)
+
+        self.assertEqual(mapping["Nom caissier"], "caissier")
+        self.assertEqual(mapping["Compte bancaire"], "compte_bancaire")
+        self.assertEqual(mapping["Numéro pièce"], "piece_id")
+        self.assertEqual(mapping["Matricule agent"], "agent_id")
+        self.assertEqual(mapping["Profil d'accès"], "profil_acces")
+        self.assertEqual(mapping["Support sauvegarde"], "support_sauvegarde")
+        for column_name in [
+            "caissier",
+            "compte_bancaire",
+            "piece_id",
+            "agent_id",
+            "profil_acces",
+            "support_sauvegarde",
+        ]:
+            self.assertIn(column_name, standardized.columns)
+
     def test_age_sex_pyramid_table_builds_expected_counts(self) -> None:
         raw = pd.DataFrame(
             {
@@ -189,7 +268,8 @@ class CreditDomainTests(unittest.TestCase):
 
     def test_included_credit_workbook_loads_and_standardizes(self) -> None:
         sample_path = Path("line_list/base_donnees_brute_credit.xlsx")
-        self.assertTrue(sample_path.exists())
+        if not sample_path.exists():
+            self.skipTest("Le fichier de démonstration crédit n'est pas présent dans ce dépôt.")
 
         raw = load_dataframe_from_path(sample_path, sheet_name="Base_brute_credit")
         standardized, _ = build_standardized_dataframe(raw)
@@ -245,6 +325,127 @@ class CreditDomainTests(unittest.TestCase):
         self.assertIn("nom_groupe", likelemba_spec["expected_columns"])
         self.assertEqual(money_provider_spec["label"], "Money Provider")
         self.assertIn("numero_reference", money_provider_spec["expected_columns"])
+
+    def test_included_epargne_workbook_loads_and_standardizes(self) -> None:
+        sample_candidates = sorted(
+            path
+            for path in Path("line_list").glob("Encours des épargnants *.xlsx")
+            if not path.name.startswith("~$")
+        )
+        self.assertTrue(sample_candidates)
+
+        raw = load_dataframe_from_path(sample_candidates[0], sheet_name="Sheet0")
+        standardized, _ = build_standardized_dataframe(raw)
+        coverage = build_cycle_coverage_summary(standardized, "epargne")
+
+        self.assertIn("client_id", standardized.columns)
+        self.assertIn("compte_id", standardized.columns)
+        self.assertIn("solde_compte", standardized.columns)
+        self.assertIn("date_operation", standardized.columns)
+        self.assertIn("type_produit", standardized.columns)
+        self.assertIn("type_client", standardized.columns)
+        self.assertIn("agent_credit", standardized.columns)
+        self.assertGreaterEqual(coverage["detected_count"], 7)
+
+    def test_epargne_snapshot_maps_expected_columns_and_watchlist(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "Code client": ["C1", "C2"],
+                "Compte": ["ACC-1", "ACC-2"],
+                "Nom client": ["Client A", "Client B"],
+                "Téléphone": ["099", "081"],
+                "Type client": ["Personne physique", "Personne morale"],
+                "Type produit": ["Compte courant CDF", None],
+                "Encours epargnant": [-50, 1200],
+                "Date dernière transaction": ["2025-01-01", "2026-06-29"],
+                "Gestionnaire": ["Agent 1", "Agent 2"],
+            }
+        )
+
+        standardized, _ = build_standardized_dataframe(raw)
+        watchlist = build_cycle_watchlist(standardized, "epargne")
+
+        self.assertIn("compte_id", standardized.columns)
+        self.assertIn("solde_compte", standardized.columns)
+        self.assertIn("date_operation", standardized.columns)
+        self.assertIn("jours_inactivite", watchlist.columns)
+        self.assertIn("kyc_missing_count", watchlist.columns)
+        self.assertTrue(any("Solde négatif" in str(value) for value in watchlist["motif_alerte"]))
+        self.assertTrue(any("Compte inactif >= 90 j" in str(value) for value in watchlist["motif_alerte"]))
+        self.assertTrue(any("Téléphone non fiable" in str(value) for value in watchlist["motif_alerte"]))
+
+    def test_epargne_advanced_analysis_tables_are_computed(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "Code client": ["C1", "C1", "C2", "C3", "C4"],
+                "Compte": ["ACC-1", "ACC-2", "ACC-3", "ACC-4", "ACC-5"],
+                "Téléphone": ["243990000001", "0810000000", "bad", None, "243990000005"],
+                "Zone géographique": ["Zone A", None, "Zone B", None, "Zone C"],
+                "Sexe": ["M", "F", None, "F", "M"],
+                "Catégorie": ["M", "F", None, None, "M"],
+                "Type client": ["Personne physique", "Personne physique", "Personne morale", "Groupe", "Personne physique"],
+                "Type produit": ["Produit A", "Produit A", "Produit B", "Produit C", "Produit A"],
+                "Encours épargnant": [1000, -50, 5000, 300, 700],
+                "Date dernière transaction": ["2026-06-29", "2026-05-10", None, "2026-03-15", "2026-06-01"],
+                "Gestionnaire": ["Agent 1", "Agent 1", "Agent 2", "Agent 2", "Agent 1"],
+                "Provenance": ["Lot A", "Lot A", "Lot B", "Lot B", "Lot A"],
+            }
+        )
+
+        standardized, _ = build_standardized_dataframe(raw)
+        dormancy_df = build_epargne_dormancy_table(standardized)
+        multi_account_df = build_epargne_multi_account_table(standardized)
+        top_clients_df = build_epargne_multi_account_clients(standardized, top_n=5)
+        concentration_df = build_epargne_product_concentration_table(standardized, top_n=5)
+        agent_df = build_epargne_agent_portfolio_table(standardized, top_n=5)
+        phone_df = build_epargne_phone_quality_table(standardized)
+        kyc_df = build_epargne_kyc_completeness_table(standardized)
+        provenance_df = build_provenance_summary_table(standardized)
+
+        self.assertIn("31-90 j", dormancy_df["classe_inactivite"].tolist())
+        self.assertIn("Non documenté", dormancy_df["classe_inactivite"].tolist())
+        self.assertIn("2 comptes", multi_account_df["classe_comptes"].tolist())
+        self.assertEqual(top_clients_df.iloc[0]["client_id"], "C1")
+        self.assertIn("Produit A", concentration_df["type_produit"].tolist())
+        self.assertIn("Agent 1", agent_df["agent_credit"].tolist())
+        self.assertIn("Format international", phone_df["qualite_telephone"].tolist())
+        self.assertIn("Autre format", phone_df["qualite_telephone"].tolist())
+        self.assertIn("0 champ manquant", kyc_df["classe_completude"].tolist())
+        self.assertIn("Lot A", provenance_df["Provenance"].tolist())
+
+    def test_epargne_watchlist_surfaces_advanced_vigilance_signals(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "Code client": ["C1", "C1", "C1", "C2"],
+                "Compte": ["ACC-1", "ACC-2", "ACC-3", "ACC-4"],
+                "Nom client": ["Client A", "Client A", "Client A", "Client B"],
+                "Téléphone": ["bad", "bad", "243990000003", None],
+                "Zone géographique": [None, None, "Zone A", None],
+                "Sexe": ["M", "M", "M", None],
+                "Catégorie": ["M", "M", "M", None],
+                "Type client": ["Personne physique"] * 4,
+                "Type produit": ["Produit A", "Produit A", None, "Produit B"],
+                "Encours épargnant": [-50, 300000, 100, 200],
+                "Date dernière transaction": ["2026-03-01", "2026-03-01", "2026-06-29", None],
+                "Gestionnaire": ["Agent 1", "Agent 1", "Agent 1", "Agent 2"],
+                "Provenance": ["Lot A", "Lot B", "Lot A", "Lot B"],
+            }
+        )
+
+        standardized, _ = build_standardized_dataframe(raw)
+        watchlist = build_cycle_watchlist(standardized, "epargne")
+        motifs = " | ".join(watchlist["motif_alerte"].astype(str).tolist())
+
+        self.assertIn("jours_inactivite", watchlist.columns)
+        self.assertIn("kyc_missing_count", watchlist.columns)
+        self.assertIn("nombre_comptes_client", watchlist.columns)
+        self.assertIn("telephone", watchlist.columns)
+        self.assertIn("Solde négatif", motifs)
+        self.assertIn("Compte inactif >= 90 j", motifs)
+        self.assertIn("Téléphone non fiable", motifs)
+        self.assertIn("KYC incomplet (2+ champs)", motifs)
+        self.assertIn("Client multi-comptes (>= 3)", motifs)
+        self.assertIn("Dormance sur solde significatif", motifs)
 
     def test_cycle_period_helpers_support_operation_cycles(self) -> None:
         raw = pd.DataFrame(

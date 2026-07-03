@@ -662,6 +662,76 @@ def style_plotly_figure(fig: go.Figure, height: int | None = None) -> go.Figure:
     return fig
 
 
+def style_standard_vertical_bar(fig: go.Figure, *, height: int = 360, tickangle: int = -25) -> go.Figure:
+    fig.update_traces(
+        marker_line_color="rgba(255,255,255,0.50)",
+        marker_line_width=1.15,
+        opacity=0.94,
+    )
+    fig.update_layout(
+        height=height,
+        showlegend=False,
+        bargap=0.22,
+        xaxis_tickangle=tickangle,
+        yaxis=dict(gridcolor="rgba(15, 53, 103, 0.08)", zeroline=False),
+    )
+    return fig
+
+
+def style_standard_horizontal_bar(fig: go.Figure, *, height: int = 360) -> go.Figure:
+    fig.update_traces(
+        marker_line_color="rgba(255,255,255,0.50)",
+        marker_line_width=1.15,
+        opacity=0.94,
+    )
+    fig.update_layout(
+        height=height,
+        showlegend=False,
+        bargap=0.18,
+        xaxis=dict(gridcolor="rgba(15, 53, 103, 0.08)", zeroline=False),
+        yaxis=dict(gridcolor="rgba(15, 53, 103, 0.00)", zeroline=False),
+    )
+    return fig
+
+
+def style_standard_line(fig: go.Figure, *, height: int = 360, tickangle: int = -25) -> go.Figure:
+    fig.update_layout(
+        height=height,
+        showlegend=False,
+        xaxis_tickangle=tickangle,
+        yaxis=dict(gridcolor="rgba(15, 53, 103, 0.08)", zeroline=False),
+        hovermode="x unified",
+    )
+    return fig
+
+
+def style_standard_donut(fig: go.Figure, *, height: int = 360) -> go.Figure:
+    fig.update_traces(
+        textinfo="percent",
+        textfont_size=12,
+        marker=dict(line=dict(color="rgba(255,255,255,0.92)", width=2)),
+        sort=False,
+    )
+    fig.update_layout(height=height, legend=dict(orientation="h"))
+    return fig
+
+
+def style_standard_histogram(fig: go.Figure, *, height: int = 360, tickangle: int = 0) -> go.Figure:
+    fig.update_traces(
+        marker_line_color="rgba(255,255,255,0.45)",
+        marker_line_width=1.0,
+        opacity=0.94,
+    )
+    fig.update_layout(
+        height=height,
+        showlegend=False,
+        bargap=0.06,
+        xaxis_tickangle=tickangle,
+        yaxis=dict(gridcolor="rgba(15, 53, 103, 0.08)", zeroline=False),
+    )
+    return fig
+
+
 def _format_annotation_value(value: Any) -> str:
     if value is None:
         return ""
@@ -740,8 +810,9 @@ def st_plot(
     fig = style_plotly_figure(fig, height=height)
     config = {
         "displaylogo": False,
-        "displayModeBar": False,
+        "displayModeBar": "hover",
         "responsive": True,
+        "scrollZoom": True,
     }
     if key is not None:
         return st.plotly_chart(fig, width="stretch", key=key, config=config)

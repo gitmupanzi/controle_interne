@@ -11,6 +11,8 @@ from credit_app.domain import (
     build_age_bucket_table,
     build_age_sex_pyramid_table,
     build_cycle_period_series,
+    build_epargne_agent_portfolio_table,
+    build_epargne_product_concentration_table,
     build_frequency_table,
     build_grouped_amounts,
     build_operational_snapshot,
@@ -19,35 +21,48 @@ from credit_app.domain import (
     build_summary_metrics,
     get_cycle_primary_date_column,
 )
-from credit_app.ui import render_kpi_cards, render_panel_title, render_summary_box, st_plot
+from credit_app.ui import (
+    render_kpi_cards,
+    render_panel_title,
+    render_summary_box,
+    st_plot,
+    style_standard_donut,
+    style_standard_horizontal_bar,
+    style_standard_line,
+    style_standard_vertical_bar,
+)
 
 CREDIT_LIKE_CYCLES = {"credit", "likelemba"}
 
 GENERIC_OVERVIEW_CONFIG = {
     "epargne": {
-        "record_label": "Opérations",
-        "record_subtitle": "Lignes analysées",
-        "amount_columns": ["montant_operation"],
-        "amount_label": "Montant traité",
-        "amount_subtitle": "Total des mouvements",
+        "record_label": "Comptes d'épargne",
+        "record_subtitle": "Comptes analysés",
+        "amount_columns": ["solde_compte", "montant_operation"],
+        "amount_label": "Encours total",
+        "amount_subtitle": "Total des soldes documentés",
         "entity_columns": ["compte_id", "client_id"],
         "entity_label": "Comptes / clients",
         "entity_subtitle": "Base couverte",
-        "site_columns": ["agence"],
-        "site_label": "Agences actives",
-        "site_subtitle": "Points de service",
-        "primary_columns": ["type_operation", "statut_compte"],
-        "primary_title": "Distribution des types d'opération",
-        "secondary_columns": ["statut_compte", "client_id"],
+        "site_columns": ["agent_credit"],
+        "site_label": "Gestionnaires actifs",
+        "site_subtitle": "Responsables documentés",
+        "primary_columns": ["type_produit", "type_client", "statut_compte"],
+        "primary_title": "Distribution des produits d'épargne",
+        "secondary_columns": ["type_client", "agent_credit", "sexe"],
         "secondary_title": "Répartition secondaire",
-        "group_columns": ["agence"],
-        "group_title": "Volume par agence",
-        "actor_columns": [],
-        "timeline_title": "Évolution mensuelle des opérations",
+        "group_columns": ["type_produit", "agent_credit"],
+        "group_title": "Encours par produit",
+        "actor_columns": ["agent_credit"],
+        "actor_label": "Gestionnaires",
+        "actor_subtitle": "Acteurs documentés",
+        "timeline_title": "Dernière activité par mois",
         "balance_columns": ["solde_compte", "solde_final"],
         "balance_label": "Solde moyen",
         "balance_subtitle": "Position observée",
-        "alert_columns": [],
+        "alert_columns": ["solde_compte"],
+        "alert_label": "Soldes négatifs",
+        "alert_subtitle": "Comptes à surveiller",
     },
     "caisse": {
         "record_label": "Mouvements caisse",
@@ -927,6 +942,138 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
                 st_plot(fig, key=f"overview_generic_age_bis_{cycle_key}", height=360)
 
 
+def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
+    config = GENERIC_OVERVIEW_CONFIG["epargne"]
+    render_kpi_cards(_build_generic_cycle_cards(df, "epargne"))
+
+    date_column = get_cycle_primary_date_column(df, "epargne")
+    period_df = build_cycle_period_series(df, "epargne")
+    amount_frame, amount_column = _prepare_amount_frame(df, config.get("amount_columns", []))
+
+    render_summary_box(
+        "Lecture de l'épargne",
+        [
+            "Cette vue garde uniquement les graphiques standards utiles à une lecture rapide du portefeuille d'épargne.",
+            f"Date pilote retenue : `{date_column}`." if date_column else "Aucune date pilote détectée dans la base active.",
+            "Les analyses de risque, de qualité et de surveillance détaillée sont regroupées dans leurs onglets dédiés.",
+        ],
+    )
+
+    top_left, top_right = st.columns((1, 1))
+
+    with top_left:
+        product_df = build_frequency_table(df, "type_produit", top_n=10)
+        if not product_df.empty:
+            render_panel_title("Distribution des produits d'épargne")
+            fig = px.bar(
+                product_df,
+                x="type_produit",
+                y="nombre_lignes",
+                color="nombre_lignes",
+                color_continuous_scale=["#d8e7fb", "#4b84d7", "#0b4ea2"],
+            )
+            fig.update_layout(coloraxis_showscale=False)
+            style_standard_vertical_bar(fig, height=360, tickangle=-20)
+            st_plot(fig, key="overview_epargne_product_distribution", height=360)
+        else:
+            st.info("Aucune distribution des produits d'épargne n'est disponible.")
+
+    with top_right:
+        if not period_df.empty:
+            render_panel_title("Dernière activité par mois")
+            fig = go.Figure()
+            fig.add_trace(
+                go.Scatter(
+                    x=period_df["periode"],
+                    y=period_df["nombre_lignes"],
+                    mode="lines+markers",
+                    line=dict(color="#2b74ca", width=3),
+                    marker=dict(size=7, color="#2b74ca"),
+                    fill="tozeroy",
+                    fillcolor="rgba(43,116,202,0.12)",
+                    hovertemplate="%{x}<br>%{y} compte(s)<extra></extra>",
+                )
+            )
+            style_standard_line(fig, height=360, tickangle=-25)
+            st_plot(fig, key="overview_epargne_period", height=360)
+        else:
+            st.info("Aucune série temporelle n'a pu être construite pour l'épargne.")
+
+    mid_left, mid_right = st.columns((1, 1))
+
+    with mid_left:
+        if amount_column:
+            grouped_df = build_grouped_amounts(amount_frame, "type_produit", amount_column=amount_column, top_n=10)
+            if not grouped_df.empty:
+                render_panel_title("Encours par produit")
+                fig = px.bar(
+                    grouped_df.sort_values(amount_column, ascending=True),
+                    x=amount_column,
+                    y="type_produit",
+                    orientation="h",
+                    color_discrete_sequence=["#4b84d7"],
+                )
+                style_standard_horizontal_bar(fig, height=360)
+                st_plot(fig, key="overview_epargne_group_amount", height=360)
+            else:
+                st.info("Aucun regroupement d'encours par produit n'est disponible.")
+
+    with mid_right:
+        concentration_df = build_epargne_product_concentration_table(df, top_n=10)
+        if not concentration_df.empty:
+            render_panel_title("Concentration des soldes par produit")
+            fig = px.bar(
+                concentration_df.sort_values("solde_total", ascending=True),
+                x="solde_total",
+                y="type_produit",
+                orientation="h",
+                color_discrete_sequence=["#1f5aa6"],
+            )
+            style_standard_horizontal_bar(fig, height=360)
+            st_plot(fig, key="overview_epargne_product_concentration", height=360)
+        else:
+            st.info("La concentration des soldes par produit n'est pas disponible.")
+
+    bottom_left, bottom_right = st.columns((1, 1))
+
+    with bottom_left:
+        agent_df = build_epargne_agent_portfolio_table(df, top_n=10)
+        if not agent_df.empty:
+            render_panel_title("Portefeuille par gestionnaire")
+            fig = px.bar(
+                agent_df.sort_values("solde_total", ascending=True),
+                x="solde_total",
+                y="agent_credit",
+                orientation="h",
+                color_discrete_sequence=["#3a9158"],
+            )
+            style_standard_horizontal_bar(fig, height=360)
+            st_plot(fig, key="overview_epargne_agent_portfolio", height=360)
+        else:
+            st.info("Aucun regroupement par gestionnaire n'est disponible.")
+
+    with bottom_right:
+        sex_df = build_sex_distribution(df)
+        if not sex_df.empty:
+            render_panel_title("Répartition par sexe")
+            fig = px.pie(
+                sex_df,
+                names="sexe",
+                values="nombre_lignes",
+                hole=0.55,
+                color="sexe",
+                color_discrete_map={
+                    "Masculin": "#1c2333",
+                    "Féminin": "#d71920",
+                    "Inconnu": "#a7a9ac",
+                },
+            )
+            style_standard_donut(fig, height=360)
+            st_plot(fig, key="overview_epargne_sex", height=360)
+        else:
+            st.info("La répartition par sexe n'est pas disponible.")
+
+
 def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame, cycle_key: str = "credit") -> None:
     if df.empty:
         st.warning("Aucune ligne ne correspond aux filtres sélectionnés.")
@@ -935,5 +1082,8 @@ def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame, cycle_key: s
     render_panel_title("Vue d'ensemble")
     if cycle_key in CREDIT_LIKE_CYCLES:
         _render_credit_like_overview(df, monthly_df, cycle_key)
+        return
+    if cycle_key == "epargne":
+        _render_epargne_overview_standard(df)
         return
     _render_generic_cycle_overview(df, cycle_key)

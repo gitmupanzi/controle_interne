@@ -4,7 +4,15 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from credit_app.ui import render_kpi_cards, render_panel_title, render_summary_box, st_plot
+from credit_app.domain import build_epargne_kyc_completeness_table
+from credit_app.ui import (
+    render_kpi_cards,
+    render_panel_title,
+    render_summary_box,
+    st_plot,
+    style_standard_donut,
+    style_standard_vertical_bar,
+)
 
 
 def render_quality_tab(
@@ -13,6 +21,7 @@ def render_quality_tab(
     quality_df: pd.DataFrame,
     missing_df: pd.DataFrame,
     mapping_df: pd.DataFrame,
+    cycle_key: str = "credit",
 ) -> None:
     total_anomalies = int(quality_df["nombre_lignes"].sum()) if not quality_df.empty else 0
     missing_critical = (
@@ -58,7 +67,8 @@ def render_quality_tab(
             color="nombre_lignes",
             color_continuous_scale=["#d9a441", "#c05621", "#9b2c2c"],
         )
-        fig.update_layout(height=360, coloraxis_showscale=False)
+        fig.update_layout(coloraxis_showscale=False)
+        style_standard_vertical_bar(fig, height=360, tickangle=-25)
         st_plot(fig, key="quality_anomalies_bar", height=360)
 
     chart_left, chart_right = st.columns(2)
@@ -74,7 +84,8 @@ def render_quality_tab(
                 color="taux_manquant",
                 color_continuous_scale=["#dbe8f9", "#f09b39", "#b9353f"],
             )
-            fig.update_layout(height=360, coloraxis_showscale=False)
+            fig.update_layout(coloraxis_showscale=False)
+            style_standard_vertical_bar(fig, height=360, tickangle=-25)
             fig.update_yaxes(tickformat=".0%")
             st_plot(fig, key="quality_missing_bar", height=360)
 
@@ -101,7 +112,7 @@ def render_quality_tab(
                     "Colonnes conservées": "#7b8794",
                 },
             )
-            fig.update_layout(height=360)
+            style_standard_donut(fig, height=360)
             st_plot(fig, key="quality_mapping_pie", height=360)
 
     left, right = st.columns(2)
@@ -113,3 +124,22 @@ def render_quality_tab(
     with right:
         render_panel_title("Mapping des colonnes")
         st.dataframe(mapping_df, width="stretch", hide_index=True)
+
+    if cycle_key == "epargne":
+        kyc_df = build_epargne_kyc_completeness_table(standardized_df)
+        render_panel_title("Complétude KYC")
+        if kyc_df.empty:
+            st.info("La complétude KYC n'a pas pu être calculée sur le périmètre actif.")
+        else:
+            kyc_left, kyc_right = st.columns((1, 1))
+            with kyc_left:
+                fig = px.bar(
+                    kyc_df,
+                    x="classe_completude",
+                    y="nombre_lignes",
+                    color_discrete_sequence=["#d77a0f"],
+                )
+                style_standard_vertical_bar(fig, height=340, tickangle=-20)
+                st_plot(fig, key="quality_epargne_kyc", height=340)
+            with kyc_right:
+                st.dataframe(kyc_df, width="stretch", hide_index=True)
