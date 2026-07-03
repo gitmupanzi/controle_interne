@@ -12,7 +12,6 @@ from credit_app.domain import (
     build_age_sex_pyramid_table,
     build_cycle_period_series,
     build_epargne_agent_portfolio_table,
-    build_epargne_product_concentration_table,
     build_frequency_table,
     build_grouped_amounts,
     build_operational_snapshot,
@@ -52,7 +51,7 @@ GENERIC_OVERVIEW_CONFIG = {
         "secondary_columns": ["type_client", "agent_credit", "sexe"],
         "secondary_title": "Répartition secondaire",
         "group_columns": ["type_produit", "agent_credit"],
-        "group_title": "Encours par produit",
+        "group_title": "Soldes cumulés par produit",
         "actor_columns": ["agent_credit"],
         "actor_label": "Gestionnaires",
         "actor_subtitle": "Acteurs documentés",
@@ -1005,7 +1004,7 @@ def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
         if amount_column:
             grouped_df = build_grouped_amounts(amount_frame, "type_produit", amount_column=amount_column, top_n=10)
             if not grouped_df.empty:
-                render_panel_title("Encours par produit")
+                render_panel_title("Soldes cumulés par produit")
                 fig = px.bar(
                     grouped_df.sort_values(amount_column, ascending=True),
                     x=amount_column,
@@ -1016,27 +1015,9 @@ def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
                 style_standard_horizontal_bar(fig, height=360)
                 st_plot(fig, key="overview_epargne_group_amount", height=360)
             else:
-                st.info("Aucun regroupement d'encours par produit n'est disponible.")
+                st.info("Aucun regroupement de soldes par produit n'est disponible.")
 
     with mid_right:
-        concentration_df = build_epargne_product_concentration_table(df, top_n=10)
-        if not concentration_df.empty:
-            render_panel_title("Concentration des soldes par produit")
-            fig = px.bar(
-                concentration_df.sort_values("solde_total", ascending=True),
-                x="solde_total",
-                y="type_produit",
-                orientation="h",
-                color_discrete_sequence=["#1f5aa6"],
-            )
-            style_standard_horizontal_bar(fig, height=360)
-            st_plot(fig, key="overview_epargne_product_concentration", height=360)
-        else:
-            st.info("La concentration des soldes par produit n'est pas disponible.")
-
-    bottom_left, bottom_right = st.columns((1, 1))
-
-    with bottom_left:
         agent_df = build_epargne_agent_portfolio_table(df, top_n=10)
         if not agent_df.empty:
             render_panel_title("Portefeuille par gestionnaire")
@@ -1052,7 +1033,9 @@ def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
         else:
             st.info("Aucun regroupement par gestionnaire n'est disponible.")
 
-    with bottom_right:
+    sex_left, sex_center, sex_right = st.columns((0.18, 0.64, 0.18))
+
+    with sex_center:
         sex_df = build_sex_distribution(df)
         if not sex_df.empty:
             render_panel_title("Répartition par sexe")
