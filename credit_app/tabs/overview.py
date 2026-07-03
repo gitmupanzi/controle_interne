@@ -493,7 +493,7 @@ def _render_credit_like_overview(df: pd.DataFrame, monthly_df: pd.DataFrame, cyc
     with risk_right:
         age_df = build_age_bucket_table(df)
         if not age_df.empty:
-            render_panel_title("Distribution par tranche d'âge")
+            render_panel_title("Tranches d'âge")
             age_order = age_df["tranche_age"].tolist()
             fig = px.bar(
                 age_df,
@@ -512,7 +512,7 @@ def _render_credit_like_overview(df: pd.DataFrame, monthly_df: pd.DataFrame, cyc
     with demo_left:
         sex_df = build_sex_distribution(df)
         if not sex_df.empty:
-            render_panel_title("Répartition par sexe")
+            render_panel_title("Sexe")
             fig = px.pie(
                 sex_df,
                 names="sexe",
@@ -740,12 +740,12 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
     amount_frame, amount_column = _prepare_amount_frame(df, config.get("amount_columns", []))
 
     render_summary_box(
-        f"Lecture du {cycle_spec['label']}",
+        f"À retenir pour {cycle_spec['label']}",
         [
             cycle_spec["summary"],
             cycle_spec["control_objective"],
-            f"Date pilote retenue : `{date_column}`." if date_column else "Aucune date pilote détectée dans la base active.",
-            f"Champ dominant analysé : `{primary_column}`." if primary_column else "Aucun champ dominant exploitable n'a été détecté.",
+            f"Date utilisée : `{date_column}`." if date_column else "Aucune date principale n'a été détectée dans les données.",
+            f"Champ principal utilisé : `{primary_column}`." if primary_column else "Aucun champ principal exploitable n'a été détecté.",
         ],
     )
 
@@ -760,7 +760,7 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
                 key=f"overview_primary_{cycle_key}",
             )
         else:
-            st.info("Aucune dimension principale n'est disponible pour ce cycle.")
+            st.info("Aucun regroupement principal n'est disponible pour ce cycle.")
 
     with top_right:
         if not period_df.empty:
@@ -780,7 +780,7 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
             fig.update_layout(height=360, xaxis_tickangle=-25)
             st_plot(fig, key=f"overview_period_{cycle_key}", height=360)
         else:
-            st.info("Aucune série temporelle n'a pu être construite pour ce cycle.")
+            st.info("Aucune évolution dans le temps n'a pu être construite pour ce cycle.")
 
     mid_left, mid_right = st.columns((1.05, 1))
 
@@ -800,7 +800,7 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
                 fig.update_layout(height=360, showlegend=False)
                 st_plot(fig, key=f"overview_group_amount_{cycle_key}", height=360)
             else:
-                st.info("Aucun regroupement monétaire n'est disponible pour ce cycle.")
+                st.info("Aucun regroupement par montant n'est disponible pour ce cycle.")
         elif group_column:
             _render_frequency_bar(
                 df,
@@ -823,7 +823,7 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
             )
         else:
             render_summary_box(
-                "Lecture complémentaire",
+                "Complément",
                 [
                     f"{len(df):,}".replace(",", " ") + " ligne(s) sont actuellement retenues dans ce cycle.",
                     "Ajoutez davantage de champs métier pour enrichir les comparaisons secondaires.",
@@ -837,7 +837,7 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
         demo_left, demo_right = st.columns((1, 1.2))
         with demo_left:
             if not sex_df.empty:
-                render_panel_title("Répartition par sexe")
+                render_panel_title("Sexe")
                 fig = px.pie(
                     sex_df,
                     names="sexe",
@@ -853,7 +853,7 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
                 fig.update_layout(height=360)
                 st_plot(fig, key=f"overview_generic_sex_{cycle_key}", height=360)
             elif not age_df.empty:
-                render_panel_title("Distribution par tranche d'âge")
+                render_panel_title("Tranches d'âge")
                 fig = px.bar(
                     age_df,
                     x="tranche_age",
@@ -930,7 +930,7 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
                     annotate_values=False,
                 )
             elif not age_df.empty:
-                render_panel_title("Distribution par tranche d'âge")
+                render_panel_title("Tranches d'âge")
                 fig = px.bar(
                     age_df,
                     x="tranche_age",
@@ -950,10 +950,10 @@ def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
     amount_frame, amount_column = _prepare_amount_frame(df, config.get("amount_columns", []))
 
     render_summary_box(
-        "Lecture de l'épargne",
+        "À retenir pour l'épargne",
         [
-            "Cette vue garde uniquement les graphiques standards utiles à une lecture rapide du portefeuille d'épargne.",
-            f"Date pilote retenue : `{date_column}`." if date_column else "Aucune date pilote détectée dans la base active.",
+            "Cette vue conserve uniquement les graphiques standard utiles pour une lecture rapide du portefeuille d'épargne.",
+            f"Date utilisée : `{date_column}`." if date_column else "Aucune date principale n'a été détectée dans les données.",
             "Les analyses de risque, de qualité et de surveillance détaillée sont regroupées dans leurs onglets dédiés.",
         ],
     )
@@ -963,7 +963,7 @@ def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
     with top_left:
         product_df = build_frequency_table(df, "type_produit", top_n=10)
         if not product_df.empty:
-            render_panel_title("Distribution des produits d'épargne")
+            render_panel_title("Produits d'épargne")
             fig = px.bar(
                 product_df,
                 x="type_produit",
@@ -979,7 +979,7 @@ def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
 
     with top_right:
         if not period_df.empty:
-            render_panel_title("Dernière activité par mois")
+            render_panel_title("Activité mensuelle")
             fig = go.Figure()
             fig.add_trace(
                 go.Scatter(
@@ -996,7 +996,7 @@ def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
             style_standard_line(fig, height=360, tickangle=-25)
             st_plot(fig, key="overview_epargne_period", height=360)
         else:
-            st.info("Aucune série temporelle n'a pu être construite pour l'épargne.")
+            st.info("Aucune évolution dans le temps n'a pu être construite pour l'épargne.")
 
     mid_left, mid_right = st.columns((1, 1))
 
@@ -1004,7 +1004,7 @@ def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
         if amount_column:
             grouped_df = build_grouped_amounts(amount_frame, "type_produit", amount_column=amount_column, top_n=10)
             if not grouped_df.empty:
-                render_panel_title("Soldes cumulés par produit")
+                render_panel_title("Soldes par produit")
                 fig = px.bar(
                     grouped_df.sort_values(amount_column, ascending=True),
                     x=amount_column,
@@ -1020,7 +1020,7 @@ def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
     with mid_right:
         agent_df = build_epargne_agent_portfolio_table(df, top_n=10)
         if not agent_df.empty:
-            render_panel_title("Portefeuille par gestionnaire")
+            render_panel_title("Gestionnaires")
             fig = px.bar(
                 agent_df.sort_values("solde_total", ascending=True),
                 x="solde_total",
@@ -1038,7 +1038,7 @@ def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
     with sex_center:
         sex_df = build_sex_distribution(df)
         if not sex_df.empty:
-            render_panel_title("Répartition par sexe")
+            render_panel_title("Sexe")
             fig = px.pie(
                 sex_df,
                 names="sexe",
@@ -1059,7 +1059,7 @@ def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
 
 def render_overview_tab(df: pd.DataFrame, monthly_df: pd.DataFrame, cycle_key: str = "credit") -> None:
     if df.empty:
-        st.warning("Aucune ligne ne correspond aux filtres sélectionnés.")
+        st.warning("Aucune ligne ne correspond aux filtres choisis.")
         return
 
     render_panel_title("Vue d'ensemble")

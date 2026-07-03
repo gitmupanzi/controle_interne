@@ -23,32 +23,32 @@ def _build_concepts_table() -> pd.DataFrame:
         [
             {
                 "Notion": "Capacité de remboursement",
-                "Definition": "Marge théorique du client après déduction des charges mensuelles.",
+                "Définition": "Marge théorique du client après déduction des charges mensuelles.",
                 "Lecture utile": "Une capacité négative ou trop faible invite à revoir la décision ou les conditions du crédit.",
             },
             {
                 "Notion": "Taux d'endettement",
-                "Definition": "Part des charges mensuelles dans le revenu mensuel.",
+                "Définition": "Part des charges mensuelles dans le revenu mensuel.",
                 "Lecture utile": "Un taux élevé signale une pression financière plus forte et un risque de défaut plus important.",
             },
             {
                 "Notion": "Niveau de risque",
-                "Definition": "Classement du dossier selon le risque déjà présent, le score crédit, l'endettement et les retards.",
+                "Définition": "Classement du dossier selon le risque déjà présent, le score crédit, l'endettement et les retards.",
                 "Lecture utile": "Permet de prioriser les revues avant l'octroi et pendant le suivi.",
             },
             {
                 "Notion": "Statut du dossier",
-                "Definition": "Étape de vie du dossier : reçu, en analyse, approuvé, rejeté, décaissé, en remboursement, en retard, clôturé.",
+                "Définition": "Étape de vie du dossier : reçu, en analyse, approuvé, rejeté, décaissé, en remboursement, en retard, clôturé.",
                 "Lecture utile": "Aide à suivre le pipeline et les points de blocage dans le processus de crédit.",
             },
             {
                 "Notion": "Statut de remboursement",
-                "Definition": "Situation du remboursement après décaissement.",
+                "Définition": "Situation du remboursement après décaissement.",
                 "Lecture utile": "Permet d'identifier les clients à jour, en retard ou soldés.",
             },
             {
-                "Notion": "Watchlist",
-                "Definition": "Liste des dossiers signalés par les règles de surveillance.",
+                "Notion": "Liste de suivi",
+                "Définition": "Liste des dossiers signalés par les règles de surveillance.",
                 "Lecture utile": "Concentre les cas à vérifier rapidement : risque élevé, retard long, capacité négative ou données incomplètes.",
             },
         ]
@@ -58,12 +58,12 @@ def _build_concepts_table() -> pd.DataFrame:
 def _build_role_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Bloc": "Évaluation des demandes", "Points cles": "Vérifier les revenus, charges, garanties, cohérence du dossier et capacité de remboursement."},
-            {"Bloc": "Analyse des risques", "Points cles": "Mesurer l'endettement, les retards, le score, les fragilités et les mesures d'atténuation."},
-            {"Bloc": "Recommandation", "Points cles": "Formuler une décision argumentée : recommandé, recommandé avec conditions, à revoir, non recommandé."},
-            {"Bloc": "Suivi du portefeuille", "Points cles": "Surveiller les échéances, les retards, les dossiers sensibles et les comptes à risque."},
-            {"Bloc": "Reporting", "Points cles": "Produire des tableaux de bord par agence, produit, période, risque et remboursement."},
-            {"Bloc": "Qualité des données", "Points cles": "Détecter les doublons, incohérences, valeurs manquantes et documenter les corrections."},
+            {"Bloc": "Évaluation des demandes", "Points clés": "Vérifier les revenus, les charges, les garanties, la cohérence du dossier et la capacité de remboursement."},
+            {"Bloc": "Analyse des risques", "Points clés": "Mesurer l'endettement, les retards, le score, les fragilités et les mesures d'atténuation."},
+            {"Bloc": "Recommandation", "Points clés": "Formuler une décision argumentée : recommandé, recommandé sous conditions, à revoir ou non recommandé."},
+            {"Bloc": "Suivi du portefeuille", "Points clés": "Surveiller les échéances, les retards, les dossiers sensibles et les comptes à risque."},
+            {"Bloc": "Reporting", "Points clés": "Produire des tableaux de bord par agence, produit, période, risque et remboursement."},
+            {"Bloc": "Qualité des données", "Points clés": "Détecter les doublons, les incohérences, les valeurs manquantes et documenter les corrections."},
         ]
     )
 
@@ -71,16 +71,16 @@ def _build_role_table() -> pd.DataFrame:
 def _build_process_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Etape": 1, "Processus": "Réception de la demande de crédit"},
-            {"Etape": 2, "Processus": "Collecte des informations du client"},
-            {"Etape": 3, "Processus": "Verification des documents fournis"},
-            {"Etape": 4, "Processus": "Analyse financiere et comportementale"},
-            {"Etape": 5, "Processus": "Évaluation du risque"},
-            {"Etape": 6, "Processus": "Calcul de la capacité de remboursement"},
-            {"Etape": 7, "Processus": "Formulation d'une recommandation"},
-            {"Etape": 8, "Processus": "Validation par les responsables concernes"},
-            {"Etape": 9, "Processus": "Suivi du crédit après approbation"},
-            {"Etape": 10, "Processus": "Reporting et mise a jour du dossier client"},
+            {"Étape": 1, "Processus": "Réception de la demande de crédit"},
+            {"Étape": 2, "Processus": "Collecte des informations du client"},
+            {"Étape": 3, "Processus": "Vérification des documents fournis"},
+            {"Étape": 4, "Processus": "Analyse financière et comportementale"},
+            {"Étape": 5, "Processus": "Évaluation du risque"},
+            {"Étape": 6, "Processus": "Calcul de la capacité de remboursement"},
+            {"Étape": 7, "Processus": "Formulation d'une recommandation"},
+            {"Étape": 8, "Processus": "Validation par les responsables concernés"},
+            {"Étape": 9, "Processus": "Suivi du crédit après approbation"},
+            {"Étape": 10, "Processus": "Mise à jour du dossier client et reporting"},
         ]
     )
 
@@ -90,9 +90,9 @@ def _build_kpi_table() -> pd.DataFrame:
         [
             {"Famille": "Demande", "Indicateurs": "Nombre de demandes, taux d'approbation, montant demandé, montant accordé, délai de traitement"},
             {"Famille": "Risque", "Indicateurs": "Dossiers à risque élevé, taux d'endettement moyen, score moyen, dossiers incomplets"},
-            {"Famille": "Remboursement", "Indicateurs": "Clients a jour, clients en retard, retard moyen, retard > 30 jours, portefeuille a risque"},
+            {"Famille": "Remboursement", "Indicateurs": "Clients à jour, clients en retard, retard moyen, retard > 30 jours, portefeuille à risque"},
             {"Famille": "Pilotage", "Indicateurs": "Performance par agence, agent, produit, sexe, tranche d'âge et période"},
-            {"Famille": "Qualite", "Indicateurs": "Doublons, valeurs manquantes, montants incoherents, statuts manquants"},
+            {"Famille": "Qualité", "Indicateurs": "Doublons, valeurs manquantes, montants incohérents, statuts manquants"},
         ]
     )
 
@@ -364,17 +364,17 @@ def _render_card_grid(cards: list[dict[str, str]]) -> None:
 def _render_formula_cards() -> None:
     formulas = [
         {
-            "label": "Capacite de remboursement",
+            "label": "Capacité de remboursement",
             "formula": "Revenu mensuel - Charges mensuelles",
             "why": "Donne une première lecture de la marge théorique disponible pour rembourser le crédit.",
         },
         {
             "label": "Taux d'endettement",
             "formula": "Charges mensuelles / Revenu mensuel",
-            "why": "Aide a estimer la pression financiere supportee par le client.",
+            "why": "Aide à estimer la pression financière supportée par le client.",
         },
         {
-            "label": "Mensualite estimee",
+            "label": "Mensualité estimée",
             "formula": "Montant accordé / Durée du crédit en mois",
             "why": "Approximation simple de l'effort mensuel attendu sur le dossier.",
         },
@@ -389,9 +389,9 @@ def _render_formula_cards() -> None:
             "why": "Mesure la fragilité du portefeuille sur le périmètre courant.",
         },
         {
-            "label": "Watchlist",
+            "label": "Liste de suivi",
             "formula": "Risque élevé + retards longs + capacité négative + données incomplètes",
-            "why": "Sert a prioriser les cas qui demandent une revue rapide ou une action immediate.",
+            "why": "Sert à prioriser les cas qui demandent une revue rapide ou une action immédiate.",
         },
     ]
     blocks: list[str] = []
@@ -498,7 +498,7 @@ def render_analyste_credit_tab(cycle_key: str = "credit", standardized_df: pd.Da
             ],
         )
     with top_right:
-        render_panel_title("Resultats attendus")
+        render_panel_title("Résultats attendus")
         render_summary_box(
             "Ce que l'organisation recherche",
             [
@@ -531,12 +531,12 @@ def render_analyste_credit_tab(cycle_key: str = "credit", standardized_df: pd.Da
                 "Vérifier la qualité des données avant de conclure.",
                 "Ne pas lire un risque élevé sans regarder aussi la capacité, l'endettement et les retards.",
                 "Documenter la recommandation avec des éléments objectifs.",
-                "Prioriser les dossiers watchlist et les retards longs.",
+                "Prioriser les dossiers de la liste de suivi et les retards longs.",
             ],
         )
-        render_panel_title("Confidentialite")
+        render_panel_title("Confidentialité")
         render_summary_box(
-            "Regles essentielles",
+            "Règles essentielles",
             [
                 "Limiter l'accès aux données aux personnes autorisées.",
                 "Éviter le partage non sécurisé des fichiers clients.",

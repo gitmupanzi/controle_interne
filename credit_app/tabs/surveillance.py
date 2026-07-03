@@ -50,7 +50,7 @@ COLUMN_LABELS = {
 
 
 def _group_title(column: str) -> str:
-    return f"Top {COLUMN_LABELS.get(column, column.replace('_', ' '))} actives"
+    return f"Principales {COLUMN_LABELS.get(column, column.replace('_', ' '))}"
 
 
 def _build_watchlist_reason_table(watchlist: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
@@ -86,7 +86,7 @@ def _render_epargne_surveillance_block(df: pd.DataFrame, watchlist: pd.DataFrame
 
     with top_left:
         if not dormancy_df.empty:
-            render_panel_title("Dormance sous surveillance")
+            render_panel_title("Dormance")
             fig = px.bar(
                 dormancy_df,
                 x="classe_inactivite",
@@ -96,11 +96,11 @@ def _render_epargne_surveillance_block(df: pd.DataFrame, watchlist: pd.DataFrame
             style_standard_vertical_bar(fig, height=320, tickangle=-20)
             st_plot(fig, key="surveillance_epargne_dormancy", height=320)
         else:
-            st.info("La dormance n'est pas disponible sur le périmètre actif.")
+            st.info("L'information sur la dormance n'est pas disponible pour les données actuelles.")
 
     with top_right:
         if not multi_account_df.empty:
-            render_panel_title("Clients multi-comptes")
+            render_panel_title("Multi-comptes")
             fig = px.bar(
                 multi_account_df,
                 x="classe_comptes",
@@ -110,14 +110,14 @@ def _render_epargne_surveillance_block(df: pd.DataFrame, watchlist: pd.DataFrame
             style_standard_vertical_bar(fig, height=320, tickangle=-20)
             st_plot(fig, key="surveillance_epargne_multi_accounts", height=320)
         else:
-            st.info("Aucune distribution multi-comptes n'est disponible sur le périmètre actif.")
+            st.info("La répartition des multi-comptes n'est pas disponible pour les données actuelles.")
 
     mid_left, mid_right = st.columns((1, 1))
 
     with mid_left:
-        render_panel_title("Top clients multi-comptes")
+        render_panel_title("Clients multi-comptes")
         if multi_clients_df.empty:
-            st.info("Aucun client multi-comptes n'a été détecté.")
+            st.info("Aucun client avec plusieurs comptes n'a été détecté.")
         else:
             st.dataframe(multi_clients_df, width="stretch", hide_index=True)
 
@@ -126,10 +126,10 @@ def _render_epargne_surveillance_block(df: pd.DataFrame, watchlist: pd.DataFrame
             render_panel_title("Comparaison des extractions")
             st.dataframe(provenance_df, width="stretch", hide_index=True)
         else:
-            st.info("Une seule extraction est disponible sur le périmètre actif.")
+            st.info("Une seule extraction est disponible pour les données actuelles.")
 
     if not watchlist_reasons_df.empty:
-        render_panel_title("Répartition des motifs de vigilance")
+        render_panel_title("Motifs de vigilance")
         fig = px.bar(
             watchlist_reasons_df,
             x="nombre_lignes",
@@ -144,18 +144,18 @@ def _render_epargne_surveillance_block(df: pd.DataFrame, watchlist: pd.DataFrame
     if not watchlist.empty:
         high_attention_count = len(watchlist)
         render_summary_box(
-            "Lecture de vigilance épargne",
+            "À retenir",
             [
                 f"{high_attention_count:,}".replace(",", " ")
-                + " compte(s) sont actuellement signalés dans la watchlist active.",
-                "Les blocs ci-dessus aident à prioriser la dormance, les multi-comptes et les écarts entre extractions.",
+                + " compte(s) sont actuellement signalés dans la liste de suivi.",
+                "Les blocs ci-dessus aident à repérer rapidement la dormance, les multi-comptes et les écarts entre extractions.",
             ],
         )
 
 
 def render_surveillance_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
     if df.empty:
-        st.warning("Aucune ligne ne correspond aux filtres sélectionnés.")
+        st.warning("Aucune ligne ne correspond aux filtres choisis.")
         return
 
     cycle_spec = get_cycle_spec(cycle_key)
@@ -167,14 +167,14 @@ def render_surveillance_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None
     primary_group = group_columns[0] if group_columns else None
     secondary_group = group_columns[1] if len(group_columns) > 1 else None
 
-    render_panel_title("Surveillance opérationnelle")
+    render_panel_title("Surveillance")
     render_summary_box(
-        "Lecture de surveillance",
+        "À retenir",
         [
             f"Cet onglet regroupe les actions prioritaires et les classements opérationnels du {cycle_spec['label']}.",
-            "La synthèse du haut reste réservée aux KPI standard et aux graphiques standard.",
+            "La synthèse du haut reste dédiée aux indicateurs et graphiques standard.",
             f"{len(watchlist):,}".replace(",", " ")
-            + f" élément(s) sont actuellement signalés dans les {preset['record_label'].lower()}.",
+            + f" élément(s) demandent actuellement une attention particulière dans les {preset['record_label'].lower()}.",
         ],
     )
 
@@ -186,12 +186,12 @@ def render_surveillance_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None
 
     with snapshot_col:
         top_dimension = primary_group or get_first_existing_column(df, ["agence", "type_operation", "banque", "journal"])
-        top_message = "Aucune dimension principale n'est disponible."
+        top_message = "Aucun regroupement principal n'est disponible."
         if top_dimension:
             top_value_series = df[top_dimension].dropna().astype("string").str.strip()
             if not top_value_series.empty:
                 top_value = top_value_series.value_counts().index[0]
-                top_message = f"Le périmètre `{top_dimension}` le plus actif est **{top_value}**."
+                top_message = f"L'élément le plus actif pour `{top_dimension}` est **{top_value}**."
 
         montant_reference = next(
             (
@@ -204,13 +204,13 @@ def render_surveillance_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None
             ),
             None,
         )
-        render_panel_title("Bloc de surveillance")
+        render_panel_title("Repères rapides")
         render_summary_box(
-            "Points de contrôle immédiats",
+            "Priorités du moment",
             [
                 top_message,
-                "Volume financier observé : " + format_currency(montant_reference) + ".",
-                f"{snapshot['high_risk_count']:,}".replace(",", " ") + " ligne(s) portent un risque élevé documenté.",
+                "Montant observé : " + format_currency(montant_reference) + ".",
+                f"{snapshot['high_risk_count']:,}".replace(",", " ") + " ligne(s) présentent un risque élevé.",
             ],
         )
 
@@ -230,9 +230,9 @@ def render_surveillance_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None
                 render_panel_title(_group_title(primary_group))
                 st.dataframe(ranking_df, width="stretch", hide_index=True)
             else:
-                st.info("Aucun classement principal n'est disponible sur le périmètre courant.")
+                st.info("Aucun classement principal n'est disponible pour les données actuelles.")
         else:
-            st.info("Aucune dimension principale n'est disponible pour ce cycle.")
+            st.info("Aucun regroupement principal n'est disponible pour ce cycle.")
 
     with ranking_right:
         if secondary_group:
@@ -247,19 +247,19 @@ def render_surveillance_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None
                 render_panel_title(_group_title(secondary_group))
                 st.dataframe(ranking_df, width="stretch", hide_index=True)
             else:
-                st.info("Aucun classement secondaire n'est disponible sur le périmètre courant.")
+                st.info("Aucun classement secondaire n'est disponible pour les données actuelles.")
         else:
-            st.info("Aucune seconde dimension n'est disponible pour ce cycle.")
+            st.info("Aucun second regroupement n'est disponible pour ce cycle.")
 
     if cycle_key == "epargne":
         _render_epargne_surveillance_block(df, watchlist)
 
-    render_panel_title("Éléments à suivre en priorité")
+    render_panel_title("Cas prioritaires")
     if not watchlist.empty:
         st.dataframe(watchlist.head(50), width="stretch", hide_index=True)
     else:
         st.success("Aucun élément prioritaire n'a été détecté avec les règles de surveillance actuelles.")
 
-    render_panel_title("Aperçu des données filtrées")
+    render_panel_title("Aperçu")
     preview_columns = [column for column in df.columns if column not in {"mois_demande"}]
     st.dataframe(df[preview_columns].head(200), width="stretch", hide_index=True)

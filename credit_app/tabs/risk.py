@@ -37,7 +37,7 @@ def _resolve_amount_column(df: pd.DataFrame, candidates: list[str]) -> str | Non
 
 def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
     if df.empty:
-        st.warning("Aucune donnée disponible pour cet onglet.")
+        st.warning("Aucune donnée n'est disponible dans cet onglet.")
         return
 
     cycle_spec = get_cycle_spec(cycle_key)
@@ -48,12 +48,12 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
     amount_column = _resolve_amount_column(df, preset.get("amount_columns", []))
     primary_group = get_first_existing_column(df, preset.get("group_columns", []))
 
-    render_panel_title("Risque et anomalies")
+    render_panel_title("Risques")
     render_kpi_cards(
         [
-            ("Éléments signalés", f"{len(watchlist):,}".replace(",", " "), "Watchlist active", "slate"),
+            ("Cas à suivre", f"{len(watchlist):,}".replace(",", " "), "Liste de suivi", "slate"),
             ("Risque élevé", f"{snapshot['high_risk_count']:,}".replace(",", " "), "Vigilance maximale", "slate"),
-            ("Risque moyen", f"{snapshot['medium_risk_count']:,}".replace(",", " "), "À monitorer", "slate"),
+            ("Risque moyen", f"{snapshot['medium_risk_count']:,}".replace(",", " "), "À surveiller", "slate"),
             ("Retards", f"{snapshot['delayed_count']:,}".replace(",", " "), "Retards identifiés", "slate"),
             (
                 "Endettement moyen",
@@ -73,13 +73,13 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
                         None,
                     )
                 ),
-                "Volume documenté",
+                "Montant recensé",
                 "slate",
             ),
         ]
     )
     render_summary_box(
-        "Lecture risque",
+        "À retenir",
         [
             f"Cet espace consolide les signaux d'alerte du {cycle_spec['label']}.",
             *build_cycle_priority_actions(df, cycle_key)[:3],
@@ -91,7 +91,7 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
     with left:
         risk_df = build_risk_distribution(df)
         if not risk_df.empty:
-            render_panel_title("Distribution du risque")
+            render_panel_title("Niveaux de risque")
             fig = px.bar(
                 risk_df,
                 x="niveau_risque_calcule",
@@ -118,7 +118,7 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
         if "taux_endettement" in df.columns:
             debt_base = df.dropna(subset=["taux_endettement"]).copy()
             if not debt_base.empty:
-                render_panel_title("Distribution du taux d'endettement")
+                render_panel_title("Taux d'endettement")
                 fig = px.histogram(
                     debt_base,
                     x="taux_endettement",
@@ -144,7 +144,7 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
 
     with lower_left:
         if cycle_key in {"credit", "likelemba"} and "statut_remboursement" in df.columns:
-            render_panel_title("Statut de remboursement")
+            render_panel_title("Remboursement")
             reimbursement_df = (
                 df.groupby("statut_remboursement", dropna=False)
                 .size()
@@ -178,7 +178,7 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
         if cycle_key == "epargne":
             phone_df = build_epargne_phone_quality_table(df)
             if not phone_df.empty:
-                render_panel_title("Qualité des téléphones")
+                render_panel_title("Téléphones")
                 fig = px.pie(
                     phone_df,
                     names="qualite_telephone",
@@ -215,7 +215,7 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
         else:
             delay_df = build_delay_bucket_table(df)
             if not delay_df.empty:
-                render_panel_title("Classes de retard")
+                render_panel_title("Retards")
                 fig = px.bar(
                     delay_df,
                     x="classe_retard",
@@ -263,7 +263,7 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
             render_panel_title(f"Zones les plus exposées par {primary_group.replace('_', ' ')}")
             st.dataframe(group_risk, width="stretch", hide_index=True)
 
-    render_panel_title("Watchlist risque")
+    render_panel_title("Cas à suivre")
     if watchlist.empty:
         st.success("Aucune ligne d'alerte n'a été détectée sur le périmètre courant.")
     else:

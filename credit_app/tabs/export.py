@@ -23,7 +23,7 @@ def render_export_tab(df: pd.DataFrame, quality_df: pd.DataFrame, mapping_df: pd
     render_panel_title("Export")
 
     if df.empty:
-        st.warning("Aucune donnée à exporter avec les filtres actuels.")
+        st.warning("Aucune donnée ne peut être exportée avec les filtres actuels.")
         return
 
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -32,16 +32,16 @@ def render_export_tab(df: pd.DataFrame, quality_df: pd.DataFrame, mapping_df: pd
         [
             ("Lignes exportées", f"{len(df):,}".replace(",", " "), "Périmètre filtré", "blue"),
             ("Colonnes exportées", str(df.shape[1]), "Données standardisées", "navy"),
-            ("Feuilles Excel", "3", "Données, qualité, mapping", "green"),
-            ("Colonnes reconnues", str(renamed_columns), "Traitées automatiquement", "orange"),
+            ("Feuilles Excel", "3", "Données, qualité, correspondances", "green"),
+            ("Colonnes reconnues", str(renamed_columns), "Traitement automatique", "orange"),
         ]
     )
 
     render_summary_box(
-        "Pack de restitution",
+        "Contenu de l'export",
         [
-            "L'export reprend les données standardisées, les contrôles qualité et le mapping des colonnes.",
-            f"Horodatage de génération : {generated_at}.",
+            "L'export comprend les données standardisées, les contrôles qualité et la table de correspondance des colonnes.",
+            f"Date et heure de génération : {generated_at}.",
         ],
     )
 
@@ -49,27 +49,27 @@ def render_export_tab(df: pd.DataFrame, quality_df: pd.DataFrame, mapping_df: pd
     excel_bytes = _to_excel_bytes(df, quality_df, mapping_df)
 
     st.download_button(
-        "Télécharger les données standardisées (CSV)",
+        "Télécharger les données standardisées en CSV",
         data=csv_bytes,
-        file_name="analyste_credit_donnees_standardisees.csv",
+        file_name="controle_interne_donnees_standardisees.csv",
         mime="text/csv",
         width="stretch",
     )
 
     st.download_button(
-        "Télécharger le pack d'analyse (Excel)",
+        "Télécharger le pack d'analyse en Excel",
         data=excel_bytes,
-        file_name="analyste_credit_pack_analyse.xlsx",
+        file_name="controle_interne_pack_analyse.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         width="stretch",
     )
 
     st.markdown(
         """
-        Le pack Excel contient :
+        Le fichier Excel contient :
 
         - les données standardisées filtrées
         - les contrôles qualité
-        - le mapping des colonnes source -> standard
+        - la correspondance entre les colonnes d'origine et les colonnes standard
         """
     )

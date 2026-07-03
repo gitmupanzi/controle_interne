@@ -48,11 +48,11 @@ def render_quality_tab(
         ]
     )
     render_summary_box(
-        "Lecture qualité",
+        "À retenir",
         [
-            "Cet onglet consolide les anomalies, les valeurs manquantes et le mapping des colonnes source.",
+            "Cet onglet rassemble les anomalies, les valeurs manquantes et la correspondance entre les colonnes d'origine et les colonnes standard.",
             f"{missing_critical} colonne(s) présentent au moins 30% de valeurs manquantes.",
-            "Le mapping combine les alias internes et la référence externe data/Rename_columns.xlsx.",
+            "La standardisation combine les règles internes et la référence externe `data/Rename_columns.xlsx`.",
         ],
     )
 
@@ -129,7 +129,7 @@ def render_quality_tab(
         kyc_df = build_epargne_kyc_completeness_table(standardized_df)
         render_panel_title("Complétude KYC")
         if kyc_df.empty:
-            st.info("La complétude KYC n'a pas pu être calculée sur le périmètre actif.")
+            st.info("La complétude KYC n'a pas pu être calculée pour les données actuelles.")
         else:
             kyc_left, kyc_right = st.columns((1, 1))
             with kyc_left:

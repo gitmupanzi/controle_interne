@@ -84,7 +84,10 @@ from credit_app.tabs.analyste_credit import render_analyste_credit_tab
 from credit_app.tabs.export import render_export_tab
 from credit_app.tabs.methodology import render_methodology_tab
 from credit_app.tabs.overview import render_overview_tab
-from credit_app.tabs.portfolio import render_portfolio_tab
+from credit_app.tabs.portfolio import (
+    build_epargne_bundles_from_standardized_frames,
+    render_portfolio_tab,
+)
 from credit_app.tabs.quality import render_quality_tab
 from credit_app.tabs.risk import render_risk_tab
 from credit_app.tabs.surveillance import render_surveillance_tab
@@ -217,6 +220,32 @@ def prepare_compiled_dataset_from_uploads(uploaded_items: tuple[tuple[str, bytes
         payload = prepare_compiled_dataset_from_paths(tuple(temp_paths), sheet_name)
     payload["compiled_files"] = [filename for filename, _ in uploaded_items]
     return payload
+
+
+@st.cache_data(show_spinner=False)
+def prepare_epargne_bundles_from_uploads(
+    uploaded_items: tuple[tuple[str, bytes], ...],
+    sheet_name: str | None,
+) -> list[dict[str, object]]:
+    frames: list[tuple[str, pd.DataFrame]] = []
+    for filename, file_bytes in uploaded_items:
+        raw_df = load_dataframe_from_bytes(file_bytes, filename, sheet_name)
+        standardized_df, _ = build_standardized_dataframe(raw_df)
+        frames.append((filename, standardized_df))
+    return build_epargne_bundles_from_standardized_frames(frames)
+
+
+@st.cache_data(show_spinner=False)
+def prepare_epargne_bundles_from_paths(
+    file_paths: tuple[str, ...],
+    sheet_name: str | None,
+) -> list[dict[str, object]]:
+    frames: list[tuple[str, pd.DataFrame]] = []
+    for file_path in file_paths:
+        raw_df = load_dataframe_from_path(file_path, sheet_name)
+        standardized_df, _ = build_standardized_dataframe(raw_df)
+        frames.append((Path(file_path).name, standardized_df))
+    return build_epargne_bundles_from_standardized_frames(frames)
 
 
 def _prepare_payload_from_dataframe(raw_df: pd.DataFrame) -> dict:
@@ -563,19 +592,19 @@ def main() -> None:
         render_context_row(
             [
                 ("Cycle", selected_cycle["label"]),
-                ("Source", "Aucun fichier chargé"),
+                ("Source", "Aucun fichier"),
                 ("Formats", "Excel, CSV ou compilation Excel"),
-                ("Analyses", "Portefeuille, risque, qualité"),
-                ("Mode", "Téléversement simple, téléversement multiple ou compilation"),
+                ("Analyses", "Vue d'ensemble, portefeuille, risque, qualité"),
+                ("Mode", "Fichier unique, plusieurs fichiers ou compilation"),
             ]
         )
         render_summary_box(
-            "Base attendue",
+            "Pour commencer",
             [
                 selected_cycle["summary"],
-                "Chargez un fichier Excel ou CSV, utilisez un fichier déjà placé dans line_list/ ou compilez plusieurs bases détaillées.",
+                "Chargez un fichier Excel ou CSV, utilisez un fichier déjà disponible pour les tests, ou regroupez plusieurs bases détaillées.",
                 "L'application reconnaît automatiquement plusieurs variantes de colonnes métier.",
-                "Le renommage externe de data/Rename_columns.xlsx est aussi pris en compte.",
+                "Le fichier `data/Rename_columns.xlsx` est aussi pris en compte pour harmoniser les noms de colonnes.",
             ],
         )
         render_footer()
@@ -627,41 +656,41 @@ def main() -> None:
             ("Référence", "Rename_columns.xlsx"),
         ]
     )
-    with st.expander("Source analytique et fichiers utilisés", expanded=False):
+    with st.expander("Données utilisées", expanded=False):
         st.write(f"Mode de chargement : **{source_label}**")
-        st.write(f"Fichier actif : **{filename}**")
+        st.write(f"Fichier utilisé : **{filename}**")
         if source_mode == "Charger un fichier inclus" and selected_local_path is not None:
             st.write(f"Chemin local : `{selected_local_path}`")
         if source_mode in {"Téléverser plusieurs fichiers", "Compiler plusieurs fichiers inclus"}:
-            st.write(f"Fichiers compilés : **{len(payload.get('compiled_files', []))}**")
+            st.write(f"Fichiers regroupés : **{len(payload.get('compiled_files', []))}**")
             for compiled_file in payload.get("compiled_files", []):
                 st.write(f"- `{compiled_file}`")
         if sheet_name:
             st.write(f"Feuille active : **{sheet_name}**")
         st.write(
-            f"Référence de renommage : **data/Rename_columns.xlsx** avec **{get_reference_column_count()}** alias chargés."
+            f"Référence de renommage : **data/Rename_columns.xlsx** avec **{get_reference_column_count()}** correspondances chargées."
         )
-        st.write(f"Cycle actif : **{selected_cycle['label']}**")
-        st.write(f"Couverture du référentiel : **{cycle_coverage['detected_count']}/{cycle_coverage['total']}** champs clés détectés.")
+        st.write(f"Cycle analysé : **{selected_cycle['label']}**")
+        st.write(f"Couverture du référentiel : **{cycle_coverage['detected_count']}/{cycle_coverage['total']}** champs clés reconnus.")
         compilation_log_df = payload.get("compilation_log_df")
         if isinstance(compilation_log_df, pd.DataFrame) and not compilation_log_df.empty:
-            st.write(f"Journal de compilation : **{len(compilation_log_df)}** transformation(s) de colonnes.")
+            st.write(f"Journal de compilation : **{len(compilation_log_df)}** modification(s) de colonnes.")
         collision_df = payload.get("column_collisions_df")
         if isinstance(collision_df, pd.DataFrame) and not collision_df.empty:
             st.write(f"Collisions de colonnes détectées : **{len(collision_df)}**")
 
-    render_sidebar_section("Filtres métier", "Les dimensions proposées dépendent du cycle actif.")
+    render_sidebar_section("Filtres métier", "Les filtres proposés dépendent du cycle choisi.")
     st.sidebar.button("Réinitialiser les filtres", key="credit_reset_filters", on_click=_reset_sidebar_filters, width="stretch")
 
     selected_column_filters = _build_cycle_sidebar_filters(standardized_df, selected_cycle_key)
 
-    render_sidebar_section("Période", "Filtrage temporel sur la date pilote du cycle.")
+    render_sidebar_section("Période", "Filtrez les données selon la date principale du cycle.")
     start_date = None
     end_date = None
     selected_date_column = get_cycle_primary_date_column(standardized_df, selected_cycle_key)
     use_period_filter = st.sidebar.checkbox(
         f"Filtrer sur {_date_filter_label(selected_date_column).lower()}",
-        value=True,
+        value=False,
         key="credit_filter_use_period",
     )
     if selected_date_column and selected_date_column in standardized_df.columns:
@@ -683,7 +712,7 @@ def main() -> None:
                     start_date = picked_range
                     end_date = picked_range
             st.sidebar.caption(
-                f"Couverture disponible : {default_range[0].isoformat()} -> {default_range[1].isoformat()}"
+                f"Période disponible : {default_range[0].isoformat()} -> {default_range[1].isoformat()}"
             )
 
     filtered_df = filter_dataframe(
@@ -707,6 +736,21 @@ def main() -> None:
             filtered_df = filtered_df.loc[cycle_mask].reset_index(drop=True)
             cycle_filter_applied = True
     filtered_monthly_df = build_monthly_series(filtered_df)
+    epargne_bundles: list[dict[str, object]] | None = None
+    epargne_source_label: str | None = None
+
+    if selected_cycle_key == "epargne":
+        epargne_source_label = source_label
+        if source_mode == "Téléverser un fichier":
+            epargne_bundles = build_epargne_bundles_from_standardized_frames([(filename, standardized_df)])
+        elif source_mode == "Téléverser plusieurs fichiers":
+            uploaded_items = tuple((file.name, file.getvalue()) for file in uploaded_files)
+            epargne_bundles = prepare_epargne_bundles_from_uploads(uploaded_items, sheet_name)
+        elif source_mode == "Charger un fichier inclus" and selected_local_path is not None:
+            epargne_bundles = prepare_epargne_bundles_from_paths((str(selected_local_path),), sheet_name)
+        elif source_mode == "Compiler plusieurs fichiers inclus":
+            compiled_paths = tuple(str(path) for path in selected_compilation_paths)
+            epargne_bundles = prepare_epargne_bundles_from_paths(compiled_paths, sheet_name)
 
     recognized_columns = sum(
         1
@@ -717,16 +761,16 @@ def main() -> None:
         [
             ("Source", filename),
             ("Lignes brutes", f"{len(raw_df):,}".replace(",", " ")),
-            ("Lignes analysées", f"{len(filtered_df):,}".replace(",", " ")),
+            ("Lignes retenues", f"{len(filtered_df):,}".replace(",", " ")),
             ("Colonnes standardisées", format_context_value(standardized_df.shape[1])),
             ("Colonnes reconnues", format_context_value(recognized_columns)),
         ]
     )
     st.caption(
-        f"Fichier source : {filename} | Lignes brutes : {len(raw_df):,} | Lignes analysées : {len(filtered_df):,}"
+        f"Fichier : {filename} | Lignes brutes : {len(raw_df):,} | Lignes retenues : {len(filtered_df):,}"
     )
 
-    with st.sidebar.expander("Résumé des filtres actifs", expanded=True):
+    with st.sidebar.expander("Résumé des filtres", expanded=True):
         active_filter_count = _count_active_sidebar_filters(selected_column_filters)
         cycle_filter_columns = [
             column
@@ -744,7 +788,7 @@ def main() -> None:
         )
         st.write(f"Fichier : **{filename}**")
         st.write(f"Cycle : **{selected_cycle['label']}**")
-        st.write(f"Lignes analysées : **{len(filtered_df):,}**".replace(",", " "))
+        st.write(f"Lignes retenues : **{len(filtered_df):,}**".replace(",", " "))
         for column_name in cycle_filter_columns:
             selected_values = selected_column_filters.get(column_name)
             if selected_values is None:
@@ -770,7 +814,7 @@ def main() -> None:
         st.write(cycle_coverage["summary"])
         if cycle_coverage["missing_fields"]:
             st.caption(
-                "Champs encore absents : "
+                "Champs encore manquants : "
                 + ", ".join(cycle_coverage["missing_fields"][:8])
                 + (" ..." if len(cycle_coverage["missing_fields"]) > 8 else "")
             )
@@ -792,12 +836,22 @@ def main() -> None:
             st.write(f"{_filter_column_label(column_name)} détectés : **{detected_count:,}**".replace(",", " "))
 
     with st.sidebar.expander("Options d'affichage", expanded=False):
-        render_sidebar_section("Affichage", "Contrôle des annotations et de la lisibilité graphique.", container=st)
+        render_sidebar_section("Affichage", "Réglez l'affichage des valeurs et la lisibilité des graphiques.", container=st)
+        if selected_cycle_key == "epargne":
+            st.number_input(
+                "Taux CDF/USD (1 USD = x CDF)",
+                min_value=1.0,
+                max_value=100000.0,
+                value=float(st.session_state.get("credit_epargne_fx_rate", 2300.0)),
+                step=50.0,
+                key="credit_epargne_fx_rate",
+                help="Exemple : 2300 signifie que 1 USD = 2300,00 CDF. Ce taux sert à convertir les montants en CDF en équivalent USD dans le rapport épargne.",
+            )
         st.checkbox(
             "Afficher annotations (valeurs)",
             value=True,
             key="credit_annot_vals",
-            help="Affiche les valeurs directement sur les graphiques lorsque l'espace visuel le permet.",
+            help="Affiche directement les valeurs sur les graphiques lorsque l'espace le permet.",
         )
         st.number_input(
             "Seuil d'affichage des annotations (valeur >)",
@@ -809,7 +863,7 @@ def main() -> None:
             disabled=not st.session_state.get("credit_annot_vals", False),
         )
         st.button(
-            "Réinitialiser les options d'affichage",
+            "Réinitialiser l'affichage",
             key="credit_reset_display_options",
             on_click=_reset_display_options,
             width="stretch",
@@ -817,27 +871,27 @@ def main() -> None:
 
     render_panel_title("Synthèse standard")
     render_summary_box(
-        f"Référentiel actif : {selected_cycle['label']}",
+        f"Cycle actif : {selected_cycle['label']}",
         [
             selected_cycle["summary"],
             selected_cycle["control_objective"],
             cycle_coverage["summary"],
-            "Le filtre cycle est appliqué directement sur les données standardisées." if cycle_filter_applied else "Le cycle pilote actuellement la lecture métier et s'appliquera aussi au filtrage dès qu'une colonne `cycle_activite` sera disponible.",
+            "Le filtre du cycle est appliqué directement aux données préparées." if cycle_filter_applied else "Le cycle guide déjà la lecture métier et s'appliquera aussi automatiquement dès qu'une colonne `cycle_activite` sera disponible.",
         ],
     )
     render_overview_tab(filtered_df, filtered_monthly_df, selected_cycle_key)
 
-    render_panel_title("Analyses détaillées par onglet")
+    render_panel_title("Analyses détaillées")
     tabs = st.tabs(
         [
-            "Vue d'ensemble active",
+            "Rappel de la vue d'ensemble",
             "Notions importantes",
             "Surveillance",
             "Portefeuille",
             "Risque",
             "Qualité",
             "Export",
-            "Méthodologie",
+            "Méthode",
         ]
     )
 
@@ -847,7 +901,7 @@ def main() -> None:
             [
                 "La synthèse principale est conservée plus haut dans la page.",
                 "Cet onglet confirme que les KPI et graphiques standard restent visibles pendant la navigation.",
-                "Les blocs de suivi opérationnel sont regroupés dans l'onglet Surveillance.",
+                "Les éléments de suivi détaillé sont regroupés dans l'onglet Surveillance.",
             ],
         )
     with tabs[1]:
@@ -855,7 +909,13 @@ def main() -> None:
     with tabs[2]:
         render_surveillance_tab(filtered_df, selected_cycle_key)
     with tabs[3]:
-        render_portfolio_tab(filtered_df, selected_cycle_key)
+        render_portfolio_tab(
+            filtered_df,
+            selected_cycle_key,
+            conversion_rate=float(st.session_state.get("credit_epargne_fx_rate", 2300.0)),
+            epargne_bundles=epargne_bundles,
+            epargne_source_label=epargne_source_label,
+        )
     with tabs[4]:
         render_risk_tab(filtered_df, selected_cycle_key)
     with tabs[5]:
