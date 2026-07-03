@@ -454,6 +454,14 @@ def inject_professional_credit_css() -> None:
         margin-bottom: 0.75rem;
     }
 
+    div[data-testid="stPlotlyChart"] .modebar {
+        z-index: 30 !important;
+    }
+
+    div[data-testid="stPlotlyChart"] .modebar-btn {
+        pointer-events: auto !important;
+    }
+
     .stButton > button,
     .stDownloadButton > button {
         border-radius: 999px;
@@ -732,6 +740,28 @@ def style_standard_histogram(fig: go.Figure, *, height: int = 360, tickangle: in
     return fig
 
 
+def _json_safe_plotly_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _json_safe_plotly_value(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_plotly_value(item) for item in value]
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    return value
+
+
+def sanitize_plotly_figure_for_streamlit(fig: go.Figure | None) -> go.Figure | None:
+    if fig is None:
+        return fig
+    try:
+        return go.Figure(_json_safe_plotly_value(fig.to_plotly_json()))
+    except Exception:
+        return fig
+
+
 def _format_annotation_value(value: Any) -> str:
     if value is None:
         return ""
@@ -793,6 +823,58 @@ def _apply_trace_annotations(fig: go.Figure, min_value: float = 1.0) -> go.Figur
     return fig
 
 
+def _build_plotly_config(fig: go.Figure) -> dict[str, Any]:
+    trace_types = {str(getattr(trace, "type", "")).lower() for trace in fig.data}
+    cartesian_types = {
+        "bar",
+        "scatter",
+        "scattergl",
+        "histogram",
+        "box",
+        "violin",
+        "heatmap",
+        "contour",
+        "waterfall",
+        "funnel",
+        "ohlc",
+        "candlestick",
+    }
+    geo_types = {"choropleth", "scattergeo", "choroplethmapbox", "scattermapbox", "densitymapbox"}
+
+    config: dict[str, Any] = {
+        "displaylogo": False,
+        "displayModeBar": True,
+        "responsive": True,
+        "scrollZoom": True,
+        "doubleClick": "reset",
+        "showTips": False,
+        "toImageButtonOptions": {
+            "format": "png",
+            "filename": "controle_interne_imf_graphique",
+            "scale": 2,
+        },
+    }
+
+    if trace_types & geo_types:
+        config["modeBarButtonsToAdd"] = ["zoomInGeo", "zoomOutGeo", "resetGeo"]
+        return config
+
+    if trace_types & cartesian_types:
+        config["modeBarButtons"] = [
+            ["toImage"],
+            ["zoom2d"],
+            ["pan2d"],
+            ["zoomIn2d"],
+            ["zoomOut2d"],
+            ["autoScale2d"],
+            ["resetScale2d"],
+        ]
+        return config
+
+    config["modeBarButtons"] = [["toImage"]]
+    return config
+
+
 def st_plot(
     fig: go.Figure,
     *,
@@ -808,12 +890,8 @@ def st_plot(
     if annotate_values:
         fig = _apply_trace_annotations(fig, min_value=float(annotation_min_value))
     fig = style_plotly_figure(fig, height=height)
-    config = {
-        "displaylogo": False,
-        "displayModeBar": "hover",
-        "responsive": True,
-        "scrollZoom": True,
-    }
+    fig = sanitize_plotly_figure_for_streamlit(fig)
+    config = _build_plotly_config(fig)
     if key is not None:
         return st.plotly_chart(fig, width="stretch", key=key, config=config)
     return st.plotly_chart(fig, width="stretch", config=config)
