@@ -592,7 +592,7 @@ def standardiser_noms_colonnes(
       `renommer_colonnes_selon_mapping`.
 
     Cette fonction est la brique de base du pipeline de preparation des colonnes
-    dans `dataminsante`. Elle permet de separer deux usages :
+    dans `credit_app`. Elle permet de separer deux usages :
     - standardisation seule avec `mapping_file=None` ;
     - standardisation suivie d'un renommage controle par un fichier de reference.
     """

@@ -1,6 +1,6 @@
-# dataminsante/compilation/__init__.py
+# credit_app/compilation/__init__.py
 """
-Initialisation du package dataminsante/compilation.
+Initialisation du package credit_app/compilation.
 """
 
 # -- Fichiers de compilation --

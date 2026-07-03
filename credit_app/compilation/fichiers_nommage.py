@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# dataminsante/compilation/fichiers_nommage.py
+# credit_app/compilation/fichiers_nommage.py
 
 import logging
 import re
