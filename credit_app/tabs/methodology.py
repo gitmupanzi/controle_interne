@@ -5,17 +5,17 @@ import html
 import pandas as pd
 import streamlit as st
 
-from credit_app.cycles import (
-    build_cycle_control_table,
-    build_cycle_coverage_summary,
-    build_cycle_expected_fields_table,
-    get_cycle_spec,
-)
 from credit_app.control_references import (
     build_control_levels_table,
     build_control_principles_table,
     build_reporting_chain_table,
     build_risk_cartography_table,
+)
+from credit_app.cycles import (
+    build_cycle_control_table,
+    build_cycle_coverage_summary,
+    build_cycle_expected_fields_table,
+    get_cycle_spec,
 )
 from credit_app.ui import render_panel_title, render_summary_box
 
@@ -23,22 +23,54 @@ from credit_app.ui import render_panel_title, render_summary_box
 def _build_standardization_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Bloc": "Mapping des colonnes", "Principe": "Plusieurs variantes de noms sont reconnues automatiquement.", "Impact": "Permet de charger des bases hétérogènes sans exiger un schéma unique strict."},
-            {"Bloc": "Référence externe", "Principe": "`data/Rename_columns.xlsx` est utilisé quand une correspondance utile existe.", "Impact": "Étend le mapping interne avec les conventions locales du projet."},
-            {"Bloc": "Dates", "Principe": "Les dates sont converties si possible.", "Impact": "Active les filtres de période et les analyses temporelles."},
-            {"Bloc": "Numériques", "Principe": "Les colonnes montants, score, retards, durée et âge sont nettoyées puis converties.", "Impact": "Fiabilise les calculs et limite les erreurs de type."},
-            {"Bloc": "Valeurs métier", "Principe": "Les statuts et certaines valeurs comme le sexe sont harmonisés.", "Impact": "Permet des regroupements plus propres dans les graphiques et tableaux."},
+            {
+                "Bloc": "Colonnes",
+                "Principe": "Les colonnes proches du référentiel métier sont reconnues puis renommées.",
+                "Utilité": "Permet de charger des bases Excel ou CSV non uniformes.",
+            },
+            {
+                "Bloc": "Référentiel",
+                "Principe": "Le fichier `data/Rename_columns.xlsx` complète les alias internes.",
+                "Utilité": "Adapte la lecture aux habitudes locales de nommage.",
+            },
+            {
+                "Bloc": "Dates",
+                "Principe": "Les dates utiles sont converties quand le format est exploitable.",
+                "Utilité": "Active les filtres de période et les séries temporelles.",
+            },
+            {
+                "Bloc": "Montants",
+                "Principe": "Les montants, durées, retards, âges et scores sont nettoyés puis convertis.",
+                "Utilité": "Fiabilise les calculs et réduit les erreurs de type.",
+            },
+            {
+                "Bloc": "Valeurs métier",
+                "Principe": "Les statuts, sexes et autres valeurs récurrentes sont harmonisés.",
+                "Utilité": "Évite les doublons de libellés dans les tableaux et graphiques.",
+            },
         ]
     )
 
 
-def _build_risk_table() -> pd.DataFrame:
+def _build_analysis_scope_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Priorite": 1, "Source": "Niveau de risque déjà présent", "Lecture": "Si la base contient déjà un niveau de risque exploitable, il est privilégié."},
-            {"Priorite": 2, "Source": "Score crédit", "Lecture": "Le score alimente une classification simple en faible, moyen ou élevé."},
-            {"Priorite": 3, "Source": "Taux d'endettement", "Lecture": "Le ratio charges / revenu sert de lecture de pression financière."},
-            {"Priorite": 4, "Source": "Retard en jours", "Lecture": "Les retards restent un signal fort de vigilance, surtout au-delà de 30 jours."},
+            {
+                "Question": "Que fait automatiquement l'application ?",
+                "Réponse": "Elle standardise les données, applique des règles simples et restitue des analyses par cycle.",
+            },
+            {
+                "Question": "Que faut-il encore valider manuellement ?",
+                "Réponse": "Les pièces, le contexte opérationnel, la conformité réelle et la pertinence des décisions.",
+            },
+            {
+                "Question": "À quoi sert la couverture du cycle ?",
+                "Réponse": "Elle montre la part des champs clés effectivement présents dans la base chargée.",
+            },
+            {
+                "Question": "Pourquoi certaines analyses changent selon le cycle ?",
+                "Réponse": "Chaque cycle a ses champs attendus, ses regroupements et ses règles d'alerte propres.",
+            },
         ]
     )
 
@@ -46,15 +78,117 @@ def _build_risk_table() -> pd.DataFrame:
 def _build_quality_table() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"Controle": "Identifiants clients manquants", "Pourquoi c'est important": "Évite les dossiers non traçables."},
-            {"Controle": "Identifiants dossiers manquants ou dupliqués", "Pourquoi c'est important": "Protège les analyses contre les surcomptes et les confusions."},
-            {"Controle": "Montants négatifs", "Pourquoi c'est important": "Signale des erreurs de saisie ou de signe."},
-            {"Controle": "Montant accordé > montant demandé", "Pourquoi c'est important": "Repère des incohérences métier."},
-            {"Controle": "Informations financières manquantes", "Pourquoi c'est important": "Fragilise la lecture de capacité et d'endettement."},
-            {"Controle": "Capacité de remboursement négative", "Pourquoi c'est important": "Oriente rapidement vers les dossiers potentiellement fragiles."},
-            {"Controle": "Retards négatifs", "Pourquoi c'est important": "Signale des erreurs temporelles dans les données."},
+            {"Contrôle": "Identifiant manquant", "Lecture": "Empêche de tracer correctement un client, un compte ou un dossier."},
+            {"Contrôle": "Doublon potentiel", "Lecture": "Peut gonfler les volumes ou créer des interprétations erronées."},
+            {"Contrôle": "Montant incohérent", "Lecture": "Peut signaler une erreur de saisie, de signe ou de conversion."},
+            {"Contrôle": "Statut absent", "Lecture": "Limite la lecture du processus et des ruptures de contrôle."},
+            {"Contrôle": "Date absente ou invalide", "Lecture": "Fausse les périodes, tendances et délais."},
+            {"Contrôle": "Valeur métier non harmonisée", "Lecture": "Multiplie artificiellement les catégories dans les analyses."},
         ]
     )
+
+
+def _build_limit_table() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Limite": "Base incomplète",
+                "Conséquence": "Une synthèse élégante ne remplace pas une base suffisamment renseignée.",
+            },
+            {
+                "Limite": "Règles heuristiques",
+                "Conséquence": "Certaines alertes sont des signaux de contrôle, pas une preuve définitive d'anomalie.",
+            },
+            {
+                "Limite": "Lecture hors procédure",
+                "Conséquence": "Un indicateur doit rester interprété à la lumière des procédures et des seuils de l'IMF.",
+            },
+            {
+                "Limite": "Absence de justificatifs",
+                "Conséquence": "Le tableau de bord oriente la revue, mais ne remplace pas la preuve documentaire.",
+            },
+        ]
+    )
+
+
+def _build_cycle_reading_table(cycle_label: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Axe": "Volumétrie",
+                "Lecture": f"Mesure les volumes actifs du {cycle_label.lower()} et aide à repérer les zones concentrées.",
+            },
+            {
+                "Axe": "Alertes",
+                "Lecture": "Signale les lignes ou regroupements qui demandent une revue plus rapide.",
+            },
+            {
+                "Axe": "Qualité",
+                "Lecture": "Montre si la base est suffisamment propre pour soutenir une conclusion de contrôle.",
+            },
+            {
+                "Axe": "Traçabilité",
+                "Lecture": "Vérifie si les identifiants, dates, statuts et références clés sont bien présents.",
+            },
+        ]
+    )
+
+
+def _build_formula_cards(cycle_key: str) -> list[dict[str, str]]:
+    generic_cards = [
+        {
+            "label": "Couverture",
+            "formula": "Champs détectés / champs attendus",
+            "why": "Mesure le niveau de préparation de la base pour le cycle choisi.",
+        },
+        {
+            "label": "Part",
+            "formula": "Montant ou volume d'un groupe / total du périmètre",
+            "why": "Aide à lire rapidement les concentrations.",
+        },
+        {
+            "label": "Variation",
+            "formula": "Valeur actuelle - valeur précédente",
+            "why": "Permet de suivre les évolutions entre deux extractions ou deux périodes.",
+        },
+        {
+            "label": "Alerte",
+            "formula": "Règle métier déclenchée sur une ligne ou un groupe",
+            "why": "Oriente les revues prioritaires sans remplacer le jugement du contrôleur.",
+        },
+    ]
+
+    if cycle_key in {"credit", "likelemba"}:
+        generic_cards.extend(
+            [
+                {
+                    "label": "Capacité",
+                    "formula": "Revenu mensuel - charges mensuelles",
+                    "why": "Donne une marge théorique simple avant décision ou revue.",
+                },
+                {
+                    "label": "Endettement",
+                    "formula": "Charges mensuelles / revenu mensuel",
+                    "why": "Aide à lire la pression financière supportée par le client.",
+                },
+            ]
+        )
+    elif cycle_key == "epargne":
+        generic_cards.extend(
+            [
+                {
+                    "label": "Dormance",
+                    "formula": "Date de référence - dernière activité",
+                    "why": "Aide à classer les comptes selon leur niveau d'inactivité.",
+                },
+                {
+                    "label": "Poids produit",
+                    "formula": "Solde produit / solde total",
+                    "why": "Met en évidence les produits dominants du portefeuille d'épargne.",
+                },
+            ]
+        )
+    return generic_cards
 
 
 def _inject_methodology_styles() -> None:
@@ -64,7 +198,7 @@ def _inject_methodology_styles() -> None:
     .method-hero {
         position: relative;
         overflow: hidden;
-        padding: 1.2rem 1.35rem;
+        padding: 1.25rem 1.4rem;
         border-radius: 24px;
         color: #ffffff;
         background:
@@ -92,10 +226,10 @@ def _inject_methodology_styles() -> None:
     }
 
     .method-hero::after {
-        width: 145px;
-        height: 145px;
-        left: -18px;
-        bottom: -78px;
+        width: 150px;
+        height: 150px;
+        left: -22px;
+        bottom: -76px;
     }
 
     .method-hero-badge {
@@ -259,22 +393,23 @@ def _inject_methodology_styles() -> None:
     )
 
 
-def _render_hero() -> None:
+def _render_hero(cycle_label: str) -> None:
     st.markdown(
-        """
+        f"""
 <div class="method-hero">
   <div class="method-hero-badge">Méthodologie</div>
-  <h2>CONVENTIONS, RÈGLES DE CALCUL ET LIMITES D'INTERPRÉTATION</h2>
+  <h2>CONVENTIONS, RÈGLES DE LECTURE ET LIMITES DU DISPOSITIF</h2>
   <p>
-    Cette page explique comment l'application standardise les données, calcule les variables
-    dérivées, classe le risque et applique ses contrôles qualité. Elle aide à relire les
-    résultats avec les bons repères techniques et métiers.
+    Cette page explique comment la plateforme de contrôle interne IMF prépare la donnée,
+    applique un référentiel commun au cycle <strong>{html.escape(cycle_label)}</strong>,
+    produit ses alertes et restitue des analyses de surveillance, de portefeuille, de risque
+    et de qualité dans une interface unique.
   </p>
   <div class="method-chip-row">
     <span class="method-chip">Standardisation</span>
-    <span class="method-chip">Formules</span>
-    <span class="method-chip">Risque</span>
-    <span class="method-chip">Qualité</span>
+    <span class="method-chip">Contrôle interne</span>
+    <span class="method-chip">Couverture de cycle</span>
+    <span class="method-chip">Limites d'interprétation</span>
   </div>
 </div>
         """,
@@ -300,31 +435,9 @@ def _render_card_grid(cards: list[dict[str, str]]) -> None:
     st.markdown(f"<div class='method-card-grid'>{''.join(blocks)}</div>", unsafe_allow_html=True)
 
 
-def _render_formula_cards() -> None:
-    formulas = [
-        {
-            "label": "Capacité",
-            "formula": "Revenu mensuel - Charges mensuelles",
-            "why": "Mesure simple de la marge théorique de remboursement.",
-        },
-        {
-            "label": "Endettement",
-            "formula": "Charges mensuelles / Revenu mensuel",
-            "why": "Aide à lire la pression financière sur le client.",
-        },
-        {
-            "label": "Mensualité estimée",
-            "formula": "Montant accordé / Durée du crédit en mois",
-            "why": "Donne une approximation simple de l'effort mensuel attendu.",
-        },
-        {
-            "label": "Risque simple",
-            "formula": "Risque déclaré -> Score -> Endettement -> Retard",
-            "why": "Ordre de priorité appliqué pour la classification automatique.",
-        },
-    ]
+def _render_formula_cards(cycle_key: str) -> None:
     blocks: list[str] = []
-    for item in formulas:
+    for item in _build_formula_cards(cycle_key):
         label = html.escape(item["label"], quote=False)
         formula = html.escape(item["formula"], quote=False)
         why = html.escape(item["why"], quote=False)
@@ -344,14 +457,15 @@ def _render_path() -> None:
     st.markdown(
         """
 <div class="method-path">
-  <div class="method-path-title">Pipeline logique</div>
+  <div class="method-path-title">Chaîne de traitement</div>
   <div class="method-stepper">
     <div class="method-step">1. Charger la base</div>
     <div class="method-step">2. Renommer les colonnes</div>
-    <div class="method-step">3. Nettoyer les types</div>
-    <div class="method-step">4. Dériver les variables</div>
-    <div class="method-step">5. Classer le risque</div>
-    <div class="method-step">6. Contrôler la qualité</div>
+    <div class="method-step">3. Nettoyer dates et montants</div>
+    <div class="method-step">4. Harmoniser les valeurs métier</div>
+    <div class="method-step">5. Détecter les alertes</div>
+    <div class="method-step">6. Restituer les analyses</div>
+    <div class="method-step">7. Valider humainement</div>
   </div>
 </div>
         """,
@@ -361,31 +475,31 @@ def _render_path() -> None:
 
 def render_methodology_tab(cycle_key: str = "credit", standardized_df: pd.DataFrame | None = None) -> None:
     _inject_methodology_styles()
-    _render_hero()
     cycle_spec = get_cycle_spec(cycle_key)
     cycle_coverage = build_cycle_coverage_summary(standardized_df, cycle_key)
 
+    _render_hero(cycle_spec["label"])
     _render_card_grid(
         [
             {
-                "label": "Point de départ",
-                "value": "Base hétérogène",
-                "subtitle": "L'application part de fichiers Excel ou CSV qui ne suivent pas toujours le même schéma.",
+                "label": "Source",
+                "value": "Excel / CSV",
+                "subtitle": "La plateforme part de fichiers opérationnels qui ne suivent pas toujours la même structure.",
             },
             {
                 "label": "Objectif",
-                "value": "Lire ensemble",
-                "subtitle": "Rendre comparables les analyses portefeuille, risque, remboursement et qualité.",
+                "value": "Lecture commune",
+                "subtitle": "Rendre les analyses comparables malgré des bases hétérogènes.",
             },
             {
-                "label": "Réflexe",
-                "value": "Vérifier le mapping",
-                "subtitle": "Le sens des indicateurs dépend de la bonne reconnaissance des colonnes sources.",
+                "label": "Cycle actif",
+                "value": cycle_spec["label"],
+                "subtitle": cycle_spec["control_objective"],
             },
             {
-                "label": "Limite",
-                "value": "Heuristique",
-                "subtitle": "Certaines règles restent simples et doivent être adaptées à votre institution.",
+                "label": "Couverture",
+                "value": f"{cycle_coverage['detected_count']}/{cycle_coverage['total']}",
+                "subtitle": "Champs clés détectés dans la base chargée pour ce cycle.",
             },
         ]
     )
@@ -395,9 +509,9 @@ def render_methodology_tab(cycle_key: str = "credit", standardized_df: pd.DataFr
     render_summary_box(
         "Cadre de lecture",
         [
-            "Cette page documente les conventions appliquées par l'application.",
-            "Elle rassemble les définitions, conventions et limites utiles à la lecture des analyses.",
-            "Elle aide à distinguer ce qui relève d'une règle de calcul automatique et ce qui reste du ressort de l'analyse humaine.",
+            "Cette page documente les conventions appliquées par la plateforme de contrôle interne.",
+            "Elle aide à distinguer ce qui relève d'une automatisation utile de ce qui doit encore être confirmé par le contrôleur, l'auditeur ou le responsable métier.",
+            cycle_coverage["summary"],
         ],
     )
 
@@ -406,16 +520,16 @@ def render_methodology_tab(cycle_key: str = "credit", standardized_df: pd.DataFr
         [
             cycle_spec["summary"],
             cycle_spec["control_objective"],
-            cycle_coverage["summary"],
+            "Les tableaux ci-dessous servent de guide d'interprétation pour les autres onglets.",
         ],
     )
 
     cycle_left, cycle_right = st.columns((1.1, 1))
     with cycle_left:
-        render_panel_title("Contrôles attendus par cycle")
+        render_panel_title("Points de contrôle du cycle")
         st.dataframe(build_cycle_control_table(cycle_key), width="stretch", hide_index=True, height=250)
     with cycle_right:
-        render_panel_title("Présence des champs clés")
+        render_panel_title("Champs attendus")
         st.dataframe(
             build_cycle_expected_fields_table(
                 cycle_key,
@@ -440,27 +554,33 @@ def render_methodology_tab(cycle_key: str = "credit", standardized_df: pd.DataFr
     render_panel_title("Cartographie synthétique des risques")
     st.dataframe(build_risk_cartography_table(), width="stretch", hide_index=True, height=280)
 
-    render_panel_title("Principes de standardisation")
+    render_panel_title("Logique de standardisation")
     st.dataframe(_build_standardization_table(), width="stretch", hide_index=True, height=280)
 
-    render_panel_title("Formules de base")
-    _render_formula_cards()
+    render_panel_title("Formules et lectures rapides")
+    _render_formula_cards(cycle_key)
 
-    left, right = st.columns((1, 1))
-    with left:
-        render_panel_title("Classification simple du risque")
-        st.dataframe(_build_risk_table(), width="stretch", hide_index=True, height=250)
-    with right:
-        render_panel_title("Contrôles qualité appliqués")
+    reading_left, reading_right = st.columns((1, 1))
+    with reading_left:
+        render_panel_title("Portée de l'analyse")
+        st.dataframe(_build_analysis_scope_table(), width="stretch", hide_index=True, height=230)
+    with reading_right:
+        render_panel_title("Lecture du cycle")
+        st.dataframe(_build_cycle_reading_table(cycle_spec["label"]), width="stretch", hide_index=True, height=230)
+
+    quality_left, quality_right = st.columns((1, 1))
+    with quality_left:
+        render_panel_title("Contrôles qualité intégrés")
         st.dataframe(_build_quality_table(), width="stretch", hide_index=True, height=250)
+    with quality_right:
+        render_panel_title("Limites à garder en tête")
+        st.dataframe(_build_limit_table(), width="stretch", hide_index=True, height=250)
 
-    render_panel_title("Limites actuelles")
     render_summary_box(
-        "Points d'attention",
+        "Bon usage du tableau de bord",
         [
-            "La qualité de l'analyse dépend directement de la qualité du fichier source.",
-            "Les alias de colonnes peuvent être enrichis selon vos bases réelles.",
-            "Les règles de scoring et d'octroi doivent être adaptées à votre institution.",
-            "L'outil ne remplace pas les validations humaines du comité crédit.",
+            "Un graphique, une watchlist ou un score doit toujours être relu avec le périmètre filtré, la qualité de la base et les procédures de l'institution.",
+            "Une alerte est un point de départ pour la revue, pas une conclusion automatique.",
+            "Le dispositif est plus robuste quand les équipes documentent les corrections, les commentaires et les suites données.",
         ],
     )

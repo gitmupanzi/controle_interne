@@ -153,6 +153,34 @@ def _format_share(value: object) -> str:
     return f"{float(numeric) * 100:,.2f}%".replace(",", " ")
 
 
+def _build_proportion_comment(share: object, is_total: bool = False) -> str:
+    if is_total:
+        return "Vue globale de la structure du portefeuille."
+
+    numeric = pd.to_numeric(pd.Series([share]), errors="coerce").iloc[0]
+    if pd.isna(numeric) or float(numeric) <= 0:
+        return "Produit sans poids significatif sur la date analysée."
+    if float(numeric) >= 0.25:
+        return "Produit très dominant dans le portefeuille."
+    if float(numeric) >= 0.10:
+        return "Produit important dans le portefeuille."
+    if float(numeric) >= 0.03:
+        return "Produit secondaire à suivre."
+    return "Produit de poids limité dans le portefeuille."
+
+
+def _build_variation_comment(amount_delta: object, is_total: bool = False) -> str:
+    if is_total:
+        return "Variation globale du portefeuille entre les deux dates."
+
+    numeric = pd.to_numeric(pd.Series([amount_delta]), errors="coerce").iloc[0]
+    if pd.isna(numeric) or float(numeric) == 0:
+        return "Niveau stable entre les deux dates."
+    if float(numeric) > 0:
+        return "Hausse observée par rapport à la date précédente."
+    return "Baisse observée par rapport à la date précédente."
+
+
 def _format_snapshot_display(snapshot_df: pd.DataFrame) -> pd.DataFrame:
     display_df = snapshot_df.copy()
     if "Nbre de compte" in display_df.columns:
@@ -248,6 +276,7 @@ def _build_epargne_report_snapshot(std_df: pd.DataFrame, conversion_rate: float)
                 "Total général en CDF",
                 "Total général en USD",
                 "Proportion",
+                "Commentaire",
             ]
         )
         empty_use = pd.DataFrame(columns=["Famille", "Total général en USD", "Norme", "Montant utilisable"])
@@ -293,6 +322,7 @@ def _build_epargne_report_snapshot(std_df: pd.DataFrame, conversion_rate: float)
     report["Total général en USD"] = report["USD"] + report["CDF"] / rate
     total_usd = float(report["Total général en USD"].sum())
     report["Proportion"] = report["Total général en USD"] / total_usd if total_usd else 0.0
+    report["Commentaire"] = report["Proportion"].apply(_build_proportion_comment)
     report["REF"] = ""
     report["PRODUITS"] = report.index
 
@@ -311,6 +341,7 @@ def _build_epargne_report_snapshot(std_df: pd.DataFrame, conversion_rate: float)
                 "Total général en CDF": float(report["Total général en CDF"].sum()),
                 "Total général en USD": float(report["Total général en USD"].sum()),
                 "Proportion": float(report["Proportion"].sum()),
+                "Commentaire": _build_proportion_comment(1.0, is_total=True),
             }
         ]
     )
@@ -378,6 +409,7 @@ def _build_epargne_report_variation(
         / float(row["Total général en USD_previous"]),
         axis=1,
     )
+    variation["Commentaire"] = variation["Total général en USD"].apply(_build_variation_comment)
 
     product_rank = {product: idx for idx, product in enumerate(EPARGNE_PRODUCT_ORDER, start=1)}
     variation["_order"] = variation["PRODUITS"].map(product_rank).fillna(999)
@@ -395,6 +427,7 @@ def _build_epargne_report_variation(
                 "Total général en USD": float(variation.loc[variation["PRODUITS"] != "TOTAL", "Total général en USD"].sum()),
                 "Proportion": float(variation.loc[variation["PRODUITS"] != "TOTAL", "Total général en USD"].sum())
                 / float(previous_snapshot.loc[previous_snapshot["PRODUITS"] == "TOTAL", "Total général en USD"].sum() or 1.0),
+                "Commentaire": _build_variation_comment(0.0, is_total=True),
             }
         ]
     )

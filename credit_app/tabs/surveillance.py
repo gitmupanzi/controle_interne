@@ -26,31 +26,155 @@ from credit_app.ui import (
     style_standard_vertical_bar,
 )
 
-COLUMN_LABELS = {
-    "agence": "agences",
-    "type_produit": "produits",
-    "agent_credit": "agents de crédit",
-    "nom_groupe": "groupes",
-    "type_operation": "types d'opération",
-    "statut_compte": "statuts de compte",
-    "caissier": "caissiers",
-    "banque": "banques",
-    "compte_bancaire": "comptes bancaires",
-    "journal": "journaux",
-    "compte_comptable": "comptes comptables",
-    "fonction": "fonctions",
-    "statut_agent": "statuts d'agent",
-    "application_source": "applications",
-    "profil_acces": "profils d'accès",
-    "type_sauvegarde": "types de sauvegarde",
-    "support_sauvegarde": "supports",
-    "operateur": "opérateurs",
-    "tresorier": "trésoriers",
+PANEL_LABELS = {
+    "agence": "Agences",
+    "type_produit": "Produits",
+    "type_client": "Types de client",
+    "agent_credit": "Gestionnaires",
+    "nom_groupe": "Groupes",
+    "type_operation": "Types d'opération",
+    "statut_compte": "Statuts de compte",
+    "caissier": "Caissiers",
+    "banque": "Banques",
+    "compte_bancaire": "Comptes bancaires",
+    "journal": "Journaux",
+    "compte_comptable": "Comptes comptables",
+    "fonction": "Fonctions",
+    "statut_agent": "Statuts d'agent",
+    "application_source": "Applications",
+    "profil_acces": "Profils d'accès",
+    "type_sauvegarde": "Types de sauvegarde",
+    "support_sauvegarde": "Supports",
+    "operateur": "Opérateurs",
+    "tresorier": "Trésoriers",
+}
+
+DISPLAY_COLUMN_LABELS = {
+    "agence": "Agence",
+    "type_produit": "Produit",
+    "type_client": "Type client",
+    "agent_credit": "Gestionnaire",
+    "nom_groupe": "Groupe",
+    "type_operation": "Opération",
+    "statut_compte": "Statut",
+    "caissier": "Caissier",
+    "banque": "Banque",
+    "compte_bancaire": "Compte bancaire",
+    "journal": "Journal",
+    "compte_comptable": "Compte comptable",
+    "fonction": "Fonction",
+    "statut_agent": "Statut agent",
+    "application_source": "Application",
+    "profil_acces": "Profil d'accès",
+    "type_sauvegarde": "Type sauvegarde",
+    "support_sauvegarde": "Support",
+    "operateur": "Opérateur",
+    "tresorier": "Trésorier",
+    "lignes": "Lignes",
+    "montant_total": "Montant",
+    "alertes": "Alertes",
+    "commentaire": "Commentaire",
+    "classe_inactivite": "Inactivité",
+    "nombre_lignes": "Lignes",
+    "part_lignes": "Part",
+    "classe_comptes": "Classe",
+    "nombre_clients": "Clients",
+    "client_id": "Client",
+    "nombre_comptes": "Nb comptes",
+    "solde_total": "Solde total",
+    "Provenance": "Source",
+    "motif_alerte": "Motif",
+    "telephone": "Téléphone",
+    "zone_geographique": "Zone",
+    "compte_id": "Compte",
 }
 
 
+def _humanize_column_name(column: object) -> str:
+    text = str(column)
+    if text in DISPLAY_COLUMN_LABELS:
+        return DISPLAY_COLUMN_LABELS[text]
+    text = text.replace("_", " ").strip()
+    if not text:
+        return str(column)
+    return text[:1].upper() + text[1:]
+
+
 def _group_title(column: str) -> str:
-    return f"Principales {COLUMN_LABELS.get(column, column.replace('_', ' '))}"
+    return PANEL_LABELS.get(column, _humanize_column_name(column))
+
+
+def _rename_columns_for_display(df: pd.DataFrame, extra_map: dict[str, str] | None = None) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    rename_map = {column: _humanize_column_name(column) for column in df.columns}
+    if extra_map:
+        rename_map.update(extra_map)
+    return df.rename(columns=rename_map)
+
+
+def _build_alert_comment(alert_count: object) -> str:
+    numeric = pd.to_numeric(pd.Series([alert_count]), errors="coerce").iloc[0]
+    if pd.isna(numeric) or float(numeric) <= 0:
+        return "Aucune ligne de ce groupe n'est remontée dans la liste de suivi."
+    if float(numeric) == 1:
+        return "Ce groupe contient 1 ligne signalée dans la liste de suivi."
+    return f"Ce groupe contient {int(float(numeric))} lignes signalées dans la liste de suivi."
+
+
+def _prepare_activity_display_table(table: pd.DataFrame, group_column: str) -> pd.DataFrame:
+    if table.empty:
+        return table.copy()
+
+    display_df = table.copy()
+    if "alertes" in display_df.columns:
+        display_df["commentaire"] = display_df["alertes"].apply(_build_alert_comment)
+
+    return _rename_columns_for_display(
+        display_df,
+        extra_map={group_column: DISPLAY_COLUMN_LABELS.get(group_column, _humanize_column_name(group_column))},
+    )
+
+
+def _prepare_multi_account_clients_display_table(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    display_df = df.copy()
+    display_df["commentaire"] = display_df["nombre_comptes"].apply(
+        lambda value: (
+            "Client à revoir en priorité pour cumul élevé de comptes."
+            if pd.notna(value) and float(value) >= 5
+            else "Client avec plusieurs comptes à confirmer."
+        )
+    )
+    return _rename_columns_for_display(display_df)
+
+
+def _prepare_provenance_display_table(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    display_df = df.copy().reset_index(drop=True)
+    if len(display_df) > 1:
+        max_lines = pd.to_numeric(display_df["nombre_lignes"], errors="coerce").max()
+        display_df["commentaire"] = pd.to_numeric(display_df["nombre_lignes"], errors="coerce").apply(
+            lambda value: (
+                "Extraction principale de la session."
+                if pd.notna(value) and value == max_lines
+                else "Extraction secondaire utile pour la comparaison."
+            )
+        )
+    else:
+        display_df["commentaire"] = "Une seule extraction est disponible."
+    return _rename_columns_for_display(display_df)
+
+
+def _prepare_watchlist_display_table(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+    return _rename_columns_for_display(df)
 
 
 def _build_watchlist_reason_table(watchlist: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
@@ -71,8 +195,7 @@ def _build_watchlist_reason_table(watchlist: pd.DataFrame, top_n: int = 10) -> p
     if motifs.empty:
         return pd.DataFrame(columns=["motif_alerte", "nombre_lignes"])
 
-    reason_df = motifs.value_counts().head(top_n).rename_axis("motif_alerte").reset_index(name="nombre_lignes")
-    return reason_df
+    return motifs.value_counts().head(top_n).rename_axis("motif_alerte").reset_index(name="nombre_lignes")
 
 
 def _render_epargne_surveillance_block(df: pd.DataFrame, watchlist: pd.DataFrame) -> None:
@@ -119,12 +242,12 @@ def _render_epargne_surveillance_block(df: pd.DataFrame, watchlist: pd.DataFrame
         if multi_clients_df.empty:
             st.info("Aucun client avec plusieurs comptes n'a été détecté.")
         else:
-            st.dataframe(multi_clients_df, width="stretch", hide_index=True)
+            st.dataframe(_prepare_multi_account_clients_display_table(multi_clients_df), width="stretch", hide_index=True)
 
     with mid_right:
         if not provenance_df.empty and len(provenance_df) > 1:
             render_panel_title("Comparaison des extractions")
-            st.dataframe(provenance_df, width="stretch", hide_index=True)
+            st.dataframe(_prepare_provenance_display_table(provenance_df), width="stretch", hide_index=True)
         else:
             st.info("Une seule extraction est disponible pour les données actuelles.")
 
@@ -142,13 +265,19 @@ def _render_epargne_surveillance_block(df: pd.DataFrame, watchlist: pd.DataFrame
         st_plot(fig, key="surveillance_epargne_watchlist_reasons", height=360)
 
     if not watchlist.empty:
-        high_attention_count = len(watchlist)
+        top_reason = ""
+        if not watchlist_reasons_df.empty:
+            top_reason = str(watchlist_reasons_df.iloc[0]["motif_alerte"])
         render_summary_box(
-            "À retenir",
+            "Lecture rapide de la surveillance épargne",
             [
-                f"{high_attention_count:,}".replace(",", " ")
-                + " compte(s) sont actuellement signalés dans la liste de suivi.",
-                "Les blocs ci-dessus aident à repérer rapidement la dormance, les multi-comptes et les écarts entre extractions.",
+                f"{len(watchlist):,}".replace(",", " ") + " ligne(s) sont actuellement dans la liste de suivi.",
+                (
+                    f"Le motif le plus fréquent est : {top_reason}."
+                    if top_reason
+                    else "Les alertes proviennent de plusieurs motifs à examiner."
+                ),
+                "Les tableaux ci-dessus aident à repérer les clients multi-comptes, la dormance et les écarts entre extractions.",
             ],
         )
 
@@ -172,7 +301,6 @@ def render_surveillance_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None
         "À retenir",
         [
             f"Cet onglet regroupe les actions prioritaires et les classements opérationnels du {cycle_spec['label']}.",
-            "La synthèse du haut reste dédiée aux indicateurs et graphiques standard.",
             f"{len(watchlist):,}".replace(",", " ")
             + f" élément(s) demandent actuellement une attention particulière dans les {preset['record_label'].lower()}.",
         ],
@@ -228,7 +356,7 @@ def render_surveillance_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None
             )
             if not ranking_df.empty:
                 render_panel_title(_group_title(primary_group))
-                st.dataframe(ranking_df, width="stretch", hide_index=True)
+                st.dataframe(_prepare_activity_display_table(ranking_df, primary_group), width="stretch", hide_index=True)
             else:
                 st.info("Aucun classement principal n'est disponible pour les données actuelles.")
         else:
@@ -245,7 +373,11 @@ def render_surveillance_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None
             )
             if not ranking_df.empty:
                 render_panel_title(_group_title(secondary_group))
-                st.dataframe(ranking_df, width="stretch", hide_index=True)
+                st.dataframe(
+                    _prepare_activity_display_table(ranking_df, secondary_group),
+                    width="stretch",
+                    hide_index=True,
+                )
             else:
                 st.info("Aucun classement secondaire n'est disponible pour les données actuelles.")
         else:
@@ -256,10 +388,10 @@ def render_surveillance_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None
 
     render_panel_title("Cas prioritaires")
     if not watchlist.empty:
-        st.dataframe(watchlist.head(50), width="stretch", hide_index=True)
+        st.dataframe(_prepare_watchlist_display_table(watchlist.head(50)), width="stretch", hide_index=True)
     else:
         st.success("Aucun élément prioritaire n'a été détecté avec les règles de surveillance actuelles.")
 
     render_panel_title("Aperçu")
     preview_columns = [column for column in df.columns if column not in {"mois_demande"}]
-    st.dataframe(df[preview_columns].head(200), width="stretch", hide_index=True)
+    st.dataframe(_rename_columns_for_display(df[preview_columns].head(200)), width="stretch", hide_index=True)

@@ -80,7 +80,7 @@ from credit_app.domain import (
     get_reference_column_count,
     normalize_text,
 )
-from credit_app.tabs.analyste_credit import render_analyste_credit_tab
+from credit_app.tabs.audit_control import render_analyste_credit_tab
 from credit_app.tabs.export import render_export_tab
 from credit_app.tabs.methodology import render_methodology_tab
 from credit_app.tabs.overview import render_overview_tab
@@ -651,9 +651,6 @@ def main() -> None:
             ("Cycle", selected_cycle["label"]),
             ("Source", filename),
             ("Mode", source_label),
-            ("Lignes brutes", f"{len(raw_df):,}".replace(",", " ")),
-            ("Colonnes source", str(raw_df.shape[1])),
-            ("Référence", "Rename_columns.xlsx"),
         ]
     )
     with st.expander("Données utilisées", expanded=False):
@@ -759,11 +756,12 @@ def main() -> None:
     )
     render_context_row(
         [
-            ("Source", filename),
             ("Lignes brutes", f"{len(raw_df):,}".replace(",", " ")),
             ("Lignes retenues", f"{len(filtered_df):,}".replace(",", " ")),
-            ("Colonnes standardisées", format_context_value(standardized_df.shape[1])),
+            ("Colonnes source",str(raw_df.shape[1])),
             ("Colonnes reconnues", format_context_value(recognized_columns)),
+            ("Colonnes standardisées", format_context_value(standardized_df.shape[1])),
+            
         ]
     )
     st.caption(
@@ -876,7 +874,6 @@ def main() -> None:
             selected_cycle["summary"],
             selected_cycle["control_objective"],
             cycle_coverage["summary"],
-            "Le filtre du cycle est appliqué directement aux données préparées." if cycle_filter_applied else "Le cycle guide déjà la lecture métier et s'appliquera aussi automatiquement dès qu'une colonne `cycle_activite` sera disponible.",
         ],
     )
     render_overview_tab(filtered_df, filtered_monthly_df, selected_cycle_key)
@@ -885,7 +882,7 @@ def main() -> None:
     tabs = st.tabs(
         [
             "Rappel de la vue d'ensemble",
-            "Notions importantes",
+            "Audit et contrôle",
             "Surveillance",
             "Portefeuille",
             "Risque",
@@ -900,8 +897,7 @@ def main() -> None:
             "Vue d'ensemble déjà affichée",
             [
                 "La synthèse principale est conservée plus haut dans la page.",
-                "Cet onglet confirme que les KPI et graphiques standard restent visibles pendant la navigation.",
-                "Les éléments de suivi détaillé sont regroupés dans l'onglet Surveillance.",
+                "Les éléments de suivi détaillé sont regroupés dans les onglets.",
             ],
         )
     with tabs[1]:

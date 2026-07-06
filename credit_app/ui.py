@@ -501,9 +501,10 @@ def render_professional_header() -> None:
   <div class="credit-hero-badge">Contrôle interne</div>
   <h1>Contrôle interne IMF</h1>
   <p>
-    Standardisez une base Excel ou CSV, appliquez une lecture commune des cycles
-    d'activité et restituez les analyses de contrôle, de risque, de conformité
-    et de supervision dans une interface unique.
+    Standardisez une base Excel ou CSV, harmonisez la lecture des opérations et
+    des cycles d'activité d'une institution de microfinance, puis restituez dans
+    une interface unique les analyses de contrôle interne, de risque, de
+    conformité et de supervision.
   </p>
 </div>
         """,
