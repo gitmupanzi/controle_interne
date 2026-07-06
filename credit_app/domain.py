@@ -786,7 +786,7 @@ def build_epargne_multi_account_table(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_epargne_multi_account_clients(df: pd.DataFrame, top_n: int = 10) -> pd.DataFrame:
-    columns = ["client_id", "nombre_comptes", "solde_total"]
+    columns = ["client_id", "nom_client", "nombre_comptes", "solde_total"]
     if not {"client_id", "compte_id"}.issubset(df.columns):
         return pd.DataFrame(columns=columns)
 
@@ -794,18 +794,32 @@ def build_epargne_multi_account_clients(df: pd.DataFrame, top_n: int = 10) -> pd
     if working_df.empty:
         return pd.DataFrame(columns=columns)
 
-    grouped = (
-        working_df.groupby("client_id", dropna=False)
-        .agg(
-            nombre_comptes=("compte_id", "nunique"),
-            solde_total=(
-                "solde_compte",
-                lambda series: pd.to_numeric(series, errors="coerce").fillna(0).sum(),
+    aggregations: dict[str, tuple[str, object]] = {
+        "nombre_comptes": ("compte_id", "nunique"),
+        "solde_total": (
+            "solde_compte",
+            lambda series: pd.to_numeric(series, errors="coerce").fillna(0).sum(),
+        ),
+    }
+    if "nom_client" in working_df.columns:
+        aggregations["nom_client"] = (
+            "nom_client",
+            lambda series: (
+                series.dropna().astype("string").str.strip().loc[lambda values: values.ne("")].iloc[0]
+                if not series.dropna().astype("string").str.strip().loc[lambda values: values.ne("")].empty
+                else pd.NA
             ),
         )
+
+    grouped = (
+        working_df.groupby("client_id", dropna=False)
+        .agg(**aggregations)
         .reset_index()
         .sort_values(["nombre_comptes", "solde_total"], ascending=[False, False])
     )
+    if "nom_client" not in grouped.columns:
+        grouped["nom_client"] = pd.NA
+    grouped = grouped[columns]
     return grouped.head(top_n).reset_index(drop=True)
 
 
@@ -1455,20 +1469,20 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
             if column_name in df.columns
         ]
         if tracked_kyc_fields:
-            kyc_missing_count = pd.Series(0, index=df.index, dtype="int64")
+            champs_kyc_manquants = pd.Series(0, index=df.index, dtype="int64")
             for column_name in tracked_kyc_fields:
                 if column_name == "date_operation":
-                    kyc_missing_count = kyc_missing_count.add(
+                    champs_kyc_manquants = champs_kyc_manquants.add(
                         pd.to_datetime(df[column_name], errors="coerce").isna().astype("int64"),
                         fill_value=0,
                     )
                 else:
-                    kyc_missing_count = kyc_missing_count.add(
+                    champs_kyc_manquants = champs_kyc_manquants.add(
                         missing_text(column_name).astype("int64"),
                         fill_value=0,
                     )
-            extra_watchlist_columns["kyc_missing_count"] = kyc_missing_count
-            mark(kyc_missing_count >= 2, "KYC incomplet (2+ champs)")
+            extra_watchlist_columns["champs_kyc_manquants"] = champs_kyc_manquants
+            mark(champs_kyc_manquants >= 2, "KYC incomplet (2+ champs)")
         if {"client_id", "compte_id"}.issubset(df.columns):
             comptes_par_client = (
                 df.dropna(subset=["client_id", "compte_id"])

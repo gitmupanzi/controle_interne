@@ -73,13 +73,14 @@ DISPLAY_COLUMN_LABELS = {
     "lignes": "Lignes",
     "montant_total": "Montant",
     "alertes": "Alertes",
-    "commentaire": "Commentaire",
+    "lecture": "Lecture",
     "classe_inactivite": "Inactivité",
     "nombre_lignes": "Lignes",
     "part_lignes": "Part",
     "classe_comptes": "Classe",
     "nombre_clients": "Clients",
     "client_id": "Client",
+    "nom_client": "Nom client",
     "nombre_comptes": "Nb comptes",
     "solde_total": "Solde total",
     "Provenance": "Source",
@@ -87,6 +88,7 @@ DISPLAY_COLUMN_LABELS = {
     "telephone": "Téléphone",
     "zone_geographique": "Zone",
     "compte_id": "Compte",
+    "champs_kyc_manquants": "Champs KYC manquants",
 }
 
 
@@ -129,7 +131,7 @@ def _prepare_activity_display_table(table: pd.DataFrame, group_column: str) -> p
 
     display_df = table.copy()
     if "alertes" in display_df.columns:
-        display_df["commentaire"] = display_df["alertes"].apply(_build_alert_comment)
+        display_df["lecture"] = display_df["alertes"].apply(_build_alert_comment)
 
     return _rename_columns_for_display(
         display_df,
@@ -142,7 +144,7 @@ def _prepare_multi_account_clients_display_table(df: pd.DataFrame) -> pd.DataFra
         return df.copy()
 
     display_df = df.copy()
-    display_df["commentaire"] = display_df["nombre_comptes"].apply(
+    display_df["lecture"] = display_df["nombre_comptes"].apply(
         lambda value: (
             "Client à revoir en priorité pour cumul élevé de comptes."
             if pd.notna(value) and float(value) >= 5
@@ -159,7 +161,7 @@ def _prepare_provenance_display_table(df: pd.DataFrame) -> pd.DataFrame:
     display_df = df.copy().reset_index(drop=True)
     if len(display_df) > 1:
         max_lines = pd.to_numeric(display_df["nombre_lignes"], errors="coerce").max()
-        display_df["commentaire"] = pd.to_numeric(display_df["nombre_lignes"], errors="coerce").apply(
+        display_df["lecture"] = pd.to_numeric(display_df["nombre_lignes"], errors="coerce").apply(
             lambda value: (
                 "Extraction principale de la session."
                 if pd.notna(value) and value == max_lines
@@ -167,7 +169,7 @@ def _prepare_provenance_display_table(df: pd.DataFrame) -> pd.DataFrame:
             )
         )
     else:
-        display_df["commentaire"] = "Une seule extraction est disponible."
+        display_df["lecture"] = "Une seule extraction est disponible."
     return _rename_columns_for_display(display_df)
 
 
