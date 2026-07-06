@@ -88,7 +88,11 @@ DISPLAY_COLUMN_LABELS = {
     "telephone": "Téléphone",
     "zone_geographique": "Zone",
     "compte_id": "Compte",
-    "champs_kyc_manquants": "Champs KYC manquants",
+    "champs_kyc_manquants": "Éléments KYC manquants",
+    "produit_reference": "Référence produit",
+    "seuil_minimum_produit": "Seuil minimum",
+    "duree_credit_mois": "Durée (mois)",
+    "taux_interet": "Taux d'intérêt",
 }
 
 

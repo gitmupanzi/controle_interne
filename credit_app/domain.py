@@ -125,6 +125,7 @@ CYCLE_DATE_PRIORITY = {
     "credit": ["date_demande", "date_decision"],
     "likelemba": ["date_demande", "date_decision"],
     "epargne": ["date_operation", "date_demande"],
+    "crm_clients": ["date_operation"],
     "caisse": ["date_operation"],
     "tresorerie": ["date_operation"],
     "comptable": ["date_operation"],
@@ -143,9 +144,72 @@ VALUE_CLEANING_CRITERIA = {
     "incident_majeur": "Boolean",
 }
 
+EPARGNE_DAT_MINIMUM_USD_PHYSIQUE = 500.0
+EPARGNE_DAT_MINIMUM_USD_MORALE = 5000.0
+
+CREDIT_PRODUCT_RULES: dict[str, dict[str, float | bool | None]] = {
+    "lisungi": {"min_amount": 100.0, "max_amount": 80000.0, "min_duration": 2.0, "max_duration": 12.0, "min_rate": 2.5, "max_rate": 4.0, "garantie_required": True},
+    "salaire": {"min_amount": 100.0, "max_amount": 10000.0, "min_duration": 2.0, "max_duration": 24.0, "min_rate": 2.5, "max_rate": 2.5, "garantie_required": True},
+    "personnel": {"min_amount": 100.0, "max_amount": 15000.0, "min_duration": 2.0, "max_duration": 24.0, "min_rate": 2.5, "max_rate": 2.5, "garantie_required": True},
+    "avance_salaire": {"min_amount": 0.0, "max_amount": None, "min_duration": 1.0, "max_duration": 1.0, "min_rate": 5.0, "max_rate": 5.0, "garantie_required": True},
+    "dare_dare": {"min_amount": 100.0, "max_amount": 10000.0, "min_duration": None, "max_duration": None, "min_rate": 2.0, "max_rate": 2.0, "garantie_required": True},
+    "pepsi": {"min_amount": 100.0, "max_amount": 10000.0, "min_duration": None, "max_duration": None, "min_rate": 2.0, "max_rate": 2.0, "garantie_required": True},
+    "auto": {"min_amount": 5000.0, "max_amount": 20000.0, "min_duration": 12.0, "max_duration": 24.0, "min_rate": 2.5, "max_rate": 2.5, "garantie_required": True},
+    "collectif": {"min_amount": 100.0, "max_amount": 10000.0, "min_duration": 2.0, "max_duration": 12.0, "min_rate": 2.5, "max_rate": 4.0, "garantie_required": True},
+    "likelemba": {"min_amount": 100.0, "max_amount": 10000.0, "min_duration": None, "max_duration": None, "min_rate": 2.5, "max_rate": 2.5, "garantie_required": True},
+}
+
 
 def normalize_text(value: object) -> str:
     return normalize_column_label(value)
+
+
+def _classify_credit_product(value: object) -> str | None:
+    text = normalize_text(value)
+    if not text:
+        return None
+    if "avance" in text and "salaire" in text:
+        return "avance_salaire"
+    if "likelemba" in text:
+        return "likelemba"
+    if "lisungi" in text:
+        return "lisungi"
+    if "dare" in text:
+        return "dare_dare"
+    if "pepsi" in text:
+        return "pepsi"
+    if "auto" in text:
+        return "auto"
+    if "collectif" in text:
+        return "collectif"
+    if "personnel" in text:
+        return "personnel"
+    if "salaire" in text:
+        return "salaire"
+    return None
+
+
+def _classify_epargne_product(value: object) -> str | None:
+    text = normalize_text(value)
+    if not text:
+        return None
+    if "dat" in text or "depot a terme" in text or "dépôt à terme" in text:
+        return "dat"
+    if "maman" in text:
+        return "femme"
+    if "elenge" in text or "jeunesse" in text:
+        return "jeunesse"
+    if "likelemba" in text or "tontine" in text:
+        return "likelemba"
+    if "courant" in text:
+        return "courant"
+    return "autre"
+
+
+def _is_corporate_client(value: object) -> bool:
+    text = normalize_text(value)
+    corporate_markers = {"personne morale", "pm", "societe", "société", "pme", "institution", "entreprise"}
+    return any(marker in text for marker in corporate_markers)
 
 
 def _apply_reference_value_cleaning(df: pd.DataFrame) -> pd.DataFrame:
@@ -260,6 +324,26 @@ def build_standardized_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[s
 
     if "sexe" in standardized.columns:
         standardized["sexe"] = _normalize_series_values(standardized["sexe"], SEX_VALUE_MAP)
+
+    if "telephone" in standardized.columns and "Portable" in standardized.columns:
+        portable_series = standardized["Portable"].astype("string").str.strip()
+        telephone_series = standardized["telephone"].astype("string").str.strip()
+        standardized["telephone"] = telephone_series.mask(
+            telephone_series.fillna("").eq(""),
+            portable_series,
+        )
+
+    if "nom_client" in standardized.columns:
+        nom_series = standardized["nom_client"].astype("string").str.strip()
+        if "Client Name" in standardized.columns:
+            client_name_series = standardized["Client Name"].astype("string").str.strip()
+            nom_series = nom_series.mask(nom_series.fillna("").eq(""), client_name_series)
+            nom_series = client_name_series.mask(client_name_series.fillna("").ne(""), client_name_series).fillna(nom_series)
+        elif "Prénom" in standardized.columns:
+            prenom_series = standardized["Prénom"].astype("string").str.strip().fillna("")
+            full_name_series = (prenom_series + " " + nom_series.fillna("")).str.strip()
+            nom_series = nom_series.mask(nom_series.fillna("").eq(""), full_name_series)
+        standardized["nom_client"] = nom_series.replace("", pd.NA)
 
     if {"revenu_mensuel", "charge_mensuelle"}.issubset(standardized.columns):
         standardized["capacite_remboursement"] = (
@@ -1348,26 +1432,88 @@ def build_watchlist(df: pd.DataFrame) -> pd.DataFrame:
     alert_reasons = pd.Series("", index=df.index, dtype="string")
     extra_watchlist_columns: dict[str, pd.Series] = {}
 
+    def mark(mask: pd.Series, label: str) -> None:
+        nonlocal watch_mask, alert_reasons
+        normalized_mask = mask.fillna(False)
+        watch_mask = watch_mask | normalized_mask
+        alert_reasons = alert_reasons.mask(normalized_mask, alert_reasons + label + "; ")
+
+    def missing_text(column: str) -> pd.Series:
+        if column not in df.columns:
+            return pd.Series(False, index=df.index)
+        return df[column].isna() | df[column].astype("string").str.strip().fillna("").eq("")
+
     if "niveau_risque_calcule" in df.columns:
         high_risk_mask = df["niveau_risque_calcule"].eq("Élevé")
-        watch_mask = watch_mask | high_risk_mask
-        alert_reasons = alert_reasons.mask(high_risk_mask, alert_reasons + "Risque élevé; ")
+        mark(high_risk_mask, "Risque élevé")
     if "retard_jours" in df.columns:
         overdue_mask = df["retard_jours"].fillna(0) > 30
-        watch_mask = watch_mask | overdue_mask
-        alert_reasons = alert_reasons.mask(overdue_mask, alert_reasons + "Retard > 30 jours; ")
+        mark(overdue_mask, "Retard > 30 jours")
     if "capacite_remboursement" in df.columns:
         negative_capacity_mask = df["capacite_remboursement"].fillna(0) < 0
-        watch_mask = watch_mask | negative_capacity_mask
-        alert_reasons = alert_reasons.mask(
-            negative_capacity_mask, alert_reasons + "Capacité négative; "
-        )
+        mark(negative_capacity_mask, "Capacité négative")
     if {"revenu_mensuel", "charge_mensuelle"}.issubset(df.columns):
         incomplete_financial_mask = df["revenu_mensuel"].isna() | df["charge_mensuelle"].isna()
-        watch_mask = watch_mask | incomplete_financial_mask
-        alert_reasons = alert_reasons.mask(
-            incomplete_financial_mask, alert_reasons + "Données financières incomplètes; "
-        )
+        mark(incomplete_financial_mask, "Données financières incomplètes")
+
+    if "type_produit" in df.columns:
+        product_keys = df["type_produit"].astype("string").map(_classify_credit_product)
+        extra_watchlist_columns["produit_reference"] = product_keys
+
+        if "garantie" in df.columns:
+            garantie_missing_mask = product_keys.notna() & missing_text("garantie")
+            mark(garantie_missing_mask, "Garantie non renseignée")
+
+        if "montant_demande" in df.columns:
+            amount_series = pd.to_numeric(df["montant_demande"], errors="coerce")
+            extra_watchlist_columns["montant_demande"] = amount_series
+            for product_key, rules in CREDIT_PRODUCT_RULES.items():
+                product_mask = product_keys.eq(product_key)
+                min_amount = rules.get("min_amount")
+                max_amount = rules.get("max_amount")
+                outside_amount_mask = pd.Series(False, index=df.index)
+                if min_amount is not None:
+                    outside_amount_mask = outside_amount_mask | amount_series.lt(float(min_amount))
+                if max_amount is not None:
+                    outside_amount_mask = outside_amount_mask | amount_series.gt(float(max_amount))
+                mark(product_mask & outside_amount_mask, "Montant hors référentiel produit")
+
+            if "revenu_mensuel" in df.columns:
+                revenu_series = pd.to_numeric(df["revenu_mensuel"], errors="coerce")
+                advance_mask = product_keys.eq("avance_salaire") & revenu_series.gt(0)
+                mark(advance_mask & amount_series.gt(revenu_series / 3.0), "Avance sur salaire > 1/3 du salaire")
+
+        if "duree_credit_mois" in df.columns:
+            duration_series = pd.to_numeric(df["duree_credit_mois"], errors="coerce")
+            extra_watchlist_columns["duree_credit_mois"] = duration_series
+            for product_key, rules in CREDIT_PRODUCT_RULES.items():
+                min_duration = rules.get("min_duration")
+                max_duration = rules.get("max_duration")
+                if min_duration is None and max_duration is None:
+                    continue
+                product_mask = product_keys.eq(product_key)
+                outside_duration_mask = pd.Series(False, index=df.index)
+                if min_duration is not None:
+                    outside_duration_mask = outside_duration_mask | duration_series.lt(float(min_duration))
+                if max_duration is not None:
+                    outside_duration_mask = outside_duration_mask | duration_series.gt(float(max_duration))
+                mark(product_mask & outside_duration_mask, "Durée hors référentiel produit")
+
+        if "taux_interet" in df.columns:
+            rate_series = pd.to_numeric(df["taux_interet"], errors="coerce")
+            extra_watchlist_columns["taux_interet"] = rate_series
+            for product_key, rules in CREDIT_PRODUCT_RULES.items():
+                min_rate = rules.get("min_rate")
+                max_rate = rules.get("max_rate")
+                if min_rate is None and max_rate is None:
+                    continue
+                product_mask = product_keys.eq(product_key)
+                outside_rate_mask = pd.Series(False, index=df.index)
+                if min_rate is not None:
+                    outside_rate_mask = outside_rate_mask | rate_series.lt(float(min_rate))
+                if max_rate is not None:
+                    outside_rate_mask = outside_rate_mask | rate_series.gt(float(max_rate))
+                mark(product_mask & outside_rate_mask, "Taux hors référentiel produit")
 
     columns = [
         column
@@ -1383,12 +1529,18 @@ def build_watchlist(df: pd.DataFrame) -> pd.DataFrame:
             "statut_remboursement",
             "retard_jours",
             "niveau_risque_calcule",
+            "garantie",
+            "duree_credit_mois",
+            "taux_interet",
+            "revenu_mensuel",
         ]
         if column in df.columns
     ]
     columns.append("motif_alerte")
 
     watchlist = df.loc[watch_mask, [column for column in columns if column != "motif_alerte"]].copy()
+    for column_name, values in extra_watchlist_columns.items():
+        watchlist[column_name] = values.loc[watchlist.index]
     watchlist["motif_alerte"] = (
         alert_reasons.loc[watchlist.index].astype("string").str.rstrip("; ").replace("", "A surveiller")
     )
@@ -1422,13 +1574,100 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
     if "niveau_risque_calcule" in df.columns:
         mark(df["niveau_risque_calcule"].eq("Élevé"), "Risque élevé")
 
-    if cycle_key == "epargne":
+    if cycle_key == "crm_clients":
+        if "client_id" in df.columns:
+            mark(missing_text("client_id"), "Identifiant client manquant")
+        if "nom_client" in df.columns:
+            mark(missing_text("nom_client"), "Nom client manquant")
+        if "agent_credit" in df.columns:
+            mark(missing_text("agent_credit"), "Gestionnaire non renseigné")
+        if "compte_id" in df.columns:
+            compte_text = df["compte_id"].astype("string").str.strip()
+            mark(compte_text.fillna("").isin({"", "0"}), "Numéro de compte client manquant")
+        if "Numéro de la pièce d’identité" in df.columns:
+            piece_text = df["Numéro de la pièce d’identité"].astype("string").str.strip()
+            piece_missing_mask = piece_text.fillna("").isin({"", "0"})
+            extra_watchlist_columns["Numéro de la pièce d’identité"] = piece_text
+            mark(piece_missing_mask, "Pièce d'identité manquante")
+            if "client_id" in df.columns:
+                pieces_par_client = (
+                    df.loc[~piece_missing_mask & df["client_id"].notna(), ["client_id", "Numéro de la pièce d’identité"]]
+                    .drop_duplicates()
+                    .groupby("Numéro de la pièce d’identité")["client_id"]
+                    .nunique()
+                )
+                piece_duplicate_mask = piece_text.map(pieces_par_client).fillna(0).gt(1)
+                mark(piece_duplicate_mask, "Pièce d'identité partagée")
+        if "date_operation" in df.columns:
+            dates = pd.to_datetime(df["date_operation"], errors="coerce")
+            extra_watchlist_columns["date_operation"] = dates
+            if dates.notna().any():
+                reference_date = dates.max()
+                jours_inactivite = (reference_date - dates).dt.days
+                extra_watchlist_columns["jours_inactivite"] = jours_inactivite
+                mark(dates.isna(), "Dernière activité non renseignée")
+                mark(dates.notna() & jours_inactivite.ge(90), "Aucune activité récente >= 90 j")
+                mark(dates.notna() & jours_inactivite.ge(180), "Aucune activité récente >= 180 j")
+
+        phone_candidates = [column_name for column_name in ["telephone", "Portable"] if column_name in df.columns]
+        if phone_candidates:
+            phone_text = pd.Series(pd.NA, index=df.index, dtype="string")
+            for column_name in phone_candidates:
+                candidate = df[column_name].astype("string").str.strip()
+                phone_text = phone_text.fillna(candidate.mask(candidate.fillna("").eq(""), pd.NA))
+            phone_digits = phone_text.fillna("").str.replace(r"\D", "", regex=True)
+            extra_watchlist_columns["telephone"] = phone_text
+            phone_missing_mask = phone_text.fillna("").eq("")
+            phone_invalid_mask = ~phone_missing_mask & ~phone_digits.str.match(r"^(243\d{9}|0\d{9})$", na=False)
+            mark(phone_missing_mask, "Téléphone manquant")
+            mark(phone_invalid_mask, "Téléphone non fiable")
+            if "client_id" in df.columns:
+                clients_par_telephone = (
+                    pd.DataFrame({"client_id": df["client_id"], "telephone": phone_digits})
+                    .loc[lambda frame: frame["client_id"].notna() & frame["telephone"].ne("")]
+                    .drop_duplicates()
+                    .groupby("telephone")["client_id"]
+                    .nunique()
+                )
+                telephone_shared_mask = phone_digits.map(clients_par_telephone).fillna(0).gt(1)
+                mark(telephone_shared_mask, "Téléphone partagé")
+
+        if "E-mail" in df.columns:
+            email_text = df["E-mail"].astype("string").str.strip()
+            extra_watchlist_columns["E-mail"] = email_text
+            email_missing_mask = email_text.fillna("").eq("")
+            email_invalid_mask = ~email_missing_mask & ~email_text.str.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", na=False)
+            mark(email_invalid_mask, "E-mail non fiable")
+            if phone_candidates:
+                mark(email_missing_mask & phone_missing_mask, "Contact client insuffisant")
+
+        if "Locked" in df.columns:
+            locked_mask = df["Locked"].apply(
+                lambda value: bool(value) if isinstance(value, bool) else normalize_text(value) in {"true", "oui", "1", "locked"}
+            ).fillna(False)
+            extra_watchlist_columns["Locked"] = locked_mask
+            mark(locked_mask, "Fiche verrouillée")
+        if "Rejet des mails" in df.columns:
+            rejet_mail_mask = df["Rejet des mails"].apply(
+                lambda value: bool(value) if isinstance(value, bool) else normalize_text(value) in {"true", "oui", "1"}
+            ).fillna(False)
+            extra_watchlist_columns["Rejet des mails"] = rejet_mail_mask
+            mark(rejet_mail_mask, "Rejet des mails actif")
+        if "Mode Désabonné" in df.columns:
+            mode_text = df["Mode Désabonné"].astype("string").str.strip()
+            extra_watchlist_columns["Mode Désabonné"] = mode_text
+            mark(mode_text.fillna("").ne(""), "Client désabonné")
+    elif cycle_key == "epargne":
         if "compte_id" in df.columns:
             mark(missing_text("compte_id"), "Compte non renseigné")
         if "type_operation" in df.columns:
             mark(missing_text("type_operation"), "Type d'opération manquant")
         if "type_produit" in df.columns:
             mark(missing_text("type_produit"), "Produit d'épargne manquant")
+            product_keys = df["type_produit"].astype("string").map(_classify_epargne_product)
+            extra_watchlist_columns["produit_reference"] = product_keys
+        else:
+            product_keys = pd.Series(pd.NA, index=df.index, dtype="object")
         if "statut_compte" in df.columns:
             sensitive_statuses = {"bloque", "bloqué", "dormant", "inactif"}
             status_mask = df["statut_compte"].apply(
@@ -1439,6 +1678,19 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
             solde_compte = pd.to_numeric(df["solde_compte"], errors="coerce")
             extra_watchlist_columns["solde_compte"] = solde_compte
             mark(solde_compte < 0, "Solde négatif")
+            if "type_client" in df.columns:
+                dat_minimum = df["type_client"].apply(
+                    lambda value: EPARGNE_DAT_MINIMUM_USD_MORALE if _is_corporate_client(value) else EPARGNE_DAT_MINIMUM_USD_PHYSIQUE
+                )
+                extra_watchlist_columns["seuil_minimum_produit"] = dat_minimum
+                mark(product_keys.eq("dat") & solde_compte.lt(dat_minimum), "DAT sous minimum attendu")
+        if "taux_interet" in df.columns:
+            taux_interet = pd.to_numeric(df["taux_interet"], errors="coerce")
+            extra_watchlist_columns["taux_interet"] = taux_interet
+            mark(product_keys.eq("dat") & (taux_interet.lt(0) | taux_interet.gt(8)), "Taux DAT hors référentiel")
+        if {"type_produit", "sexe"}.issubset(df.columns):
+            sexe_normalise = df["sexe"].astype("string").map(normalize_text)
+            mark(product_keys.eq("femme") & sexe_normalise.eq("masculin"), "Produit femme à confirmer")
         if "date_operation" in df.columns:
             dates = pd.to_datetime(df["date_operation"], errors="coerce")
             extra_watchlist_columns["date_operation"] = dates
@@ -1599,6 +1851,19 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
     ]
     if cycle_key == "epargne":
         candidate_columns.extend(["nom_client", "telephone", "Provenance"])
+    elif cycle_key == "crm_clients":
+        candidate_columns.extend(
+            [
+                "nom_client",
+                "telephone",
+                "Portable",
+                "E-mail",
+                "zone_geographique",
+                "Numéro de la pièce d’identité",
+                "Source de données",
+                "Origine du Prospect",
+            ]
+        )
     candidate_columns.extend(extra_watchlist_columns.keys())
     columns = [column for column in dict.fromkeys(candidate_columns) if column in df.columns]
     watchlist = df.loc[watch_mask, columns].copy()
@@ -1621,6 +1886,15 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
         if epargne_sort_columns:
             watchlist = watchlist.sort_values(by=epargne_sort_columns, ascending=False)
         return watchlist.drop(columns="_abs_solde_compte", errors="ignore")
+    if cycle_key == "crm_clients":
+        crm_sort_columns = [
+            column_name
+            for column_name in ["jours_inactivite", "revenu_mensuel"]
+            if column_name in watchlist.columns
+        ]
+        if crm_sort_columns:
+            return watchlist.sort_values(by=crm_sort_columns, ascending=[False] * len(crm_sort_columns))
+        return watchlist
 
     numeric_sort_candidates = [
         column

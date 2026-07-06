@@ -81,6 +81,7 @@ from credit_app.domain import (
     normalize_text,
 )
 from credit_app.tabs.audit_control import render_analyste_credit_tab
+from credit_app.tabs.crm_clients import render_crm_clients_tab
 from credit_app.tabs.export import render_export_tab
 from credit_app.tabs.methodology import render_methodology_tab
 from credit_app.tabs.overview import render_overview_tab
@@ -879,10 +880,14 @@ def main() -> None:
     render_overview_tab(filtered_df, filtered_monthly_df, selected_cycle_key)
 
     render_panel_title("Analyses détaillées")
-    tabs = st.tabs(
+    tab_labels = [
+        "Rappel de la vue d'ensemble",
+        "Audit et contrôle",
+    ]
+    if selected_cycle_key == "crm_clients":
+        tab_labels.append("Actions CRM")
+    tab_labels.extend(
         [
-            "Rappel de la vue d'ensemble",
-            "Audit et contrôle",
             "Surveillance",
             "Portefeuille",
             "Risque",
@@ -891,6 +896,7 @@ def main() -> None:
             "Méthode",
         ]
     )
+    tabs = st.tabs(tab_labels)
 
     with tabs[0]:
         render_summary_box(
@@ -902,9 +908,14 @@ def main() -> None:
         )
     with tabs[1]:
         render_analyste_credit_tab(selected_cycle_key, standardized_df)
-    with tabs[2]:
+    tab_index = 2
+    if selected_cycle_key == "crm_clients":
+        with tabs[tab_index]:
+            render_crm_clients_tab(filtered_df)
+        tab_index += 1
+    with tabs[tab_index]:
         render_surveillance_tab(filtered_df, selected_cycle_key)
-    with tabs[3]:
+    with tabs[tab_index + 1]:
         render_portfolio_tab(
             filtered_df,
             selected_cycle_key,
@@ -912,9 +923,9 @@ def main() -> None:
             epargne_bundles=epargne_bundles,
             epargne_source_label=epargne_source_label,
         )
-    with tabs[4]:
+    with tabs[tab_index + 2]:
         render_risk_tab(filtered_df, selected_cycle_key)
-    with tabs[5]:
+    with tabs[tab_index + 3]:
         render_quality_tab(
             raw_df=raw_df,
             standardized_df=standardized_df,
@@ -923,9 +934,9 @@ def main() -> None:
             mapping_df=payload["mapping_df"],
             cycle_key=selected_cycle_key,
         )
-    with tabs[6]:
+    with tabs[tab_index + 4]:
         render_export_tab(filtered_df, payload["quality_df"], payload["mapping_df"])
-    with tabs[7]:
+    with tabs[tab_index + 5]:
         render_methodology_tab(selected_cycle_key, standardized_df)
 
     render_footer()

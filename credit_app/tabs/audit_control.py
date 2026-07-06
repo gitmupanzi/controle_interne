@@ -6,10 +6,15 @@ import pandas as pd
 import streamlit as st
 
 from credit_app.control_references import (
+    build_credit_file_checklist_table,
+    build_credit_product_matrix_table,
     build_control_levels_table,
     build_control_principles_table,
+    build_general_kyc_requirements_table,
     build_reporting_chain_table,
     build_risk_cartography_table,
+    build_savings_product_reference_table,
+    build_service_pricing_reference_table,
 )
 from credit_app.cycles import (
     build_cycle_control_table,
@@ -514,6 +519,57 @@ def render_audit_control_tab(cycle_key: str = "credit", standardized_df: pd.Data
             width="stretch",
             hide_index=True,
             height=250,
+        )
+
+    if cycle_key == "epargne":
+        ref_left, ref_right = st.columns((1.3, 1))
+        with ref_left:
+            render_panel_title("Référentiel des produits d'épargne")
+            st.dataframe(build_savings_product_reference_table(), width="stretch", hide_index=True, height=280)
+        with ref_right:
+            render_panel_title("Exigences KYC à l'ouverture")
+            st.dataframe(build_general_kyc_requirements_table(), width="stretch", hide_index=True, height=280)
+
+        render_panel_title("Services et tarification de référence")
+        st.dataframe(build_service_pricing_reference_table(), width="stretch", hide_index=True, height=250)
+        render_summary_box(
+            "Ce que l'application peut mieux contrôler",
+            [
+                "les comptes avec informations KYC incomplètes ou peu fiables",
+                "les comptes DAT sous le minimum attendu quand le type de client et le solde sont disponibles",
+                "les produits d'épargne attribués à un profil qui demande une confirmation",
+                "les écarts de lecture sur les frais et services quand la base contient les colonnes de tarification",
+            ],
+        )
+    elif cycle_key in {"credit", "likelemba"}:
+        ref_left, ref_right = st.columns((1.15, 1))
+        with ref_left:
+            render_panel_title("Matrice d'octroi et de tarification")
+            st.dataframe(build_credit_product_matrix_table(), width="stretch", hide_index=True, height=300)
+        with ref_right:
+            render_panel_title("Checklist dossier de crédit")
+            st.dataframe(build_credit_file_checklist_table(), width="stretch", hide_index=True, height=300)
+
+        render_panel_title("Exigences KYC générales")
+        st.dataframe(build_general_kyc_requirements_table(), width="stretch", hide_index=True, height=250)
+        render_summary_box(
+            "Ce que l'application peut mieux contrôler",
+            [
+                "les montants, durées et taux hors référentiel quand le produit est reconnu",
+                "les avances sur salaire supérieures au tiers du salaire net quand le revenu est disponible",
+                "les dossiers sans garantie renseignée pour les produits qui l'exigent",
+                "les écarts documentaires à confirmer ensuite avec les pièces du dossier",
+            ],
+        )
+    elif cycle_key == "crm_clients":
+        render_panel_title("Exigences KYC et identité client")
+        st.dataframe(build_general_kyc_requirements_table(), width="stretch", hide_index=True, height=240)
+        render_summary_box(
+            "Lecture pour le suivi CRM",
+            [
+                "Une fiche CRM utile doit d'abord permettre d'identifier, joindre et suivre correctement le client.",
+                "Les informations d'identité, de contact et de dernière activité restent prioritaires pour accélérer les corrections.",
+            ],
         )
 
     govern_left, govern_right = st.columns((1, 1))

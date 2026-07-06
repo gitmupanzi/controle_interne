@@ -26,6 +26,8 @@ DEFAULT_CANONICAL_ALIASES: dict[str, list[str]] = {
         "numero_client",
         "num_client",
         "reference_client",
+        "id de l'enregistrement",
+        "id de l’enregistrement",
     ],
     "dossier_id": [
         "dossier_id",
@@ -152,6 +154,7 @@ DEFAULT_CANONICAL_ALIASES: dict[str, list[str]] = {
         "charge_portefeuille",
         "gestionnaire",
         "officier_credit",
+        "gestionnaire du client",
     ],
     "type_produit": [
         "type_produit",
@@ -225,6 +228,8 @@ DEFAULT_CANONICAL_ALIASES: dict[str, list[str]] = {
         "date de l'operation",
         "date derniere transaction",
         "date dernière transaction",
+        "date de la derniere activite",
+        "date de la dernière activité",
     ],
     "type_operation": [
         "type_operation",
@@ -285,6 +290,7 @@ DEFAULT_CANONICAL_ALIASES: dict[str, list[str]] = {
         "num_compte",
         "n compte",
         "n° compte",
+        "numéro de compte client",
     ],
     "statut_compte": [
         "statut_compte",
@@ -304,12 +310,14 @@ DEFAULT_CANONICAL_ALIASES: dict[str, list[str]] = {
         "zone géographique",
         "localite",
         "localité",
+        "province de correspondance",
     ],
     "categorie": [
         "categorie",
         "catégorie",
         "categorie client",
         "catégorie client",
+        "catégorie socio-professionnelle",
     ],
     "solde_compte": [
         "solde_compte",

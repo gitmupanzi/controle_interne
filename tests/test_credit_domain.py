@@ -162,6 +162,29 @@ class CreditDomainTests(unittest.TestCase):
         self.assertIn("motif_alerte", watchlist.columns)
         self.assertTrue(any("Risque élevé" in str(value) or "Capacité négative" in str(value) for value in watchlist["motif_alerte"]))
 
+    def test_credit_watchlist_uses_catalog_rules_when_product_is_recognized(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "client_id": ["C1", "C2"],
+                "dossier_id": ["D1", "D2"],
+                "type_produit": ["Avance sur salaire", "CrÃ©dit Auto"],
+                "montant_demande": [500, 25000],
+                "revenu_mensuel": [900, 4000],
+                "garantie": ["", None],
+                "duree_credit_mois": [2, 30],
+                "taux_interet": [6, 3],
+            }
+        )
+
+        standardized, _ = build_standardized_dataframe(raw)
+        watchlist = build_watchlist(standardized)
+        motifs = " | ".join(watchlist["motif_alerte"].astype(str).tolist())
+
+        self.assertIn("Garantie non renseignée", motifs)
+        self.assertIn("Montant hors référentiel produit", motifs)
+        self.assertIn("Durée hors référentiel produit", motifs)
+        self.assertIn("Avance sur salaire > 1/3 du salaire", motifs)
+
     def test_sex_and_age_distributions_are_standardized_and_ordered(self) -> None:
         raw = pd.DataFrame(
             {
@@ -320,11 +343,60 @@ class CreditDomainTests(unittest.TestCase):
     def test_specialized_cycle_specs_are_available(self) -> None:
         likelemba_spec = get_cycle_spec("likelemba")
         money_provider_spec = get_cycle_spec("money_provider")
+        crm_clients_spec = get_cycle_spec("crm_clients")
 
         self.assertEqual(likelemba_spec["label"], "Likelemba solidaire")
         self.assertIn("nom_groupe", likelemba_spec["expected_columns"])
         self.assertEqual(money_provider_spec["label"], "Money Provider")
         self.assertIn("numero_reference", money_provider_spec["expected_columns"])
+        self.assertEqual(crm_clients_spec["label"], "Suivi clients CRM")
+        self.assertIn("client_id", crm_clients_spec["expected_columns"])
+
+    def test_crm_client_cycle_maps_columns_and_builds_watchlist(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "Id de l’enregistrement": ["CL-1", "CL-2", "CL-3"],
+                "Gestionnaire du Client": ["Agent A", None, "Agent B"],
+                "Nom": ["Kanku", "Mbuyi", "Mbuyi"],
+                "Client Name": ["Jean Kanku", "Anne Mbuyi", "Paul Mbuyi"],
+                "Téléphone": ["099", None, "0812345678"],
+                "Portable": [None, "0823456789", "0812345678"],
+                "E-mail": ["jean@example.com", "", "badmail"],
+                "Date de la dernière activité": ["2026-01-01", "2026-07-01", None],
+                "Province de correspondance": ["Kinshasa", None, "Kinshasa"],
+                "Catégorie socio-professionnelle": ["Commerçant", None, "Commerçant"],
+                "Numéro de la pièce d’identité": ["ID-1", "0", "ID-1"],
+                "Numéro de compte client": ["CP-1", "", "CP-3"],
+                "Locked": [False, True, False],
+                "Rejet des mails": [False, False, True],
+                "Mode Désabonné": ["", "", "SMS"],
+                "Origine du Prospect": ["Appel entrant", "Terrain", "Terrain"],
+            }
+        )
+
+        standardized, mapping = build_standardized_dataframe(raw)
+        watchlist = build_cycle_watchlist(standardized, "crm_clients")
+        coverage = build_cycle_coverage_summary(standardized, "crm_clients")
+        motifs = " | ".join(watchlist["motif_alerte"].astype(str).tolist())
+
+        self.assertEqual(mapping["Id de l’enregistrement"], "client_id")
+        self.assertEqual(mapping["Gestionnaire du Client"], "agent_credit")
+        self.assertEqual(mapping["Date de la dernière activité"], "date_operation")
+        self.assertEqual(mapping["Province de correspondance"], "zone_geographique")
+        self.assertEqual(mapping["Catégorie socio-professionnelle"], "categorie")
+        self.assertEqual(mapping["Numéro de compte client"], "compte_id")
+        self.assertIn("nom_client", standardized.columns)
+        self.assertIn("date_operation", standardized.columns)
+        self.assertIn("jours_inactivite", watchlist.columns)
+        self.assertIn("telephone", watchlist.columns)
+        self.assertGreaterEqual(coverage["detected_count"], 8)
+        self.assertIn("Gestionnaire non renseigné", motifs)
+        self.assertIn("Téléphone non fiable", motifs)
+        self.assertIn("E-mail non fiable", motifs)
+        self.assertIn("Pièce d'identité manquante", motifs)
+        self.assertIn("Pièce d'identité partagée", motifs)
+        self.assertIn("Fiche verrouillée", motifs)
+        self.assertIn("Client désabonné", motifs)
 
     def test_included_epargne_workbook_loads_and_standardizes(self) -> None:
         sample_candidates = sorted(
@@ -447,6 +519,29 @@ class CreditDomainTests(unittest.TestCase):
         self.assertIn("KYC incomplet (2+ champs)", motifs)
         self.assertIn("Client multi-comptes (>= 3)", motifs)
         self.assertIn("Dormance sur solde significatif", motifs)
+
+    def test_epargne_watchlist_uses_catalog_rules_for_dat_and_segmented_products(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "Code client": ["C1", "C2"],
+                "Compte": ["DAT-1", "ELU-1"],
+                "Nom client": ["Client DAT", "Client Maman"],
+                "Type client": ["Personne morale", "Personne physique"],
+                "Type produit": ["DAT SociÃ©tÃ©", "Elubu ya ba Maman"],
+                "Encours Ã©pargnant": [1200, 500],
+                "Taux interet": [10, 2],
+                "Sexe": ["F", "M"],
+                "Date derniÃ¨re transaction": ["2026-06-29", "2026-06-29"],
+            }
+        )
+
+        standardized, _ = build_standardized_dataframe(raw)
+        watchlist = build_cycle_watchlist(standardized, "epargne")
+        motifs = " | ".join(watchlist["motif_alerte"].astype(str).tolist())
+
+        self.assertIn("DAT sous minimum attendu", motifs)
+        self.assertIn("Taux DAT hors référentiel", motifs)
+        self.assertIn("Produit femme à confirmer", motifs)
 
     def test_cycle_period_helpers_support_operation_cycles(self) -> None:
         raw = pd.DataFrame(

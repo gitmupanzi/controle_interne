@@ -6,10 +6,15 @@ import pandas as pd
 import streamlit as st
 
 from credit_app.control_references import (
+    build_credit_file_checklist_table,
+    build_credit_product_matrix_table,
     build_control_levels_table,
     build_control_principles_table,
+    build_general_kyc_requirements_table,
     build_reporting_chain_table,
     build_risk_cartography_table,
+    build_savings_product_reference_table,
+    build_service_pricing_reference_table,
 )
 from credit_app.cycles import (
     build_cycle_control_table,
@@ -130,6 +135,76 @@ def _build_cycle_reading_table(cycle_label: str) -> pd.DataFrame:
                 "Axe": "Traçabilité",
                 "Lecture": "Vérifie si les identifiants, dates, statuts et références clés sont bien présents.",
             },
+        ]
+    )
+
+
+def _build_cycle_rule_table(cycle_key: str) -> pd.DataFrame:
+    if cycle_key == "epargne":
+        return pd.DataFrame(
+            [
+                {
+                    "Règle utile": "DAT sous minimum attendu",
+                    "Lecture": "Le tableau de bord compare le solde du compte DAT au seuil de 500 USD ou 5 000 USD selon le type de client si ce champ est disponible.",
+                },
+                {
+                    "Règle utile": "Taux DAT hors référentiel",
+                    "Lecture": "Si la base contient un taux d'intérêt, l'application peut signaler un taux hors plage 0 % à 8 %.",
+                },
+                {
+                    "Règle utile": "Produit segmenté à confirmer",
+                    "Lecture": "Un produit orienté vers un segment précis peut être signalé s'il paraît incohérent avec le profil client.",
+                },
+                {
+                    "Règle utile": "KYC et dormance",
+                    "Lecture": "Les alertes de KYC, d'inactivité et de multi-comptes restent prioritaires pour la revue opérationnelle.",
+                },
+            ]
+        )
+    if cycle_key in {"credit", "likelemba"}:
+        return pd.DataFrame(
+            [
+                {
+                    "Règle utile": "Montant hors référentiel",
+                    "Lecture": "Le montant demandé peut être comparé aux bornes du produit quand le libellé est reconnu.",
+                },
+                {
+                    "Règle utile": "Durée ou taux hors référentiel",
+                    "Lecture": "La durée et le taux peuvent être rapprochés de la grille officielle si les colonnes existent dans la base.",
+                },
+                {
+                    "Règle utile": "Garantie non renseignée",
+                    "Lecture": "Les produits qui exigent une garantie sont signalés si cette information manque.",
+                },
+                {
+                    "Règle utile": "Avance sur salaire trop élevée",
+                    "Lecture": "L'avance sur salaire peut être comparée au tiers du salaire net quand le revenu mensuel est disponible.",
+                },
+            ]
+        )
+    if cycle_key == "crm_clients":
+        return pd.DataFrame(
+            [
+                {
+                    "Règle utile": "Contact insuffisant",
+                    "Lecture": "Une fiche sans téléphone fiable ni e-mail utile est plus difficile à exploiter rapidement.",
+                },
+                {
+                    "Règle utile": "Pièce partagée ou manquante",
+                    "Lecture": "Le tableau de bord remonte les fiches sans pièce ou avec un même numéro d'identité utilisé sur plusieurs clients.",
+                },
+                {
+                    "Règle utile": "Inactivité prolongée",
+                    "Lecture": "La dernière activité permet de prioriser les relances et les corrections commerciales.",
+                },
+            ]
+        )
+    return pd.DataFrame(
+        [
+            {
+                "Règle utile": "Contrôle du référentiel",
+                "Lecture": "Les règles automatiques dépendent des champs détectés et du cycle sélectionné.",
+            }
         ]
     )
 
@@ -540,6 +615,24 @@ def render_methodology_tab(cycle_key: str = "credit", standardized_df: pd.DataFr
             height=250,
         )
 
+    rule_left, rule_right = st.columns((1.15, 1))
+    with rule_left:
+        render_panel_title("Règles métier appliquées ou à relire")
+        st.dataframe(_build_cycle_rule_table(cycle_key), width="stretch", hide_index=True, height=220)
+    with rule_right:
+        if cycle_key == "epargne":
+            render_panel_title("Référentiel épargne")
+            st.dataframe(build_savings_product_reference_table(), width="stretch", hide_index=True, height=220)
+        elif cycle_key in {"credit", "likelemba"}:
+            render_panel_title("Matrice crédit")
+            st.dataframe(build_credit_product_matrix_table(), width="stretch", hide_index=True, height=220)
+        elif cycle_key == "crm_clients":
+            render_panel_title("Référence KYC")
+            st.dataframe(build_general_kyc_requirements_table(), width="stretch", hide_index=True, height=220)
+        else:
+            render_panel_title("Repère de lecture")
+            st.dataframe(_build_cycle_reading_table(cycle_spec["label"]), width="stretch", hide_index=True, height=220)
+
     governance_left, governance_right = st.columns((1, 1))
     with governance_left:
         render_panel_title("Niveaux de contrôle")
@@ -575,6 +668,23 @@ def render_methodology_tab(cycle_key: str = "credit", standardized_df: pd.DataFr
     with quality_right:
         render_panel_title("Limites à garder en tête")
         st.dataframe(_build_limit_table(), width="stretch", hide_index=True, height=250)
+
+    if cycle_key == "epargne":
+        method_left, method_right = st.columns((1.2, 1))
+        with method_left:
+            render_panel_title("KYC à relire pour l'épargne")
+            st.dataframe(build_general_kyc_requirements_table(), width="stretch", hide_index=True, height=250)
+        with method_right:
+            render_panel_title("Services et barèmes utiles")
+            st.dataframe(build_service_pricing_reference_table(), width="stretch", hide_index=True, height=250)
+    elif cycle_key in {"credit", "likelemba"}:
+        method_left, method_right = st.columns((1.15, 1))
+        with method_left:
+            render_panel_title("Checklist dossier")
+            st.dataframe(build_credit_file_checklist_table(), width="stretch", hide_index=True, height=260)
+        with method_right:
+            render_panel_title("KYC de base")
+            st.dataframe(build_general_kyc_requirements_table(), width="stretch", hide_index=True, height=260)
 
     render_summary_box(
         "Bon usage du tableau de bord",
