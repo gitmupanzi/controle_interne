@@ -413,3 +413,131 @@ def build_general_kyc_requirements_table() -> pd.DataFrame:
 
 def build_credit_file_checklist_table() -> pd.DataFrame:
     return pd.DataFrame(CREDIT_FILE_CHECKLIST)
+
+
+SQL_OPERATIONS_CONTROL_CATALOG = [
+    {
+        "Contrôle ID": 49,
+        "Thème": "Produits d'épargne",
+        "Contrôle": "Produits d'épargne inactifs encore utilisés",
+        "Lecture": "Repère les comptes encore rattachés à un produit inactif pour lancer une régularisation ou une migration.",
+    },
+    {
+        "Contrôle ID": 50,
+        "Thème": "Produits d'épargne",
+        "Contrôle": "Produits d'épargne non valides encore utilisés",
+        "Lecture": "Signale les comptes liés à un produit non valide afin de sécuriser le paramétrage du portefeuille.",
+    },
+    {
+        "Contrôle ID": 51,
+        "Thème": "Produits d'épargne",
+        "Contrôle": "Produits sans dépôt ou retrait autorisé mais avec mouvements",
+        "Lecture": "Compare les règles du produit aux mouvements réellement observés sur les comptes.",
+    },
+    {
+        "Contrôle ID": 52,
+        "Thème": "Produits d'épargne",
+        "Contrôle": "Incohérences de devise produit, compte et mouvement",
+        "Lecture": "Aide à repérer les écarts de devise qui peuvent fausser la lecture des opérations ou du produit.",
+    },
+    {
+        "Contrôle ID": 53,
+        "Thème": "Produits d'épargne",
+        "Contrôle": "Comptes sans produit d'épargne exploitable",
+        "Lecture": "Isole les comptes sans produit de référence ou avec produit introuvable ou invalide.",
+    },
+    {
+        "Contrôle ID": 54,
+        "Thème": "Mouvements HDPM",
+        "Contrôle": "Mouvements sans compte ou sans opération rattachée",
+        "Lecture": "Contrôle la présence des références minimales avant toute analyse détaillée.",
+    },
+    {
+        "Contrôle ID": 55,
+        "Thème": "Mouvements HDPM",
+        "Contrôle": "Mouvements à montant nul, négatif ou très élevé",
+        "Lecture": "Fait ressortir les écritures qui demandent une revue immédiate de cohérence ou de conformité.",
+    },
+    {
+        "Contrôle ID": 56,
+        "Thème": "Mouvements HDPM",
+        "Contrôle": "Dépôts et retraits par client, compte, agence, devise et produit",
+        "Lecture": "Donne une lecture consolidée des flux d'épargne sur la période.",
+    },
+    {
+        "Contrôle ID": 57,
+        "Thème": "Mouvements HDPM",
+        "Contrôle": "Analyse des gros mouvements par période",
+        "Lecture": "Suivi utile pour la vigilance LBC-FT, les pics d'activité et les volumes sensibles.",
+    },
+    {
+        "Contrôle ID": 58,
+        "Thème": "Mouvements HDPM",
+        "Contrôle": "Analyse des mouvements par point de service",
+        "Lecture": "Compare les points de service selon les volumes, les comptes touchés et les totaux débit/crédit.",
+    },
+    {
+        "Contrôle ID": 59,
+        "Thème": "Crédit",
+        "Contrôle": "Demandes de crédit sans prêt accordé",
+        "Lecture": "Suit les demandes reçues qui n'ont pas encore abouti à un prêt ou à une mise en place effective.",
+    },
+    {
+        "Contrôle ID": 60,
+        "Thème": "Crédit",
+        "Contrôle": "Prêts incomplets",
+        "Lecture": "Repère les prêts sans dossier, sans compte crédit, sans compte épargne ou sans cycle rattaché.",
+    },
+    {
+        "Contrôle ID": 61,
+        "Thème": "Crédit",
+        "Contrôle": "Cycles de prêt échus non clôturés",
+        "Lecture": "Met en évidence les cycles dépassés qui demandent un suivi de recouvrement ou une régularisation.",
+    },
+    {
+        "Contrôle ID": 62,
+        "Thème": "Crédit",
+        "Contrôle": "Comparaison montant demandé et montant accordé",
+        "Lecture": "Mesure les écarts entre la demande initiale, le dossier de crédit et le prêt finalement mis en place.",
+    },
+    {
+        "Contrôle ID": 63,
+        "Thème": "Crédit",
+        "Contrôle": "Analyse des crédits par agence, produit, devise et état",
+        "Lecture": "Offre une vue de pilotage du pipeline de crédit selon les axes les plus utiles pour la décision.",
+    },
+    {
+        "Contrôle ID": 64,
+        "Thème": "Risque et décision",
+        "Contrôle": "Clients avec forte activité d'épargne et crédit actif",
+        "Lecture": "Aide à cibler les profils très actifs qui méritent une lecture croisée épargne-crédit.",
+    },
+    {
+        "Contrôle ID": 65,
+        "Thème": "Risque et décision",
+        "Contrôle": "Clients avec plusieurs demandes de crédit sur une même période",
+        "Lecture": "Repère les clients qui multiplient les demandes et demandent une vigilance renforcée.",
+    },
+    {
+        "Contrôle ID": 66,
+        "Thème": "Risque et décision",
+        "Contrôle": "Agences avec volume élevé de mouvements ou de crédits",
+        "Lecture": "Compare la pression opérationnelle entre activité mouvement et activité crédit.",
+    },
+    {
+        "Contrôle ID": 67,
+        "Thème": "Risque et décision",
+        "Contrôle": "Produits d'épargne les plus utilisés et produits crédit les plus sollicités",
+        "Lecture": "Met en évidence les produits dominants pour le pilotage commercial et la supervision.",
+    },
+    {
+        "Contrôle ID": 68,
+        "Thème": "Risque et décision",
+        "Contrôle": "Anomalies à prioriser pour audit",
+        "Lecture": "Fournit une synthèse courte des signaux d'alerte à traiter en premier.",
+    },
+]
+
+
+def build_sql_operations_control_catalog_table() -> pd.DataFrame:
+    return pd.DataFrame(SQL_OPERATIONS_CONTROL_CATALOG)

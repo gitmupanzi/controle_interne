@@ -15,6 +15,7 @@ from credit_app.control_references import (
     build_risk_cartography_table,
     build_savings_product_reference_table,
     build_service_pricing_reference_table,
+    build_sql_operations_control_catalog_table,
 )
 from credit_app.cycles import (
     build_cycle_control_table,
@@ -26,6 +27,27 @@ from credit_app.ui import render_panel_title, render_summary_box
 
 
 def _build_standardization_table() -> pd.DataFrame:
+    if cycle_key == "operations_depot_retrait":
+        return pd.DataFrame(
+            [
+                {
+                    "RÃ¨gle utile": "RÃ©fÃ©rences minimales",
+                    "Lecture": "Un mouvement doit rester rattachÃ© Ã  un compte, une opÃ©ration, un point de service et une devise lisibles.",
+                },
+                {
+                    "RÃ¨gle utile": "CohÃ©rence produit / mouvement",
+                    "Lecture": "Les rÃ¨gles du produit d'Ã©pargne doivent rester cohÃ©rentes avec les dÃ©pÃ´ts, retraits et devises observÃ©s.",
+                },
+                {
+                    "RÃ¨gle utile": "Montants sensibles",
+                    "Lecture": "Les montants nuls, nÃ©gatifs, trÃ¨s Ã©levÃ©s ou concentrÃ©s sur une pÃ©riode demandent une revue prioritaire.",
+                },
+                {
+                    "RÃ¨gle utile": "Lecture croisÃ©e Ã©pargne / crÃ©dit",
+                    "Lecture": "Les clients trÃ¨s actifs, les agences trÃ¨s exposÃ©es et les demandes rÃ©pÃ©tÃ©es doivent Ãªtre relus de faÃ§on globale.",
+                },
+            ]
+        )
     return pd.DataFrame(
         [
             {
@@ -207,6 +229,34 @@ def _build_cycle_rule_table(cycle_key: str) -> pd.DataFrame:
             }
         ]
     )
+
+
+_base_build_cycle_rule_table = _build_cycle_rule_table
+
+
+def _build_cycle_rule_table(cycle_key: str) -> pd.DataFrame:
+    if cycle_key == "operations_depot_retrait":
+        return pd.DataFrame(
+            [
+                {
+                    "Regle utile": "References minimales",
+                    "Lecture": "Un mouvement doit rester rattache a un compte, une operation, un point de service et une devise lisibles.",
+                },
+                {
+                    "Regle utile": "Coherence produit / mouvement",
+                    "Lecture": "Les regles du produit d'epargne doivent rester coherentes avec les depots, retraits et devises observes.",
+                },
+                {
+                    "Regle utile": "Montants sensibles",
+                    "Lecture": "Les montants nuls, negatifs, tres eleves ou concentres sur une periode demandent une revue prioritaire.",
+                },
+                {
+                    "Regle utile": "Lecture croisee epargne / credit",
+                    "Lecture": "Les clients tres actifs, les agences tres exposees et les demandes repetees doivent etre relus de facon globale.",
+                },
+            ]
+        )
+    return _base_build_cycle_rule_table(cycle_key)
 
 
 def _build_formula_cards(cycle_key: str) -> list[dict[str, str]]:
@@ -685,6 +735,29 @@ def render_methodology_tab(cycle_key: str = "credit", standardized_df: pd.DataFr
         with method_right:
             render_panel_title("KYC de base")
             st.dataframe(build_general_kyc_requirements_table(), width="stretch", hide_index=True, height=260)
+    elif cycle_key == "__legacy_operations_depot_retrait__":
+        render_panel_title("Catalogue des contrÃ´les SQL disponibles")
+        st.dataframe(build_sql_operations_control_catalog_table(), width="stretch", hide_index=True, height=430)
+        render_summary_box(
+            "Comment lire ces contrÃ´les SQL",
+            [
+                "Les contrÃ´les 49 Ã  68 complÃ¨tent les analyses dÃ©jÃ  visibles dans les onglets de surveillance, portefeuille et risque.",
+                "Ils relient les flux HDPM, les produits d'Ã©pargne, les demandes de crÃ©dit et les prÃªts dans une mÃªme lecture de contrÃ´le.",
+                "Le plus utile est de partir d'une alerte synthÃ©tique, puis d'ouvrir le contrÃ´le SQL correspondant pour aller jusqu'au dÃ©tail opÃ©rationnel.",
+            ],
+        )
+
+    if cycle_key == "operations_depot_retrait":
+        render_panel_title("Catalogue des controles SQL disponibles")
+        st.dataframe(build_sql_operations_control_catalog_table(), width="stretch", hide_index=True, height=430)
+        render_summary_box(
+            "Comment lire ces controles SQL",
+            [
+                "Les controles 49 a 68 completent les analyses deja visibles dans les onglets de surveillance, portefeuille et risque.",
+                "Ils relient les flux HDPM, les produits d'epargne, les demandes de credit et les prets dans une meme lecture de controle.",
+                "Le plus utile est de partir d'une alerte synthetique, puis d'ouvrir le controle SQL correspondant pour aller jusqu'au detail operationnel.",
+            ],
+        )
 
     render_summary_box(
         "Bon usage du tableau de bord",

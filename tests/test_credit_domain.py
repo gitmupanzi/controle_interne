@@ -39,6 +39,8 @@ from credit_app.domain import (
 from credit_app.sql_operations import (
     build_operations_depot_retrait_dataset,
     build_high_activity_kyc_table,
+    build_lbcft_reporting_table,
+    build_mobile_banking_summary_table,
     has_minimum_sql_bundle,
     infer_sql_bundle_role,
     missing_sql_bundle_roles,
@@ -127,8 +129,8 @@ class CreditDomainTests(unittest.TestCase):
     def test_sql_operations_kyc_table_stays_robust_without_client_columns(self) -> None:
         df = pd.DataFrame(
             {
-                "operation_id": ["OP1", "OP2"],
                 "compte_id": ["CP1", "CP2"],
+                "numero_reference": ["REF1", "REF2"],
                 "type_mouvement": ["Depot", "Retrait"],
                 "montant_operation": [40_000_000.0, 35_000_000.0],
                 "code_devise": ["CDF", "CDF"],
@@ -141,6 +143,50 @@ class CreditDomainTests(unittest.TestCase):
         self.assertFalse(result.empty)
         self.assertIn("client_id", result.columns)
         self.assertIn("nom_client", result.columns)
+
+    def test_sql_operations_lbcft_table_stays_robust_without_type_operation(self) -> None:
+        df = pd.DataFrame(
+            {
+                "compte_id": ["CP1", "CP2"],
+                "numero_reference": ["REF1", "REF2"],
+                "type_mouvement": ["Depot mobile", "Retrait"],
+                "montant_operation": [20_000_000.0, 8_000_000.0],
+                "code_devise": ["CDF", "CDF"],
+                "source_mouvement": ["API_MOBILE", "BACK_OFFICE"],
+                "annule": [False, False],
+            }
+        )
+
+        result = build_lbcft_reporting_table(df, 2800.0)
+
+        self.assertEqual(len(result), 8)
+        self.assertIn("rubrique", result.columns)
+        self.assertIn("volume_cdf", result.columns)
+
+    def test_sql_operations_mobile_summary_stays_robust_with_line_movement_file(self) -> None:
+        df = pd.DataFrame(
+            {
+                "source_mouvement": ["API_MOBILE", "API_MOBILE", "BACK_OFFICE"],
+                "id_operation": ["OP1", "OP1", "OP2"],
+                "DATE_OPERATION": ["2026-06-01", "2026-06-01", "2026-06-02"],
+                "ID_TYPE_OPERATION": ["MOB_DEPO", "MOB_DEPO", "DEPO"],
+                "type_mouvement": ["Depot mobile", "Depot mobile", "Depot"],
+                "ID_COMPTE": ["CP1", "CP2", "CP3"],
+                "SENS": ["D", "C", "D"],
+                "MONTANT_OPERATION": [100.0, 100.0, 200.0],
+                "ID_DEVISE": [1, 1, 2],
+                "ID_POINT_SERVICE": ["PS1", "PS1", "PS2"],
+                "annule": [False, False, False],
+            }
+        )
+
+        result = build_mobile_banking_summary_table(df, 2800.0)
+
+        self.assertFalse(result.empty)
+        self.assertIn("type_operation", result.columns)
+        self.assertIn("nb_lignes_hdpm_api", result.columns)
+        self.assertIn("total_debit", result.columns)
+        self.assertIn("total_credit", result.columns)
 
     def test_reference_mapping_file_is_loaded(self) -> None:
         self.assertGreaterEqual(get_reference_column_count(), 100)
@@ -507,7 +553,8 @@ class CreditDomainTests(unittest.TestCase):
             for path in Path("line_list").glob("Encours des épargnants *.xlsx")
             if not path.name.startswith("~$")
         )
-        self.assertTrue(sample_candidates)
+        if not sample_candidates:
+            self.skipTest("Le fichier de démonstration épargne n'est pas présent dans ce dépôt.")
 
         raw = load_dataframe_from_path(sample_candidates[0], sheet_name="Sheet0")
         standardized, _ = build_standardized_dataframe(raw)

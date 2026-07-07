@@ -15,6 +15,7 @@ from credit_app.control_references import (
     build_risk_cartography_table,
     build_savings_product_reference_table,
     build_service_pricing_reference_table,
+    build_sql_operations_control_catalog_table,
 )
 from credit_app.cycles import (
     build_cycle_control_table,
@@ -569,6 +570,30 @@ def render_audit_control_tab(cycle_key: str = "credit", standardized_df: pd.Data
             [
                 "Une fiche CRM utile doit d'abord permettre d'identifier, joindre et suivre correctement le client.",
                 "Les informations d'identité, de contact et de dernière activité restent prioritaires pour accélérer les corrections.",
+            ],
+        )
+
+    if cycle_key == "__legacy_operations_depot_retrait__":
+        render_panel_title("Catalogue des contrÃ´les SQL de revue")
+        st.dataframe(build_sql_operations_control_catalog_table(), width="stretch", hide_index=True, height=430)
+        render_summary_box(
+            "Comment exploiter ce catalogue",
+            [
+                "Chaque contrÃ´le SQL sert Ã  prolonger une alerte du tableau de bord jusqu'au niveau du dÃ©tail opÃ©rationnel.",
+                "Les blocs 49 Ã  53 portent surtout sur les produits d'Ã©pargne et les comptes, 54 Ã  58 sur les mouvements, 59 Ã  63 sur le crÃ©dit et 64 Ã  68 sur la priorisation du risque.",
+                "En mission, l'idÃ©e est simple : repÃ©rer un signal dans l'application, ouvrir le contrÃ´le SQL correspondant, puis documenter le constat, la cause et la suite Ã  donner.",
+            ],
+        )
+
+    if cycle_key == "operations_depot_retrait":
+        render_panel_title("Catalogue des controles SQL de revue")
+        st.dataframe(build_sql_operations_control_catalog_table(), width="stretch", hide_index=True, height=430)
+        render_summary_box(
+            "Comment exploiter ce catalogue",
+            [
+                "Chaque controle SQL sert a prolonger une alerte du tableau de bord jusqu'au niveau du detail operationnel.",
+                "Les blocs 49 a 53 portent surtout sur les produits d'epargne et les comptes, 54 a 58 sur les mouvements, 59 a 63 sur le credit et 64 a 68 sur la priorisation du risque.",
+                "En mission, l'idee est simple : reperer un signal dans l'application, ouvrir le controle SQL correspondant, puis documenter le constat, la cause et la suite a donner.",
             ],
         )
 

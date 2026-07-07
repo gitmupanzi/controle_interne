@@ -65,6 +65,106 @@ def _first_notna(values: pd.Series) -> object:
 
 def _ensure_client_analysis_columns(df: pd.DataFrame) -> pd.DataFrame:
     work = df.copy()
+    if "operation_id" not in work.columns:
+        if "id_operation" in work.columns:
+            work["operation_id"] = work["id_operation"]
+        elif "numero_reference" in work.columns:
+            work["operation_id"] = work["numero_reference"]
+        elif "NUM_TRANSACTION" in work.columns:
+            work["operation_id"] = work["NUM_TRANSACTION"]
+        elif "compte_id" in work.columns:
+            work["operation_id"] = work["compte_id"]
+        else:
+            work["operation_id"] = pd.Series(
+                [f"ligne_{index}" for index in work.index],
+                index=work.index,
+                dtype="object",
+            )
+    if "source_mouvement" not in work.columns:
+        work["source_mouvement"] = pd.Series("NON_RENSEIGNE", index=work.index, dtype="object")
+    if "type_operation" not in work.columns:
+        if "ID_TYPE_OPERATION" in work.columns:
+            work["type_operation"] = work["ID_TYPE_OPERATION"].astype("string")
+        elif "type_mouvement" in work.columns:
+            reverse_map = {
+                "Depot": "DEPO",
+                "Retrait": "RETR",
+                "Depot mobile": "MOB_DEPO",
+                "Retrait mobile": "MOB_RETR",
+            }
+            work["type_operation"] = work["type_mouvement"].map(reverse_map).fillna(
+                work["type_mouvement"].astype("string")
+            )
+        else:
+            work["type_operation"] = pd.Series(pd.NA, index=work.index, dtype="object")
+    if "type_mouvement" not in work.columns:
+        forward_map = {
+            "DEPO": "Depot",
+            "RETR": "Retrait",
+            "MOB_DEPO": "Depot mobile",
+            "MOB_RETR": "Retrait mobile",
+        }
+        work["type_mouvement"] = work["type_operation"].map(forward_map).fillna(
+            work["type_operation"].astype("string")
+        )
+    if "date_operation" not in work.columns:
+        if "DATE_OPERATION" in work.columns:
+            work["date_operation"] = work["DATE_OPERATION"]
+        elif "date_saisie" in work.columns:
+            work["date_operation"] = work["date_saisie"]
+        elif "date_validation" in work.columns:
+            work["date_operation"] = work["date_validation"]
+        else:
+            work["date_operation"] = pd.Series(pd.NaT, index=work.index)
+    if "montant_operation" not in work.columns:
+        if "MONTANT_OPERATION" in work.columns:
+            work["montant_operation"] = work["MONTANT_OPERATION"]
+        elif "montant_reporting_cdf" in work.columns:
+            work["montant_operation"] = work["montant_reporting_cdf"]
+        else:
+            work["montant_operation"] = pd.Series(0.0, index=work.index)
+    if "code_devise" not in work.columns:
+        if "ID_DEVISE" in work.columns:
+            work["code_devise"] = work["ID_DEVISE"].map(DEVIS_CODE_MAP).fillna(
+                work["ID_DEVISE"].astype("string")
+            )
+        else:
+            work["code_devise"] = pd.Series("", index=work.index, dtype="object")
+    if "agence" not in work.columns:
+        if "ID_POINT_SERVICE" in work.columns:
+            work["agence"] = work["ID_POINT_SERVICE"]
+        elif "agence_client" in work.columns:
+            work["agence"] = work["agence_client"]
+        else:
+            work["agence"] = pd.Series(pd.NA, index=work.index, dtype="object")
+    if "annule" not in work.columns:
+        work["annule"] = pd.Series(False, index=work.index)
+    if "compte_id" not in work.columns:
+        if "ID_COMPTE" in work.columns:
+            work["compte_id"] = work["ID_COMPTE"]
+        else:
+            work["compte_id"] = pd.Series(pd.NA, index=work.index, dtype="object")
+    work["montant_operation"] = _coerce_number(work["montant_operation"]).fillna(0.0)
+    work["date_operation"] = _coerce_date(work["date_operation"])
+    work["type_operation"] = work["type_operation"].astype("string")
+    work["type_mouvement"] = work["type_mouvement"].astype("string")
+    work["source_mouvement"] = work["source_mouvement"].astype("string")
+    work["code_devise"] = work["code_devise"].astype("string")
+    work["agence"] = work["agence"].astype("string")
+    work["nb_ecritures"] = pd.to_numeric(
+        work.get("nb_ecritures", pd.Series(1, index=work.index)),
+        errors="coerce",
+    ).fillna(1)
+    if "total_debit" not in work.columns:
+        sens_series = work.get("SENS", pd.Series(index=work.index, dtype="object")).astype("string").str.upper()
+        work["total_debit"] = work["montant_operation"].where(sens_series.eq("D"), 0.0)
+    else:
+        work["total_debit"] = _coerce_number(work["total_debit"]).fillna(0.0)
+    if "total_credit" not in work.columns:
+        sens_series = work.get("SENS", pd.Series(index=work.index, dtype="object")).astype("string").str.upper()
+        work["total_credit"] = work["montant_operation"].where(sens_series.eq("C"), 0.0)
+    else:
+        work["total_credit"] = _coerce_number(work["total_credit"]).fillna(0.0)
     if "client_id" not in work.columns:
         if "compte_id" in work.columns:
             work["client_id"] = work["compte_id"]
@@ -86,6 +186,10 @@ def _ensure_client_analysis_columns(df: pd.DataFrame) -> pd.DataFrame:
         if column_name not in work.columns:
             work[column_name] = default_value
     return work
+
+
+def normalize_operations_analysis_frame(df: pd.DataFrame) -> pd.DataFrame:
+    return _ensure_client_analysis_columns(df)
 
 
 def _normalize_named_frames(named_frames: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
@@ -409,6 +513,7 @@ def build_lbcft_reporting_table(df: pd.DataFrame, conversion_rate: float) -> pd.
         return pd.DataFrame(columns=["section", "ligne_excel", "rubrique", "nombre", "volume_cdf", "commentaire"])
 
     work = apply_reporting_conversion(df.loc[~df.get("annule", pd.Series(False, index=df.index)).fillna(False)].copy(), conversion_rate)
+    work = _ensure_client_analysis_columns(work)
     threshold_5k = float(conversion_rate) * 5000.0
     threshold_10k = float(conversion_rate) * 10000.0
 
@@ -698,6 +803,7 @@ def build_mobile_banking_summary_table(df: pd.DataFrame, conversion_rate: float)
     if df.empty:
         return pd.DataFrame()
     work = apply_reporting_conversion(df.loc[df.get("source_mouvement", pd.Series(index=df.index)).eq("API_MOBILE")].copy(), conversion_rate)
+    work = _ensure_client_analysis_columns(work)
     if work.empty:
         return work
     grouped = (

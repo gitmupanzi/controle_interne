@@ -24,6 +24,7 @@ from credit_app.sql_operations import (
     build_client_movement_summary_table,
     build_lbcft_reporting_table,
     build_mobile_banking_summary_table,
+    normalize_operations_analysis_frame,
     build_top_clients_table,
 )
 from credit_app.ui import (
@@ -703,7 +704,9 @@ def _render_epargne_reconstructed_report(
 
 
 def _render_operations_portfolio_report(df: pd.DataFrame, conversion_rate: float) -> None:
-    work = df.loc[~df.get("annule", pd.Series(False, index=df.index)).fillna(False)].copy()
+    work = normalize_operations_analysis_frame(
+        df.loc[~df.get("annule", pd.Series(False, index=df.index)).fillna(False)].copy()
+    )
     if work.empty:
         st.info("Aucune opération active n'est disponible pour construire le rapport dépôts / retraits.")
         return

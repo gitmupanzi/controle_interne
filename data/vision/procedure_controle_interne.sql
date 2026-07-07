@@ -1595,7 +1595,679 @@ BEGIN
         RETURN;
     END;
 
-    RAISERROR('Controle inconnu. Utiliser un @controle_id entre 1 et 48.', 16, 1);
+    IF @controle_id = 49
+    BEGIN
+        SELECT pe.ID AS id_produit_epargne,
+            pe.LIBELLE AS produit_epargne,
+            pe.ACTIF AS produit_actif,
+            c.ID AS id_compte,
+            c.NUM_CPTE AS numero_compte,
+            c.ETAT AS etat_compte,
+            a.ID AS id_adherent,
+            a.CODE AS code_adherent,
+            a.NOM_ADHERENT,
+            ps.CODE AS code_agence,
+            ps.NOM AS nom_agence
+        FROM dbo.COMPTES c
+        INNER JOIN dbo.COMPTES_ADHERENT_INFO cai ON cai.id = c.ID
+        INNER JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
+        LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
+        LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = COALESCE(c.ID_POINT_SERVICE, c.ID_AGENCE)
+        WHERE ISNULL(pe.ACTIF, 0) = 0
+        ORDER BY pe.LIBELLE, c.NUM_CPTE;
+        RETURN;
+    END;
+
+    IF @controle_id = 50
+    BEGIN
+        SELECT pe.ID AS id_produit_epargne,
+            pe.LIBELLE AS produit_epargne,
+            pe.IS_EPG_VALIDE,
+            c.ID AS id_compte,
+            c.NUM_CPTE AS numero_compte,
+            c.ETAT AS etat_compte,
+            a.ID AS id_adherent,
+            a.CODE AS code_adherent,
+            a.NOM_ADHERENT,
+            ps.CODE AS code_agence,
+            ps.NOM AS nom_agence
+        FROM dbo.COMPTES c
+        INNER JOIN dbo.COMPTES_ADHERENT_INFO cai ON cai.id = c.ID
+        INNER JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
+        LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
+        LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = COALESCE(c.ID_POINT_SERVICE, c.ID_AGENCE)
+        WHERE ISNULL(pe.IS_EPG_VALIDE, 0) = 0
+        ORDER BY pe.LIBELLE, c.NUM_CPTE;
+        RETURN;
+    END;
+
+    IF @controle_id = 51
+    BEGIN
+        SELECT CASE
+                WHEN h.SENS = 'C' AND ISNULL(pe.OPERATION_DEPOT, 0) = 0 THEN 'Credits sur produit sans depot autorise'
+                WHEN h.SENS = 'D' AND ISNULL(pe.OPERATION_RETRAIT, 0) = 0 THEN 'Debits sur produit sans retrait autorise'
+                ELSE 'Autre'
+            END AS anomalie,
+            pe.ID AS id_produit_epargne,
+            pe.LIBELLE AS produit_epargne,
+            c.ID AS id_compte,
+            c.NUM_CPTE AS numero_compte,
+            a.CODE AS code_adherent,
+            a.NOM_ADHERENT,
+            ps.CODE AS code_agence,
+            ps.NOM AS nom_agence,
+            COUNT(*) AS nb_mouvements,
+            SUM(ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION))) AS montant_total
+        FROM dbo.HDPM_VIEW h
+        INNER JOIN dbo.COMPTES c ON c.ID = h.ID_COMPTE
+        INNER JOIN dbo.COMPTES_ADHERENT_INFO cai ON cai.id = c.ID
+        INNER JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
+        LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
+        LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = COALESCE(h.ID_POINT_SERVICE, c.ID_POINT_SERVICE, c.ID_AGENCE)
+        WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+            AND ISNULL(h.ID_TYPE_OPERATION, '') <> 'REPR'
+            AND ((h.SENS = 'C' AND ISNULL(pe.OPERATION_DEPOT, 0) = 0)
+                OR (h.SENS = 'D' AND ISNULL(pe.OPERATION_RETRAIT, 0) = 0))
+        GROUP BY CASE
+                WHEN h.SENS = 'C' AND ISNULL(pe.OPERATION_DEPOT, 0) = 0 THEN 'Credits sur produit sans depot autorise'
+                WHEN h.SENS = 'D' AND ISNULL(pe.OPERATION_RETRAIT, 0) = 0 THEN 'Debits sur produit sans retrait autorise'
+                ELSE 'Autre'
+            END,
+            pe.ID, pe.LIBELLE, c.ID, c.NUM_CPTE, a.CODE, a.NOM_ADHERENT, ps.CODE, ps.NOM
+        ORDER BY nb_mouvements DESC, montant_total DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 52
+    BEGIN
+        SELECT pe.ID AS id_produit_epargne,
+            pe.LIBELLE AS produit_epargne,
+            dp.CODE AS devise_produit,
+            c.ID AS id_compte,
+            c.NUM_CPTE AS numero_compte,
+            dc.CODE AS devise_compte,
+            h.ID AS id_mouvement,
+            h.DATE_OPERATION,
+            dh.CODE AS devise_mouvement,
+            h.MONTANT_OPERATION,
+            h.ID_TYPE_OPERATION,
+            a.CODE AS code_adherent,
+            a.NOM_ADHERENT
+        FROM dbo.HDPM_VIEW h
+        INNER JOIN dbo.COMPTES c ON c.ID = h.ID_COMPTE
+        INNER JOIN dbo.COMPTES_ADHERENT_INFO cai ON cai.id = c.ID
+        INNER JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
+        LEFT JOIN dbo.DEVISES dp ON dp.ID = pe.ID_DEVISE
+        LEFT JOIN dbo.DEVISES dc ON dc.ID = c.ID_DEVISE
+        LEFT JOIN dbo.DEVISES dh ON dh.ID = h.ID_DEVISE
+        LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
+        LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+        WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+            AND ISNULL(h.ID_TYPE_OPERATION, '') <> 'REPR'
+            AND (
+                ISNULL(pe.ID_DEVISE, -1) <> ISNULL(c.ID_DEVISE, -1)
+                OR ISNULL(pe.ID_DEVISE, -1) <> ISNULL(h.ID_DEVISE, -1)
+                OR ISNULL(c.ID_DEVISE, -1) <> ISNULL(h.ID_DEVISE, -1)
+            )
+        ORDER BY h.DATE_OPERATION DESC, pe.LIBELLE, c.NUM_CPTE;
+        RETURN;
+    END;
+
+    IF @controle_id = 53
+    BEGIN
+        SELECT c.ID AS id_compte,
+            c.NUM_CPTE AS numero_compte,
+            c.ETAT AS etat_compte,
+            cai.ID_PRODUIT_EPG AS id_produit_reference,
+            pe.LIBELLE AS produit_epargne,
+            CASE
+                WHEN cai.ID_PRODUIT_EPG IS NULL THEN 'Compte sans produit epargne reference'
+                WHEN pe.ID IS NULL THEN 'Produit epargne introuvable'
+                WHEN ISNULL(pe.IS_EPG_VALIDE, 0) = 0 THEN 'Produit epargne non valide'
+                ELSE 'A verifier'
+            END AS anomalie,
+            a.CODE AS code_adherent,
+            a.NOM_ADHERENT,
+            ps.CODE AS code_agence,
+            ps.NOM AS nom_agence
+        FROM dbo.COMPTES c
+        LEFT JOIN dbo.COMPTES_ADHERENT_INFO cai ON cai.id = c.ID
+        LEFT JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
+        LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
+        LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = COALESCE(c.ID_POINT_SERVICE, c.ID_AGENCE)
+        WHERE cai.ID_PRODUIT_EPG IS NULL
+            OR pe.ID IS NULL
+            OR ISNULL(pe.IS_EPG_VALIDE, 0) = 0
+        ORDER BY anomalie, c.NUM_CPTE;
+        RETURN;
+    END;
+
+    IF @controle_id = 54
+    BEGIN
+        SELECT h.ID AS id_mouvement,
+            h.DATE_OPERATION,
+            h.ID_COMPTE,
+            c.NUM_CPTE AS numero_compte,
+            h.ID_OPERATION,
+            h.NUM_TRANSACTION,
+            h.NUMERO_RECU,
+            h.ID_POINT_SERVICE,
+            h.ID_TYPE_OPERATION,
+            h.SENS,
+            h.MONTANT_OPERATION,
+            CASE
+                WHEN NULLIF(LTRIM(RTRIM(ISNULL(h.ID_COMPTE, ''))), '') IS NULL THEN 'Mouvement sans compte'
+                WHEN c.ID IS NULL THEN 'Mouvement avec compte inexistant'
+                WHEN NULLIF(LTRIM(RTRIM(ISNULL(h.ID_OPERATION, ''))), '') IS NULL THEN 'Mouvement sans operation rattachee'
+                WHEN o.ID IS NULL AND oa.CODE IS NULL THEN 'Operation rattachee introuvable'
+                ELSE 'A verifier'
+            END AS anomalie
+        FROM dbo.HDPM_VIEW h
+        LEFT JOIN dbo.COMPTES c ON c.ID = h.ID_COMPTE
+        LEFT JOIN dbo.OPERATIONS o ON o.ID = h.ID_OPERATION
+        LEFT JOIN dbo.OPERATIONS_API oa ON oa.CODE = h.ID_OPERATION
+        WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+            AND (
+                NULLIF(LTRIM(RTRIM(ISNULL(h.ID_COMPTE, ''))), '') IS NULL
+                OR c.ID IS NULL
+                OR NULLIF(LTRIM(RTRIM(ISNULL(h.ID_OPERATION, ''))), '') IS NULL
+                OR (o.ID IS NULL AND oa.CODE IS NULL)
+            )
+        ORDER BY h.DATE_OPERATION DESC, anomalie;
+        RETURN;
+    END;
+
+    IF @controle_id = 55
+    BEGIN
+        SELECT h.ID AS id_mouvement,
+            h.DATE_OPERATION,
+            h.ID_COMPTE,
+            c.NUM_CPTE AS numero_compte,
+            h.ID_OPERATION,
+            h.ID_TYPE_OPERATION,
+            h.SENS,
+            h.MONTANT_OPERATION,
+            h.MONTANT_REEL,
+            d.CODE AS devise_mouvement,
+            CASE
+                WHEN ISNULL(h.MONTANT_OPERATION, 0) = 0 THEN 'Montant nul'
+                WHEN ISNULL(h.MONTANT_OPERATION, 0) < 0 THEN 'Montant negatif'
+                WHEN ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION)) >= CASE WHEN @seuil_10k_usd_cdf > 0 THEN @seuil_10k_usd_cdf ELSE 10000000 END THEN 'Montant eleve'
+                ELSE 'A verifier'
+            END AS anomalie
+        FROM dbo.HDPM_VIEW h
+        LEFT JOIN dbo.COMPTES c ON c.ID = h.ID_COMPTE
+        LEFT JOIN dbo.DEVISES d ON d.ID = h.ID_DEVISE
+        WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+            AND (
+                ISNULL(h.MONTANT_OPERATION, 0) <= 0
+                OR ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION)) >= CASE WHEN @seuil_10k_usd_cdf > 0 THEN @seuil_10k_usd_cdf ELSE 10000000 END
+            )
+        ORDER BY ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION)) DESC, h.DATE_OPERATION DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 56
+    BEGIN
+        SELECT CASE
+                WHEN h.SENS = 'C' THEN 'Depot / entree'
+                WHEN h.SENS = 'D' THEN 'Retrait / sortie'
+                ELSE 'Autre'
+            END AS nature_mouvement,
+            a.ID AS id_adherent,
+            a.CODE AS code_adherent,
+            a.NOM_ADHERENT,
+            c.ID AS id_compte,
+            c.NUM_CPTE AS numero_compte,
+            ps.CODE AS code_agence,
+            ps.NOM AS nom_agence,
+            d.CODE AS devise,
+            pe.ID AS id_produit_epargne,
+            pe.LIBELLE AS produit_epargne,
+            COUNT(*) AS nb_mouvements,
+            SUM(ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION))) AS montant_total,
+            AVG(ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION))) AS montant_moyen,
+            MAX(ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION))) AS montant_max
+        FROM dbo.HDPM_VIEW h
+        INNER JOIN dbo.COMPTES c ON c.ID = h.ID_COMPTE
+        LEFT JOIN dbo.COMPTES_ADHERENT_INFO cai ON cai.id = c.ID
+        LEFT JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
+        LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
+        LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = COALESCE(h.ID_POINT_SERVICE, c.ID_POINT_SERVICE, c.ID_AGENCE)
+        LEFT JOIN dbo.DEVISES d ON d.ID = h.ID_DEVISE
+        WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+            AND ISNULL(h.ID_TYPE_OPERATION, '') <> 'REPR'
+            AND h.SENS IN ('C', 'D')
+        GROUP BY CASE
+                WHEN h.SENS = 'C' THEN 'Depot / entree'
+                WHEN h.SENS = 'D' THEN 'Retrait / sortie'
+                ELSE 'Autre'
+            END,
+            a.ID, a.CODE, a.NOM_ADHERENT, c.ID, c.NUM_CPTE, ps.CODE, ps.NOM, d.CODE, pe.ID, pe.LIBELLE
+        ORDER BY montant_total DESC, nb_mouvements DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 57
+    BEGIN
+        SELECT DATEFROMPARTS(YEAR(h.DATE_OPERATION), MONTH(h.DATE_OPERATION), 1) AS mois,
+            ps.CODE AS code_point_service,
+            ps.NOM AS nom_point_service,
+            d.CODE AS devise,
+            COUNT(*) AS nb_gros_mouvements,
+            SUM(ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION))) AS volume_total,
+            MAX(ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION))) AS plus_gros_mouvement
+        FROM dbo.HDPM_VIEW h
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = h.ID_POINT_SERVICE
+        LEFT JOIN dbo.DEVISES d ON d.ID = h.ID_DEVISE
+        WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+            AND ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION)) >= CASE WHEN @seuil_5k_usd_cdf > 0 THEN @seuil_5k_usd_cdf ELSE 5000000 END
+        GROUP BY DATEFROMPARTS(YEAR(h.DATE_OPERATION), MONTH(h.DATE_OPERATION), 1), ps.CODE, ps.NOM, d.CODE
+        ORDER BY mois, volume_total DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 58
+    BEGIN
+        SELECT h.ID_POINT_SERVICE,
+            ps.CODE AS code_point_service,
+            ps.NOM AS nom_point_service,
+            d.CODE AS devise,
+            COUNT(*) AS nb_mouvements,
+            COUNT(DISTINCT h.ID_COMPTE) AS nb_comptes_touches,
+            COUNT(DISTINCT h.ID_OPERATION) AS nb_operations_rattachees,
+            SUM(CASE WHEN h.SENS = 'C' THEN ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION)) ELSE 0 END) AS total_credits,
+            SUM(CASE WHEN h.SENS = 'D' THEN ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION)) ELSE 0 END) AS total_debits
+        FROM dbo.HDPM_VIEW h
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = h.ID_POINT_SERVICE
+        LEFT JOIN dbo.DEVISES d ON d.ID = h.ID_DEVISE
+        WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+            AND ISNULL(h.ID_TYPE_OPERATION, '') <> 'REPR'
+        GROUP BY h.ID_POINT_SERVICE, ps.CODE, ps.NOM, d.CODE
+        ORDER BY nb_mouvements DESC, total_credits + total_debits DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 59
+    BEGIN
+        SELECT dc.ID AS id_demande,
+            dc.NUM_DEMANDE,
+            dc.REF_DEMANDE,
+            dc.DATE_RECEPTION,
+            dc.ETAT_DEMANDE,
+            dc.MONTANT_DEMANDE,
+            dc.ID_POINT_SERIVCE,
+            ps_service.CODE AS code_point_service_demande,
+            ps_service.NOM AS nom_point_service_demande,
+            dc.ID_AGENCE,
+            ps_agence.CODE AS code_agence,
+            ps_agence.NOM AS nom_agence,
+            a.CODE AS code_adherent,
+            a.NOM_ADHERENT,
+            pc.LIBELLE AS produit_credit,
+            d.ID AS id_dossier_credit,
+            d.NUM_DOSSIER,
+            p.ID AS id_pret
+        FROM dbo.DEMANDES_CREDIT dc
+        LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+        LEFT JOIN dbo.POINTS_SERVICE ps_service ON ps_service.ID = dc.ID_POINT_SERIVCE
+        LEFT JOIN dbo.POINTS_SERVICE ps_agence ON ps_agence.ID = dc.ID_AGENCE
+        LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
+        LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
+        LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
+        WHERE dc.DATE_RECEPTION BETWEEN @date_debut AND @date_fin
+            AND p.ID IS NULL
+        ORDER BY dc.DATE_RECEPTION DESC, dc.MONTANT_DEMANDE DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 60
+    BEGIN
+        WITH cycles AS (
+            SELECT ID_PRET, COUNT(*) AS nb_cycles
+            FROM dbo.CYCLES_PRET
+            GROUP BY ID_PRET
+        )
+        SELECT p.ID AS id_pret,
+            p.NUMERO_PRET,
+            p.NUMERO_CONTRAT,
+            p.DATE_DECAISSEMENT,
+            p.MONTANT,
+            p.ID_DOSSIER_CREDIT,
+            d.NUM_DOSSIER,
+            p.ID_COMPTE_CREDIT,
+            cc.NUM_CPTE AS numero_compte_credit,
+            p.ID_COMPTE_EPARGNE,
+            ce.NUM_CPTE AS numero_compte_epargne,
+            p.ID_DEVISE,
+            dv.CODE AS devise_pret,
+            ISNULL(cy.nb_cycles, 0) AS nb_cycles,
+            CASE WHEN p.ID_DOSSIER_CREDIT IS NULL OR d.ID IS NULL THEN 1 ELSE 0 END AS anomalie_dossier,
+            CASE WHEN p.ID_COMPTE_CREDIT IS NULL OR cc.ID IS NULL THEN 1 ELSE 0 END AS anomalie_compte_credit,
+            CASE WHEN p.ID_COMPTE_EPARGNE IS NULL OR ce.ID IS NULL THEN 1 ELSE 0 END AS anomalie_compte_epargne,
+            CASE WHEN ISNULL(cy.nb_cycles, 0) = 0 THEN 1 ELSE 0 END AS anomalie_cycle
+        FROM dbo.PRETS p
+        LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+        LEFT JOIN dbo.COMPTES cc ON cc.ID = p.ID_COMPTE_CREDIT
+        LEFT JOIN dbo.COMPTES ce ON ce.ID = p.ID_COMPTE_EPARGNE
+        LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
+        LEFT JOIN cycles cy ON cy.ID_PRET = p.ID
+        WHERE ((p.DATE_DECAISSEMENT BETWEEN @date_debut AND @date_fin)
+            OR (p.DATE_EFFET BETWEEN @date_debut AND @date_fin))
+            AND (
+                p.ID_DOSSIER_CREDIT IS NULL
+                OR d.ID IS NULL
+                OR p.ID_COMPTE_CREDIT IS NULL
+                OR cc.ID IS NULL
+                OR p.ID_COMPTE_EPARGNE IS NULL
+                OR ce.ID IS NULL
+                OR ISNULL(cy.nb_cycles, 0) = 0
+            )
+        ORDER BY p.DATE_DECAISSEMENT DESC, p.MONTANT DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 61
+    BEGIN
+        SELECT cp.ID AS id_cycle_pret,
+            cp.ID_PRET,
+            p.NUMERO_PRET,
+            p.NUMERO_CONTRAT,
+            cp.NUM_CYCLE,
+            cp.DATE_DEBUT,
+            cp.FIN_ECHEANCE,
+            cp.DATE_CLOTURE,
+            cp.MONTANT AS montant_cycle,
+            p.MONTANT AS montant_pret,
+            d.NUM_DOSSIER,
+            a.CODE AS code_adherent,
+            a.NOM_ADHERENT,
+            DATEDIFF(day, cp.FIN_ECHEANCE, @date_fin) AS jours_de_depassement
+        FROM dbo.CYCLES_PRET cp
+        INNER JOIN dbo.PRETS p ON p.ID = cp.ID_PRET
+        LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+        LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+        LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+        WHERE cp.FIN_ECHEANCE IS NOT NULL
+            AND cp.FIN_ECHEANCE < @date_fin
+            AND cp.DATE_CLOTURE IS NULL
+        ORDER BY jours_de_depassement DESC, cp.FIN_ECHEANCE;
+        RETURN;
+    END;
+
+    IF @controle_id = 62
+    BEGIN
+        SELECT dc.ID AS id_demande,
+            dc.NUM_DEMANDE,
+            dc.REF_DEMANDE,
+            dc.DATE_RECEPTION,
+            dc.ETAT_DEMANDE,
+            a.CODE AS code_adherent,
+            a.NOM_ADHERENT,
+            pc.LIBELLE AS produit_credit,
+            dc.MONTANT_DEMANDE,
+            d.ID AS id_dossier_credit,
+            d.NUM_DOSSIER,
+            d.MONTANT_SOLLICITE,
+            d.MONTANT_ACCORDE,
+            p.ID AS id_pret,
+            p.NUMERO_PRET,
+            p.MONTANT AS montant_pret,
+            ISNULL(d.MONTANT_ACCORDE, 0) - ISNULL(dc.MONTANT_DEMANDE, 0) AS ecart_dossier_vs_demande,
+            ISNULL(p.MONTANT, 0) - ISNULL(dc.MONTANT_DEMANDE, 0) AS ecart_pret_vs_demande
+        FROM dbo.DEMANDES_CREDIT dc
+        LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+        LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
+        LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
+        LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
+        WHERE dc.DATE_RECEPTION BETWEEN @date_debut AND @date_fin
+        ORDER BY ABS(ISNULL(p.MONTANT, 0) - ISNULL(dc.MONTANT_DEMANDE, 0)) DESC, dc.DATE_RECEPTION DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 63
+    BEGIN
+        SELECT dc.ID_AGENCE,
+            ps.CODE AS code_agence,
+            ps.NOM AS nom_agence,
+            dc.ID_POINT_SERIVCE,
+            pss.CODE AS code_point_service_demande,
+            pss.NOM AS nom_point_service_demande,
+            pc.ID AS id_produit_credit,
+            pc.LIBELLE AS produit_credit,
+            dv.CODE AS devise_reference,
+            dc.ETAT_DEMANDE,
+            COUNT(DISTINCT dc.ID) AS nb_demandes,
+            COUNT(DISTINCT d.ID) AS nb_dossiers,
+            COUNT(DISTINCT p.ID) AS nb_prets,
+            SUM(ISNULL(dc.MONTANT_DEMANDE, 0)) AS total_demande,
+            SUM(ISNULL(d.MONTANT_ACCORDE, 0)) AS total_accorde_dossier,
+            SUM(ISNULL(p.MONTANT, 0)) AS total_pret
+        FROM dbo.DEMANDES_CREDIT dc
+        LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
+        LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
+        LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
+        LEFT JOIN dbo.DEVISES dv ON dv.ID = COALESCE(p.ID_DEVISE, pc.ID_DEVISE)
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_AGENCE
+        LEFT JOIN dbo.POINTS_SERVICE pss ON pss.ID = dc.ID_POINT_SERIVCE
+        WHERE dc.DATE_RECEPTION BETWEEN @date_debut AND @date_fin
+        GROUP BY dc.ID_AGENCE, ps.CODE, ps.NOM, dc.ID_POINT_SERIVCE, pss.CODE, pss.NOM, pc.ID, pc.LIBELLE, dv.CODE, dc.ETAT_DEMANDE
+        ORDER BY total_demande DESC, nb_demandes DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 64
+    BEGIN
+        WITH epargne AS (
+            SELECT ca.ID_ADHERENT,
+                COUNT(*) AS nb_mouvements_epargne,
+                SUM(ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION))) AS volume_epargne,
+                MAX(ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION))) AS plus_gros_mouvement
+            FROM dbo.HDPM_VIEW h
+            INNER JOIN dbo.COMPTES c ON c.ID = h.ID_COMPTE
+            INNER JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
+            WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+                AND ISNULL(h.ID_TYPE_OPERATION, '') <> 'REPR'
+            GROUP BY ca.ID_ADHERENT
+        ),
+        credits AS (
+            SELECT dc.ID_ADHERENT,
+                COUNT(DISTINCT p.ID) AS nb_prets_actifs,
+                SUM(ISNULL(p.MONTANT, 0)) AS encours_reference_credit
+            FROM dbo.PRETS p
+            INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+            INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+            WHERE ISNULL(p.DATE_SOLDE, '9999-12-31') > @date_fin
+                AND p.DATE_SORTIE IS NULL
+                AND p.DATE_PERTE IS NULL
+            GROUP BY dc.ID_ADHERENT
+        )
+        SELECT a.ID AS id_adherent,
+            a.CODE AS code_adherent,
+            a.NOM_ADHERENT,
+            e.nb_mouvements_epargne,
+            e.volume_epargne,
+            e.plus_gros_mouvement,
+            c.nb_prets_actifs,
+            c.encours_reference_credit
+        FROM epargne e
+        INNER JOIN credits c ON c.ID_ADHERENT = e.ID_ADHERENT
+        INNER JOIN dbo.ADHERENTS a ON a.ID = e.ID_ADHERENT
+        WHERE e.volume_epargne >= CASE WHEN @seuil_5k_usd_cdf > 0 THEN @seuil_5k_usd_cdf ELSE 5000000 END
+        ORDER BY e.volume_epargne DESC, c.nb_prets_actifs DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 65
+    BEGIN
+        SELECT dc.ID_ADHERENT,
+            a.CODE AS code_adherent,
+            a.NOM_ADHERENT,
+            DATEFROMPARTS(YEAR(dc.DATE_RECEPTION), MONTH(dc.DATE_RECEPTION), 1) AS mois_reception,
+            COUNT(*) AS nb_demandes,
+            SUM(ISNULL(dc.MONTANT_DEMANDE, 0)) AS montant_total_demande,
+            COUNT(DISTINCT dc.ID_PRODUIT_CREDIT) AS nb_produits_demandes
+        FROM dbo.DEMANDES_CREDIT dc
+        LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+        WHERE dc.DATE_RECEPTION BETWEEN @date_debut AND @date_fin
+        GROUP BY dc.ID_ADHERENT, a.CODE, a.NOM_ADHERENT, DATEFROMPARTS(YEAR(dc.DATE_RECEPTION), MONTH(dc.DATE_RECEPTION), 1)
+        HAVING COUNT(*) > 1
+        ORDER BY nb_demandes DESC, montant_total_demande DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 66
+    BEGIN
+        SELECT 'MOUVEMENTS' AS source_volume,
+            h.ID_POINT_SERVICE AS id_agence,
+            ps.CODE AS code_agence,
+            ps.NOM AS nom_agence,
+            COUNT(*) AS nb_elements,
+            SUM(ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION))) AS volume_total
+        FROM dbo.HDPM_VIEW h
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = h.ID_POINT_SERVICE
+        WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+            AND ISNULL(h.ID_TYPE_OPERATION, '') <> 'REPR'
+        GROUP BY h.ID_POINT_SERVICE, ps.CODE, ps.NOM
+        UNION ALL
+        SELECT 'CREDITS' AS source_volume,
+            dc.ID_AGENCE,
+            ps.CODE,
+            ps.NOM,
+            COUNT(DISTINCT dc.ID) AS nb_elements,
+            SUM(ISNULL(dc.MONTANT_DEMANDE, 0)) AS volume_total
+        FROM dbo.DEMANDES_CREDIT dc
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_AGENCE
+        WHERE dc.DATE_RECEPTION BETWEEN @date_debut AND @date_fin
+        GROUP BY dc.ID_AGENCE, ps.CODE, ps.NOM
+        ORDER BY source_volume, volume_total DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 67
+    BEGIN
+        SELECT 'EPARGNE' AS source_produit,
+            CAST(pe.ID AS varchar(50)) AS id_produit,
+            pe.LIBELLE AS libelle_produit,
+            COUNT(DISTINCT c.ID) AS nb_comptes,
+            COUNT(h.ID) AS nb_mouvements,
+            SUM(ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION))) AS volume_total
+        FROM dbo.PRODUITS_EPG pe
+        INNER JOIN dbo.COMPTES_ADHERENT_INFO cai ON cai.ID_PRODUIT_EPG = pe.ID
+        INNER JOIN dbo.COMPTES c ON c.ID = cai.id
+        LEFT JOIN dbo.HDPM_VIEW h ON h.ID_COMPTE = c.ID
+            AND h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+            AND ISNULL(h.ID_TYPE_OPERATION, '') <> 'REPR'
+        GROUP BY pe.ID, pe.LIBELLE
+        UNION ALL
+        SELECT 'CREDIT' AS source_produit,
+            CAST(pc.ID AS varchar(50)) AS id_produit,
+            pc.LIBELLE AS libelle_produit,
+            COUNT(DISTINCT dc.ID) AS nb_comptes,
+            COUNT(DISTINCT dc.ID) AS nb_mouvements,
+            SUM(ISNULL(dc.MONTANT_DEMANDE, 0)) AS volume_total
+        FROM dbo.PRODUITS_CRD pc
+        LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID_PRODUIT_CREDIT = pc.ID
+            AND dc.DATE_RECEPTION BETWEEN @date_debut AND @date_fin
+        GROUP BY pc.ID, pc.LIBELLE
+        ORDER BY source_produit, volume_total DESC;
+        RETURN;
+    END;
+
+    IF @controle_id = 68
+    BEGIN
+        WITH produits_inactifs AS (
+            SELECT COUNT(*) AS nb_cas
+            FROM dbo.COMPTES c
+            INNER JOIN dbo.COMPTES_ADHERENT_INFO cai ON cai.id = c.ID
+            INNER JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
+            WHERE ISNULL(pe.ACTIF, 0) = 0
+        ),
+        produits_non_valides AS (
+            SELECT COUNT(*) AS nb_cas
+            FROM dbo.COMPTES c
+            INNER JOIN dbo.COMPTES_ADHERENT_INFO cai ON cai.id = c.ID
+            INNER JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
+            WHERE ISNULL(pe.IS_EPG_VALIDE, 0) = 0
+        ),
+        comptes_sans_produit AS (
+            SELECT COUNT(*) AS nb_cas
+            FROM dbo.COMPTES c
+            LEFT JOIN dbo.COMPTES_ADHERENT_INFO cai ON cai.id = c.ID
+            LEFT JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
+            WHERE cai.ID_PRODUIT_EPG IS NULL OR pe.ID IS NULL
+        ),
+        mouvements_non_justifies AS (
+            SELECT COUNT(*) AS nb_cas
+            FROM dbo.HDPM_VIEW h
+            LEFT JOIN dbo.COMPTES c ON c.ID = h.ID_COMPTE
+            LEFT JOIN dbo.OPERATIONS o ON o.ID = h.ID_OPERATION
+            LEFT JOIN dbo.OPERATIONS_API oa ON oa.CODE = h.ID_OPERATION
+            WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+                AND (
+                    NULLIF(LTRIM(RTRIM(ISNULL(h.ID_COMPTE, ''))), '') IS NULL
+                    OR c.ID IS NULL
+                    OR NULLIF(LTRIM(RTRIM(ISNULL(h.ID_OPERATION, ''))), '') IS NULL
+                    OR (o.ID IS NULL AND oa.CODE IS NULL)
+                )
+        ),
+        demandes_sans_pret AS (
+            SELECT COUNT(*) AS nb_cas
+            FROM dbo.DEMANDES_CREDIT dc
+            LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
+            LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
+            WHERE dc.DATE_RECEPTION BETWEEN @date_debut AND @date_fin
+                AND p.ID IS NULL
+        ),
+        prets_sans_cycle AS (
+            SELECT COUNT(*) AS nb_cas
+            FROM dbo.PRETS p
+            LEFT JOIN (
+                SELECT ID_PRET, COUNT(*) AS nb_cycles
+                FROM dbo.CYCLES_PRET
+                GROUP BY ID_PRET
+            ) cy ON cy.ID_PRET = p.ID
+            WHERE ((p.DATE_DECAISSEMENT BETWEEN @date_debut AND @date_fin)
+                OR (p.DATE_EFFET BETWEEN @date_debut AND @date_fin))
+                AND ISNULL(cy.nb_cycles, 0) = 0
+        ),
+        cycles_en_retard AS (
+            SELECT COUNT(*) AS nb_cas
+            FROM dbo.CYCLES_PRET cp
+            WHERE cp.FIN_ECHEANCE IS NOT NULL
+                AND cp.FIN_ECHEANCE < @date_fin
+                AND cp.DATE_CLOTURE IS NULL
+        )
+        SELECT 'Epargne' AS domaine, 'Produits inactifs encore utilises' AS anomalie, 'Haute' AS priorite, nb_cas
+        FROM produits_inactifs
+        UNION ALL
+        SELECT 'Epargne', 'Produits non valides encore utilises', 'Haute', nb_cas
+        FROM produits_non_valides
+        UNION ALL
+        SELECT 'Epargne', 'Comptes sans produit ou avec produit introuvable', 'Haute', nb_cas
+        FROM comptes_sans_produit
+        UNION ALL
+        SELECT 'Mouvements', 'Mouvements sans reference complete', 'Haute', nb_cas
+        FROM mouvements_non_justifies
+        UNION ALL
+        SELECT 'Credit', 'Demandes sans pret accorde', 'Moyenne', nb_cas
+        FROM demandes_sans_pret
+        UNION ALL
+        SELECT 'Credit', 'Prets sans cycle', 'Haute', nb_cas
+        FROM prets_sans_cycle
+        UNION ALL
+        SELECT 'Credit', 'Cycles echus non clotures', 'Haute', nb_cas
+        FROM cycles_en_retard
+        ORDER BY nb_cas DESC, domaine, anomalie;
+        RETURN;
+    END;
+
+    RAISERROR('Controle inconnu. Utiliser un @controle_id entre 1 et 68.', 16, 1);
 END;
 GO
 
@@ -1611,4 +2283,4 @@ EXEC dbo.sp_controle_interne_vision_pro
     @date_debut = '2026-01-01',
     @date_fin = '2026-12-31',
     @controle_id = 14;
-/*
+*/
