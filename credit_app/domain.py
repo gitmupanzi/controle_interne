@@ -125,6 +125,7 @@ CYCLE_DATE_PRIORITY = {
     "credit": ["date_demande", "date_decision"],
     "likelemba": ["date_demande", "date_decision"],
     "epargne": ["date_operation", "date_demande"],
+    "operations_depot_retrait": ["date_operation"],
     "crm_clients": ["date_operation"],
     "caisse": ["date_operation"],
     "tresorerie": ["date_operation"],
@@ -1835,6 +1836,67 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
             mark(missing_text("journal_transaction"), "Journal de transaction manquant")
         if "solde_final" in df.columns:
             mark(pd.to_numeric(df["solde_final"], errors="coerce") < 0, "Solde final négatif")
+    elif cycle_key == "operations_depot_retrait":
+        if "operation_non_validee" in df.columns:
+            mark(df["operation_non_validee"].fillna(False), "Opération non validée")
+        if "saisie_tardive" in df.columns:
+            mark(df["saisie_tardive"].fillna(False), "Saisie tardive")
+        if "validation_incoherente" in df.columns:
+            mark(df["validation_incoherente"].fillna(False), "Validation incohérente")
+        if "auto_validation" in df.columns:
+            mark(df["auto_validation"].fillna(False), "Auto-validation")
+        if "annule" in df.columns:
+            mark(df["annule"].fillna(False), "Opération annulée")
+        if "operateur" in df.columns:
+            mark(missing_text("operateur"), "Utilisateur non renseigné")
+        if "agence" in df.columns:
+            mark(missing_text("agence"), "Point de service manquant")
+        if "type_operation" in df.columns:
+            mark(missing_text("type_operation"), "Type d'opération manquant")
+        if "numero_reference" in df.columns:
+            duplicate_ref_mask = (
+                df["numero_reference"]
+                .astype("string")
+                .str.strip()
+                .replace("", pd.NA)
+                .map(
+                    df["numero_reference"]
+                    .astype("string")
+                    .str.strip()
+                    .replace("", pd.NA)
+                    .value_counts(dropna=True)
+                )
+                .fillna(0)
+                .gt(1)
+            )
+            mark(duplicate_ref_mask, "Référence dupliquée")
+        if "numero_recu" in df.columns:
+            duplicate_receipt_mask = (
+                df["numero_recu"]
+                .astype("string")
+                .str.strip()
+                .replace("", pd.NA)
+                .map(
+                    df["numero_recu"]
+                    .astype("string")
+                    .str.strip()
+                    .replace("", pd.NA)
+                    .value_counts(dropna=True)
+                )
+                .fillna(0)
+                .gt(1)
+            )
+            mark(duplicate_receipt_mask, "Reçu dupliqué")
+        if "equilibre_comptable_ok" in df.columns:
+            mark(~df["equilibre_comptable_ok"].fillna(False), "Écriture déséquilibrée")
+        if "ecarts_date_valeur" in df.columns:
+            mark(pd.to_numeric(df["ecarts_date_valeur"], errors="coerce").fillna(0).gt(0), "Date de valeur différente")
+        if "lignes_sens_absent" in df.columns:
+            mark(pd.to_numeric(df["lignes_sens_absent"], errors="coerce").fillna(0).gt(0), "Sens comptable absent")
+        if "lignes_montant_non_positif" in df.columns:
+            mark(pd.to_numeric(df["lignes_montant_non_positif"], errors="coerce").fillna(0).gt(0), "Montant comptable non positif")
+        if "kyc_missing_count" in df.columns:
+            mark(pd.to_numeric(df["kyc_missing_count"], errors="coerce").fillna(0).gt(0), "KYC client à compléter")
 
     if not bool(watch_mask.any()):
         return pd.DataFrame(columns=["motif_alerte"])
@@ -1862,6 +1924,20 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
                 "Numéro de la pièce d’identité",
                 "Source de données",
                 "Origine du Prospect",
+            ]
+        )
+    elif cycle_key == "operations_depot_retrait":
+        candidate_columns.extend(
+            [
+                "nom_client",
+                "type_mouvement",
+                "source_mouvement",
+                "code_devise",
+                "agence",
+                "numero_recu",
+                "date_saisie",
+                "date_validation",
+                "delai_saisie_jours",
             ]
         )
     candidate_columns.extend(extra_watchlist_columns.keys())

@@ -13,4 +13,4 @@ Thumbs.db
 
 # line_list/*
 # !line_list/.gitkeep
-# data/*.sql
+# data/vision/*

@@ -215,6 +215,40 @@ CYCLE_SPECS: dict[str, dict[str, Any]] = {
             "commentaire",
         ],
     },
+    "operations_depot_retrait": {
+        "label": "Opérations dépôts et retraits",
+        "summary": "Contrôle des opérations de dépôt et de retrait issues du back-office et du mobile banking, avec rapprochement comptable, lecture client et surveillance LBC-FT.",
+        "control_objective": "Tracer les flux, détecter les anomalies de workflow, sécuriser les écritures et faire ressortir les signaux d'alerte sur les clients, les utilisateurs et les points de service.",
+        "controls": [
+            {"Axe": "Flux opérationnels", "Point de contrôle": "Distinguer les dépôts, retraits, canaux back-office et mobile, puis confirmer la cohérence des montants."},
+            {"Axe": "Workflow", "Point de contrôle": "Surveiller les opérations non validées, les saisies tardives, les validations incohérentes et les auto-validations."},
+            {"Axe": "Comptabilité", "Point de contrôle": "Contrôler l'équilibre débit/crédit, les dates de valeur et la qualité des écritures HDPM / HDPM_API."},
+            {"Axe": "Conformité", "Point de contrôle": "Repérer les montants élevés, le fractionnement potentiel et les clients à forte activité avec KYC incomplet."},
+            {"Axe": "Pilotage", "Point de contrôle": "Comparer les volumes par point de service, utilisateur et canal mobile."},
+        ],
+        "expected_columns": [
+            "operation_id",
+            "date_operation",
+            "date_saisie",
+            "type_operation",
+            "type_mouvement",
+            "source_mouvement",
+            "montant_operation",
+            "code_devise",
+            "agence",
+            "operateur",
+            "numero_reference",
+            "numero_recu",
+            "compte_id",
+            "client_id",
+            "nom_client",
+            "annule",
+            "operation_non_validee",
+            "saisie_tardive",
+            "equilibre_comptable_ok",
+            "kyc_missing_count",
+        ],
+    },
 }
 
 DEFAULT_ANALYSIS_PRESET: dict[str, Any] = {
@@ -333,6 +367,15 @@ CYCLE_ANALYSIS_PRESETS: dict[str, dict[str, Any]] = {
         "amount_columns": ["montant_operation", "solde_final"],
         "actor_columns": ["operateur", "tresorier"],
         "filter_columns": ["agence", "type_operation", "operateur", "tresorier"],
+    },
+    "operations_depot_retrait": {
+        "record_label": "Opérations",
+        "id_columns": ["operation_id", "numero_reference", "client_id", "compte_id"],
+        "group_columns": ["agence", "type_mouvement", "source_mouvement", "operateur"],
+        "status_columns": ["type_mouvement", "source_mouvement"],
+        "amount_columns": ["montant_operation"],
+        "actor_columns": ["operateur"],
+        "filter_columns": ["agence", "type_mouvement", "source_mouvement", "operateur", "code_devise"],
     },
 }
 

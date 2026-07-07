@@ -17,6 +17,11 @@ from credit_app.domain import (
     build_risk_distribution,
     get_first_existing_column,
 )
+from credit_app.sql_operations import (
+    build_fractionnement_table,
+    build_high_activity_kyc_table,
+    build_unusual_operations_table,
+)
 from credit_app.ui import (
     render_kpi_cards,
     render_panel_title,
@@ -35,7 +40,35 @@ def _resolve_amount_column(df: pd.DataFrame, candidates: list[str]) -> str | Non
     return None
 
 
-def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
+def _render_operations_risk_block(df: pd.DataFrame, conversion_rate: float) -> None:
+    fractionnement_df = build_fractionnement_table(df, conversion_rate)
+    unusual_df = build_unusual_operations_table(df, conversion_rate)
+    kyc_df = build_high_activity_kyc_table(df, conversion_rate)
+
+    top_left, top_right = st.columns((1, 1))
+
+    with top_left:
+        render_panel_title("Fractionnement potentiel")
+        if fractionnement_df.empty:
+            st.info("Aucun cas de fractionnement potentiel n'a été détecté sur le périmètre courant.")
+        else:
+            st.dataframe(fractionnement_df.head(50), width="stretch", hide_index=True)
+
+    with top_right:
+        render_panel_title("Clients aux opérations inhabituelles")
+        if unusual_df.empty:
+            st.info("Aucun client inhabituel n'est ressorti avec les règles actuelles.")
+        else:
+            st.dataframe(unusual_df.head(50), width="stretch", hide_index=True)
+
+    render_panel_title("Clients à forte activité avec KYC incomplet")
+    if kyc_df.empty:
+        st.info("Aucun client à forte activité avec KYC incomplet n'a été détecté.")
+    else:
+        st.dataframe(kyc_df.head(50), width="stretch", hide_index=True)
+
+
+def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate: float = 2800.0) -> None:
     if df.empty:
         st.warning("Aucune donnée n'est disponible dans cet onglet.")
         return
@@ -262,6 +295,9 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
         if not group_risk.empty:
             render_panel_title(f"Zones les plus exposées par {primary_group.replace('_', ' ')}")
             st.dataframe(group_risk, width="stretch", hide_index=True)
+
+    if cycle_key == "operations_depot_retrait":
+        _render_operations_risk_block(df, conversion_rate)
 
     render_panel_title("Cas à suivre")
     if watchlist.empty:

@@ -18,6 +18,12 @@ from credit_app.domain import (
     build_summary_metrics,
     get_first_existing_column,
 )
+from credit_app.sql_operations import (
+    build_cancelled_operations_table,
+    build_high_activity_kyc_table,
+    build_point_service_summary_table,
+    build_risky_users_table,
+)
 from credit_app.ui import (
     render_panel_title,
     render_summary_box,
@@ -93,6 +99,15 @@ DISPLAY_COLUMN_LABELS = {
     "seuil_minimum_produit": "Seuil minimum",
     "duree_credit_mois": "Durée (mois)",
     "taux_interet": "Taux d'intérêt",
+    "source_mouvement": "Canal",
+    "type_mouvement": "Mouvement",
+    "operateur": "Utilisateur",
+    "numero_reference": "Référence",
+    "numero_recu": "Reçu",
+    "delai_saisie_jours": "Délai saisie (j)",
+    "equilibre_comptable_ok": "Équilibre OK",
+    "ecart_debit_credit": "Écart débit/crédit",
+    "kyc_missing_count": "Éléments KYC manquants",
 }
 
 
@@ -288,7 +303,50 @@ def _render_epargne_surveillance_block(df: pd.DataFrame, watchlist: pd.DataFrame
         )
 
 
-def render_surveillance_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None:
+def _render_operations_surveillance_block(df: pd.DataFrame, conversion_rate: float) -> None:
+    risky_users_df = build_risky_users_table(df)
+    point_service_df = build_point_service_summary_table(df)
+    high_activity_kyc_df = build_high_activity_kyc_table(df, conversion_rate=conversion_rate)
+    cancelled_df = build_cancelled_operations_table(df)
+
+    top_left, top_right = st.columns((1, 1))
+
+    with top_left:
+        render_panel_title("Utilisateurs à relire")
+        if risky_users_df.empty:
+            st.info("Aucun profil utilisateur sensible n'est isolé avec les règles actuelles.")
+        else:
+            st.dataframe(_rename_columns_for_display(risky_users_df.head(30)), width="stretch", hide_index=True)
+
+    with top_right:
+        render_panel_title("Points de service / agences")
+        if point_service_df.empty:
+            st.info("Aucun regroupement par point de service n'est disponible.")
+        else:
+            st.dataframe(_rename_columns_for_display(point_service_df.head(30)), width="stretch", hide_index=True)
+
+    bottom_left, bottom_right = st.columns((1, 1))
+
+    with bottom_left:
+        render_panel_title("Clients actifs avec KYC à compléter")
+        if high_activity_kyc_df.empty:
+            st.info("Aucun client très actif avec KYC incomplet n'a été détecté.")
+        else:
+            st.dataframe(_rename_columns_for_display(high_activity_kyc_df.head(30)), width="stretch", hide_index=True)
+
+    with bottom_right:
+        render_panel_title("Opérations annulées")
+        if cancelled_df.empty:
+            st.info("Aucune opération annulée n'est présente sur le périmètre courant.")
+        else:
+            st.dataframe(_rename_columns_for_display(cancelled_df.head(30)), width="stretch", hide_index=True)
+
+
+def render_surveillance_tab(
+    df: pd.DataFrame,
+    cycle_key: str = "credit",
+    conversion_rate: float = 2800.0,
+) -> None:
     if df.empty:
         st.warning("Aucune ligne ne correspond aux filtres choisis.")
         return
@@ -391,6 +449,8 @@ def render_surveillance_tab(df: pd.DataFrame, cycle_key: str = "credit") -> None
 
     if cycle_key == "epargne":
         _render_epargne_surveillance_block(df, watchlist)
+    elif cycle_key == "operations_depot_retrait":
+        _render_operations_surveillance_block(df, conversion_rate)
 
     render_panel_title("Cas prioritaires")
     if not watchlist.empty:

@@ -92,6 +92,12 @@ from credit_app.tabs.portfolio import (
 from credit_app.tabs.quality import render_quality_tab
 from credit_app.tabs.risk import render_risk_tab
 from credit_app.tabs.surveillance import render_surveillance_tab
+from credit_app.sql_operations import (
+    build_operations_depot_retrait_dataset,
+    has_minimum_sql_bundle,
+    infer_sql_bundle_role,
+    missing_sql_bundle_roles,
+)
 import credit_app.ui as credit_ui
 
 format_context_value = credit_ui.format_context_value
@@ -249,6 +255,61 @@ def prepare_epargne_bundles_from_paths(
     return build_epargne_bundles_from_standardized_frames(frames)
 
 
+def _load_named_frames_from_paths(
+    file_paths: tuple[str, ...],
+    sheet_name: str | None,
+) -> dict[str, pd.DataFrame]:
+    named_frames: dict[str, pd.DataFrame] = {}
+    for file_path in file_paths:
+        path = Path(file_path)
+        active_sheet_name = sheet_name if path.suffix.lower() in {".xlsx", ".xls"} else None
+        named_frames[path.name] = load_dataframe_from_path(path, active_sheet_name)
+    return named_frames
+
+
+def _load_named_frames_from_uploads(
+    uploaded_items: tuple[tuple[str, bytes], ...],
+    sheet_name: str | None,
+) -> dict[str, pd.DataFrame]:
+    named_frames: dict[str, pd.DataFrame] = {}
+    for filename, file_bytes in uploaded_items:
+        active_sheet_name = sheet_name if filename.lower().endswith((".xlsx", ".xls")) else None
+        named_frames[filename] = load_dataframe_from_bytes(file_bytes, filename, active_sheet_name)
+    return named_frames
+
+
+@st.cache_data(show_spinner=False)
+def prepare_sql_operations_dataset_from_paths(
+    file_paths: tuple[str, ...],
+    sheet_name: str | None,
+) -> dict:
+    named_frames = _load_named_frames_from_paths(file_paths, sheet_name)
+    raw_df = build_operations_depot_retrait_dataset(named_frames)
+    payload = _prepare_payload_from_dataframe(raw_df)
+    payload["compiled_files"] = list(file_paths)
+    payload["sql_bundle_roles"] = {
+        Path(file_name).name: infer_sql_bundle_role(Path(file_name).name) or "inconnu"
+        for file_name in file_paths
+    }
+    return payload
+
+
+@st.cache_data(show_spinner=False)
+def prepare_sql_operations_dataset_from_uploads(
+    uploaded_items: tuple[tuple[str, bytes], ...],
+    sheet_name: str | None,
+) -> dict:
+    named_frames = _load_named_frames_from_uploads(uploaded_items, sheet_name)
+    raw_df = build_operations_depot_retrait_dataset(named_frames)
+    payload = _prepare_payload_from_dataframe(raw_df)
+    payload["compiled_files"] = [filename for filename, _ in uploaded_items]
+    payload["sql_bundle_roles"] = {
+        filename: infer_sql_bundle_role(filename) or "inconnu"
+        for filename, _ in uploaded_items
+    }
+    return payload
+
+
 def _prepare_payload_from_dataframe(raw_df: pd.DataFrame) -> dict:
     standardized_df, mapping = build_standardized_dataframe(raw_df)
     quality_df = build_quality_checks(standardized_df)
@@ -294,6 +355,21 @@ def _preferred_included_file_index(file_names: list[str]) -> int:
         if "base_donnees_brute_credit" in name.lower():
             return index
     return 0
+
+
+def _is_sql_operations_cycle(cycle_key: str) -> bool:
+    return cycle_key == "operations_depot_retrait"
+
+
+def _sql_bundle_role_label(role: str | None) -> str:
+    labels = {
+        "operations": "Opérations back-office",
+        "operations_api": "Opérations API mobile",
+        "hdpm": "Écritures HDPM",
+        "hdpm_api": "Écritures HDPM API",
+        "adherents": "Adhérents",
+    }
+    return labels.get(str(role), "Fichier complémentaire")
 
 
 def _normalize_multiselect_with_all(
@@ -423,6 +499,9 @@ def main() -> None:
     available_excel_files = [
         path for path in available_files if path.suffix.lower() in {".xlsx", ".xls"}
     ]
+    available_sql_bundle_files = [
+        path for path in available_files if infer_sql_bundle_role(path.name) is not None
+    ]
     cycle_options = list_cycle_keys()
     default_cycle_index = cycle_options.index(DEFAULT_CYCLE_KEY) if DEFAULT_CYCLE_KEY in cycle_options else 0
     render_sidebar_intro_card(
@@ -441,6 +520,7 @@ def main() -> None:
         format_func=lambda key: get_cycle_spec(key)["label"],
         key="credit_cycle_key",
     )
+    sql_operations_cycle = _is_sql_operations_cycle(selected_cycle_key)
     selected_cycle = get_cycle_spec(selected_cycle_key)
     with st.sidebar.expander("Repère du cycle", expanded=False):
         st.caption(selected_cycle["summary"])
@@ -470,106 +550,165 @@ def main() -> None:
 
     if source_mode == "Téléverser un fichier":
         uploaded_file = st.sidebar.file_uploader(
-            "Base crédit",
+            "Base à analyser",
             type=["xlsx", "xls", "csv"],
             help="Formats acceptés : Excel ou CSV.",
         )
     elif source_mode == "Téléverser plusieurs fichiers":
         uploaded_files = st.sidebar.file_uploader(
-            "Bases à compiler",
-            type=["xlsx", "xls"],
+            "Fichiers à regrouper",
+            type=["xlsx", "xls", "csv"],
             accept_multiple_files=True,
-            help="Sélectionnez plusieurs fichiers Excel détaillés partageant la même feuille métier.",
+            help=(
+                "Chargez plusieurs fichiers détaillés. "
+                "Pour les dépôts et retraits, ajoutez au minimum OPERATIONS, HDPM et ADHERENTS."
+                if sql_operations_cycle
+                else "Sélectionnez plusieurs fichiers Excel détaillés partageant la même feuille métier."
+            ),
         ) or []
         if uploaded_files:
-            common_sheets = _get_common_excel_sheets_from_uploads(
-                [(file.name, file.getvalue()) for file in uploaded_files]
-            )
-            if common_sheets:
-                sheet_name = st.sidebar.selectbox(
-                    "Feuille commune",
-                    common_sheets,
-                    index=0,
-                    key="credit_upload_compile_sheet_name",
-                )
-            else:
-                sheet_name = st.sidebar.text_input(
-                    "Nom de la feuille commune",
-                    value="",
-                    key="credit_upload_compile_sheet_name_manual",
-                    help="À renseigner uniquement si la feuille n'a pas pu être détectée automatiquement.",
-                ).strip() or None
+            uploaded_items_preview = [(file.name, file.getvalue()) for file in uploaded_files]
+            excel_uploads = [
+                (name, file_bytes)
+                for name, file_bytes in uploaded_items_preview
+                if name.lower().endswith((".xlsx", ".xls"))
+            ]
+            if excel_uploads:
+                common_sheets = _get_common_excel_sheets_from_uploads(excel_uploads)
+                if common_sheets:
+                    sheet_name = st.sidebar.selectbox(
+                        "Feuille commune",
+                        common_sheets,
+                        index=0,
+                        key="credit_upload_compile_sheet_name",
+                    )
+                else:
+                    sheet_name = st.sidebar.text_input(
+                        "Nom de la feuille commune",
+                        value="",
+                        key="credit_upload_compile_sheet_name_manual",
+                        help="À renseigner uniquement si la feuille n'a pas pu être détectée automatiquement.",
+                    ).strip() or None
             filename = f"Compilation de {len(uploaded_files)} fichiers téléversés"
             st.sidebar.caption(
                 f"{len(uploaded_files)} fichier(s) téléversé(s) pour une compilation unique."
             )
+            if sql_operations_cycle:
+                detected_roles = [
+                    _sql_bundle_role_label(infer_sql_bundle_role(file.name))
+                    for file in uploaded_files
+                    if infer_sql_bundle_role(file.name) is not None
+                ]
+                if detected_roles:
+                    st.sidebar.caption("Rôles détectés : " + ", ".join(detected_roles))
+                missing_roles = missing_sql_bundle_roles([file.name for file in uploaded_files])
+                if missing_roles:
+                    st.sidebar.warning(
+                        "Fichiers encore attendus : "
+                        + ", ".join(_sql_bundle_role_label(role) for role in missing_roles)
+                        + "."
+                    )
         else:
-            st.sidebar.caption("Téléversez au moins deux fichiers Excel détaillés pour lancer une compilation.")
+            st.sidebar.caption(
+                "Téléversez plusieurs fichiers détaillés pour lancer l'analyse groupée."
+                if sql_operations_cycle
+                else "Téléversez au moins deux fichiers Excel détaillés pour lancer une compilation."
+            )
     elif source_mode == "Charger un fichier inclus":
-        if available_files:
-            available_names = [path.name for path in available_files]
+        selectable_paths = available_sql_bundle_files if sql_operations_cycle else available_files
+        if selectable_paths:
+            available_names = [path.name for path in selectable_paths]
             selected_name = st.sidebar.selectbox(
                 "Fichier inclus",
                 available_names,
                 index=_preferred_included_file_index(available_names),
                 key="credit_included_file",
             )
-            selected_local_path = next(path for path in available_files if path.name == selected_name)
+            selected_local_path = next(path for path in selectable_paths if path.name == selected_name)
             filename = selected_local_path.name
             if filename.lower().endswith((".xlsx", ".xls")):
                 local_sheets = get_excel_sheet_names_from_path(selected_local_path)
                 if local_sheets:
                     sheet_name = st.sidebar.selectbox("Feuille Excel", local_sheets, index=0, key="local_sheet_name")
         else:
-            st.sidebar.warning("Aucun fichier `.xlsx`, `.xls` ou `.csv` n'a été trouvé dans `line_list/`.")
+            st.sidebar.warning(
+                "Aucun fichier SQL reconnu n'a été trouvé dans `line_list/`."
+                if sql_operations_cycle
+                else "Aucun fichier `.xlsx`, `.xls` ou `.csv` n'a été trouvé dans `line_list/`."
+            )
     else:
-        if len(available_excel_files) >= 2:
+        selectable_compilation_files = available_sql_bundle_files if sql_operations_cycle else available_excel_files
+        if len(selectable_compilation_files) >= 2:
             compile_filter = st.sidebar.text_input(
                 "Filtre nom fichier",
                 value="",
                 key="credit_compile_filter",
-                help="Permet de limiter la liste avant sélection des fichiers à compiler.",
+                help="Permet de limiter la liste avant sélection des fichiers à regrouper.",
             )
             filtered_compile_paths = [
                 path
-                for path in available_excel_files
+                for path in selectable_compilation_files
                 if compile_filter.strip().lower() in path.name.lower()
             ]
             selected_compile_names = st.sidebar.multiselect(
-                "Fichiers à compiler",
+                "Fichiers à regrouper",
                 [path.name for path in filtered_compile_paths],
                 key="credit_compile_files",
-                help="Sélectionnez au moins deux fichiers Excel détaillés partageant la même feuille métier.",
+                help=(
+                    "Sélectionnez les fichiers du bundle SQL à analyser ensemble."
+                    if sql_operations_cycle
+                    else "Sélectionnez au moins deux fichiers Excel détaillés partageant la même feuille métier."
+                ),
             )
             selected_compilation_paths = [
                 path for path in filtered_compile_paths if path.name in selected_compile_names
             ]
             if selected_compilation_paths:
-                common_sheets = _get_common_excel_sheets(selected_compilation_paths)
-                if common_sheets:
-                    sheet_name = st.sidebar.selectbox(
-                        "Feuille commune",
-                        common_sheets,
-                        index=0,
-                        key="credit_compile_sheet_name",
-                    )
-                else:
-                    sheet_name = st.sidebar.text_input(
-                        "Nom de la feuille commune",
-                        value="",
-                        key="credit_compile_sheet_name_manual",
-                        help="À renseigner uniquement si la feuille n'a pas pu être détectée automatiquement.",
-                    ).strip() or None
+                excel_selected_paths = [
+                    path for path in selected_compilation_paths if path.suffix.lower() in {".xlsx", ".xls"}
+                ]
+                if excel_selected_paths:
+                    common_sheets = _get_common_excel_sheets(excel_selected_paths)
+                    if common_sheets:
+                        sheet_name = st.sidebar.selectbox(
+                            "Feuille commune",
+                            common_sheets,
+                            index=0,
+                            key="credit_compile_sheet_name",
+                        )
+                    else:
+                        sheet_name = st.sidebar.text_input(
+                            "Nom de la feuille commune",
+                            value="",
+                            key="credit_compile_sheet_name_manual",
+                            help="À renseigner uniquement si la feuille n'a pas pu être détectée automatiquement.",
+                        ).strip() or None
                 filename = f"Compilation de {len(selected_compilation_paths)} fichiers"
                 st.sidebar.caption(
-                    f"{len(selected_compilation_paths)} fichier(s) sélectionné(s) pour une compilation unique."
+                    f"{len(selected_compilation_paths)} fichier(s) sélectionné(s) pour une analyse groupée."
                 )
+                if sql_operations_cycle:
+                    missing_roles = missing_sql_bundle_roles([path.name for path in selected_compilation_paths])
+                    if missing_roles:
+                        st.sidebar.warning(
+                            "Fichiers encore attendus : "
+                            + ", ".join(_sql_bundle_role_label(role) for role in missing_roles)
+                            + "."
+                        )
             else:
-                st.sidebar.caption("Sélectionnez plusieurs fichiers détaillés pour créer une base compilée.")
-        elif available_excel_files:
-            st.sidebar.warning("Au moins deux fichiers Excel sont nécessaires pour lancer une compilation.")
+                st.sidebar.caption("Sélectionnez plusieurs fichiers détaillés pour créer une base consolidée.")
+        elif selectable_compilation_files:
+            st.sidebar.warning(
+                "Au moins deux fichiers sont nécessaires pour lancer une analyse groupée."
+                if sql_operations_cycle
+                else "Au moins deux fichiers Excel sont nécessaires pour lancer une compilation."
+            )
         else:
-            st.sidebar.warning("Aucun fichier Excel n'a été trouvé dans `line_list/` pour la compilation.")
+            st.sidebar.warning(
+                "Aucun fichier du bundle SQL n'a été trouvé dans `line_list/`."
+                if sql_operations_cycle
+                else "Aucun fichier Excel n'a été trouvé dans `line_list/` pour la compilation."
+            )
 
     with st.sidebar.expander("Référence et stockage", expanded=False):
         st.caption(
@@ -583,27 +722,39 @@ def main() -> None:
     if source_mode == "Téléverser un fichier":
         source_ready = uploaded_file is not None
     elif source_mode == "Téléverser plusieurs fichiers":
-        source_ready = len(uploaded_files) >= 2 and bool(sheet_name)
+        source_ready = (
+            has_minimum_sql_bundle([file.name for file in uploaded_files])
+            if sql_operations_cycle
+            else len(uploaded_files) >= 2 and bool(sheet_name)
+        )
     elif source_mode == "Charger un fichier inclus":
         source_ready = selected_local_path is not None
     else:
-        source_ready = len(selected_compilation_paths) >= 2 and bool(sheet_name)
+        source_ready = (
+            has_minimum_sql_bundle([path.name for path in selected_compilation_paths])
+            if sql_operations_cycle
+            else len(selected_compilation_paths) >= 2 and bool(sheet_name)
+        )
 
     if not source_ready:
         render_context_row(
             [
                 ("Cycle", selected_cycle["label"]),
                 ("Source", "Aucun fichier"),
-                ("Formats", "Excel, CSV ou compilation Excel"),
+                ("Formats", "Excel, CSV ou bundle multi-fichiers"),
                 ("Analyses", "Vue d'ensemble, portefeuille, risque, qualité"),
-                ("Mode", "Fichier unique, plusieurs fichiers ou compilation"),
+                ("Mode", "Fichier unique, groupement ou compilation"),
             ]
         )
         render_summary_box(
             "Pour commencer",
             [
                 selected_cycle["summary"],
-                "Chargez un fichier Excel ou CSV, utilisez un fichier déjà disponible pour les tests, ou regroupez plusieurs bases détaillées.",
+                (
+                    "Chargez le bundle SQL d'opérations en ajoutant au minimum les fichiers OPERATIONS, HDPM et ADHERENTS."
+                    if sql_operations_cycle
+                    else "Chargez un fichier Excel ou CSV, utilisez un fichier déjà disponible pour les tests, ou regroupez plusieurs bases détaillées."
+                ),
                 "L'application reconnaît automatiquement plusieurs variantes de colonnes métier.",
                 "Le fichier `data/Rename_columns.xlsx` est aussi pris en compte pour harmoniser les noms de colonnes.",
             ],
@@ -626,14 +777,20 @@ def main() -> None:
     elif source_mode == "Téléverser plusieurs fichiers":
         uploaded_items = tuple((file.name, file.getvalue()) for file in uploaded_files)
         with st.spinner("Compilation et préparation des fichiers téléversés en cours..."):
-            payload = prepare_compiled_dataset_from_uploads(uploaded_items, sheet_name or "")
+            if sql_operations_cycle:
+                payload = prepare_sql_operations_dataset_from_uploads(uploaded_items, sheet_name)
+            else:
+                payload = prepare_compiled_dataset_from_uploads(uploaded_items, sheet_name or "")
     elif source_mode == "Charger un fichier inclus":
         with st.spinner("Préparation de la base en cours..."):
             payload = prepare_dataset_from_path(str(selected_local_path), sheet_name)
     else:
         compiled_paths = tuple(str(path) for path in selected_compilation_paths)
         with st.spinner("Compilation et préparation des bases en cours..."):
-            payload = prepare_compiled_dataset_from_paths(compiled_paths, sheet_name or "")
+            if sql_operations_cycle:
+                payload = prepare_sql_operations_dataset_from_paths(compiled_paths, sheet_name)
+            else:
+                payload = prepare_compiled_dataset_from_paths(compiled_paths, sheet_name or "")
 
     raw_df = payload["raw_df"]
     standardized_df = payload["standardized_df"]
@@ -663,6 +820,11 @@ def main() -> None:
             st.write(f"Fichiers regroupés : **{len(payload.get('compiled_files', []))}**")
             for compiled_file in payload.get("compiled_files", []):
                 st.write(f"- `{compiled_file}`")
+        sql_bundle_roles = payload.get("sql_bundle_roles")
+        if isinstance(sql_bundle_roles, dict) and sql_bundle_roles:
+            st.write("Rôles du bundle SQL :")
+            for file_name, role in sql_bundle_roles.items():
+                st.write(f"- `{Path(file_name).name}` : **{_sql_bundle_role_label(role)}**")
         if sheet_name:
             st.write(f"Feuille active : **{sheet_name}**")
         st.write(
@@ -846,6 +1008,16 @@ def main() -> None:
                 key="credit_epargne_fx_rate",
                 help="Exemple : 2300 signifie que 1 USD = 2300,00 CDF. Ce taux sert à convertir les montants en CDF en équivalent USD dans le rapport épargne.",
             )
+        if selected_cycle_key == "operations_depot_retrait":
+            st.number_input(
+                "Taux de reporting CDF/USD",
+                min_value=1.0,
+                max_value=100000.0,
+                value=float(st.session_state.get("credit_operations_fx_rate", 2800.0)),
+                step=50.0,
+                key="credit_operations_fx_rate",
+                help="Exemple : 2800 signifie que 10 000 USD correspondent à 28 000 000 CDF pour les seuils de reporting et de vigilance.",
+            )
         st.checkbox(
             "Afficher annotations (valeurs)",
             value=True,
@@ -914,17 +1086,30 @@ def main() -> None:
             render_crm_clients_tab(filtered_df)
         tab_index += 1
     with tabs[tab_index]:
-        render_surveillance_tab(filtered_df, selected_cycle_key)
+        render_surveillance_tab(
+            filtered_df,
+            selected_cycle_key,
+            conversion_rate=float(st.session_state.get("credit_operations_fx_rate", 2800.0)),
+        )
     with tabs[tab_index + 1]:
         render_portfolio_tab(
             filtered_df,
             selected_cycle_key,
-            conversion_rate=float(st.session_state.get("credit_epargne_fx_rate", 2300.0)),
+            conversion_rate=float(
+                st.session_state.get(
+                    "credit_operations_fx_rate" if selected_cycle_key == "operations_depot_retrait" else "credit_epargne_fx_rate",
+                    2800.0 if selected_cycle_key == "operations_depot_retrait" else 2300.0,
+                )
+            ),
             epargne_bundles=epargne_bundles,
             epargne_source_label=epargne_source_label,
         )
     with tabs[tab_index + 2]:
-        render_risk_tab(filtered_df, selected_cycle_key)
+        render_risk_tab(
+            filtered_df,
+            selected_cycle_key,
+            conversion_rate=float(st.session_state.get("credit_operations_fx_rate", 2800.0)),
+        )
     with tabs[tab_index + 3]:
         render_quality_tab(
             raw_df=raw_df,

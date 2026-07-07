@@ -36,9 +36,112 @@ from credit_app.domain import (
     get_cycle_primary_date_column,
     get_reference_column_count,
 )
+from credit_app.sql_operations import (
+    build_operations_depot_retrait_dataset,
+    build_high_activity_kyc_table,
+    has_minimum_sql_bundle,
+    infer_sql_bundle_role,
+    missing_sql_bundle_roles,
+)
 
 
 class CreditDomainTests(unittest.TestCase):
+    def test_sql_bundle_role_detection_prefers_api_exports(self) -> None:
+        self.assertEqual(infer_sql_bundle_role("dbo_operations_api.csv"), "operations_api")
+        self.assertEqual(infer_sql_bundle_role("dbo_hdpm_api.csv"), "hdpm_api")
+        self.assertEqual(infer_sql_bundle_role("dbo_operations.csv"), "operations")
+        self.assertTrue(
+            has_minimum_sql_bundle(["dbo_operations.csv", "dbo_hdpm.csv", "dbo_adherants.csv"])
+        )
+        self.assertEqual(
+            missing_sql_bundle_roles(["dbo_operations.csv", "dbo_hdpm.csv"]),
+            ["adherents"],
+        )
+
+    def test_sql_operations_bundle_builds_unified_dataset(self) -> None:
+        named_frames = {
+            "dbo_operations.csv": pd.DataFrame(
+                {
+                    "ID": ["OP1", "OP2"],
+                    "ANNULE": [0, 0],
+                    "DATE_OPERATION": ["2026-06-01", "2026-06-02"],
+                    "DATE_SAISIE": ["2026-06-01", "2026-06-02"],
+                    "DATE_VALIDATION": ["2026-06-01", "2026-06-02"],
+                    "DATE_VALIDE": ["2026-06-01", "2026-06-02"],
+                    "DESCRIPTION": ["Depot guichet", "Retrait guichet"],
+                    "ID_OPERATION_ANNULE": [None, None],
+                    "ID_OPERATION_MERE": [None, None],
+                    "MODE_PAIEMENT": ["Cash", "Cash"],
+                    "NUM_TRANSACTION": ["TX1", "TX2"],
+                    "NUMERO_RECU": ["R1", "R2"],
+                    "ID_JOURNAL_OPERATION": [None, None],
+                    "ID_POINT_SERVICE": ["PS1", "PS1"],
+                    "ID_TYPE_OPERATION": ["DEPO", "RETR"],
+                    "ID_UTILISATEUR": ["U1", "U2"],
+                    "ID_UTILISATEUR_VALIDE": ["V1", "V2"],
+                }
+            ),
+            "dbo_hdpm.csv": pd.DataFrame(
+                {
+                    "ID": ["H1", "H2", "H3", "H4"],
+                    "DATE_OPERATION": ["2026-06-01", "2026-06-01", "2026-06-02", "2026-06-02"],
+                    "DATE_SAISIE": ["2026-06-01", "2026-06-01", "2026-06-02", "2026-06-02"],
+                    "DATE_VALEUR": ["2026-06-01", "2026-06-01", "2026-06-02", "2026-06-02"],
+                    "DESCRIPTION": ["Depot", "Depot", "Retrait", "Retrait"],
+                    "ID_OPERATION": ["OP1", "OP1", "OP2", "OP2"],
+                    "MONTANT_OPERATION": [100, 100, 60, 60],
+                    "NUM_TRANSACTION": ["TX1", "TX1", "TX2", "TX2"],
+                    "NUMERO_RECU": ["R1", "R1", "R2", "R2"],
+                    "SENS": ["D", "C", "D", "C"],
+                    "ID_COMPTE": ["CAISSE1", "COMPTE_CLIENT_1", "CAISSE1", "COMPTE_CLIENT_2"],
+                    "ID_DEVISE": [1, 1, 2, 2],
+                    "ID_JOURNAL": [None, None, None, None],
+                    "ID_POINT_SERVICE": ["PS1", "PS1", "PS1", "PS1"],
+                    "ID_TYPE_OPERATION": ["DEPO", "DEPO", "RETR", "RETR"],
+                }
+            ),
+            "dbo_adherants.csv": pd.DataFrame(
+                {
+                    "ID": ["A1", "A2"],
+                    "CODE": ["CLI1", "CLI2"],
+                    "NOM_ADHERENT": ["Client Un", "Client Deux"],
+                    "ID_COMPTE_ADHERENT": ["COMPTE_CLIENT_1", "COMPTE_CLIENT_2"],
+                    "ID_TYPE_ADHERENT": ["Particulier", "Particulier"],
+                    "ID_GESTIONNAIRE": ["G1", "G2"],
+                    "ID_POINT_SERVICE": ["PS1", "PS1"],
+                    "DROIT_PAYE": [1, 1],
+                    "EST_VALIDE": [1, 1],
+                    "ID_CATEGORIE_ADHERENT": ["CAT1", "CAT1"],
+                }
+            ),
+        }
+
+        dataset = build_operations_depot_retrait_dataset(named_frames)
+
+        self.assertEqual(len(dataset), 2)
+        self.assertEqual(set(dataset["type_mouvement"].tolist()), {"Depot", "Retrait"})
+        self.assertEqual(set(dataset["client_id"].dropna().tolist()), {"CLI1", "CLI2"})
+        self.assertEqual(set(dataset["nom_client"].dropna().tolist()), {"Client Un", "Client Deux"})
+        self.assertTrue((dataset["cycle_activite"] == "operations_depot_retrait").all())
+
+    def test_sql_operations_kyc_table_stays_robust_without_client_columns(self) -> None:
+        df = pd.DataFrame(
+            {
+                "operation_id": ["OP1", "OP2"],
+                "compte_id": ["CP1", "CP2"],
+                "type_mouvement": ["Depot", "Retrait"],
+                "montant_operation": [40_000_000.0, 35_000_000.0],
+                "code_devise": ["CDF", "CDF"],
+                "annule": [False, False],
+            }
+        )
+
+        result = build_high_activity_kyc_table(df, 2800.0)
+
+        self.assertFalse(result.empty)
+        self.assertIn("client_id", result.columns)
+        self.assertIn("nom_client", result.columns)
+
     def test_reference_mapping_file_is_loaded(self) -> None:
         self.assertGreaterEqual(get_reference_column_count(), 100)
 

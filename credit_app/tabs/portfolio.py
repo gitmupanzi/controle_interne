@@ -20,6 +20,12 @@ from credit_app.domain import (
     get_first_existing_column,
     normalize_text,
 )
+from credit_app.sql_operations import (
+    build_client_movement_summary_table,
+    build_lbcft_reporting_table,
+    build_mobile_banking_summary_table,
+    build_top_clients_table,
+)
 from credit_app.ui import (
     render_kpi_cards,
     render_panel_title,
@@ -696,6 +702,105 @@ def _render_epargne_reconstructed_report(
         )
 
 
+def _render_operations_portfolio_report(df: pd.DataFrame, conversion_rate: float) -> None:
+    work = df.loc[~df.get("annule", pd.Series(False, index=df.index)).fillna(False)].copy()
+    if work.empty:
+        st.info("Aucune opération active n'est disponible pour construire le rapport dépôts / retraits.")
+        return
+
+    reporting_df = build_lbcft_reporting_table(work, conversion_rate)
+    client_summary_df = build_client_movement_summary_table(work, conversion_rate).head(20)
+    top_clients_df = build_top_clients_table(work, conversion_rate, top_n=20)
+    mobile_df = build_mobile_banking_summary_table(work, conversion_rate)
+
+    operation_count = int(work.get("operation_id", pd.Series(dtype="object")).nunique())
+    client_count = int(work.get("client_id", pd.Series(dtype="object")).dropna().nunique())
+    volume_total = float(pd.to_numeric(work.get("montant_operation"), errors="coerce").fillna(0.0).sum())
+    depot_mask = work.get("type_mouvement", pd.Series(index=work.index)).isin(["Depot", "Depot mobile"])
+    retrait_mask = work.get("type_mouvement", pd.Series(index=work.index)).isin(["Retrait", "Retrait mobile"])
+    depot_volume = float(pd.to_numeric(work.loc[depot_mask, "montant_operation"], errors="coerce").fillna(0.0).sum())
+    retrait_volume = float(pd.to_numeric(work.loc[retrait_mask, "montant_operation"], errors="coerce").fillna(0.0).sum())
+    mobile_count = int(work.loc[work.get("source_mouvement", pd.Series(index=work.index)).eq("API_MOBILE"), "operation_id"].nunique())
+
+    render_panel_title("Rapport dépôts et retraits")
+    render_summary_box(
+        "À retenir",
+        [
+            "Cette section restitue les contrôles transactionnels issus des exports SQL Server.",
+            f"Taux de reporting utilisé : `{conversion_rate:,.0f}` CDF pour 1 USD.".replace(",", " "),
+            "La synthèse LBC-FT reprend les principales lignes de travail du reporting mensuel.",
+        ],
+    )
+    render_kpi_cards(
+        [
+            ("Opérations", f"{operation_count:,}".replace(",", " "), "Périmètre actif", "slate"),
+            ("Clients", f"{client_count:,}".replace(",", " "), "Clients mouvementés", "slate"),
+            ("Volume total", format_currency(volume_total), "Montant observé", "slate"),
+            ("Dépôts", format_currency(depot_volume), "Volume dépôts", "slate"),
+            ("Retraits", format_currency(retrait_volume), "Volume retraits", "slate"),
+            ("Mobile banking", f"{mobile_count:,}".replace(",", " "), "Opérations API mobiles", "slate"),
+        ]
+    )
+
+    top_left, top_right = st.columns((1.15, 1))
+    with top_left:
+        render_panel_title("Synthèse LBC-FT")
+        if reporting_df.empty:
+            st.info("La synthèse LBC-FT n'a pas pu être calculée sur le périmètre courant.")
+        else:
+            st.dataframe(reporting_df, width="stretch", hide_index=True)
+    with top_right:
+        render_panel_title("Dépôts et retraits agrégés par client")
+        if client_summary_df.empty:
+            st.info("Aucun résumé client n'est disponible.")
+        else:
+            st.dataframe(client_summary_df, width="stretch", hide_index=True)
+
+    chart_left, chart_right = st.columns((1.05, 1))
+    with chart_left:
+        flux_df = pd.DataFrame(
+            {
+                "Mouvement": ["Dépôts", "Retraits"],
+                "Montant": [depot_volume, retrait_volume],
+            }
+        )
+        render_panel_title("Volumes dépôts / retraits")
+        fig = px.bar(
+            flux_df,
+            x="Mouvement",
+            y="Montant",
+            color="Mouvement",
+            color_discrete_map={"Dépôts": "#2b74ca", "Retraits": "#0b2c63"},
+        )
+        style_standard_vertical_bar(fig, height=340, tickangle=0)
+        st_plot(fig, key="portfolio_operations_flux", height=340)
+    with chart_right:
+        render_panel_title("Mobile banking")
+        if mobile_df.empty:
+            st.info("Aucune opération mobile n'est disponible sur le périmètre courant.")
+        else:
+            mobile_chart_df = (
+                mobile_df.groupby("type_operation", dropna=False)
+                .agg(nb_operations=("nb_operations", "sum"))
+                .reset_index()
+                .sort_values("nb_operations", ascending=False)
+            )
+            fig = px.bar(
+                mobile_chart_df,
+                x="type_operation",
+                y="nb_operations",
+                color_discrete_sequence=["#4b84d7"],
+            )
+            style_standard_vertical_bar(fig, height=340, tickangle=-20)
+            st_plot(fig, key="portfolio_operations_mobile", height=340)
+
+    render_panel_title("Top clients par volume")
+    if top_clients_df.empty:
+        st.info("Aucun classement client n'est disponible.")
+    else:
+        st.dataframe(top_clients_df, width="stretch", hide_index=True)
+
+
 def render_portfolio_tab(
     df: pd.DataFrame,
     cycle_key: str = "credit",
@@ -709,6 +814,9 @@ def render_portfolio_tab(
             bundles=epargne_bundles,
             source_label=epargne_source_label,
         )
+        return
+    if cycle_key == "operations_depot_retrait":
+        _render_operations_portfolio_report(df, conversion_rate)
         return
 
     if df.empty:
