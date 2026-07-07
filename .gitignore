@@ -11,5 +11,6 @@ exports/
 Thumbs.db
 .DS_Store
 
-line_list/*
-!line_list/.gitkeep
+# line_list/*
+# !line_list/.gitkeep
+# data/*.sql
