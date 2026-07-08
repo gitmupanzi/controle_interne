@@ -6,95 +6,129 @@ Les fichiers `procedure_controle_interne.sql` et `requetes.sql` ne creent pas de
 ## Vue Globale
 
 ```mermaid
-erDiagram
-    ADHERENTS ||--o{ COMPTES_ADHERENT : possede
-    COMPTES ||--o| COMPTES_ADHERENT : specialise
-    COMPTES ||--o{ HDPM : mouvemente
-    OPERATIONS ||--o{ HDPM : genere
-    PRODUITS_EPG ||--o{ COMPTES_ADHERENT : parametre
-    DEVISES ||--o{ COMPTES : devise
-    POINTS_SERVICE ||--o{ ADHERENTS : agence
-    POINTS_SERVICE ||--o{ OPERATIONS : agence
+flowchart LR
+    classDef ref fill:#173b6d,color:#ffffff,stroke:#9cc3ff,stroke-width:2px;
+    classDef core fill:#1f5aa6,color:#ffffff,stroke:#dbe8ff,stroke-width:2px;
+    classDef bridge fill:#eef4ff,color:#12345a,stroke:#7ba4e0,stroke-width:1.5px;
+    classDef ledger fill:#0f2747,color:#ffffff,stroke:#7ba4e0,stroke-width:2px;
+
+    subgraph REF["Referentiels"]
+        PS["POINTS_SERVICE<br/>Agences et points de service"]
+        DV["DEVISES<br/>USD, CDF, autres"]
+        PE["PRODUITS_EPG<br/>Parametrage epargne"]
+    end
+
+    subgraph EPG["Cycle epargne et mouvements"]
+        ADH["ADHERENTS<br/>Client / groupe / entreprise"]
+        CA["COMPTES_ADHERENT<br/>Lien client-compte"]
+        CPT["COMPTES<br/>Compte operationnel"]
+        CAI["COMPTES_ADHERENT_INFO<br/>Produit, statut, retraits"]
+        OP["OPERATIONS<br/>Entete de l'operation"]
+        HD["HDPM / HDPM_VIEW<br/>Mouvement comptable detaille"]
+    end
+
+    PS -->|"agence du client"| ADH
+    PS -->|"point de service de saisie"| OP
+    DV -->|"devise du compte"| CPT
+    DV -->|"devise du mouvement"| HD
+    PE -->|"produit epargne"| CAI
+    ADH -->|"possede"| CA
+    CA -->|"specialise"| CPT
+    CPT -->|"complete"| CAI
+    OP -->|"genere"| HD
+    CPT -->|"est mouvemente par"| HD
+
+    class PS,DV,PE ref
+    class ADH,CPT,OP core
+    class CA,CAI bridge
+    class HD ledger
 ```
+
+Lecture rapide :
+
+- `ADHERENTS` est le point d'entree du client.
+- `COMPTES_ADHERENT` relie le client a son compte.
+- `COMPTES` porte le numero, l'etat et la devise du compte.
+- `OPERATIONS` donne l'entete de saisie, mais `HDPM / HDPM_VIEW` reste la meilleure source pour analyser les depots et retraits.
 
 ## Cycle Epargne
 
 ```mermaid
-erDiagram
-    ADHERENTS {
-        varchar ID PK
-        varchar CODE
-        varchar NOM_ADHERENT
-        varchar ID_AGENCE FK
-        varchar ID_POINT_SERVICE FK
-        int ID_TYPE_ADHERENT FK
-    }
-    COMPTES {
-        varchar ID PK
-        varchar NUM_CPTE UK
-        varchar TYPE_COMPTE
-        varchar ETAT
-        int ID_DEVISE FK
-        varchar ID_POINT_SERVICE FK
-    }
-    COMPTES_ADHERENT {
-        varchar id PK,FK
-        varchar ID_ADHERENT FK
-        varchar CATEG_CPTE_ADH
-        varchar TYPE_CPTE_ADH
-    }
-    COMPTES_ADHERENT_INFO {
-        varchar id PK,FK
-        int ID_PRODUIT_EPG FK
-        varchar STATUT
-        int NBRE_RETRAIT_MOIS
-    }
-    PRODUITS_EPG {
-        int ID PK
-        varchar LIBELLE
-        varchar TYPE_PRDT
-        int ID_DEVISE FK
-        bit OPERATION_DEPOT
-        bit OPERATION_RETRAIT
-    }
-    HDPM {
-        varchar ID PK
-        varchar ID_OPERATION FK
-        varchar ID_COMPTE FK
-        float MONTANT_OPERATION
-        varchar SENS
-        date DATE_OPERATION
-    }
-    OPERATIONS {
-        varchar ID PK
-        date DATE_OPERATION
-        varchar DESCRIPTION
-        varchar ID_TYPE_OPERATION FK
-        varchar ID_POINT_SERVICE FK
-    }
+flowchart TB
+    classDef node fill:#14355f,color:#ffffff,stroke:#a6c8ff,stroke-width:2px;
+    classDef fact fill:#edf4ff,color:#173b6d,stroke:#7aa3dd,stroke-width:1.5px;
 
-    ADHERENTS ||--o{ COMPTES_ADHERENT : "ID_ADHERENT"
-    COMPTES ||--o| COMPTES_ADHERENT : "id"
-    COMPTES ||--o| COMPTES_ADHERENT_INFO : "id"
-    PRODUITS_EPG ||--o{ COMPTES_ADHERENT : "ID_PRODUIT_EPG"
-    COMPTES ||--o{ HDPM : "ID_COMPTE"
-    OPERATIONS ||--o{ HDPM : "ID_OPERATION"
+    ADH["ADHERENTS<br/>ID, CODE, NOM_ADHERENT"]
+    CA["COMPTES_ADHERENT<br/>ID_ADHERENT, id"]
+    CPT["COMPTES<br/>NUM_CPTE, ETAT, ID_DEVISE"]
+    CAI["COMPTES_ADHERENT_INFO<br/>ID_PRODUIT_EPG, STATUT"]
+    PE["PRODUITS_EPG<br/>LIBELLE, OPERATION_DEPOT, OPERATION_RETRAIT"]
+    OP["OPERATIONS<br/>DATE_OPERATION, ID_TYPE_OPERATION"]
+    HD["HDPM / HDPM_VIEW<br/>ID_COMPTE, SENS, MONTANT_OPERATION"]
+
+    ADH -->|"1 client peut avoir plusieurs comptes"| CA
+    CA -->|"1 specialisation de compte"| CPT
+    CPT -->|"1 compte, 0..1 fiche info"| CAI
+    PE -->|"1 produit, plusieurs comptes"| CAI
+    OP -->|"1 operation, plusieurs lignes"| HD
+    CPT -->|"1 compte, plusieurs mouvements"| HD
+
+    class ADH,CA,CPT,CAI,PE,OP node
+    class HD fact
 ```
 
 ## Cycle Credit
 
 ```mermaid
-erDiagram
-    ADHERENTS ||--o{ DEMANDES_CREDIT : demande
-    PRODUITS_CRD ||--o{ DEMANDES_CREDIT : produit
-    DEMANDES_CREDIT ||--o| DOSSIERS_CREDIT : dossier
-    DOSSIERS_CREDIT ||--o{ PRETS : transforme
-    PRETS ||--o{ CYCLES_PRET : echeances
-    CYCLES_PRET ||--o{ TABAMOR : tableau
-    PRETS ||--o{ DECLASSEMENTS : risque
-    PRETS ||--o{ OPERATIONS_CRD : mouvements_credit
-    OPERATIONS ||--o{ OPERATIONS_CRD : operation
+flowchart LR
+    classDef ref fill:#173b6d,color:#ffffff,stroke:#9cc3ff,stroke-width:2px;
+    classDef credit fill:#1f5aa6,color:#ffffff,stroke:#dbe8ff,stroke-width:2px;
+    classDef control fill:#eef4ff,color:#12345a,stroke:#7ba4e0,stroke-width:1.5px;
+    classDef risk fill:#7a1f2b,color:#ffffff,stroke:#ffc6cf,stroke-width:2px;
+
+    ADH["ADHERENTS"]
+    PCRD["PRODUITS_CRD"]
+    DCR["DEMANDES_CREDIT"]
+    DOS["DOSSIERS_CREDIT"]
+    VAL["VALIDATION_DOSSIER_CREDIT"]
+    REV["CREDIT_ANALYSE_REVENU"]
+    PROJ["CREDIT_ANALYSE_PROJET"]
+    GAR["GARANTIES / CAUTIONS"]
+    PRT["PRETS"]
+    DEB["DEBLOCAGES"]
+    CYP["CYCLES_PRET"]
+    TAM["TABAMOR"]
+    REE["DEMANDES_REECHELONNEMENT"]
+    CTX["PRETS_CONTENTIEUX"]
+
+    ADH -->|"client demandeur"| DCR
+    PCRD -->|"produit demande"| DCR
+    DCR -->|"alimente"| DOS
+    DOS -->|"controle / validation"| VAL
+    DOS -->|"analyse revenu"| REV
+    DOS -->|"analyse projet"| PROJ
+    DOS -->|"garanties et caution"| GAR
+    DOS -->|"genere"| PRT
+    PRT -->|"deboursement"| DEB
+    PRT -->|"decoupe en cycles"| CYP
+    CYP -->|"plan d'amortissement"| TAM
+    PRT -->|"reechelonnement"| REE
+    PRT -->|"suivi contentieux"| CTX
+
+    class ADH,PCRD ref
+    class DCR,DOS,PRT,CYP credit
+    class VAL,REV,PROJ,GAR,DEB,REE control
+    class TAM,CTX risk
 ```
+
+## Schema Visuel Recommande
+
+Le schema ci-dessus est plus utile pour une lecture de controle interne que le rendu automatique brut, car il separe clairement :
+
+- les referentiels
+- le cycle epargne et les mouvements
+- le cycle credit et ses points de controle
+- les tables de suivi a risque comme `TABAMOR`, `DEMANDES_REECHELONNEMENT` et `PRETS_CONTENTIEUX`
 
 ## Relations Principales
 
