@@ -626,6 +626,42 @@ SQL_OPERATIONS_CONTROL_CATALOG = [
         "ContrÃ´le": "Cycles de prÃªt sans Ã©chÃ©ancier TABAMOR exploitable",
         "Lecture": "RepÃ¨re les cycles sans plan d'amortissement lisible pour le suivi des Ã©chÃ©ances et de la piste d'audit.",
     },
+    {
+        "ContrÃ´le ID": 84,
+        "ThÃ¨me": "Risque de portefeuille",
+        "ContrÃ´le": "Taux d'impayÃ© du portefeuille par tranche de montant et par devise",
+        "Lecture": "Mesure, par tranche de montant et par devise, la part des cycles Ã©chus non clÃ´turÃ©s par rapport aux montants octroyÃ©s sur la pÃ©riode.",
+    },
+    {
+        "ContrÃ´le ID": 85,
+        "ThÃ¨me": "FidÃ©lisation et clÃ´ture",
+        "ContrÃ´le": "Clients qui terminent leur crÃ©dit par mois, devise et agence",
+        "Lecture": "Suit les clients dont les prÃªts sont soldÃ©s afin de lire les clÃ´tures mensuelles et les opportunitÃ©s de renouvellement par devise ou par agence.",
+    },
+    {
+        "ContrÃ´le ID": 86,
+        "ThÃ¨me": "FidÃ©lisation et renouvellement",
+        "ContrÃ´le": "SynthÃ¨se de renouvellement aprÃ¨s clÃ´ture",
+        "Lecture": "Mesure, par mois, devise et agence, la part des clients soldÃ©s qui reviennent ensuite sur un nouveau prÃªt.",
+    },
+    {
+        "ContrÃ´le ID": 87,
+        "ThÃ¨me": "FidÃ©lisation et dÃ©lai de retour",
+        "ContrÃ´le": "DÃ©lai de renouvellement aprÃ¨s clÃ´ture",
+        "Lecture": "Classe les retours aprÃ¨s solde en renouvellement rapide, moyen, tardif ou pas encore renouvelÃ© pour mieux lire le rythme de fidÃ©lisation.",
+    },
+    {
+        "ContrÃ´le ID": 88,
+        "ThÃ¨me": "FidÃ©lisation et mobilitÃ© agence",
+        "ContrÃ´le": "Renouvellement dans la mÃªme agence ou avec changement d'agence",
+        "Lecture": "Compare l'agence du prÃªt soldÃ© et celle du premier prÃªt repris pour distinguer les retours fidÃ¨les Ã  l'agence et les renouvellements avec mobilitÃ©.",
+    },
+    {
+        "ContrÃ´le ID": 89,
+        "ThÃ¨me": "FidÃ©lisation et Ã©volution du montant",
+        "ContrÃ´le": "Evolution du montant au renouvellement",
+        "Lecture": "Compare le montant du prÃªt soldÃ© et celui du premier prÃªt repris pour distinguer les renouvellements en hausse, en baisse, stables ou pas encore renouvelÃ©s.",
+    },
 ]
 
 def build_sql_operations_control_catalog_table() -> pd.DataFrame:

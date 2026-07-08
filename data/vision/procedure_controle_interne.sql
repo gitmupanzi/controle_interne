@@ -105,6 +105,8 @@
  81 = Validations de dossier incoherentes avec le dossier ou le pret
  82 = Types de garantie utilises mais non parametres pour l'agence
  83 = Cycles de pret sans echeancier TABAMOR exploitable
+ 84 = Taux d'impaye du portefeuille par tranche de montant
+ 85 = Clients qui terminent leur credit par mois ou sur la periode
  */
 USE [BB_VISION_PRO];
 GO CREATE
@@ -3544,8 +3546,453 @@ ORDER BY COALESCE(p.DATE_DECAISSEMENT, cp.DATE_DEBUT) DESC,
     cp.MONTANT DESC;
 RETURN;
 END;
+IF @controle_id = 84 BEGIN WITH base_prets AS (
+    SELECT p.ID AS id_pret,
+        p.MONTANT AS montant_pret,
+        ISNULL(dv.CODE, 'Non renseignee') AS devise_pret,
+        CASE
+            WHEN p.MONTANT BETWEEN 500 AND 3000 THEN '500 - 3000'
+            WHEN p.MONTANT BETWEEN 3001 AND 10000 THEN '3001 - 10000'
+            WHEN p.MONTANT BETWEEN 10001 AND 50000 THEN '10001 - 50000'
+            WHEN p.MONTANT > 50000 THEN '50001 et plus'
+            ELSE 'Moins de 500'
+        END AS tranche_montant
+    FROM dbo.PRETS p
+        LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
+    WHERE COALESCE(p.DATE_DECAISSEMENT, p.DATE_EFFET) BETWEEN @date_debut AND @date_fin
+),
+cycles_a_risque AS (
+    SELECT cp.ID_PRET,
+        SUM(ISNULL(cp.MONTANT, 0)) AS montant_cycles_echus_non_clotures,
+        COUNT(*) AS nb_cycles_echus_non_clotures
+    FROM dbo.CYCLES_PRET cp
+    WHERE cp.FIN_ECHEANCE IS NOT NULL
+        AND cp.FIN_ECHEANCE <= @date_fin
+        AND cp.DATE_CLOTURE IS NULL
+    GROUP BY cp.ID_PRET
+)
+SELECT bp.devise_pret,
+    bp.tranche_montant,
+    COUNT(DISTINCT bp.id_pret) AS nb_prets_octroyes,
+    SUM(ISNULL(bp.montant_pret, 0)) AS montant_total_octroye,
+    COUNT(DISTINCT CASE
+            WHEN car.ID_PRET IS NOT NULL THEN bp.id_pret
+        END) AS nb_prets_avec_impaye_proxy,
+    SUM(ISNULL(car.montant_cycles_echus_non_clotures, 0)) AS montant_impaye_proxy,
+    SUM(ISNULL(car.nb_cycles_echus_non_clotures, 0)) AS nb_cycles_echus_non_clotures,
+    CASE
+        WHEN SUM(ISNULL(bp.montant_pret, 0)) = 0 THEN 0
+        ELSE ROUND(
+            100.0 * SUM(ISNULL(car.montant_cycles_echus_non_clotures, 0)) / SUM(ISNULL(bp.montant_pret, 0)),
+            2
+        )
+    END AS taux_impaye_proxy_pct
+FROM base_prets bp
+    LEFT JOIN cycles_a_risque car ON car.ID_PRET = bp.id_pret
+GROUP BY bp.devise_pret,
+    bp.tranche_montant
+ORDER BY bp.devise_pret,
+    CASE bp.tranche_montant
+        WHEN 'Moins de 500' THEN 1
+        WHEN '500 - 3000' THEN 2
+        WHEN '3001 - 10000' THEN 3
+        WHEN '10001 - 50000' THEN 4
+        ELSE 5
+    END;
+RETURN;
+END;
+IF @controle_id = 85 BEGIN
+SELECT DATEFROMPARTS(
+        YEAR(p.DATE_SOLDE),
+        MONTH(p.DATE_SOLDE),
+        1
+    ) AS mois_solde,
+    ISNULL(dv.CODE, 'Non renseignee') AS devise_pret,
+    p.ID_COMPTE_CREDIT AS id_compte_credit,
+    cc.NUM_CPTE AS numero_compte_credit,
+    cc.LIBELLE AS nom_compte_credit,
+    p.ID_COMPTE_REMB AS id_compte_remboursement,
+    cr.NUM_CPTE AS numero_compte_remboursement,
+    cr.LIBELLE AS nom_compte_remboursement,
+    dc.ID_AGENCE AS id_agence,
+    ps.CODE AS code_agence,
+    ps.NOM AS nom_agence,
+    a.ID AS id_adherent,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    COUNT(DISTINCT p.ID) AS nb_prets_termines,
+    SUM(ISNULL(p.MONTANT, 0)) AS montant_total_credits_termines,
+    MIN(p.DATE_SOLDE) AS premiere_date_solde,
+    MAX(p.DATE_SOLDE) AS derniere_date_solde
+FROM dbo.PRETS p
+    INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+    INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    INNER JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.COMPTES cc ON cc.ID = p.ID_COMPTE_CREDIT
+    LEFT JOIN dbo.COMPTES cr ON cr.ID = p.ID_COMPTE_REMB
+    LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
+    LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_AGENCE
+WHERE p.DATE_SOLDE BETWEEN @date_debut AND @date_fin
+GROUP BY DATEFROMPARTS(
+        YEAR(p.DATE_SOLDE),
+        MONTH(p.DATE_SOLDE),
+        1
+    ),
+    ISNULL(dv.CODE, 'Non renseignee'),
+    p.ID_COMPTE_CREDIT,
+    cc.NUM_CPTE,
+    cc.LIBELLE,
+    p.ID_COMPTE_REMB,
+    cr.NUM_CPTE,
+    cr.LIBELLE,
+    dc.ID_AGENCE,
+    ps.CODE,
+    ps.NOM,
+    a.ID,
+    a.CODE,
+    a.NOM_ADHERENT
+ORDER BY mois_solde DESC,
+    devise_pret,
+    nom_agence,
+    nb_prets_termines DESC,
+    montant_total_credits_termines DESC;
+RETURN;
+END;
+IF @controle_id = 86 BEGIN
+WITH prets_soldes AS (
+    SELECT DATEFROMPARTS(
+            YEAR(p.DATE_SOLDE),
+            MONTH(p.DATE_SOLDE),
+            1
+        ) AS mois_solde,
+        p.DATE_SOLDE,
+        p.ID AS id_pret_solde,
+        ISNULL(p.MONTANT, 0) AS montant_pret_solde,
+        ISNULL(dv.CODE, 'Non renseignee') AS devise_pret,
+        dc.ID_AGENCE AS id_agence,
+        ps.CODE AS code_agence,
+        ps.NOM AS nom_agence,
+        a.ID AS id_adherent
+    FROM dbo.PRETS p
+        INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+        INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+        INNER JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+        LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_AGENCE
+    WHERE p.DATE_SOLDE BETWEEN @date_debut AND @date_fin
+),
+renouvellements_estimes AS (
+    SELECT DISTINCT ps.id_pret_solde,
+        ps.id_adherent
+    FROM prets_soldes ps
+        INNER JOIN dbo.DEMANDES_CREDIT dc2 ON dc2.ID_ADHERENT = ps.id_adherent
+        INNER JOIN dbo.DOSSIERS_CREDIT d2 ON d2.ID_DEMANDE = dc2.ID
+        INNER JOIN dbo.PRETS p2 ON p2.ID_DOSSIER_CREDIT = d2.ID
+    WHERE p2.ID <> ps.id_pret_solde
+        AND COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET) > ps.DATE_SOLDE
+)
+SELECT ps.mois_solde,
+    ps.devise_pret,
+    ps.id_agence,
+    ps.code_agence,
+    ps.nom_agence,
+    COUNT(DISTINCT ps.id_adherent) AS nb_clients_ayant_solde,
+    COUNT(DISTINCT ps.id_pret_solde) AS nb_prets_termines,
+    SUM(ps.montant_pret_solde) AS montant_total_credits_termines,
+    COUNT(DISTINCT CASE
+            WHEN re.id_pret_solde IS NOT NULL THEN ps.id_adherent
+        END) AS nb_clients_renouveles_estimes,
+    COUNT(DISTINCT CASE
+            WHEN re.id_pret_solde IS NOT NULL THEN ps.id_pret_solde
+        END) AS nb_prets_soldes_avec_renouvellement,
+    CASE
+        WHEN COUNT(DISTINCT ps.id_adherent) = 0 THEN 0
+        ELSE ROUND(
+            100.0 * COUNT(DISTINCT CASE
+                    WHEN re.id_pret_solde IS NOT NULL THEN ps.id_adherent
+                END) / COUNT(DISTINCT ps.id_adherent),
+            2
+        )
+    END AS taux_renouvellement_estime_pct,
+    MIN(ps.DATE_SOLDE) AS premiere_date_solde,
+    MAX(ps.DATE_SOLDE) AS derniere_date_solde
+FROM prets_soldes ps
+    LEFT JOIN renouvellements_estimes re ON re.id_pret_solde = ps.id_pret_solde
+GROUP BY ps.mois_solde,
+    ps.devise_pret,
+    ps.id_agence,
+    ps.code_agence,
+    ps.nom_agence
+ORDER BY ps.mois_solde DESC,
+    ps.devise_pret,
+    ps.nom_agence;
+RETURN;
+END;
+IF @controle_id = 87 BEGIN
+WITH prets_soldes AS (
+    SELECT DATEFROMPARTS(
+            YEAR(p.DATE_SOLDE),
+            MONTH(p.DATE_SOLDE),
+            1
+        ) AS mois_solde,
+        p.ID AS id_pret_solde,
+        p.DATE_SOLDE,
+        ISNULL(p.MONTANT, 0) AS montant_pret_solde,
+        ISNULL(dv.CODE, 'Non renseignee') AS devise_pret,
+        dc.ID_AGENCE AS id_agence,
+        ps.CODE AS code_agence,
+        ps.NOM AS nom_agence,
+        a.ID AS id_adherent,
+        a.CODE AS code_adherent,
+        a.NOM_ADHERENT
+    FROM dbo.PRETS p
+        INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+        INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+        INNER JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+        LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_AGENCE
+    WHERE p.DATE_SOLDE BETWEEN @date_debut AND @date_fin
+),
+prochain_pret AS (
+    SELECT ps.*,
+        np.date_prochain_pret,
+        np.id_prochain_pret,
+        CASE
+            WHEN np.date_prochain_pret IS NULL THEN NULL
+            ELSE DATEDIFF(day, ps.DATE_SOLDE, np.date_prochain_pret)
+        END AS delai_renouvellement_jours
+    FROM prets_soldes ps
+        OUTER APPLY (
+            SELECT TOP (1) p2.ID AS id_prochain_pret,
+                COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET) AS date_prochain_pret
+            FROM dbo.DEMANDES_CREDIT dc2
+                INNER JOIN dbo.DOSSIERS_CREDIT d2 ON d2.ID_DEMANDE = dc2.ID
+                INNER JOIN dbo.PRETS p2 ON p2.ID_DOSSIER_CREDIT = d2.ID
+            WHERE dc2.ID_ADHERENT = ps.id_adherent
+                AND p2.ID <> ps.id_pret_solde
+                AND COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET) > ps.DATE_SOLDE
+            ORDER BY COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET)
+        ) np
+)
+SELECT pp.mois_solde,
+    pp.devise_pret,
+    pp.id_agence,
+    pp.code_agence,
+    pp.nom_agence,
+    CASE
+        WHEN pp.date_prochain_pret IS NULL THEN 'Pas encore renouvelle'
+        WHEN pp.delai_renouvellement_jours <= 30 THEN 'Renouvellement rapide'
+        WHEN pp.delai_renouvellement_jours <= 90 THEN 'Renouvellement moyen'
+        ELSE 'Renouvellement tardif'
+    END AS profil_renouvellement,
+    COUNT(DISTINCT pp.id_adherent) AS nb_clients,
+    COUNT(DISTINCT pp.id_pret_solde) AS nb_prets_soldes,
+    SUM(pp.montant_pret_solde) AS montant_total_prets_soldes,
+    AVG(CAST(pp.delai_renouvellement_jours AS float)) AS delai_moyen_renouvellement_jours,
+    MIN(pp.delai_renouvellement_jours) AS delai_min_jours,
+    MAX(pp.delai_renouvellement_jours) AS delai_max_jours
+FROM prochain_pret pp
+GROUP BY pp.mois_solde,
+    pp.devise_pret,
+    pp.id_agence,
+    pp.code_agence,
+    pp.nom_agence,
+    CASE
+        WHEN pp.date_prochain_pret IS NULL THEN 'Pas encore renouvelle'
+        WHEN pp.delai_renouvellement_jours <= 30 THEN 'Renouvellement rapide'
+        WHEN pp.delai_renouvellement_jours <= 90 THEN 'Renouvellement moyen'
+        ELSE 'Renouvellement tardif'
+    END
+ORDER BY pp.mois_solde DESC,
+    pp.devise_pret,
+    pp.nom_agence,
+    CASE
+        WHEN pp.date_prochain_pret IS NULL THEN 4
+        WHEN pp.delai_renouvellement_jours <= 30 THEN 1
+        WHEN pp.delai_renouvellement_jours <= 90 THEN 2
+        ELSE 3
+    END;
+RETURN;
+END;
+IF @controle_id = 88 BEGIN
+WITH prets_soldes AS (
+    SELECT DATEFROMPARTS(
+            YEAR(p.DATE_SOLDE),
+            MONTH(p.DATE_SOLDE),
+            1
+        ) AS mois_solde,
+        p.ID AS id_pret_solde,
+        p.DATE_SOLDE,
+        ISNULL(p.MONTANT, 0) AS montant_pret_solde,
+        ISNULL(dv.CODE, 'Non renseignee') AS devise_pret,
+        dc.ID_AGENCE AS id_agence_origine,
+        ps.CODE AS code_agence_origine,
+        ps.NOM AS nom_agence_origine,
+        a.ID AS id_adherent
+    FROM dbo.PRETS p
+        INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+        INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+        INNER JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+        LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_AGENCE
+    WHERE p.DATE_SOLDE BETWEEN @date_debut AND @date_fin
+),
+premier_renouvellement AS (
+    SELECT ps.*,
+        np.id_prochain_pret,
+        np.date_prochain_pret,
+        np.id_agence_nouvelle,
+        np.code_agence_nouvelle,
+        np.nom_agence_nouvelle
+    FROM prets_soldes ps
+        OUTER APPLY (
+            SELECT TOP (1) p2.ID AS id_prochain_pret,
+                COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET) AS date_prochain_pret,
+                dc2.ID_AGENCE AS id_agence_nouvelle,
+                ps2.CODE AS code_agence_nouvelle,
+                ps2.NOM AS nom_agence_nouvelle
+            FROM dbo.DEMANDES_CREDIT dc2
+                INNER JOIN dbo.DOSSIERS_CREDIT d2 ON d2.ID_DEMANDE = dc2.ID
+                INNER JOIN dbo.PRETS p2 ON p2.ID_DOSSIER_CREDIT = d2.ID
+                LEFT JOIN dbo.POINTS_SERVICE ps2 ON ps2.ID = dc2.ID_AGENCE
+            WHERE dc2.ID_ADHERENT = ps.id_adherent
+                AND p2.ID <> ps.id_pret_solde
+                AND COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET) > ps.DATE_SOLDE
+            ORDER BY COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET)
+        ) np
+)
+SELECT pr.mois_solde,
+    pr.devise_pret,
+    pr.id_agence_origine,
+    pr.code_agence_origine,
+    pr.nom_agence_origine,
+    CASE
+        WHEN pr.id_prochain_pret IS NULL THEN 'Pas encore renouvelle'
+        WHEN ISNULL(pr.id_agence_nouvelle, '') = ISNULL(pr.id_agence_origine, '') THEN 'Renouvellement même agence'
+        ELSE 'Renouvellement avec changement d''agence'
+    END AS lecture_agence_renouvellement,
+    pr.id_agence_nouvelle,
+    pr.code_agence_nouvelle,
+    pr.nom_agence_nouvelle,
+    COUNT(DISTINCT pr.id_adherent) AS nb_clients,
+    COUNT(DISTINCT pr.id_pret_solde) AS nb_prets_soldes,
+    SUM(pr.montant_pret_solde) AS montant_total_prets_soldes,
+    MIN(pr.date_prochain_pret) AS premiere_date_renouvellement,
+    MAX(pr.date_prochain_pret) AS derniere_date_renouvellement
+FROM premier_renouvellement pr
+GROUP BY pr.mois_solde,
+    pr.devise_pret,
+    pr.id_agence_origine,
+    pr.code_agence_origine,
+    pr.nom_agence_origine,
+    CASE
+        WHEN pr.id_prochain_pret IS NULL THEN 'Pas encore renouvelle'
+        WHEN ISNULL(pr.id_agence_nouvelle, '') = ISNULL(pr.id_agence_origine, '') THEN 'Renouvellement même agence'
+        ELSE 'Renouvellement avec changement d''agence'
+    END,
+    pr.id_agence_nouvelle,
+    pr.code_agence_nouvelle,
+    pr.nom_agence_nouvelle
+ORDER BY pr.mois_solde DESC,
+    pr.devise_pret,
+    pr.nom_agence_origine,
+    CASE
+        WHEN pr.id_prochain_pret IS NULL THEN 3
+        WHEN ISNULL(pr.id_agence_nouvelle, '') = ISNULL(pr.id_agence_origine, '') THEN 1
+        ELSE 2
+    END;
+RETURN;
+END;
+IF @controle_id = 89 BEGIN
+WITH prets_soldes AS (
+    SELECT DATEFROMPARTS(
+            YEAR(p.DATE_SOLDE),
+            MONTH(p.DATE_SOLDE),
+            1
+        ) AS mois_solde,
+        p.ID AS id_pret_solde,
+        p.DATE_SOLDE,
+        ISNULL(p.MONTANT, 0) AS montant_pret_solde,
+        ISNULL(dv.CODE, 'Non renseignee') AS devise_pret,
+        dc.ID_AGENCE AS id_agence_origine,
+        ps.CODE AS code_agence_origine,
+        ps.NOM AS nom_agence_origine,
+        a.ID AS id_adherent
+    FROM dbo.PRETS p
+        INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+        INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+        INNER JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+        LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
+        LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_AGENCE
+    WHERE p.DATE_SOLDE BETWEEN @date_debut AND @date_fin
+),
+premier_renouvellement AS (
+    SELECT ps.*,
+        np.id_prochain_pret,
+        np.date_prochain_pret,
+        np.montant_prochain_pret
+    FROM prets_soldes ps
+        OUTER APPLY (
+            SELECT TOP (1) p2.ID AS id_prochain_pret,
+                COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET) AS date_prochain_pret,
+                ISNULL(p2.MONTANT, 0) AS montant_prochain_pret
+            FROM dbo.DEMANDES_CREDIT dc2
+                INNER JOIN dbo.DOSSIERS_CREDIT d2 ON d2.ID_DEMANDE = dc2.ID
+                INNER JOIN dbo.PRETS p2 ON p2.ID_DOSSIER_CREDIT = d2.ID
+            WHERE dc2.ID_ADHERENT = ps.id_adherent
+                AND p2.ID <> ps.id_pret_solde
+                AND COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET) > ps.DATE_SOLDE
+            ORDER BY COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET)
+        ) np
+)
+SELECT pr.mois_solde,
+    pr.devise_pret,
+    pr.id_agence_origine,
+    pr.code_agence_origine,
+    pr.nom_agence_origine,
+    CASE
+        WHEN pr.id_prochain_pret IS NULL THEN 'Pas encore renouvelle'
+        WHEN ABS(ISNULL(pr.montant_prochain_pret, 0) - ISNULL(pr.montant_pret_solde, 0)) < 1 THEN 'Montant stable'
+        WHEN ISNULL(pr.montant_prochain_pret, 0) > ISNULL(pr.montant_pret_solde, 0) THEN 'Montant en hausse'
+        ELSE 'Montant en baisse'
+    END AS profil_evolution_montant,
+    COUNT(DISTINCT pr.id_adherent) AS nb_clients,
+    COUNT(DISTINCT pr.id_pret_solde) AS nb_prets_soldes,
+    SUM(pr.montant_pret_solde) AS montant_total_prets_soldes,
+    SUM(ISNULL(pr.montant_prochain_pret, 0)) AS montant_total_nouveaux_prets,
+    AVG(
+        CASE
+            WHEN pr.id_prochain_pret IS NULL THEN NULL
+            ELSE ISNULL(pr.montant_prochain_pret, 0) - ISNULL(pr.montant_pret_solde, 0)
+        END
+    ) AS variation_moyenne_montant,
+    MIN(pr.date_prochain_pret) AS premiere_date_renouvellement,
+    MAX(pr.date_prochain_pret) AS derniere_date_renouvellement
+FROM premier_renouvellement pr
+GROUP BY pr.mois_solde,
+    pr.devise_pret,
+    pr.id_agence_origine,
+    pr.code_agence_origine,
+    pr.nom_agence_origine,
+    CASE
+        WHEN pr.id_prochain_pret IS NULL THEN 'Pas encore renouvelle'
+        WHEN ABS(ISNULL(pr.montant_prochain_pret, 0) - ISNULL(pr.montant_pret_solde, 0)) < 1 THEN 'Montant stable'
+        WHEN ISNULL(pr.montant_prochain_pret, 0) > ISNULL(pr.montant_pret_solde, 0) THEN 'Montant en hausse'
+        ELSE 'Montant en baisse'
+    END
+ORDER BY pr.mois_solde DESC,
+    pr.devise_pret,
+    pr.nom_agence_origine,
+    CASE
+        WHEN pr.id_prochain_pret IS NULL THEN 4
+        WHEN ABS(ISNULL(pr.montant_prochain_pret, 0) - ISNULL(pr.montant_pret_solde, 0)) < 1 THEN 3
+        WHEN ISNULL(pr.montant_prochain_pret, 0) > ISNULL(pr.montant_pret_solde, 0) THEN 1
+        ELSE 2
+    END;
+RETURN;
+END;
 RAISERROR(
-    'Controle inconnu. Utiliser un @controle_id entre 1 et 83.',
+    'Controle inconnu. Utiliser un @controle_id entre 1 et 89.',
     16,
     1
 );
