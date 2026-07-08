@@ -3773,44 +3773,48 @@ prochain_pret AS (
                 AND COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET) > ps.DATE_SOLDE
             ORDER BY COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET)
         ) np
+),
+synthese_renouvellement AS (
+    SELECT pp.mois_solde,
+        pp.devise_pret,
+        pp.id_agence,
+        pp.code_agence,
+        pp.nom_agence,
+        CASE
+            WHEN pp.date_prochain_pret IS NULL THEN 'Pas encore renouvelle'
+            WHEN pp.delai_renouvellement_jours <= 30 THEN 'Renouvellement rapide'
+            WHEN pp.delai_renouvellement_jours <= 90 THEN 'Renouvellement moyen'
+            ELSE 'Renouvellement tardif'
+        END AS profil_renouvellement,
+        COUNT(DISTINCT pp.id_adherent) AS nb_clients,
+        COUNT(DISTINCT pp.id_pret_solde) AS nb_prets_soldes,
+        SUM(pp.montant_pret_solde) AS montant_total_prets_soldes,
+        AVG(CAST(pp.delai_renouvellement_jours AS float)) AS delai_moyen_renouvellement_jours,
+        MIN(pp.delai_renouvellement_jours) AS delai_min_jours,
+        MAX(pp.delai_renouvellement_jours) AS delai_max_jours
+    FROM prochain_pret pp
+    GROUP BY pp.mois_solde,
+        pp.devise_pret,
+        pp.id_agence,
+        pp.code_agence,
+        pp.nom_agence,
+        CASE
+            WHEN pp.date_prochain_pret IS NULL THEN 'Pas encore renouvelle'
+            WHEN pp.delai_renouvellement_jours <= 30 THEN 'Renouvellement rapide'
+            WHEN pp.delai_renouvellement_jours <= 90 THEN 'Renouvellement moyen'
+            ELSE 'Renouvellement tardif'
+        END
 )
-SELECT pp.mois_solde,
-    pp.devise_pret,
-    pp.id_agence,
-    pp.code_agence,
-    pp.nom_agence,
-    CASE
-        WHEN pp.date_prochain_pret IS NULL THEN 'Pas encore renouvelle'
-        WHEN pp.delai_renouvellement_jours <= 30 THEN 'Renouvellement rapide'
-        WHEN pp.delai_renouvellement_jours <= 90 THEN 'Renouvellement moyen'
-        ELSE 'Renouvellement tardif'
-    END AS profil_renouvellement,
-    COUNT(DISTINCT pp.id_adherent) AS nb_clients,
-    COUNT(DISTINCT pp.id_pret_solde) AS nb_prets_soldes,
-    SUM(pp.montant_pret_solde) AS montant_total_prets_soldes,
-    AVG(CAST(pp.delai_renouvellement_jours AS float)) AS delai_moyen_renouvellement_jours,
-    MIN(pp.delai_renouvellement_jours) AS delai_min_jours,
-    MAX(pp.delai_renouvellement_jours) AS delai_max_jours
-FROM prochain_pret pp
-GROUP BY pp.mois_solde,
-    pp.devise_pret,
-    pp.id_agence,
-    pp.code_agence,
-    pp.nom_agence,
-    CASE
-        WHEN pp.date_prochain_pret IS NULL THEN 'Pas encore renouvelle'
-        WHEN pp.delai_renouvellement_jours <= 30 THEN 'Renouvellement rapide'
-        WHEN pp.delai_renouvellement_jours <= 90 THEN 'Renouvellement moyen'
-        ELSE 'Renouvellement tardif'
-    END
-ORDER BY pp.mois_solde DESC,
-    pp.devise_pret,
-    pp.nom_agence,
-    CASE
-        WHEN pp.date_prochain_pret IS NULL THEN 4
-        WHEN pp.delai_renouvellement_jours <= 30 THEN 1
-        WHEN pp.delai_renouvellement_jours <= 90 THEN 2
-        ELSE 3
+SELECT *
+FROM synthese_renouvellement
+ORDER BY mois_solde DESC,
+    devise_pret,
+    nom_agence,
+    CASE profil_renouvellement
+        WHEN 'Renouvellement rapide' THEN 1
+        WHEN 'Renouvellement moyen' THEN 2
+        WHEN 'Renouvellement tardif' THEN 3
+        ELSE 4
     END;
 RETURN;
 END;
@@ -3860,46 +3864,50 @@ premier_renouvellement AS (
                 AND COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET) > ps.DATE_SOLDE
             ORDER BY COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET)
         ) np
+),
+synthese_agence_renouvellement AS (
+    SELECT pr.mois_solde,
+        pr.devise_pret,
+        pr.id_agence_origine,
+        pr.code_agence_origine,
+        pr.nom_agence_origine,
+        CASE
+            WHEN pr.id_prochain_pret IS NULL THEN 'Pas encore renouvelle'
+            WHEN ISNULL(pr.id_agence_nouvelle, '') = ISNULL(pr.id_agence_origine, '') THEN 'Renouvellement même agence'
+            ELSE 'Renouvellement avec changement d''agence'
+        END AS lecture_agence_renouvellement,
+        pr.id_agence_nouvelle,
+        pr.code_agence_nouvelle,
+        pr.nom_agence_nouvelle,
+        COUNT(DISTINCT pr.id_adherent) AS nb_clients,
+        COUNT(DISTINCT pr.id_pret_solde) AS nb_prets_soldes,
+        SUM(pr.montant_pret_solde) AS montant_total_prets_soldes,
+        MIN(pr.date_prochain_pret) AS premiere_date_renouvellement,
+        MAX(pr.date_prochain_pret) AS derniere_date_renouvellement
+    FROM premier_renouvellement pr
+    GROUP BY pr.mois_solde,
+        pr.devise_pret,
+        pr.id_agence_origine,
+        pr.code_agence_origine,
+        pr.nom_agence_origine,
+        CASE
+            WHEN pr.id_prochain_pret IS NULL THEN 'Pas encore renouvelle'
+            WHEN ISNULL(pr.id_agence_nouvelle, '') = ISNULL(pr.id_agence_origine, '') THEN 'Renouvellement même agence'
+            ELSE 'Renouvellement avec changement d''agence'
+        END,
+        pr.id_agence_nouvelle,
+        pr.code_agence_nouvelle,
+        pr.nom_agence_nouvelle
 )
-SELECT pr.mois_solde,
-    pr.devise_pret,
-    pr.id_agence_origine,
-    pr.code_agence_origine,
-    pr.nom_agence_origine,
-    CASE
-        WHEN pr.id_prochain_pret IS NULL THEN 'Pas encore renouvelle'
-        WHEN ISNULL(pr.id_agence_nouvelle, '') = ISNULL(pr.id_agence_origine, '') THEN 'Renouvellement même agence'
-        ELSE 'Renouvellement avec changement d''agence'
-    END AS lecture_agence_renouvellement,
-    pr.id_agence_nouvelle,
-    pr.code_agence_nouvelle,
-    pr.nom_agence_nouvelle,
-    COUNT(DISTINCT pr.id_adherent) AS nb_clients,
-    COUNT(DISTINCT pr.id_pret_solde) AS nb_prets_soldes,
-    SUM(pr.montant_pret_solde) AS montant_total_prets_soldes,
-    MIN(pr.date_prochain_pret) AS premiere_date_renouvellement,
-    MAX(pr.date_prochain_pret) AS derniere_date_renouvellement
-FROM premier_renouvellement pr
-GROUP BY pr.mois_solde,
-    pr.devise_pret,
-    pr.id_agence_origine,
-    pr.code_agence_origine,
-    pr.nom_agence_origine,
-    CASE
-        WHEN pr.id_prochain_pret IS NULL THEN 'Pas encore renouvelle'
-        WHEN ISNULL(pr.id_agence_nouvelle, '') = ISNULL(pr.id_agence_origine, '') THEN 'Renouvellement même agence'
-        ELSE 'Renouvellement avec changement d''agence'
-    END,
-    pr.id_agence_nouvelle,
-    pr.code_agence_nouvelle,
-    pr.nom_agence_nouvelle
-ORDER BY pr.mois_solde DESC,
-    pr.devise_pret,
-    pr.nom_agence_origine,
-    CASE
-        WHEN pr.id_prochain_pret IS NULL THEN 3
-        WHEN ISNULL(pr.id_agence_nouvelle, '') = ISNULL(pr.id_agence_origine, '') THEN 1
-        ELSE 2
+SELECT *
+FROM synthese_agence_renouvellement
+ORDER BY mois_solde DESC,
+    devise_pret,
+    nom_agence_origine,
+    CASE lecture_agence_renouvellement
+        WHEN 'Renouvellement même agence' THEN 1
+        WHEN 'Renouvellement avec changement d''agence' THEN 2
+        ELSE 3
     END;
 RETURN;
 END;
@@ -3944,50 +3952,54 @@ premier_renouvellement AS (
                 AND COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET) > ps.DATE_SOLDE
             ORDER BY COALESCE(p2.DATE_DECAISSEMENT, p2.DATE_EFFET)
         ) np
-)
-SELECT pr.mois_solde,
-    pr.devise_pret,
-    pr.id_agence_origine,
-    pr.code_agence_origine,
-    pr.nom_agence_origine,
-    CASE
-        WHEN pr.id_prochain_pret IS NULL THEN 'Pas encore renouvelle'
-        WHEN ABS(ISNULL(pr.montant_prochain_pret, 0) - ISNULL(pr.montant_pret_solde, 0)) < 1 THEN 'Montant stable'
-        WHEN ISNULL(pr.montant_prochain_pret, 0) > ISNULL(pr.montant_pret_solde, 0) THEN 'Montant en hausse'
-        ELSE 'Montant en baisse'
-    END AS profil_evolution_montant,
-    COUNT(DISTINCT pr.id_adherent) AS nb_clients,
-    COUNT(DISTINCT pr.id_pret_solde) AS nb_prets_soldes,
-    SUM(pr.montant_pret_solde) AS montant_total_prets_soldes,
-    SUM(ISNULL(pr.montant_prochain_pret, 0)) AS montant_total_nouveaux_prets,
-    AVG(
+),
+synthese_evolution_montant AS (
+    SELECT pr.mois_solde,
+        pr.devise_pret,
+        pr.id_agence_origine,
+        pr.code_agence_origine,
+        pr.nom_agence_origine,
         CASE
-            WHEN pr.id_prochain_pret IS NULL THEN NULL
-            ELSE ISNULL(pr.montant_prochain_pret, 0) - ISNULL(pr.montant_pret_solde, 0)
+            WHEN pr.id_prochain_pret IS NULL THEN 'Pas encore renouvelle'
+            WHEN ABS(ISNULL(pr.montant_prochain_pret, 0) - ISNULL(pr.montant_pret_solde, 0)) < 1 THEN 'Montant stable'
+            WHEN ISNULL(pr.montant_prochain_pret, 0) > ISNULL(pr.montant_pret_solde, 0) THEN 'Montant en hausse'
+            ELSE 'Montant en baisse'
+        END AS profil_evolution_montant,
+        COUNT(DISTINCT pr.id_adherent) AS nb_clients,
+        COUNT(DISTINCT pr.id_pret_solde) AS nb_prets_soldes,
+        SUM(pr.montant_pret_solde) AS montant_total_prets_soldes,
+        SUM(ISNULL(pr.montant_prochain_pret, 0)) AS montant_total_nouveaux_prets,
+        AVG(
+            CASE
+                WHEN pr.id_prochain_pret IS NULL THEN NULL
+                ELSE ISNULL(pr.montant_prochain_pret, 0) - ISNULL(pr.montant_pret_solde, 0)
+            END
+        ) AS variation_moyenne_montant,
+        MIN(pr.date_prochain_pret) AS premiere_date_renouvellement,
+        MAX(pr.date_prochain_pret) AS derniere_date_renouvellement
+    FROM premier_renouvellement pr
+    GROUP BY pr.mois_solde,
+        pr.devise_pret,
+        pr.id_agence_origine,
+        pr.code_agence_origine,
+        pr.nom_agence_origine,
+        CASE
+            WHEN pr.id_prochain_pret IS NULL THEN 'Pas encore renouvelle'
+            WHEN ABS(ISNULL(pr.montant_prochain_pret, 0) - ISNULL(pr.montant_pret_solde, 0)) < 1 THEN 'Montant stable'
+            WHEN ISNULL(pr.montant_prochain_pret, 0) > ISNULL(pr.montant_pret_solde, 0) THEN 'Montant en hausse'
+            ELSE 'Montant en baisse'
         END
-    ) AS variation_moyenne_montant,
-    MIN(pr.date_prochain_pret) AS premiere_date_renouvellement,
-    MAX(pr.date_prochain_pret) AS derniere_date_renouvellement
-FROM premier_renouvellement pr
-GROUP BY pr.mois_solde,
-    pr.devise_pret,
-    pr.id_agence_origine,
-    pr.code_agence_origine,
-    pr.nom_agence_origine,
-    CASE
-        WHEN pr.id_prochain_pret IS NULL THEN 'Pas encore renouvelle'
-        WHEN ABS(ISNULL(pr.montant_prochain_pret, 0) - ISNULL(pr.montant_pret_solde, 0)) < 1 THEN 'Montant stable'
-        WHEN ISNULL(pr.montant_prochain_pret, 0) > ISNULL(pr.montant_pret_solde, 0) THEN 'Montant en hausse'
-        ELSE 'Montant en baisse'
-    END
-ORDER BY pr.mois_solde DESC,
-    pr.devise_pret,
-    pr.nom_agence_origine,
-    CASE
-        WHEN pr.id_prochain_pret IS NULL THEN 4
-        WHEN ABS(ISNULL(pr.montant_prochain_pret, 0) - ISNULL(pr.montant_pret_solde, 0)) < 1 THEN 3
-        WHEN ISNULL(pr.montant_prochain_pret, 0) > ISNULL(pr.montant_pret_solde, 0) THEN 1
-        ELSE 2
+)
+SELECT *
+FROM synthese_evolution_montant
+ORDER BY mois_solde DESC,
+    devise_pret,
+    nom_agence_origine,
+    CASE profil_evolution_montant
+        WHEN 'Montant en hausse' THEN 1
+        WHEN 'Montant en baisse' THEN 2
+        WHEN 'Montant stable' THEN 3
+        ELSE 4
     END;
 RETURN;
 END;
@@ -4011,3 +4023,6 @@ GO
      @date_fin = '2026-12-31',
      @controle_id = 14;
      */
+
+
+
