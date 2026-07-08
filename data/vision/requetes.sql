@@ -2769,3 +2769,1013 @@ FROM cycles_en_retard
 ORDER BY nb_cas DESC,
     domaine,
     anomalie;
+/*
+ 69. Prets decaisses sans validation prealable exploitable
+ Objectif : verifier qu'un pret a bien fait l'objet d'une validation exploitable avant deboursement.
+ Lecture : signale les prets sans validation, sans validation favorable ou avec validation enregistree apres deboursement.
+ */
+WITH validation_stats AS (
+    SELECT v.ID_DOSSIER_CREDIT,
+        COUNT(*) AS nb_validations,
+        SUM(
+            CASE
+                WHEN ISNULL(v.etatValid, 0) = 1 THEN 1
+                ELSE 0
+            END
+        ) AS nb_validations_favorables,
+        MAX(CAST(v.dateValidation AS date)) AS date_derniere_validation,
+        MAX(
+            CASE
+                WHEN ISNULL(v.etatValid, 0) = 1 THEN CAST(v.dateValidation AS date)
+                ELSE NULL
+            END
+        ) AS date_derniere_validation_favorable
+    FROM dbo.VALIDATION_DOSSIER_CREDIT v
+    GROUP BY v.ID_DOSSIER_CREDIT
+),
+debloc_stats AS (
+    SELECT d.ID_PRET,
+        COUNT(*) AS nb_deblocages,
+        MIN(d.DATE_DEBLOC) AS date_premier_debloc,
+        MAX(d.DATE_DEBLOC) AS date_dernier_debloc
+    FROM dbo.DEBLOCAGES d
+    GROUP BY d.ID_PRET
+)
+SELECT p.ID AS id_pret,
+    p.NUMERO_PRET,
+    p.DATE_DECAISSEMENT,
+    ds.date_premier_debloc,
+    dc.ID AS id_demande,
+    dc.NUM_DEMANDE,
+    d.ID AS id_dossier_credit,
+    d.NUM_DOSSIER,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    pc.LIBELLE AS produit_credit,
+    ISNULL(vs.nb_validations, 0) AS nb_validations,
+    ISNULL(vs.nb_validations_favorables, 0) AS nb_validations_favorables,
+    vs.date_derniere_validation,
+    vs.date_derniere_validation_favorable,
+    CASE
+        WHEN vs.ID_DOSSIER_CREDIT IS NULL THEN 'Aucune validation de dossier'
+        WHEN ISNULL(vs.nb_validations_favorables, 0) = 0 THEN 'Validation favorable absente'
+        WHEN vs.date_derniere_validation_favorable > COALESCE(ds.date_premier_debloc, p.DATE_DECAISSEMENT) THEN 'Validation favorable enregistree apres deboursement'
+    END AS anomalie_validation
+FROM dbo.PRETS p
+    INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+    INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
+    LEFT JOIN validation_stats vs ON vs.ID_DOSSIER_CREDIT = d.ID
+    LEFT JOIN debloc_stats ds ON ds.ID_PRET = p.ID
+WHERE COALESCE(
+        ds.date_premier_debloc,
+        p.DATE_DECAISSEMENT,
+        p.DATE_EFFET
+    ) BETWEEN @date_debut AND @date_fin
+    AND (
+        vs.ID_DOSSIER_CREDIT IS NULL
+        OR ISNULL(vs.nb_validations_favorables, 0) = 0
+        OR vs.date_derniere_validation_favorable > COALESCE(ds.date_premier_debloc, p.DATE_DECAISSEMENT)
+    )
+ORDER BY COALESCE(ds.date_premier_debloc, p.DATE_DECAISSEMENT) DESC,
+    p.MONTANT DESC;
+/*
+ 70. Couverture de garantie insuffisante par rapport a la tranche
+ Objectif : comparer la valeur des garanties a la couverture attendue pour le dossier.
+ Lecture : utile pour verifier les dossiers dont la garantie reelle reste en dessous du minimum attendu.
+ */
+WITH garantie_stats AS (
+    SELECT g.ID_DEMANDE_CREDIT,
+        COUNT(*) AS nb_garanties,
+        SUM(ISNULL(g.VALEUR, 0)) AS valeur_garantie_totale
+    FROM dbo.GARANTIES g
+    GROUP BY g.ID_DEMANDE_CREDIT
+)
+SELECT dc.ID AS id_demande,
+    dc.NUM_DEMANDE,
+    d.ID AS id_dossier_credit,
+    d.NUM_DOSSIER,
+    p.ID AS id_pret,
+    p.NUMERO_PRET,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    pc.LIBELLE AS produit_credit,
+    tr.ID AS id_tranche,
+    ISNULL(tr.GARANTIE_OBLIGATOIRE, 0) AS garantie_obligatoire,
+    tr.SEUIL_MONTANT_GARANTIE,
+    CASE
+        WHEN ISNULL(tr.TAUX_VALEUR_GARANTIE, 0) = 0 THEN 120.0
+        WHEN tr.TAUX_VALEUR_GARANTIE <= 2 THEN tr.TAUX_VALEUR_GARANTIE * 100.0
+        ELSE tr.TAUX_VALEUR_GARANTIE
+    END AS taux_garantie_attendu_pct,
+    COALESCE(
+        p.MONTANT,
+        d.MONTANT_ACCORDE,
+        d.MONTANT_SOLLICITE,
+        dc.MONTANT_DEMANDE,
+        0
+    ) AS montant_reference,
+    ISNULL(gs.nb_garanties, 0) AS nb_garanties,
+    ISNULL(gs.valeur_garantie_totale, 0) AS valeur_garantie_totale,
+    COALESCE(
+        p.MONTANT,
+        d.MONTANT_ACCORDE,
+        d.MONTANT_SOLLICITE,
+        dc.MONTANT_DEMANDE,
+        0
+    ) * (
+        CASE
+            WHEN ISNULL(tr.TAUX_VALEUR_GARANTIE, 0) = 0 THEN 1.20
+            WHEN tr.TAUX_VALEUR_GARANTIE <= 2 THEN tr.TAUX_VALEUR_GARANTIE
+            ELSE tr.TAUX_VALEUR_GARANTIE / 100.0
+        END
+    ) AS valeur_garantie_attendue,
+    ISNULL(gs.valeur_garantie_totale, 0) - COALESCE(
+        p.MONTANT,
+        d.MONTANT_ACCORDE,
+        d.MONTANT_SOLLICITE,
+        dc.MONTANT_DEMANDE,
+        0
+    ) * (
+        CASE
+            WHEN ISNULL(tr.TAUX_VALEUR_GARANTIE, 0) = 0 THEN 1.20
+            WHEN tr.TAUX_VALEUR_GARANTIE <= 2 THEN tr.TAUX_VALEUR_GARANTIE
+            ELSE tr.TAUX_VALEUR_GARANTIE / 100.0
+        END
+    ) AS ecart_valeur_garantie
+FROM dbo.DEMANDES_CREDIT dc
+    INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
+    LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
+    LEFT JOIN dbo.PRODUITS_CRD_TRANCHE tr ON tr.ID = d.ID_PRDT_CRD_TRANCHE
+    LEFT JOIN garantie_stats gs ON gs.ID_DEMANDE_CREDIT = dc.ID
+WHERE COALESCE(
+        p.DATE_DECAISSEMENT,
+        d.DATE_DECISION,
+        dc.DATE_RECEPTION
+    ) BETWEEN @date_debut AND @date_fin
+    AND (
+        ISNULL(tr.GARANTIE_OBLIGATOIRE, 0) = 1
+        OR (
+            ISNULL(tr.SEUIL_MONTANT_GARANTIE, 0) > 0
+            AND COALESCE(
+                p.MONTANT,
+                d.MONTANT_ACCORDE,
+                d.MONTANT_SOLLICITE,
+                dc.MONTANT_DEMANDE,
+                0
+            ) >= tr.SEUIL_MONTANT_GARANTIE
+        )
+    )
+    AND ISNULL(gs.valeur_garantie_totale, 0) < COALESCE(
+        p.MONTANT,
+        d.MONTANT_ACCORDE,
+        d.MONTANT_SOLLICITE,
+        dc.MONTANT_DEMANDE,
+        0
+    ) * (
+        CASE
+            WHEN ISNULL(tr.TAUX_VALEUR_GARANTIE, 0) = 0 THEN 1.20
+            WHEN tr.TAUX_VALEUR_GARANTIE <= 2 THEN tr.TAUX_VALEUR_GARANTIE
+            ELSE tr.TAUX_VALEUR_GARANTIE / 100.0
+        END
+    )
+ORDER BY ecart_valeur_garantie,
+    COALESCE(
+        p.MONTANT,
+        d.MONTANT_ACCORDE,
+        dc.MONTANT_DEMANDE,
+        0
+    ) DESC;
+/*
+ 71. Caution financiere insuffisante par rapport au dossier
+ Objectif : rapprocher la caution constatee, le taux attendu et le minimum parametre.
+ Lecture : signale les prets dont la caution financiere reste absente ou insuffisante.
+ */
+WITH caution_base AS (
+    SELECT c.ID_PRET,
+        COUNT(*) AS nb_cautions,
+        SUM(ISNULL(c.MONTANT_CAUTION, 0)) AS montant_caution_table
+    FROM dbo.CAUTIONS c
+    GROUP BY c.ID_PRET
+),
+caution_compte AS (
+    SELECT c.ID_PRET,
+        SUM(ISNULL(cfc.MONTANT, 0)) AS montant_caution_compte
+    FROM dbo.CAUTIONS c
+        INNER JOIN dbo.CAUTIONS_FINANCIERE_COMPTE cfc ON cfc.ID_CAUTION_FIN = c.ID
+    GROUP BY c.ID_PRET
+)
+SELECT p.ID AS id_pret,
+    p.NUMERO_PRET,
+    d.ID AS id_dossier_credit,
+    d.NUM_DOSSIER,
+    dc.ID AS id_demande,
+    dc.NUM_DEMANDE,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    pc.LIBELLE AS produit_credit,
+    tr.ID AS id_tranche,
+    ISNULL(tr.CAUTION_FINANCIERE, 0) AS caution_financiere_obligatoire,
+    CASE
+        WHEN ISNULL(d.TAUX_CAUTION, 0) > 0 THEN d.TAUX_CAUTION
+        WHEN ISNULL(tr.TAUX_CAUTION_MIN, 0) > 0
+        AND tr.TAUX_CAUTION_MIN <= 1 THEN tr.TAUX_CAUTION_MIN * 100.0
+        ELSE ISNULL(tr.TAUX_CAUTION_MIN, 0)
+    END AS taux_caution_attendu_pct,
+    d.MNT_EPG_OBLIGATOIRE,
+    COALESCE(
+        p.MONTANT,
+        d.MONTANT_ACCORDE,
+        d.MONTANT_SOLLICITE,
+        dc.MONTANT_DEMANDE,
+        0
+    ) AS montant_reference,
+    ISNULL(cb.nb_cautions, 0) AS nb_cautions,
+    CASE
+        WHEN ISNULL(cc.montant_caution_compte, 0) > ISNULL(cb.montant_caution_table, 0) THEN ISNULL(cc.montant_caution_compte, 0)
+        ELSE ISNULL(cb.montant_caution_table, 0)
+    END AS montant_caution_constate,
+    CASE
+        WHEN ISNULL(d.MNT_EPG_OBLIGATOIRE, 0) > COALESCE(
+            p.MONTANT,
+            d.MONTANT_ACCORDE,
+            d.MONTANT_SOLLICITE,
+            dc.MONTANT_DEMANDE,
+            0
+        ) * (
+            CASE
+                WHEN ISNULL(d.TAUX_CAUTION, 0) > 0 THEN d.TAUX_CAUTION / 100.0
+                WHEN ISNULL(tr.TAUX_CAUTION_MIN, 0) > 0
+                AND tr.TAUX_CAUTION_MIN <= 1 THEN tr.TAUX_CAUTION_MIN
+                ELSE ISNULL(tr.TAUX_CAUTION_MIN, 0) / 100.0
+            END
+        ) THEN ISNULL(d.MNT_EPG_OBLIGATOIRE, 0)
+        ELSE COALESCE(
+            p.MONTANT,
+            d.MONTANT_ACCORDE,
+            d.MONTANT_SOLLICITE,
+            dc.MONTANT_DEMANDE,
+            0
+        ) * (
+            CASE
+                WHEN ISNULL(d.TAUX_CAUTION, 0) > 0 THEN d.TAUX_CAUTION / 100.0
+                WHEN ISNULL(tr.TAUX_CAUTION_MIN, 0) > 0
+                AND tr.TAUX_CAUTION_MIN <= 1 THEN tr.TAUX_CAUTION_MIN
+                ELSE ISNULL(tr.TAUX_CAUTION_MIN, 0) / 100.0
+            END
+        )
+    END AS caution_attendue
+FROM dbo.PRETS p
+    INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+    INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
+    LEFT JOIN dbo.PRODUITS_CRD_TRANCHE tr ON tr.ID = d.ID_PRDT_CRD_TRANCHE
+    LEFT JOIN caution_base cb ON cb.ID_PRET = p.ID
+    LEFT JOIN caution_compte cc ON cc.ID_PRET = p.ID
+WHERE COALESCE(
+        p.DATE_DECAISSEMENT,
+        d.DATE_DECISION,
+        dc.DATE_RECEPTION
+    ) BETWEEN @date_debut AND @date_fin
+    AND (
+        ISNULL(tr.CAUTION_FINANCIERE, 0) = 1
+        OR ISNULL(d.MNT_EPG_OBLIGATOIRE, 0) > 0
+        OR ISNULL(d.TAUX_CAUTION, 0) > 0
+        OR ISNULL(tr.TAUX_CAUTION_MIN, 0) > 0
+    )
+    AND (
+        CASE
+            WHEN ISNULL(cc.montant_caution_compte, 0) > ISNULL(cb.montant_caution_table, 0) THEN ISNULL(cc.montant_caution_compte, 0)
+            ELSE ISNULL(cb.montant_caution_table, 0)
+        END
+    ) < CASE
+        WHEN ISNULL(d.MNT_EPG_OBLIGATOIRE, 0) > COALESCE(
+            p.MONTANT,
+            d.MONTANT_ACCORDE,
+            d.MONTANT_SOLLICITE,
+            dc.MONTANT_DEMANDE,
+            0
+        ) * (
+            CASE
+                WHEN ISNULL(d.TAUX_CAUTION, 0) > 0 THEN d.TAUX_CAUTION / 100.0
+                WHEN ISNULL(tr.TAUX_CAUTION_MIN, 0) > 0
+                AND tr.TAUX_CAUTION_MIN <= 1 THEN tr.TAUX_CAUTION_MIN
+                ELSE ISNULL(tr.TAUX_CAUTION_MIN, 0) / 100.0
+            END
+        ) THEN ISNULL(d.MNT_EPG_OBLIGATOIRE, 0)
+        ELSE COALESCE(
+            p.MONTANT,
+            d.MONTANT_ACCORDE,
+            d.MONTANT_SOLLICITE,
+            dc.MONTANT_DEMANDE,
+            0
+        ) * (
+            CASE
+                WHEN ISNULL(d.TAUX_CAUTION, 0) > 0 THEN d.TAUX_CAUTION / 100.0
+                WHEN ISNULL(tr.TAUX_CAUTION_MIN, 0) > 0
+                AND tr.TAUX_CAUTION_MIN <= 1 THEN tr.TAUX_CAUTION_MIN
+                ELSE ISNULL(tr.TAUX_CAUTION_MIN, 0) / 100.0
+            END
+        )
+    END
+ORDER BY p.DATE_DECAISSEMENT DESC,
+    p.MONTANT DESC;
+/*
+ 72. Garanties sans garant identifiable ou sans piece exploitable
+ Objectif : reperer les garanties rattachees a un dossier mais sans garant correctement documente.
+ Lecture : permet de cibler les dossiers dont la garantie existe sur le papier mais reste fragile juridiquement.
+ */
+SELECT g.ID AS id_garantie,
+    g.ID_DEMANDE_CREDIT AS id_demande,
+    dc.NUM_DEMANDE,
+    d.ID AS id_dossier_credit,
+    d.NUM_DOSSIER,
+    p.ID AS id_pret,
+    p.NUMERO_PRET,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    pc.LIBELLE AS produit_credit,
+    g.DESCRIPTION AS description_garantie,
+    g.VALEUR,
+    g.ID_GARANT,
+    gr.NOM_GARANT,
+    gr.NOM,
+    gr.NUMERO_PIECE,
+    gr.NUM_REGISTRE,
+    CASE
+        WHEN g.ID_GARANT IS NULL THEN 'Garant non renseigne'
+        WHEN gr.ID IS NULL THEN 'Fiche garant introuvable'
+        WHEN NULLIF(LTRIM(RTRIM(ISNULL(gr.NOM_GARANT, gr.NOM))), '') IS NULL THEN 'Nom du garant manquant'
+        WHEN NULLIF(LTRIM(RTRIM(ISNULL(gr.NUMERO_PIECE, ''))), '') IS NULL
+        AND NULLIF(LTRIM(RTRIM(ISNULL(gr.NUM_REGISTRE, ''))), '') IS NULL THEN 'Piece ou registre du garant manquant'
+        ELSE 'Garant a revoir'
+    END AS anomalie_garant
+FROM dbo.GARANTIES g
+    INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = g.ID_DEMANDE_CREDIT
+    LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
+    LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
+    LEFT JOIN dbo.GARANTS gr ON gr.ID = g.ID_GARANT
+WHERE COALESCE(
+        p.DATE_DECAISSEMENT,
+        d.DATE_DECISION,
+        dc.DATE_RECEPTION
+    ) BETWEEN @date_debut AND @date_fin
+    AND (
+        g.ID_GARANT IS NULL
+        OR gr.ID IS NULL
+        OR NULLIF(LTRIM(RTRIM(ISNULL(gr.NOM_GARANT, gr.NOM))), '') IS NULL
+        OR (
+            NULLIF(LTRIM(RTRIM(ISNULL(gr.NUMERO_PIECE, ''))), '') IS NULL
+            AND NULLIF(LTRIM(RTRIM(ISNULL(gr.NUM_REGISTRE, ''))), '') IS NULL
+        )
+    )
+ORDER BY COALESCE(
+        p.DATE_DECAISSEMENT,
+        d.DATE_DECISION,
+        dc.DATE_RECEPTION
+    ) DESC,
+    g.VALEUR DESC;
+/*
+ 73. Dossiers avec analyse obligatoire absente ou inachevee
+ Objectif : verifier l'existence des analyses de revenu et de projet quand la tranche les exige.
+ Lecture : tres utile pour les controles d'octroi et la revue de la qualite documentaire.
+ */
+SELECT dc.ID AS id_demande,
+    dc.NUM_DEMANDE,
+    d.ID AS id_dossier_credit,
+    d.NUM_DOSSIER,
+    p.ID AS id_pret,
+    p.NUMERO_PRET,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    pc.LIBELLE AS produit_credit,
+    tr.ID AS id_tranche,
+    ISNULL(tr.ANALYSE_OBLIGATOIRE, 0) AS analyse_revenu_obligatoire,
+    ISNULL(tr.ANALYSE_PROJET_OBLIGATOIRE, 0) AS analyse_projet_obligatoire,
+    ar.ID AS id_analyse_revenu,
+    ar.REVENU_NET,
+    ar.AVIS AS avis_analyse_revenu,
+    ap.ID AS id_analyse_projet,
+    ap.PRODUIT_RECETTE,
+    ap.ACTIF,
+    ap.PASSIF,
+    ap.AVIS AS avis_analyse_projet,
+    CASE
+        WHEN ISNULL(tr.ANALYSE_OBLIGATOIRE, 0) = 1
+        AND (
+            ar.ID IS NULL
+            OR ar.REVENU_NET IS NULL
+        )
+        AND ISNULL(tr.ANALYSE_PROJET_OBLIGATOIRE, 0) = 1
+        AND (
+            ap.ID IS NULL
+            OR ap.PRODUIT_RECETTE IS NULL
+        ) THEN 'Analyse revenu et projet a completer'
+        WHEN ISNULL(tr.ANALYSE_OBLIGATOIRE, 0) = 1
+        AND (
+            ar.ID IS NULL
+            OR ar.REVENU_NET IS NULL
+        ) THEN 'Analyse de revenu a completer'
+        WHEN ISNULL(tr.ANALYSE_PROJET_OBLIGATOIRE, 0) = 1
+        AND (
+            ap.ID IS NULL
+            OR ap.PRODUIT_RECETTE IS NULL
+        ) THEN 'Analyse de projet a completer'
+    END AS anomalie_analyse
+FROM dbo.DEMANDES_CREDIT dc
+    INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
+    LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
+    LEFT JOIN dbo.PRODUITS_CRD_TRANCHE tr ON tr.ID = d.ID_PRDT_CRD_TRANCHE
+    LEFT JOIN dbo.CREDIT_ANALYSE_REVENU ar ON ar.ID_DEMANDE_CREDIT = dc.ID
+    LEFT JOIN dbo.CREDIT_ANALYSE_PROJET ap ON ap.ID_DEMANDE_CREDIT = dc.ID
+WHERE COALESCE(
+        p.DATE_DECAISSEMENT,
+        d.DATE_DECISION,
+        dc.DATE_RECEPTION
+    ) BETWEEN @date_debut AND @date_fin
+    AND (
+        (
+            ISNULL(tr.ANALYSE_OBLIGATOIRE, 0) = 1
+            AND (
+                ar.ID IS NULL
+                OR ar.REVENU_NET IS NULL
+            )
+        )
+        OR (
+            ISNULL(tr.ANALYSE_PROJET_OBLIGATOIRE, 0) = 1
+            AND (
+                ap.ID IS NULL
+                OR ap.PRODUIT_RECETTE IS NULL
+            )
+        )
+    )
+ORDER BY COALESCE(
+        p.DATE_DECAISSEMENT,
+        d.DATE_DECISION,
+        dc.DATE_RECEPTION
+    ) DESC,
+    dc.MONTANT_DEMANDE DESC;
+/*
+ 74. Decaissements sans support exploitable ou avec montant incoherent
+ Objectif : rapprocher le pret, le ou les deblocages et l'operation de support.
+ Lecture : permet d'isoler les cas sans trace de deblocage ou avec montant tire incoherent.
+ */
+WITH debloc_stats AS (
+    SELECT d.ID_PRET,
+        COUNT(*) AS nb_deblocages,
+        SUM(ISNULL(d.MONTANT_TIRE, 0)) AS montant_total_tire,
+        MIN(d.DATE_DEBLOC) AS date_premier_debloc,
+        MAX(d.DATE_DEBLOC) AS date_dernier_debloc,
+        SUM(
+            CASE
+                WHEN NULLIF(LTRIM(RTRIM(ISNULL(d.ID_OPERATION, ''))), '') IS NULL THEN 1
+                ELSE 0
+            END
+        ) AS nb_deblocages_sans_operation
+    FROM dbo.DEBLOCAGES d
+    GROUP BY d.ID_PRET
+)
+SELECT p.ID AS id_pret,
+    p.NUMERO_PRET,
+    p.DATE_DECAISSEMENT,
+    d.ID AS id_dossier_credit,
+    d.NUM_DOSSIER,
+    d.DATE_DECISION,
+    dc.ID AS id_demande,
+    dc.NUM_DEMANDE,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    p.MONTANT AS montant_pret,
+    ISNULL(ds.nb_deblocages, 0) AS nb_deblocages,
+    ISNULL(ds.montant_total_tire, 0) AS montant_total_tire,
+    ds.date_premier_debloc,
+    ds.date_dernier_debloc,
+    ISNULL(ds.nb_deblocages_sans_operation, 0) AS nb_deblocages_sans_operation,
+    CASE
+        WHEN ds.ID_PRET IS NULL THEN 'Aucun deblocage rattache'
+        WHEN ISNULL(ds.nb_deblocages_sans_operation, 0) > 0 THEN 'Deblocage sans operation de support'
+        WHEN ISNULL(ds.montant_total_tire, 0) <= 0 THEN 'Montant deblocage nul ou negatif'
+        WHEN ABS(
+            ISNULL(ds.montant_total_tire, 0) - ISNULL(p.MONTANT, 0)
+        ) > 1 THEN 'Ecart entre montant tire et montant du pret'
+        WHEN d.DATE_DECISION IS NOT NULL
+        AND ds.date_premier_debloc < d.DATE_DECISION THEN 'Deblocage avant decision'
+    END AS anomalie_deblocage
+FROM dbo.PRETS p
+    INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+    INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN debloc_stats ds ON ds.ID_PRET = p.ID
+WHERE COALESCE(
+        ds.date_premier_debloc,
+        p.DATE_DECAISSEMENT,
+        p.DATE_EFFET
+    ) BETWEEN @date_debut AND @date_fin
+    AND (
+        ds.ID_PRET IS NULL
+        OR ISNULL(ds.nb_deblocages_sans_operation, 0) > 0
+        OR ISNULL(ds.montant_total_tire, 0) <= 0
+        OR ABS(
+            ISNULL(ds.montant_total_tire, 0) - ISNULL(p.MONTANT, 0)
+        ) > 1
+        OR (
+            d.DATE_DECISION IS NOT NULL
+            AND ds.date_premier_debloc < d.DATE_DECISION
+        )
+    )
+ORDER BY COALESCE(ds.date_premier_debloc, p.DATE_DECAISSEMENT) DESC,
+    p.MONTANT DESC;
+/*
+ 75. Credits de groupe avec nombre de beneficiaires hors norme
+ Objectif : identifier les dossiers collectifs dont le nombre de beneficiaires semble incoherent.
+ Lecture : le manuel Likelemba recommande une taille de groupe maitrisee, generalement entre 5 et 10 membres.
+ */
+SELECT dc.ID AS id_demande,
+    dc.NUM_DEMANDE,
+    dc.REF_DEMANDE,
+    dc.DATE_RECEPTION,
+    dc.NBRE_BENEFICIAIRE,
+    d.ID AS id_dossier_credit,
+    d.NUM_DOSSIER,
+    p.ID AS id_pret,
+    p.NUMERO_PRET,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    pc.LIBELLE AS produit_credit,
+    pc.CREDIT_GROUPE,
+    CASE
+        WHEN dc.NBRE_BENEFICIAIRE IS NULL THEN 'Nombre de beneficiaires absent'
+        WHEN dc.NBRE_BENEFICIAIRE < 5 THEN 'Groupe inferieur au minimum recommande'
+        WHEN dc.NBRE_BENEFICIAIRE > 10 THEN 'Groupe superieur au maximum recommande'
+    END AS anomalie_groupe
+FROM dbo.DEMANDES_CREDIT dc
+    LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
+    LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
+WHERE dc.DATE_RECEPTION BETWEEN @date_debut AND @date_fin
+    AND (
+        NULLIF(LTRIM(RTRIM(ISNULL(pc.CREDIT_GROUPE, ''))), '') IS NOT NULL
+        OR ISNULL(dc.NBRE_BENEFICIAIRE, 0) > 1
+        OR UPPER(ISNULL(pc.LIBELLE, '')) LIKE '%LIKELEMBA%'
+    )
+    AND (
+        dc.NBRE_BENEFICIAIRE IS NULL
+        OR dc.NBRE_BENEFICIAIRE < 5
+        OR dc.NBRE_BENEFICIAIRE > 10
+    )
+ORDER BY dc.DATE_RECEPTION DESC,
+    dc.MONTANT_DEMANDE DESC;
+/*
+ 76. Nombre de prets actifs au-dela de la limite du produit
+ Objectif : comparer le nombre de prets actifs d'un client a la limite parametree sur le produit.
+ Lecture : aide a detecter les situations de cumul a relire avant nouvel octroi.
+ */
+WITH actifs AS (
+    SELECT dc.ID_ADHERENT,
+        dc.ID_PRODUIT_CREDIT,
+        COUNT(DISTINCT p.ID) AS nb_prets_actifs,
+        SUM(ISNULL(p.MONTANT, 0)) AS encours_total
+    FROM dbo.PRETS p
+        INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+        INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    WHERE COALESCE(p.DATE_DECAISSEMENT, p.DATE_EFFET) <= @date_fin
+        AND ISNULL(p.DATE_SOLDE, '9999-12-31') > @date_fin
+        AND p.DATE_SORTIE IS NULL
+        AND p.DATE_PERTE IS NULL
+    GROUP BY dc.ID_ADHERENT,
+        dc.ID_PRODUIT_CREDIT
+)
+SELECT a.ID_ADHERENT,
+    adh.CODE AS code_adherent,
+    adh.NOM_ADHERENT,
+    a.ID_PRODUIT_CREDIT,
+    pc.LIBELLE AS produit_credit,
+    pc.NBRE_MAX_DOSSIER_CLIENT AS limite_produit,
+    a.nb_prets_actifs,
+    a.encours_total
+FROM actifs a
+    INNER JOIN dbo.ADHERENTS adh ON adh.ID = a.ID_ADHERENT
+    INNER JOIN dbo.PRODUITS_CRD pc ON pc.ID = a.ID_PRODUIT_CREDIT
+WHERE ISNULL(pc.NBRE_MAX_DOSSIER_CLIENT, 0) > 0
+    AND a.nb_prets_actifs > pc.NBRE_MAX_DOSSIER_CLIENT
+ORDER BY a.nb_prets_actifs DESC,
+    a.encours_total DESC;
+/*
+ 77. Mainlevee ou retrait de garantie avant solde du pret
+ Objectif : verifier qu'une garantie n'a pas ete retiree alors que le pret reste non solde.
+ Lecture : cible les mainlevees a relire en priorite car elles peuvent fragiliser le recouvrement.
+ */
+WITH retraits_garantie AS (
+    SELECT g.ID_DEMANDE_CREDIT,
+        MIN(
+            COALESCE(or1.DATE_OPERATION, oa1.DATE_OPERATION)
+        ) AS date_premier_retrait_garantie,
+        COUNT(*) AS nb_retraits_garantie
+    FROM dbo.GARANTIES g
+        LEFT JOIN dbo.OPERATIONS or1 ON or1.ID = g.ID_OPERATION_RETRAIT
+        LEFT JOIN dbo.OPERATIONS_API oa1 ON oa1.CODE = g.ID_OPERATION_RETRAIT
+    WHERE NULLIF(
+            LTRIM(RTRIM(ISNULL(g.ID_OPERATION_RETRAIT, ''))),
+            ''
+        ) IS NOT NULL
+    GROUP BY g.ID_DEMANDE_CREDIT
+    UNION ALL
+    SELECT g.ID_DEMANDE_CREDIT,
+        MIN(
+            COALESCE(or2.DATE_OPERATION, oa2.DATE_OPERATION)
+        ) AS date_premier_retrait_garantie,
+        COUNT(*) AS nb_retraits_garantie
+    FROM dbo.GARANTIES g
+        INNER JOIN dbo.GARANTIES_DETAIL gd ON gd.ID_GARANTIE = g.ID
+        LEFT JOIN dbo.OPERATIONS or2 ON or2.ID = gd.id_operation_retrait
+        LEFT JOIN dbo.OPERATIONS_API oa2 ON oa2.CODE = gd.id_operation_retrait
+    WHERE NULLIF(
+            LTRIM(RTRIM(ISNULL(gd.id_operation_retrait, ''))),
+            ''
+        ) IS NOT NULL
+    GROUP BY g.ID_DEMANDE_CREDIT
+),
+retraits_agreges AS (
+    SELECT rg.ID_DEMANDE_CREDIT,
+        MIN(rg.date_premier_retrait_garantie) AS date_premier_retrait_garantie,
+        SUM(rg.nb_retraits_garantie) AS nb_retraits_garantie
+    FROM retraits_garantie rg
+    GROUP BY rg.ID_DEMANDE_CREDIT
+)
+SELECT dc.ID AS id_demande,
+    dc.NUM_DEMANDE,
+    d.ID AS id_dossier_credit,
+    d.NUM_DOSSIER,
+    p.ID AS id_pret,
+    p.NUMERO_PRET,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    p.DATE_DECAISSEMENT,
+    p.DATE_SOLDE,
+    ra.date_premier_retrait_garantie,
+    ra.nb_retraits_garantie,
+    CASE
+        WHEN p.DATE_SOLDE IS NULL THEN 'Retrait de garantie observe avant solde du pret'
+        WHEN ra.date_premier_retrait_garantie < p.DATE_SOLDE THEN 'Retrait de garantie avant la date de solde'
+    END AS anomalie_retrait_garantie
+FROM dbo.DEMANDES_CREDIT dc
+    INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
+    INNER JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
+    INNER JOIN retraits_agreges ra ON ra.ID_DEMANDE_CREDIT = dc.ID
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+WHERE COALESCE(
+        ra.date_premier_retrait_garantie,
+        p.DATE_DECAISSEMENT
+    ) BETWEEN @date_debut AND @date_fin
+    AND (
+        p.DATE_SOLDE IS NULL
+        OR ra.date_premier_retrait_garantie < p.DATE_SOLDE
+    )
+ORDER BY ra.date_premier_retrait_garantie DESC,
+    p.MONTANT DESC;
+/*
+ 78. Demandes de reechelonnement sans validation exploitable
+ Objectif : controler les demandes de reechelonnement non validees ou rattachees a un pret deja sorti du portefeuille normal.
+ Lecture : permet d'isoler les reechelonnements a regulariser ou a justifier.
+ */
+SELECT dr.ID AS id_demande_reechelonnement,
+    dr.DATE_VALIDATION,
+    dr.NBRE_ECHEANCE_CONSERVEES,
+    dr.NBRE_ECHEANCE_NLLES,
+    dr.NBRE_PERIODE_DIFFERE,
+    dr.NBRE_PERIODE_GRACE,
+    p.ID AS id_pret,
+    p.NUMERO_PRET,
+    p.DATE_DECAISSEMENT,
+    p.DATE_REECH,
+    p.DATE_SOLDE,
+    p.DATE_SORTIE,
+    p.DATE_PERTE,
+    d.NUM_DOSSIER,
+    dc.NUM_DEMANDE,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    CASE
+        WHEN dr.DATE_VALIDATION IS NULL THEN 'Validation de reechelonnement absente'
+        WHEN p.DATE_SOLDE IS NOT NULL
+        AND dr.DATE_VALIDATION >= p.DATE_SOLDE THEN 'Reechelonnement enregistre sur un pret deja solde'
+        WHEN p.DATE_SORTIE IS NOT NULL
+        AND dr.DATE_VALIDATION >= p.DATE_SORTIE THEN 'Reechelonnement enregistre sur un pret deja sorti'
+        WHEN p.DATE_PERTE IS NOT NULL
+        AND dr.DATE_VALIDATION >= p.DATE_PERTE THEN 'Reechelonnement enregistre sur un pret deja passe en perte'
+        WHEN dr.NBRE_ECHEANCE_NLLES IS NULL
+        AND dr.NBRE_PERIODE_DIFFERE IS NULL
+        AND dr.NBRE_PERIODE_GRACE IS NULL THEN 'Parametres du reechelonnement insuffisants'
+    END AS anomalie_reechelonnement
+FROM dbo.DEMANDES_REECHELONNEMENT dr
+    INNER JOIN dbo.PRETS p ON p.ID = dr.ID_PRET
+    LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+    LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+WHERE COALESCE(
+        dr.DATE_VALIDATION,
+        p.DATE_REECH,
+        p.DATE_LAST_MODIFIED,
+        p.DATE_DECAISSEMENT
+    ) BETWEEN @date_debut AND @date_fin
+    AND (
+        dr.DATE_VALIDATION IS NULL
+        OR (
+            p.DATE_SOLDE IS NOT NULL
+            AND dr.DATE_VALIDATION >= p.DATE_SOLDE
+        )
+        OR (
+            p.DATE_SORTIE IS NOT NULL
+            AND dr.DATE_VALIDATION >= p.DATE_SORTIE
+        )
+        OR (
+            p.DATE_PERTE IS NOT NULL
+            AND dr.DATE_VALIDATION >= p.DATE_PERTE
+        )
+        OR (
+            dr.NBRE_ECHEANCE_NLLES IS NULL
+            AND dr.NBRE_PERIODE_DIFFERE IS NULL
+            AND dr.NBRE_PERIODE_GRACE IS NULL
+        )
+    )
+ORDER BY COALESCE(
+        dr.DATE_VALIDATION,
+        p.DATE_REECH,
+        p.DATE_LAST_MODIFIED
+    ) DESC,
+    p.MONTANT DESC;
+/*
+ 79. Prets marques reechelonnes sans demande formelle
+ Objectif : verifier qu'un pret marque comme reechelonne dispose d'une demande correspondante.
+ Lecture : tres utile quand le traitement systeme a ete fait avant ou sans formalisation du dossier.
+ */
+WITH reech AS (
+    SELECT dr.ID_PRET,
+        COUNT(*) AS nb_demandes_reechelonnement,
+        MAX(dr.DATE_VALIDATION) AS date_derniere_validation_reechelonnement
+    FROM dbo.DEMANDES_REECHELONNEMENT dr
+    GROUP BY dr.ID_PRET
+)
+SELECT p.ID AS id_pret,
+    p.NUMERO_PRET,
+    p.DATE_DECAISSEMENT,
+    p.DATE_REECH,
+    p.DATE_LAST_MODIFIED,
+    d.NUM_DOSSIER,
+    dc.NUM_DEMANDE,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    ISNULL(r.nb_demandes_reechelonnement, 0) AS nb_demandes_reechelonnement,
+    r.date_derniere_validation_reechelonnement
+FROM dbo.PRETS p
+    LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+    LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN reech r ON r.ID_PRET = p.ID
+WHERE COALESCE(p.DATE_REECH, p.DATE_LAST_MODIFIED) BETWEEN @date_debut AND @date_fin
+    AND p.DATE_REECH IS NOT NULL
+    AND ISNULL(r.nb_demandes_reechelonnement, 0) = 0
+ORDER BY p.DATE_REECH DESC,
+    p.MONTANT DESC;
+/*
+ 80. Prets en contentieux avec incoherences de transfert ou de montant
+ Objectif : relire les passages en contentieux dont la date ou le montant semble incoherent.
+ Lecture : aide a fiabiliser le suivi des dossiers sensibles et la piste d'audit.
+ */
+SELECT pcx.ID AS id_pret_contentieux,
+    pcx.DATE_TRANSFERT,
+    pcx.MONTANT_CONTENTIEUX,
+    pcx.MONTANT_CREDIT,
+    pcx.MONTANT_PERTE,
+    p.ID AS id_pret,
+    p.NUMERO_PRET,
+    p.DATE_DECAISSEMENT,
+    p.DATE_SOLDE,
+    p.DATE_SORTIE,
+    p.DATE_PERTE,
+    d.NUM_DOSSIER,
+    dc.NUM_DEMANDE,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    CASE
+        WHEN pcx.DATE_TRANSFERT IS NULL THEN 'Date de transfert en contentieux absente'
+        WHEN pcx.DATE_TRANSFERT < p.DATE_DECAISSEMENT THEN 'Transfert en contentieux anterieur au decaissement'
+        WHEN ISNULL(pcx.MONTANT_CONTENTIEUX, 0) <= 0 THEN 'Montant contentieux nul ou negatif'
+        WHEN ISNULL(pcx.MONTANT_CREDIT, 0) > 0
+        AND ISNULL(pcx.MONTANT_CONTENTIEUX, 0) > ISNULL(pcx.MONTANT_CREDIT, 0) THEN 'Montant contentieux superieur au montant credit'
+        WHEN p.DATE_SOLDE IS NOT NULL
+        AND pcx.DATE_TRANSFERT > p.DATE_SOLDE THEN 'Transfert en contentieux apres solde du pret'
+    END AS anomalie_contentieux
+FROM dbo.PRETS_CONTENTIEUX pcx
+    INNER JOIN dbo.PRETS p ON p.ID = pcx.ID_PRET
+    LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+    LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+WHERE COALESCE(
+        pcx.DATE_TRANSFERT,
+        p.DATE_PERTE,
+        p.DATE_SORTIE,
+        p.DATE_LAST_MODIFIED
+    ) BETWEEN @date_debut AND @date_fin
+    AND (
+        pcx.DATE_TRANSFERT IS NULL
+        OR pcx.DATE_TRANSFERT < p.DATE_DECAISSEMENT
+        OR ISNULL(pcx.MONTANT_CONTENTIEUX, 0) <= 0
+        OR (
+            ISNULL(pcx.MONTANT_CREDIT, 0) > 0
+            AND ISNULL(pcx.MONTANT_CONTENTIEUX, 0) > ISNULL(pcx.MONTANT_CREDIT, 0)
+        )
+        OR (
+            p.DATE_SOLDE IS NOT NULL
+            AND pcx.DATE_TRANSFERT > p.DATE_SOLDE
+        )
+    )
+ORDER BY COALESCE(pcx.DATE_TRANSFERT, p.DATE_PERTE, p.DATE_SORTIE) DESC,
+    ISNULL(pcx.MONTANT_CONTENTIEUX, 0) DESC;
+/*
+ 81. Validations de dossier incoherentes avec le dossier ou le pret
+ Objectif : comparer les montants, echeances et periodes valides avec les valeurs du dossier et du pret.
+ Lecture : cible les validations a relire avant revue d'octroi ou mission d'audit.
+ */
+SELECT v.id AS id_validation,
+    v.TYPE_VALIDATION,
+    v.dateValidation,
+    v.etatValid,
+    v.mntAccorde,
+    v.mntValide,
+    v.nbEchAccorde,
+    v.nbEchValide,
+    v.differeAccorde,
+    v.differeValide,
+    v.graceAccorde,
+    v.graceValide,
+    d.ID AS id_dossier_credit,
+    d.NUM_DOSSIER,
+    d.MONTANT_ACCORDE,
+    d.NBRE_ECHEANCE,
+    d.NBRE_DIFFERE,
+    d.PERIODE_GRACE,
+    p.ID AS id_pret,
+    p.NUMERO_PRET,
+    p.MONTANT AS montant_pret,
+    dc.NUM_DEMANDE,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    CASE
+        WHEN ISNULL(v.etatValid, 0) = 1
+        AND v.mntValide IS NULL THEN 'Validation favorable sans montant valide'
+        WHEN v.mntValide IS NOT NULL
+        AND d.MONTANT_ACCORDE IS NOT NULL
+        AND ABS(v.mntValide - d.MONTANT_ACCORDE) > 1 THEN 'Montant valide different du montant accorde dossier'
+        WHEN v.mntValide IS NOT NULL
+        AND p.MONTANT IS NOT NULL
+        AND ABS(v.mntValide - p.MONTANT) > 1 THEN 'Montant valide different du montant du pret'
+        WHEN v.nbEchValide IS NOT NULL
+        AND d.NBRE_ECHEANCE IS NOT NULL
+        AND v.nbEchValide <> d.NBRE_ECHEANCE THEN 'Nombre d''echeances valide different du dossier'
+        WHEN v.differeValide IS NOT NULL
+        AND d.NBRE_DIFFERE IS NOT NULL
+        AND v.differeValide <> d.NBRE_DIFFERE THEN 'Differe valide different du dossier'
+        WHEN v.graceValide IS NOT NULL
+        AND d.PERIODE_GRACE IS NOT NULL
+        AND v.graceValide <> d.PERIODE_GRACE THEN 'Periode de grace validee differente du dossier'
+    END AS anomalie_validation_detail
+FROM dbo.VALIDATION_DOSSIER_CREDIT v
+    LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = v.ID_DOSSIER_CREDIT
+    LEFT JOIN dbo.PRETS p ON p.ID = v.ID_PRET
+    LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = COALESCE(v.ID_DEMANDE_CREDIT, d.ID_DEMANDE)
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+WHERE CAST(v.dateValidation AS date) BETWEEN @date_debut AND @date_fin
+    AND (
+        (
+            ISNULL(v.etatValid, 0) = 1
+            AND v.mntValide IS NULL
+        )
+        OR (
+            v.mntValide IS NOT NULL
+            AND d.MONTANT_ACCORDE IS NOT NULL
+            AND ABS(v.mntValide - d.MONTANT_ACCORDE) > 1
+        )
+        OR (
+            v.mntValide IS NOT NULL
+            AND p.MONTANT IS NOT NULL
+            AND ABS(v.mntValide - p.MONTANT) > 1
+        )
+        OR (
+            v.nbEchValide IS NOT NULL
+            AND d.NBRE_ECHEANCE IS NOT NULL
+            AND v.nbEchValide <> d.NBRE_ECHEANCE
+        )
+        OR (
+            v.differeValide IS NOT NULL
+            AND d.NBRE_DIFFERE IS NOT NULL
+            AND v.differeValide <> d.NBRE_DIFFERE
+        )
+        OR (
+            v.graceValide IS NOT NULL
+            AND d.PERIODE_GRACE IS NOT NULL
+            AND v.graceValide <> d.PERIODE_GRACE
+        )
+    )
+ORDER BY v.dateValidation DESC,
+    dc.NUM_DEMANDE;
+/*
+ 82. Types de garantie utilises mais non parametres pour l'agence
+ Objectif : verifier que le type de garantie utilise est bien autorise pour le point de service et la devise concernes.
+ Lecture : pratique pour la revue du parametre produit et la regularisation des garanties hors cadre.
+ */
+SELECT g.ID AS id_garantie,
+    g.ID_DEMANDE_CREDIT AS id_demande,
+    dc.NUM_DEMANDE,
+    d.ID AS id_dossier_credit,
+    d.NUM_DOSSIER,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    dc.ID_POINT_SERIVCE AS id_point_service,
+    ps.CODE AS code_point_service,
+    ps.NOM AS nom_point_service,
+    tg.ID AS id_type_garantie,
+    tg.LIBELLE AS type_garantie,
+    dv.CODE AS devise_garantie,
+    g.VALEUR,
+    tga.ID AS id_parametrage_agence
+FROM dbo.GARANTIES g
+    INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = g.ID_DEMANDE_CREDIT
+    LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_POINT_SERIVCE
+    LEFT JOIN dbo.TYPES_GARANTIE tg ON tg.ID = g.ID_TYPE_GARANTIE
+    LEFT JOIN dbo.DEVISES dv ON dv.ID = g.ID_DEVISE
+    LEFT JOIN dbo.TYPES_GARANTIE_AGENCE tga ON tga.ID_POINT_SERVICE = dc.ID_POINT_SERIVCE
+    AND tga.ID_TYPE_GARANTIE = g.ID_TYPE_GARANTIE
+    AND (
+        tga.ID_DEVISE = g.ID_DEVISE
+        OR g.ID_DEVISE IS NULL
+    )
+WHERE COALESCE(d.DATE_DECISION, dc.DATE_RECEPTION) BETWEEN @date_debut AND @date_fin
+    AND g.ID_TYPE_GARANTIE IS NOT NULL
+    AND tga.ID IS NULL
+ORDER BY COALESCE(d.DATE_DECISION, dc.DATE_RECEPTION) DESC,
+    g.VALEUR DESC;
+/*
+ 83. Cycles de pret sans echeancier TABAMOR exploitable
+ Objectif : verifier qu'un cycle de pret dispose bien d'un plan d'amortissement lisible.
+ Lecture : un cycle sans echeancier fiable complique le suivi, le rappel des echeances et la piste d'audit.
+ */
+WITH tabamor_stats AS (
+    SELECT t.ID_CYCLE_PRET,
+        COUNT(*) AS nb_lignes_tabamor,
+        MIN(t.DATE_ECHEANCE) AS date_premiere_echeance,
+        MAX(t.DATE_ECHEANCE) AS date_derniere_echeance,
+        SUM(
+            ISNULL(t.CAPITAL, 0) + ISNULL(t.INTERET, 0) + ISNULL(t.COMMISSION, 0)
+        ) AS montant_total_planifie
+    FROM dbo.TABAMOR t
+    GROUP BY t.ID_CYCLE_PRET
+)
+SELECT cp.ID AS id_cycle_pret,
+    cp.ID_PRET,
+    p.NUMERO_PRET,
+    cp.NUM_CYCLE,
+    cp.DATE_DEBUT,
+    cp.FIN_ECHEANCE,
+    cp.DATE_CLOTURE,
+    cp.MONTANT AS montant_cycle,
+    d.NUM_DOSSIER,
+    dc.NUM_DEMANDE,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    ISNULL(ts.nb_lignes_tabamor, 0) AS nb_lignes_tabamor,
+    ts.date_premiere_echeance,
+    ts.date_derniere_echeance,
+    ts.montant_total_planifie,
+    CASE
+        WHEN ts.ID_CYCLE_PRET IS NULL THEN 'Aucune ligne TABAMOR'
+        WHEN ISNULL(ts.nb_lignes_tabamor, 0) = 0 THEN 'Echeancier vide'
+        WHEN ts.date_premiere_echeance IS NULL THEN 'Premiere echeance absente'
+        WHEN ts.date_derniere_echeance IS NULL THEN 'Derniere echeance absente'
+    END AS anomalie_echeancier
+FROM dbo.CYCLES_PRET cp
+    INNER JOIN dbo.PRETS p ON p.ID = cp.ID_PRET
+    LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+    LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN tabamor_stats ts ON ts.ID_CYCLE_PRET = cp.ID
+WHERE COALESCE(p.DATE_DECAISSEMENT, cp.DATE_DEBUT, p.DATE_EFFET) BETWEEN @date_debut AND @date_fin
+    AND (
+        ts.ID_CYCLE_PRET IS NULL
+        OR ISNULL(ts.nb_lignes_tabamor, 0) = 0
+        OR ts.date_premiere_echeance IS NULL
+        OR ts.date_derniere_echeance IS NULL
+    )
+ORDER BY COALESCE(p.DATE_DECAISSEMENT, cp.DATE_DEBUT) DESC,
+    cp.MONTANT DESC;

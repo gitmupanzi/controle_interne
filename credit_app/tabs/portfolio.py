@@ -237,9 +237,10 @@ def _build_epargne_ratio_table(
     )
     dat_share = dat_usd / total_usd if total_usd else 0.0
     active_accounts = int(current_df.get("compte_id", pd.Series(dtype="object")).nunique())
+    current_solde = current_df["solde_compte"] if "solde_compte" in current_df.columns else pd.Series(index=current_df.index, dtype="float64")
     nonzero_accounts = int(
         current_df.loc[
-            pd.to_numeric(current_df.get("solde_compte"), errors="coerce").fillna(0.0) != 0,
+            pd.to_numeric(current_solde, errors="coerce").fillna(0.0) != 0,
             "compte_id",
         ].nunique()
     ) if "compte_id" in current_df.columns else 0
@@ -290,15 +291,20 @@ def _build_epargne_report_snapshot(std_df: pd.DataFrame, conversion_rate: float)
         return empty_snapshot, empty_use
 
     base = std_df.copy()
-    base["solde_compte"] = pd.to_numeric(base.get("solde_compte"), errors="coerce").fillna(0.0)
-    base["source_currency"] = base.get("source_currency", pd.Series(index=base.index, dtype="object")).fillna("")
+    solde_source = base["solde_compte"] if "solde_compte" in base.columns else pd.Series(index=base.index, dtype="float64")
+    base["solde_compte"] = pd.to_numeric(solde_source, errors="coerce").fillna(0.0)
+    source_currency = base["source_currency"] if "source_currency" in base.columns else pd.Series(index=base.index, dtype="object")
+    base["source_currency"] = source_currency.fillna("")
     base["devise"] = base["type_produit"].astype("string").str.extract(r"\b(USD|CDF)\b", expand=False)
     fallback_currency = base["source_currency"].replace("", pd.NA)
     base["devise"] = base["devise"].fillna(fallback_currency)
     base["devise"] = base["devise"].fillna("USD")
     base["report_product"] = [
         _report_product_label(product, client_type)
-        for product, client_type in zip(base.get("type_produit", []), base.get("type_client", []))
+        for product, client_type in zip(
+            base["type_produit"] if "type_produit" in base.columns else pd.Series(index=base.index, dtype="object"),
+            base["type_client"] if "type_client" in base.columns else pd.Series(index=base.index, dtype="object"),
+        )
     ]
 
     grouped = (

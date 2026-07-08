@@ -598,6 +598,38 @@ def _render_path() -> None:
     )
 
 
+def _build_standardization_table() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Bloc": "Colonnes",
+                "Principe": "Les colonnes proches du referentiel metier sont reconnues puis renommees.",
+                "Utilite": "Permet de charger des bases Excel ou CSV non uniformes.",
+            },
+            {
+                "Bloc": "Referentiel",
+                "Principe": "Le fichier `data/Rename_columns.xlsx` complete les alias internes.",
+                "Utilite": "Adapte la lecture aux habitudes locales de nommage.",
+            },
+            {
+                "Bloc": "Dates",
+                "Principe": "Les dates utiles sont converties quand le format est exploitable.",
+                "Utilite": "Active les filtres de periode et les series temporelles.",
+            },
+            {
+                "Bloc": "Montants",
+                "Principe": "Les montants, durees, retards, ages et scores sont nettoyes puis convertis.",
+                "Utilite": "Fiabilise les calculs et reduit les erreurs de type.",
+            },
+            {
+                "Bloc": "Valeurs metier",
+                "Principe": "Les statuts, sexes et autres valeurs recurrentes sont harmonises.",
+                "Utilite": "Evite les doublons de libelles dans les tableaux et graphiques.",
+            },
+        ]
+    )
+
+
 def render_methodology_tab(cycle_key: str = "credit", standardized_df: pd.DataFrame | None = None) -> None:
     _inject_methodology_styles()
     cycle_spec = get_cycle_spec(cycle_key)

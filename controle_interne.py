@@ -424,6 +424,38 @@ def _date_filter_label(date_column: str | None) -> str:
     return labels.get(str(date_column), "Période analytique")
 
 
+def _clamp_period_input_value(
+    raw_value: object,
+    min_date: date,
+    max_date: date,
+) -> tuple[date, date]:
+    if isinstance(raw_value, tuple) and len(raw_value) == 2:
+        start_raw, end_raw = raw_value
+    elif isinstance(raw_value, list) and len(raw_value) == 2:
+        start_raw, end_raw = raw_value
+    elif isinstance(raw_value, date):
+        start_raw = raw_value
+        end_raw = raw_value
+    else:
+        return min_date, max_date
+
+    start = start_raw if isinstance(start_raw, date) else min_date
+    end = end_raw if isinstance(end_raw, date) else max_date
+
+    if start < min_date:
+        start = min_date
+    if start > max_date:
+        start = max_date
+    if end < min_date:
+        end = min_date
+    if end > max_date:
+        end = max_date
+    if start > end:
+        start, end = end, start
+
+    return start, end
+
+
 def _filter_column_label(column_name: str) -> str:
     labels = {
         "statut_dossier": "Statut du dossier",
@@ -857,9 +889,15 @@ def main() -> None:
         valid_dates = pd.to_datetime(standardized_df[selected_date_column], errors="coerce").dropna()
         if not valid_dates.empty:
             default_range = (valid_dates.min().date(), valid_dates.max().date())
+            raw_period_value = st.session_state.get("credit_period_range", default_range)
+            safe_period_value = _clamp_period_input_value(
+                raw_period_value,
+                default_range[0],
+                default_range[1],
+            )
             picked_range = st.sidebar.date_input(
                 _date_filter_label(selected_date_column),
-                value=st.session_state.get("credit_period_range", default_range),
+                value=safe_period_value,
                 min_value=default_range[0],
                 max_value=default_range[1],
                 key="credit_period_range",
