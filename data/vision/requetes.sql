@@ -792,9 +792,13 @@ ORDER BY o.DATE_OPERATION;
  */
 SELECT CODE,
     COUNT(*) AS nb_adherents,
+    COUNT(DISTINCT ID_TYPE_ADHERENT) AS nb_types_client,
+    MIN(ID_TYPE_ADHERENT) AS code_type_client_exemple,
+    MIN(ta.LIBELLE) AS type_client_exemple,
     MIN(DATE_INSCRIPTION) AS premiere_inscription,
     MAX(DATE_INSCRIPTION) AS derniere_inscription
-FROM dbo.ADHERENTS
+FROM dbo.ADHERENTS a
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
 WHERE CODE IS NOT NULL
     AND LTRIM(RTRIM(CODE)) <> ''
 GROUP BY CODE
@@ -806,59 +810,67 @@ ORDER BY nb_adherents DESC,
  Objectif : reperer les fiches adherents incompletes sur les champs de base.
  Lecture : sert au nettoyage KYC et a l'amelioration de la qualite du referentiel client.
  */
-SELECT ID,
-    CODE,
-    NOM_ADHERENT,
-    DATE_INSCRIPTION,
-    ID_CATEGORIE_ADHERENT,
-    ID_TYPE_ADHERENT,
-    ID_POINT_SERVICE,
-    ID_GESTIONNAIRE,
-    EST_VALIDE,
-    DROIT_PAYE
-FROM dbo.ADHERENTS
-WHERE CODE IS NULL
-    OR LTRIM(RTRIM(CODE)) = ''
-    OR NOM_ADHERENT IS NULL
-    OR LTRIM(RTRIM(NOM_ADHERENT)) = ''
-    OR DATE_INSCRIPTION IS NULL
-    OR ID_POINT_SERVICE IS NULL
-    OR ID_TYPE_ADHERENT IS NULL
-ORDER BY DATE_INSCRIPTION,
-    CODE;
+SELECT a.ID,
+    a.CODE,
+    a.NOM_ADHERENT,
+    a.DATE_INSCRIPTION,
+    a.ID_CATEGORIE_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
+    a.ID_POINT_SERVICE,
+    a.ID_GESTIONNAIRE,
+    a.EST_VALIDE,
+    a.DROIT_PAYE
+FROM dbo.ADHERENTS a
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
+WHERE a.CODE IS NULL
+    OR LTRIM(RTRIM(a.CODE)) = ''
+    OR a.NOM_ADHERENT IS NULL
+    OR LTRIM(RTRIM(a.NOM_ADHERENT)) = ''
+    OR a.DATE_INSCRIPTION IS NULL
+    OR a.ID_POINT_SERVICE IS NULL
+    OR a.ID_TYPE_ADHERENT IS NULL
+ORDER BY a.DATE_INSCRIPTION,
+    a.CODE;
 /*
  26. Adherents non valides ou droit d'adhesion non paye
  Objectif : identifier les adherents non valides ou dont le droit d'adhesion n'est pas paye.
  Lecture : a rapprocher avec les ouvertures de comptes et l'activite transactionnelle.
  */
-SELECT ID,
-    CODE,
-    NOM_ADHERENT,
-    DATE_INSCRIPTION,
-    ID_POINT_SERVICE,
-    EST_VALIDE,
-    DROIT_PAYE,
-    OBSERVATION
-FROM dbo.ADHERENTS
-WHERE ISNULL(EST_VALIDE, 0) = 0
-    OR ISNULL(DROIT_PAYE, 0) = 0
-ORDER BY DATE_INSCRIPTION DESC;
+SELECT a.ID,
+    a.CODE,
+    a.NOM_ADHERENT,
+    a.DATE_INSCRIPTION,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
+    a.ID_POINT_SERVICE,
+    a.EST_VALIDE,
+    a.DROIT_PAYE,
+    a.OBSERVATION
+FROM dbo.ADHERENTS a
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
+WHERE ISNULL(a.EST_VALIDE, 0) = 0
+    OR ISNULL(a.DROIT_PAYE, 0) = 0
+ORDER BY a.DATE_INSCRIPTION DESC;
 /*
  27. Adherents inscrits apres leur derniere modification
  Objectif : detecter une incoherence chronologique dans les dates adherent.
  Lecture : peut indiquer une reprise de donnees ou une date de modification incorrecte.
  */
-SELECT ID,
-    CODE,
-    NOM_ADHERENT,
-    DATE_INSCRIPTION,
-    DATE_LAST_MODIFIED,
-    ID_POINT_SERVICE
-FROM dbo.ADHERENTS
-WHERE DATE_INSCRIPTION IS NOT NULL
-    AND DATE_LAST_MODIFIED IS NOT NULL
-    AND DATE_LAST_MODIFIED < DATE_INSCRIPTION
-ORDER BY DATE_INSCRIPTION DESC;
+SELECT a.ID,
+    a.CODE,
+    a.NOM_ADHERENT,
+    a.DATE_INSCRIPTION,
+    a.DATE_LAST_MODIFIED,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
+    a.ID_POINT_SERVICE
+FROM dbo.ADHERENTS a
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
+WHERE a.DATE_INSCRIPTION IS NOT NULL
+    AND a.DATE_LAST_MODIFIED IS NOT NULL
+    AND a.DATE_LAST_MODIFIED < a.DATE_INSCRIPTION
+ORDER BY a.DATE_INSCRIPTION DESC;
 /*
  28. Adherents sans compte adherent ou avec compte adherent introuvable
  Objectif : verifier le rattachement de l'adherent a son compte adherent.
@@ -867,10 +879,13 @@ ORDER BY DATE_INSCRIPTION DESC;
 SELECT a.ID,
     a.CODE,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     a.ID_COMPTE_ADHERENT,
     a.DATE_INSCRIPTION,
     a.ID_POINT_SERVICE
 FROM dbo.ADHERENTS a
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.COMPTES c ON c.ID = a.ID_COMPTE_ADHERENT
 WHERE a.ID_COMPTE_ADHERENT IS NULL
     OR c.ID IS NULL
@@ -1400,12 +1415,15 @@ WITH mouvements AS (
         ca.ID_ADHERENT,
         a.CODE AS code_adherent,
         a.NOM_ADHERENT,
+        a.ID_TYPE_ADHERENT AS code_type_client,
+        ta.LIBELLE AS type_client,
         MAX(ABS(ISNULL(h.MONTANT_OPERATION, 0))) AS montant_operation,
         h.ID_DEVISE
     FROM dbo.OPERATIONS o
         INNER JOIN dbo.HDPM h ON h.ID_OPERATION = o.ID
         LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = h.ID_COMPTE
         LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+        LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     WHERE o.DATE_OPERATION BETWEEN @date_debut AND @date_fin
         AND o.ID_TYPE_OPERATION IN ('DEPO', 'RETR')
         AND ISNULL(o.ANNULE, 0) = 0
@@ -1419,6 +1437,8 @@ WITH mouvements AS (
         ca.ID_ADHERENT,
         a.CODE,
         a.NOM_ADHERENT,
+        a.ID_TYPE_ADHERENT,
+        ta.LIBELLE,
         h.ID_DEVISE
     UNION ALL
     SELECT 'API_MOBILE',
@@ -1432,12 +1452,15 @@ WITH mouvements AS (
         ca.ID_ADHERENT,
         a.CODE,
         a.NOM_ADHERENT,
+        a.ID_TYPE_ADHERENT AS code_type_client,
+        ta.LIBELLE AS type_client,
         MAX(ABS(ISNULL(h.MONTANT_OPERATION, 0))),
         h.ID_DEVISE
     FROM dbo.OPERATIONS_API oa
         INNER JOIN dbo.HDPM_API h ON h.ID_OPERATION = oa.CODE
         LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = h.ID_COMPTE
         LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+        LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     WHERE oa.DATE_OPERATION BETWEEN @date_debut AND @date_fin
         AND oa.ID_TYPE_OPERATION IN ('MOB_DEPO', 'MOB_RETR')
         AND ISNULL(oa.ANNULE, 0) = 0
@@ -1451,12 +1474,16 @@ WITH mouvements AS (
         ca.ID_ADHERENT,
         a.CODE,
         a.NOM_ADHERENT,
+        a.ID_TYPE_ADHERENT,
+        ta.LIBELLE,
         h.ID_DEVISE
 )
 SELECT DATE_OPERATION,
     ID_ADHERENT,
     code_adherent,
     NOM_ADHERENT,
+    code_type_client,
+    type_client,
     type_mouvement,
     ID_DEVISE,
     COUNT(*) AS nb_operations,
@@ -1469,6 +1496,8 @@ GROUP BY DATE_OPERATION,
     ID_ADHERENT,
     code_adherent,
     NOM_ADHERENT,
+    code_type_client,
+    type_client,
     type_mouvement,
     ID_DEVISE
 HAVING COUNT(*) >= 2
@@ -1485,11 +1514,14 @@ WITH mouvements AS (
         ca.ID_ADHERENT,
         a.CODE AS code_adherent,
         a.NOM_ADHERENT,
+        a.ID_TYPE_ADHERENT AS code_type_client,
+        ta.LIBELLE AS type_client,
         MAX(ABS(ISNULL(h.MONTANT_OPERATION, 0))) AS montant_operation
     FROM dbo.OPERATIONS o
         INNER JOIN dbo.HDPM h ON h.ID_OPERATION = o.ID
         LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = h.ID_COMPTE
         LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+        LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     WHERE o.DATE_OPERATION BETWEEN DATEADD(month, -3, @date_debut)
         AND @date_fin
         AND o.ID_TYPE_OPERATION IN ('DEPO', 'RETR')
@@ -1502,19 +1534,25 @@ WITH mouvements AS (
         o.DATE_OPERATION,
         ca.ID_ADHERENT,
         a.CODE,
-        a.NOM_ADHERENT
+        a.NOM_ADHERENT,
+        a.ID_TYPE_ADHERENT,
+        ta.LIBELLE
 ),
 periode AS (
     SELECT ID_ADHERENT,
         code_adherent,
         NOM_ADHERENT,
+        code_type_client,
+        type_client,
         SUM(montant_operation) AS volume_periode,
         COUNT(*) AS nb_operations_periode
     FROM mouvements
     WHERE DATE_OPERATION BETWEEN @date_debut AND @date_fin
     GROUP BY ID_ADHERENT,
         code_adherent,
-        NOM_ADHERENT
+        NOM_ADHERENT,
+        code_type_client,
+        type_client
 ),
 historique AS (
     SELECT ID_ADHERENT,
@@ -1533,6 +1571,8 @@ historique AS (
 SELECT p.ID_ADHERENT,
     p.code_adherent,
     p.NOM_ADHERENT,
+    p.code_type_client,
+    p.type_client,
     p.nb_operations_periode,
     p.volume_periode,
     h.moyenne_journaliere_historique,
@@ -1557,6 +1597,8 @@ WITH mouvements AS (
     SELECT ca.ID_ADHERENT,
         MAX(a.CODE) AS code_adherent,
         MAX(a.NOM_ADHERENT) AS NOM_ADHERENT,
+        MAX(a.ID_TYPE_ADHERENT) AS code_type_client,
+        MAX(ta.LIBELLE) AS type_client,
         MAX(a.ID_CATEGORIE_ADHERENT) AS ID_CATEGORIE_ADHERENT,
         MAX(a.ID_TYPE_ADHERENT) AS ID_TYPE_ADHERENT,
         MAX(a.ID_POINT_SERVICE) AS ID_POINT_SERVICE,
@@ -1569,6 +1611,7 @@ WITH mouvements AS (
         INNER JOIN dbo.HDPM h ON h.ID_OPERATION = o.ID
         LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = h.ID_COMPTE
         LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+        LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     WHERE o.DATE_OPERATION BETWEEN @date_debut AND @date_fin
         AND o.ID_TYPE_OPERATION IN ('DEPO', 'RETR')
         AND ISNULL(o.ANNULE, 0) = 0
@@ -1601,6 +1644,8 @@ WITH mouvements AS (
     SELECT ca.ID_ADHERENT,
         a.CODE AS code_adherent,
         a.NOM_ADHERENT,
+        a.ID_TYPE_ADHERENT AS code_type_client,
+        ta.LIBELLE AS type_client,
         CASE
             WHEN o.ID_TYPE_OPERATION = 'DEPO' THEN 'Depot'
             WHEN o.ID_TYPE_OPERATION = 'RETR' THEN 'Retrait'
@@ -1610,6 +1655,7 @@ WITH mouvements AS (
         INNER JOIN dbo.HDPM h ON h.ID_OPERATION = o.ID
         LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = h.ID_COMPTE
         LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+        LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     WHERE o.DATE_OPERATION BETWEEN @date_debut AND @date_fin
         AND o.ID_TYPE_OPERATION IN ('DEPO', 'RETR')
         AND ISNULL(o.ANNULE, 0) = 0
@@ -1621,11 +1667,15 @@ WITH mouvements AS (
         ca.ID_ADHERENT,
         a.CODE,
         a.NOM_ADHERENT,
+        a.ID_TYPE_ADHERENT,
+        ta.LIBELLE,
         o.ID_TYPE_OPERATION
 )
 SELECT ID_ADHERENT,
     code_adherent,
     NOM_ADHERENT,
+    code_type_client,
+    type_client,
     SUM(
         CASE
             WHEN type_mouvement = 'Depot' THEN 1
@@ -1655,7 +1705,9 @@ SELECT ID_ADHERENT,
 FROM mouvements
 GROUP BY ID_ADHERENT,
     code_adherent,
-    NOM_ADHERENT
+    NOM_ADHERENT,
+    code_type_client,
+    type_client
 ORDER BY volume_total DESC;
 /*
  43. Top clients par volume de mouvements
@@ -1666,11 +1718,14 @@ WITH mouvements AS (
     SELECT ca.ID_ADHERENT,
         a.CODE AS code_adherent,
         a.NOM_ADHERENT,
+        a.ID_TYPE_ADHERENT AS code_type_client,
+        ta.LIBELLE AS type_client,
         MAX(ABS(ISNULL(h.MONTANT_OPERATION, 0))) AS montant_operation
     FROM dbo.OPERATIONS o
         INNER JOIN dbo.HDPM h ON h.ID_OPERATION = o.ID
         LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = h.ID_COMPTE
         LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+        LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     WHERE o.DATE_OPERATION BETWEEN @date_debut AND @date_fin
         AND o.ID_TYPE_OPERATION IN ('DEPO', 'RETR')
         AND ISNULL(o.ANNULE, 0) = 0
@@ -1681,18 +1736,24 @@ WITH mouvements AS (
     GROUP BY o.ID,
         ca.ID_ADHERENT,
         a.CODE,
-        a.NOM_ADHERENT
+        a.NOM_ADHERENT,
+        a.ID_TYPE_ADHERENT,
+        ta.LIBELLE
 )
 SELECT TOP (50) ID_ADHERENT,
     code_adherent,
     NOM_ADHERENT,
+    code_type_client,
+    type_client,
     COUNT(*) AS nb_operations,
     SUM(montant_operation) AS volume_total,
     MAX(montant_operation) AS plus_grosse_operation
 FROM mouvements
 GROUP BY ID_ADHERENT,
     code_adherent,
-    NOM_ADHERENT
+    NOM_ADHERENT,
+    code_type_client,
+    type_client
 ORDER BY volume_total DESC;
 /*
  44. Analyse detaillee des operations annulees
@@ -1939,6 +2000,8 @@ SELECT pe.ID AS id_produit_epargne,
     a.ID AS id_adherent,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     ps.CODE AS code_agence,
     ps.NOM AS nom_agence
 FROM dbo.COMPTES c
@@ -1946,6 +2009,7 @@ FROM dbo.COMPTES c
     INNER JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
     LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
     LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = COALESCE(c.ID_POINT_SERVICE, c.ID_AGENCE)
 WHERE ISNULL(pe.ACTIF, 0) = 0
 ORDER BY pe.LIBELLE,
@@ -1964,6 +2028,8 @@ SELECT pe.ID AS id_produit_epargne,
     a.ID AS id_adherent,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     ps.CODE AS code_agence,
     ps.NOM AS nom_agence
 FROM dbo.COMPTES c
@@ -1971,6 +2037,7 @@ FROM dbo.COMPTES c
     INNER JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
     LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
     LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = COALESCE(c.ID_POINT_SERVICE, c.ID_AGENCE)
 WHERE ISNULL(pe.IS_EPG_VALIDE, 0) = 0
 ORDER BY pe.LIBELLE,
@@ -1993,6 +2060,8 @@ SELECT CASE
     c.NUM_CPTE AS numero_compte,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     ps.CODE AS code_agence,
     ps.NOM AS nom_agence,
     COUNT(*) AS nb_mouvements,
@@ -2003,6 +2072,7 @@ FROM dbo.HDPM_VIEW h
     INNER JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
     LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
     LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = COALESCE(
         h.ID_POINT_SERVICE,
         c.ID_POINT_SERVICE,
@@ -2033,6 +2103,8 @@ GROUP BY CASE
     c.NUM_CPTE,
     a.CODE,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT,
+    ta.LIBELLE,
     ps.CODE,
     ps.NOM
 ORDER BY nb_mouvements DESC,
@@ -2054,7 +2126,9 @@ SELECT pe.ID AS id_produit_epargne,
     h.MONTANT_OPERATION,
     h.ID_TYPE_OPERATION,
     a.CODE AS code_adherent,
-    a.NOM_ADHERENT
+    a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client
 FROM dbo.HDPM_VIEW h
     INNER JOIN dbo.COMPTES c ON c.ID = h.ID_COMPTE
     INNER JOIN dbo.COMPTES_ADHERENT_INFO cai ON cai.id = c.ID
@@ -2064,6 +2138,7 @@ FROM dbo.HDPM_VIEW h
     LEFT JOIN dbo.DEVISES dh ON dh.ID = h.ID_DEVISE
     LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
     LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
 WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
     AND ISNULL(h.ID_TYPE_OPERATION, '') <> 'REPR'
     AND (
@@ -2092,6 +2167,8 @@ SELECT c.ID AS id_compte,
     END AS anomalie,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     ps.CODE AS code_agence,
     ps.NOM AS nom_agence
 FROM dbo.COMPTES c
@@ -2099,6 +2176,7 @@ FROM dbo.COMPTES c
     LEFT JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
     LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
     LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = COALESCE(c.ID_POINT_SERVICE, c.ID_AGENCE)
 WHERE cai.ID_PRODUIT_EPG IS NULL
     OR pe.ID IS NULL
@@ -2195,6 +2273,8 @@ SELECT CASE
     a.ID AS id_adherent,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     c.ID AS id_compte,
     c.NUM_CPTE AS numero_compte,
     ps.CODE AS code_agence,
@@ -2212,6 +2292,7 @@ FROM dbo.HDPM_VIEW h
     LEFT JOIN dbo.PRODUITS_EPG pe ON pe.ID = cai.ID_PRODUIT_EPG
     LEFT JOIN dbo.COMPTES_ADHERENT ca ON ca.id = c.ID
     LEFT JOIN dbo.ADHERENTS a ON a.ID = ca.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = COALESCE(
         h.ID_POINT_SERVICE,
         c.ID_POINT_SERVICE,
@@ -2229,6 +2310,8 @@ GROUP BY CASE
     a.ID,
     a.CODE,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT,
+    ta.LIBELLE,
     c.ID,
     c.NUM_CPTE,
     ps.CODE,
@@ -2326,12 +2409,15 @@ SELECT dc.ID AS id_demande,
     ps_agence.NOM AS nom_agence,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     pc.LIBELLE AS produit_credit,
     d.ID AS id_dossier_credit,
     d.NUM_DOSSIER,
     p.ID AS id_pret
 FROM dbo.DEMANDES_CREDIT dc
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.POINTS_SERVICE ps_service ON ps_service.ID = dc.ID_POINT_SERIVCE
     LEFT JOIN dbo.POINTS_SERVICE ps_agence ON ps_agence.ID = dc.ID_AGENCE
     LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
@@ -2359,6 +2445,10 @@ SELECT p.ID AS id_pret,
     p.MONTANT,
     p.ID_DOSSIER_CREDIT,
     d.NUM_DOSSIER,
+    a.CODE AS code_adherent,
+    a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     p.ID_COMPTE_CREDIT,
     cc.NUM_CPTE AS numero_compte_credit,
     p.ID_COMPTE_EPARGNE,
@@ -2387,6 +2477,9 @@ SELECT p.ID AS id_pret,
     END AS anomalie_cycle
 FROM dbo.PRETS p
     LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+    LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.COMPTES cc ON cc.ID = p.ID_COMPTE_CREDIT
     LEFT JOIN dbo.COMPTES ce ON ce.ID = p.ID_COMPTE_EPARGNE
     LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
@@ -2424,12 +2517,15 @@ SELECT cp.ID AS id_cycle_pret,
     d.NUM_DOSSIER,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     DATEDIFF(day, cp.FIN_ECHEANCE, @date_fin) AS jours_de_depassement
 FROM dbo.CYCLES_PRET cp
     INNER JOIN dbo.PRETS p ON p.ID = cp.ID_PRET
     LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
     LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
 WHERE cp.FIN_ECHEANCE IS NOT NULL
     AND cp.FIN_ECHEANCE < @date_fin
     AND cp.DATE_CLOTURE IS NULL
@@ -2447,6 +2543,8 @@ SELECT dc.ID AS id_demande,
     dc.ETAT_DEMANDE,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     pc.LIBELLE AS produit_credit,
     dc.MONTANT_DEMANDE,
     d.ID AS id_dossier_credit,
@@ -2460,6 +2558,7 @@ SELECT dc.ID AS id_demande,
     ISNULL(p.MONTANT, 0) - ISNULL(dc.MONTANT_DEMANDE, 0) AS ecart_pret_vs_demande
 FROM dbo.DEMANDES_CREDIT dc
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
     LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
     LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
@@ -2541,6 +2640,8 @@ credits AS (
 SELECT a.ID AS id_adherent,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     e.nb_mouvements_epargne,
     e.volume_epargne,
     e.plus_gros_mouvement,
@@ -2549,6 +2650,7 @@ SELECT a.ID AS id_adherent,
 FROM epargne e
     INNER JOIN credits c ON c.ID_ADHERENT = e.ID_ADHERENT
     INNER JOIN dbo.ADHERENTS a ON a.ID = e.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
 WHERE e.volume_epargne >= CASE
         WHEN @seuil_5k_usd_cdf > 0 THEN @seuil_5k_usd_cdf
         ELSE 5000000
@@ -2563,6 +2665,8 @@ ORDER BY e.volume_epargne DESC,
 SELECT dc.ID_ADHERENT,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     DATEFROMPARTS(
         YEAR(dc.DATE_RECEPTION),
         MONTH(dc.DATE_RECEPTION),
@@ -2573,10 +2677,13 @@ SELECT dc.ID_ADHERENT,
     COUNT(DISTINCT dc.ID_PRODUIT_CREDIT) AS nb_produits_demandes
 FROM dbo.DEMANDES_CREDIT dc
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
 WHERE dc.DATE_RECEPTION BETWEEN @date_debut AND @date_fin
 GROUP BY dc.ID_ADHERENT,
     a.CODE,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT,
+    ta.LIBELLE,
     DATEFROMPARTS(
         YEAR(dc.DATE_RECEPTION),
         MONTH(dc.DATE_RECEPTION),
@@ -2811,6 +2918,8 @@ SELECT p.ID AS id_pret,
     d.NUM_DOSSIER,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     pc.LIBELLE AS produit_credit,
     ISNULL(vs.nb_validations, 0) AS nb_validations,
     ISNULL(vs.nb_validations_favorables, 0) AS nb_validations_favorables,
@@ -2825,6 +2934,7 @@ FROM dbo.PRETS p
     INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
     INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
     LEFT JOIN validation_stats vs ON vs.ID_DOSSIER_CREDIT = d.ID
     LEFT JOIN debloc_stats ds ON ds.ID_PRET = p.ID
@@ -2860,6 +2970,8 @@ SELECT dc.ID AS id_demande,
     p.NUMERO_PRET,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     pc.LIBELLE AS produit_credit,
     tr.ID AS id_tranche,
     ISNULL(tr.GARANTIE_OBLIGATOIRE, 0) AS garantie_obligatoire,
@@ -2908,6 +3020,7 @@ FROM dbo.DEMANDES_CREDIT dc
     INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
     LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
     LEFT JOIN dbo.PRODUITS_CRD_TRANCHE tr ON tr.ID = d.ID_PRDT_CRD_TRANCHE
     LEFT JOIN garantie_stats gs ON gs.ID_DEMANDE_CREDIT = dc.ID
@@ -2976,6 +3089,8 @@ SELECT p.ID AS id_pret,
     dc.NUM_DEMANDE,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     pc.LIBELLE AS produit_credit,
     tr.ID AS id_tranche,
     ISNULL(tr.CAUTION_FINANCIERE, 0) AS caution_financiere_obligatoire,
@@ -3032,6 +3147,7 @@ FROM dbo.PRETS p
     INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
     INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
     LEFT JOIN dbo.PRODUITS_CRD_TRANCHE tr ON tr.ID = d.ID_PRDT_CRD_TRANCHE
     LEFT JOIN caution_base cb ON cb.ID_PRET = p.ID
@@ -3098,6 +3214,8 @@ SELECT g.ID AS id_garantie,
     p.NUMERO_PRET,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     pc.LIBELLE AS produit_credit,
     g.DESCRIPTION AS description_garantie,
     g.VALEUR,
@@ -3119,6 +3237,7 @@ FROM dbo.GARANTIES g
     LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
     LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
     LEFT JOIN dbo.GARANTS gr ON gr.ID = g.ID_GARANT
 WHERE COALESCE(
@@ -3154,6 +3273,8 @@ SELECT dc.ID AS id_demande,
     p.NUMERO_PRET,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     pc.LIBELLE AS produit_credit,
     tr.ID AS id_tranche,
     ISNULL(tr.ANALYSE_OBLIGATOIRE, 0) AS analyse_revenu_obligatoire,
@@ -3192,6 +3313,7 @@ FROM dbo.DEMANDES_CREDIT dc
     INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
     LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
     LEFT JOIN dbo.PRODUITS_CRD_TRANCHE tr ON tr.ID = d.ID_PRDT_CRD_TRANCHE
     LEFT JOIN dbo.CREDIT_ANALYSE_REVENU ar ON ar.ID_DEMANDE_CREDIT = dc.ID
@@ -3253,6 +3375,8 @@ SELECT p.ID AS id_pret,
     dc.NUM_DEMANDE,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     p.MONTANT AS montant_pret,
     ISNULL(ds.nb_deblocages, 0) AS nb_deblocages,
     ISNULL(ds.montant_total_tire, 0) AS montant_total_tire,
@@ -3273,6 +3397,7 @@ FROM dbo.PRETS p
     INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
     INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN debloc_stats ds ON ds.ID_PRET = p.ID
 WHERE COALESCE(
         ds.date_premier_debloc,
@@ -3309,6 +3434,8 @@ SELECT dc.ID AS id_demande,
     p.NUMERO_PRET,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     pc.LIBELLE AS produit_credit,
     pc.CREDIT_GROUPE,
     CASE
@@ -3320,6 +3447,7 @@ FROM dbo.DEMANDES_CREDIT dc
     LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
     LEFT JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.PRODUITS_CRD pc ON pc.ID = dc.ID_PRODUIT_CREDIT
 WHERE dc.DATE_RECEPTION BETWEEN @date_debut AND @date_fin
     AND (
@@ -3357,6 +3485,8 @@ WITH actifs AS (
 SELECT a.ID_ADHERENT,
     adh.CODE AS code_adherent,
     adh.NOM_ADHERENT,
+    adh.ID_TYPE_ADHERENT AS code_type_client,
+    tadh.LIBELLE AS type_client,
     a.ID_PRODUIT_CREDIT,
     pc.LIBELLE AS produit_credit,
     pc.NBRE_MAX_DOSSIER_CLIENT AS limite_produit,
@@ -3364,6 +3494,7 @@ SELECT a.ID_ADHERENT,
     a.encours_total
 FROM actifs a
     INNER JOIN dbo.ADHERENTS adh ON adh.ID = a.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT tadh ON tadh.ID = adh.ID_TYPE_ADHERENT
     INNER JOIN dbo.PRODUITS_CRD pc ON pc.ID = a.ID_PRODUIT_CREDIT
 WHERE ISNULL(pc.NBRE_MAX_DOSSIER_CLIENT, 0) > 0
     AND a.nb_prets_actifs > pc.NBRE_MAX_DOSSIER_CLIENT
@@ -3419,6 +3550,8 @@ SELECT dc.ID AS id_demande,
     p.NUMERO_PRET,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     p.DATE_DECAISSEMENT,
     p.DATE_SOLDE,
     ra.date_premier_retrait_garantie,
@@ -3432,6 +3565,7 @@ FROM dbo.DEMANDES_CREDIT dc
     INNER JOIN dbo.PRETS p ON p.ID_DOSSIER_CREDIT = d.ID
     INNER JOIN retraits_agreges ra ON ra.ID_DEMANDE_CREDIT = dc.ID
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
 WHERE COALESCE(
         ra.date_premier_retrait_garantie,
         p.DATE_DECAISSEMENT
@@ -3464,6 +3598,8 @@ SELECT dr.ID AS id_demande_reechelonnement,
     dc.NUM_DEMANDE,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     CASE
         WHEN dr.DATE_VALIDATION IS NULL THEN 'Validation de reechelonnement absente'
         WHEN p.DATE_SOLDE IS NOT NULL
@@ -3481,6 +3617,7 @@ FROM dbo.DEMANDES_REECHELONNEMENT dr
     LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
     LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
 WHERE COALESCE(
         dr.DATE_VALIDATION,
         p.DATE_REECH,
@@ -3534,12 +3671,15 @@ SELECT p.ID AS id_pret,
     dc.NUM_DEMANDE,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     ISNULL(r.nb_demandes_reechelonnement, 0) AS nb_demandes_reechelonnement,
     r.date_derniere_validation_reechelonnement
 FROM dbo.PRETS p
     LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
     LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN reech r ON r.ID_PRET = p.ID
 WHERE COALESCE(p.DATE_REECH, p.DATE_LAST_MODIFIED) BETWEEN @date_debut AND @date_fin
     AND p.DATE_REECH IS NOT NULL
@@ -3566,6 +3706,8 @@ SELECT pcx.ID AS id_pret_contentieux,
     dc.NUM_DEMANDE,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     CASE
         WHEN pcx.DATE_TRANSFERT IS NULL THEN 'Date de transfert en contentieux absente'
         WHEN pcx.DATE_TRANSFERT < p.DATE_DECAISSEMENT THEN 'Transfert en contentieux anterieur au decaissement'
@@ -3580,6 +3722,7 @@ FROM dbo.PRETS_CONTENTIEUX pcx
     LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
     LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
 WHERE COALESCE(
         pcx.DATE_TRANSFERT,
         p.DATE_PERTE,
@@ -3630,6 +3773,8 @@ SELECT v.id AS id_validation,
     dc.NUM_DEMANDE,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     CASE
         WHEN ISNULL(v.etatValid, 0) = 1
         AND v.mntValide IS NULL THEN 'Validation favorable sans montant valide'
@@ -3654,6 +3799,7 @@ FROM dbo.VALIDATION_DOSSIER_CREDIT v
     LEFT JOIN dbo.PRETS p ON p.ID = v.ID_PRET
     LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = COALESCE(v.ID_DEMANDE_CREDIT, d.ID_DEMANDE)
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
 WHERE CAST(v.dateValidation AS date) BETWEEN @date_debut AND @date_fin
     AND (
         (
@@ -3700,6 +3846,8 @@ SELECT g.ID AS id_garantie,
     d.NUM_DOSSIER,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     dc.ID_POINT_SERIVCE AS id_point_service,
     ps.CODE AS code_point_service,
     ps.NOM AS nom_point_service,
@@ -3712,6 +3860,7 @@ FROM dbo.GARANTIES g
     INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = g.ID_DEMANDE_CREDIT
     LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID_DEMANDE = dc.ID
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_POINT_SERIVCE
     LEFT JOIN dbo.TYPES_GARANTIE tg ON tg.ID = g.ID_TYPE_GARANTIE
     LEFT JOIN dbo.DEVISES dv ON dv.ID = g.ID_DEVISE
@@ -3754,6 +3903,8 @@ SELECT cp.ID AS id_cycle_pret,
     dc.NUM_DEMANDE,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     ISNULL(ts.nb_lignes_tabamor, 0) AS nb_lignes_tabamor,
     ts.date_premiere_echeance,
     ts.date_derniere_echeance,
@@ -3769,6 +3920,7 @@ FROM dbo.CYCLES_PRET cp
     LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
     LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
     LEFT JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN tabamor_stats ts ON ts.ID_CYCLE_PRET = cp.ID
 WHERE COALESCE(p.DATE_DECAISSEMENT, cp.DATE_DEBUT, p.DATE_EFFET) BETWEEN @date_debut AND @date_fin
     AND (
@@ -3860,6 +4012,8 @@ SELECT DATEFROMPARTS(
     a.ID AS id_adherent,
     a.CODE AS code_adherent,
     a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT AS code_type_client,
+    ta.LIBELLE AS type_client,
     COUNT(DISTINCT p.ID) AS nb_prets_termines,
     SUM(ISNULL(p.MONTANT, 0)) AS montant_total_credits_termines,
     MIN(p.DATE_SOLDE) AS premiere_date_solde,
@@ -3868,6 +4022,7 @@ FROM dbo.PRETS p
     INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
     INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
     INNER JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+    LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
     LEFT JOIN dbo.COMPTES cc ON cc.ID = p.ID_COMPTE_CREDIT
     LEFT JOIN dbo.COMPTES cr ON cr.ID = p.ID_COMPTE_REMB
     LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
@@ -3890,7 +4045,9 @@ GROUP BY DATEFROMPARTS(
     ps.NOM,
     a.ID,
     a.CODE,
-    a.NOM_ADHERENT
+    a.NOM_ADHERENT,
+    a.ID_TYPE_ADHERENT,
+    ta.LIBELLE
 ORDER BY mois_solde DESC,
     devise_pret,
     nom_agence,
@@ -3919,6 +4076,7 @@ WITH prets_soldes AS (
         INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
         INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
         INNER JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+        LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
         LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
         LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_AGENCE
     WHERE p.DATE_SOLDE BETWEEN @date_debut AND @date_fin
@@ -3993,6 +4151,7 @@ WITH prets_soldes AS (
         INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
         INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
         INNER JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+        LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
         LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
         LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_AGENCE
     WHERE p.DATE_SOLDE BETWEEN @date_debut AND @date_fin
@@ -4083,6 +4242,7 @@ WITH prets_soldes AS (
         INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
         INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
         INNER JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+        LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
         LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
         LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_AGENCE
     WHERE p.DATE_SOLDE BETWEEN @date_debut AND @date_fin
@@ -4178,6 +4338,7 @@ WITH prets_soldes AS (
         INNER JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
         INNER JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
         INNER JOIN dbo.ADHERENTS a ON a.ID = dc.ID_ADHERENT
+        LEFT JOIN dbo.TYPES_ADHERENT ta ON ta.ID = a.ID_TYPE_ADHERENT
         LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
         LEFT JOIN dbo.POINTS_SERVICE ps ON ps.ID = dc.ID_AGENCE
     WHERE p.DATE_SOLDE BETWEEN @date_debut AND @date_fin
@@ -4249,6 +4410,378 @@ ORDER BY mois_solde DESC,
         WHEN 'Montant stable' THEN 3
         ELSE 4
     END;
+
+/*
+ 90. Liste des clients avec leurs comptes et devises
+ Objectif : obtenir le portefeuille client-compte avec les informations de devise et d'agence.
+ Lecture : une ligne correspond a un compte rattache a un client. Renseigner @id_devise_reporting pour limiter a une devise.
+ */
+SELECT ecv.code_categorie_client,
+    ecv.categorie_client,
+    ecv.code_type_client,
+    ecv.type_client,
+    ecv.id_client,
+    ecv.code_client,
+    ecv.num_manuel,
+    ecv.nom_client,
+    ecv.prenoms_client,
+    ecv.telephone,
+    ecv.email,
+    ecv.bp,
+    ecv.ville,
+    ecv.adresse,
+    ecv.date_adhesion,
+    ecv.id_agence,
+    ecv.code_agence,
+    ecv.nom_agence,
+    ca.CATEG_CPTE_ADH AS categorie_compte_adherent,
+    ca.TYPE_CPTE_ADH AS type_compte_adherent,
+    c.ID AS id_compte,
+    c.NUM_CPTE AS numero_compte,
+    c.LIBELLE AS libelle_compte,
+    c.TYPE_COMPTE AS type_compte,
+    c.ETAT AS etat_compte,
+    c.DATE_OUVERTURE AS date_ouverture_compte,
+    c.ID_DEVISE AS id_devise,
+    dv.CODE AS code_devise,
+    dv.LIBELLE AS devise,
+    dv.SYMBOLE AS symbole_devise
+FROM dbo.COMPTES_ADHERENT ca
+    INNER JOIN dbo.COMPTES c ON c.ID = ca.id
+    INNER JOIN dbo.extra_clients_view ecv ON ecv.id_client = ca.ID_ADHERENT
+    LEFT JOIN dbo.DEVISES dv ON dv.ID = c.ID_DEVISE
+WHERE (
+        @id_devise_reporting IS NULL
+        OR c.ID_DEVISE = @id_devise_reporting
+    )
+ORDER BY ecv.code_client,
+    c.NUM_CPTE;
+
+/*
+ 91. Credits en cours ou termines avec echeances impayees sur la periode
+ Objectif : lister les prets dont au moins une echeance attendue sur la periode n'est pas totalement remboursee.
+ Lecture : compare TABAMOR (attendu) avec REMBOURS_CRD (remboursements rattaches a l'echeance, valides jusqu'a @date_fin). Le statut distingue les prets encore en cours et ceux deja soldes dans le SIG.
+ */
+WITH remboursements_echeance AS (
+    SELECT r.ID_TABAMORT,
+        SUM(ISNULL(r.CAPITAL, 0)) AS capital_rembourse,
+        SUM(ISNULL(r.INTERET, 0)) AS interet_rembourse,
+        SUM(ISNULL(r.COMMISSION, 0)) AS commission_remboursee,
+        SUM(ISNULL(r.EPARGNE, 0)) AS epargne_remboursee,
+        SUM(ISNULL(r.PENALITE, 0)) AS penalite_remboursee
+    FROM dbo.REMBOURS_CRD r
+        INNER JOIN dbo.OPERATIONS_CRD oc ON oc.ID = r.ID_OPERATION_CRD
+        INNER JOIN dbo.OPERATIONS o ON o.ID = oc.ID_OPERATION
+    WHERE o.DATE_OPERATION <= @date_fin
+        AND ISNULL(o.ANNULE, 0) = 0
+    GROUP BY r.ID_TABAMORT
+),
+echeances_impayees AS (
+    SELECT t.ID AS id_echeance,
+        t.ID_CYCLE_PRET,
+        t.DATE_ECHEANCE,
+        ISNULL(t.CAPITAL, 0) AS capital_attendu,
+        ISNULL(t.INTERET, 0) AS interet_attendu,
+        ISNULL(t.COMMISSION, 0) AS commission_attendue,
+        ISNULL(t.EPARGNE, 0) AS epargne_attendue,
+        ISNULL(t.CAPITAL, 0) + ISNULL(t.INTERET, 0) + ISNULL(t.COMMISSION, 0) + ISNULL(t.EPARGNE, 0) AS total_attendu,
+        ISNULL(re.capital_rembourse, 0) AS capital_rembourse,
+        ISNULL(re.interet_rembourse, 0) AS interet_rembourse,
+        ISNULL(re.commission_remboursee, 0) AS commission_remboursee,
+        ISNULL(re.epargne_remboursee, 0) AS epargne_remboursee,
+        ISNULL(re.capital_rembourse, 0) + ISNULL(re.interet_rembourse, 0) + ISNULL(re.commission_remboursee, 0) + ISNULL(re.epargne_remboursee, 0) AS total_rembourse
+    FROM dbo.TABAMOR t
+        LEFT JOIN remboursements_echeance re ON re.ID_TABAMORT = t.ID
+    WHERE t.DATE_ECHEANCE BETWEEN @date_debut AND @date_fin
+        AND ISNULL(t.CAPITAL, 0) + ISNULL(t.INTERET, 0) + ISNULL(t.COMMISSION, 0) + ISNULL(t.EPARGNE, 0) > ISNULL(re.capital_rembourse, 0) + ISNULL(re.interet_rembourse, 0) + ISNULL(re.commission_remboursee, 0) + ISNULL(re.epargne_remboursee, 0) + 0.01
+),
+impayes_pret AS (
+    SELECT cp.ID_PRET,
+        COUNT(*) AS nb_echeances_impayees,
+        MIN(ei.DATE_ECHEANCE) AS premiere_echeance_impayee,
+        MAX(ei.DATE_ECHEANCE) AS derniere_echeance_impayee,
+        SUM(ei.total_attendu) AS total_attendu,
+        SUM(ei.total_rembourse) AS total_rembourse,
+        SUM(ei.total_attendu - ei.total_rembourse) AS montant_impaye,
+        SUM(ei.capital_attendu - ei.capital_rembourse) AS capital_impaye,
+        SUM(ei.interet_attendu - ei.interet_rembourse) AS interet_impaye,
+        SUM(ei.commission_attendue - ei.commission_remboursee) AS commission_impayee,
+        SUM(ei.epargne_attendue - ei.epargne_remboursee) AS epargne_impayee
+    FROM echeances_impayees ei
+        INNER JOIN dbo.CYCLES_PRET cp ON cp.ID = ei.ID_CYCLE_PRET
+    GROUP BY cp.ID_PRET
+)
+SELECT CASE
+        WHEN p.DATE_SOLDE IS NULL
+            OR p.DATE_SOLDE > @date_fin THEN 'Pret en cours'
+        ELSE 'Pret termine'
+    END AS statut_pret,
+    ecv.code_categorie_client,
+    ecv.categorie_client,
+    ecv.code_type_client,
+    ecv.type_client,
+    ecv.id_client,
+    ecv.code_client,
+    ecv.num_manuel,
+    ecv.nom_client,
+    ecv.prenoms_client,
+    ecv.id_agence,
+    ecv.code_agence,
+    ecv.nom_agence,
+    p.ID AS id_pret,
+    p.NUMERO_PRET,
+    p.NUMERO_CONTRAT,
+    p.DATE_DECAISSEMENT,
+    p.DATE_EFFET,
+    p.DATE_SOLDE,
+    p.MONTANT AS montant_pret,
+    ISNULL(dv.CODE, 'Non renseignee') AS devise_pret,
+    dc.NUM_DEMANDE,
+    dc.REF_DEMANDE,
+    d.NUM_DOSSIER,
+    ip.nb_echeances_impayees,
+    ip.premiere_echeance_impayee,
+    ip.derniere_echeance_impayee,
+    ip.total_attendu,
+    ip.total_rembourse,
+    ip.montant_impaye,
+    ip.capital_impaye,
+    ip.interet_impaye,
+    ip.commission_impayee,
+    ip.epargne_impayee
+FROM impayes_pret ip
+    INNER JOIN dbo.PRETS p ON p.ID = ip.ID_PRET
+    LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
+    LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+    LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    LEFT JOIN dbo.extra_clients_view ecv ON ecv.id_client = dc.ID_ADHERENT
+ORDER BY ip.montant_impaye DESC,
+    ip.premiere_echeance_impayee,
+    ecv.code_client;
+
+/*
+ 92. Clients avec depots frequents par semaine sur la periode
+ Objectif : identifier les clients qui effectuent des depots 3 a 5 fois par semaine ou plus.
+ Lecture : une operation de depot est comptee une seule fois par client et par operation. Les lignes non rattachees a COMPTES_ADHERENT sont exclues pour eviter les contreparties caisse/banque.
+ */
+WITH depots AS (
+    SELECT 'BACK_OFFICE' AS source_mouvement,
+        o.ID AS id_operation,
+        o.DATE_OPERATION,
+        DATEADD(WEEK, DATEDIFF(WEEK, 0, o.DATE_OPERATION), 0) AS semaine_debut,
+        ca.ID_ADHERENT,
+        MAX(ABS(ISNULL(h.MONTANT_OPERATION, 0))) AS montant_depot,
+        h.ID_DEVISE
+    FROM dbo.OPERATIONS o
+        INNER JOIN dbo.HDPM h ON h.ID_OPERATION = o.ID
+        INNER JOIN dbo.COMPTES_ADHERENT ca ON ca.id = h.ID_COMPTE
+    WHERE o.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+        AND o.ID_TYPE_OPERATION = 'DEPO'
+        AND ISNULL(o.ANNULE, 0) = 0
+        AND UPPER(ISNULL(h.SENS, '')) IN ('C', 'CREDIT')
+        AND (
+            @id_devise_reporting IS NULL
+            OR h.ID_DEVISE = @id_devise_reporting
+        )
+    GROUP BY o.ID,
+        o.DATE_OPERATION,
+        DATEADD(WEEK, DATEDIFF(WEEK, 0, o.DATE_OPERATION), 0),
+        ca.ID_ADHERENT,
+        h.ID_DEVISE
+    UNION ALL
+    SELECT 'API_MOBILE',
+        oa.CODE,
+        oa.DATE_OPERATION,
+        DATEADD(WEEK, DATEDIFF(WEEK, 0, oa.DATE_OPERATION), 0),
+        ca.ID_ADHERENT,
+        MAX(ABS(ISNULL(h.MONTANT_OPERATION, 0))),
+        h.ID_DEVISE
+    FROM dbo.OPERATIONS_API oa
+        INNER JOIN dbo.HDPM_API h ON h.ID_OPERATION = oa.CODE
+        INNER JOIN dbo.COMPTES_ADHERENT ca ON ca.id = h.ID_COMPTE
+    WHERE oa.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+        AND oa.ID_TYPE_OPERATION = 'MOB_DEPO'
+        AND ISNULL(oa.ANNULE, 0) = 0
+        AND UPPER(ISNULL(h.SENS, '')) IN ('C', 'CREDIT')
+        AND (
+            @id_devise_reporting IS NULL
+            OR h.ID_DEVISE = @id_devise_reporting
+        )
+    GROUP BY oa.CODE,
+        oa.DATE_OPERATION,
+        DATEADD(WEEK, DATEDIFF(WEEK, 0, oa.DATE_OPERATION), 0),
+        ca.ID_ADHERENT,
+        h.ID_DEVISE
+),
+depots_semaine AS (
+    SELECT ID_ADHERENT,
+        semaine_debut,
+        COUNT(DISTINCT id_operation) AS nb_depots_semaine,
+        SUM(montant_depot) AS volume_depots_semaine
+    FROM depots
+    GROUP BY ID_ADHERENT,
+        semaine_debut
+)
+SELECT ecv.id_client,
+    ecv.code_client,
+    ecv.num_manuel,
+    ecv.nom_client,
+    ecv.prenoms_client,
+    ecv.code_categorie_client,
+    ecv.categorie_client,
+    ecv.code_type_client,
+    ecv.type_client,
+    ecv.telephone,
+    ecv.id_agence,
+    ecv.code_agence,
+    ecv.nom_agence,
+    ds.semaine_debut,
+    DATEADD(DAY, 6, ds.semaine_debut) AS semaine_fin,
+    ds.nb_depots_semaine,
+    CASE
+        WHEN ds.nb_depots_semaine BETWEEN 3 AND 5 THEN '3 a 5 depots par semaine'
+        WHEN ds.nb_depots_semaine >= 6 THEN '6 depots et plus par semaine'
+    END AS categorie_frequence,
+    ds.volume_depots_semaine
+FROM depots_semaine ds
+    LEFT JOIN dbo.extra_clients_view ecv ON ecv.id_client = ds.ID_ADHERENT
+WHERE ds.nb_depots_semaine >= 3
+ORDER BY ds.nb_depots_semaine DESC,
+    ds.volume_depots_semaine DESC,
+    ds.semaine_debut,
+    ecv.code_client;
+
+/*
+ 93. Clients avec depots par tranche USD/CDF sur la periode
+ Objectif : reperer les clients qui effectuent des depots dans les tranches de montant sensibles definies pour USD et CDF.
+ Lecture : USD est classe en 10-24.99, 25-49.99, 50-99.99, 100 et plus. CDF est classe en 125000-199999 et 200000 et plus. Les depots inferieurs aux seuils ne sortent pas.
+ */
+WITH depots AS (
+    SELECT 'BACK_OFFICE' AS source_mouvement,
+        o.ID AS id_operation,
+        o.DATE_OPERATION,
+        ca.ID_ADHERENT,
+        MAX(ABS(ISNULL(h.MONTANT_OPERATION, 0))) AS montant_depot,
+        h.ID_DEVISE,
+        dv.CODE AS code_devise,
+        o.NUM_TRANSACTION,
+        o.NUMERO_RECU,
+        o.ID_POINT_SERVICE
+    FROM dbo.OPERATIONS o
+        INNER JOIN dbo.HDPM h ON h.ID_OPERATION = o.ID
+        INNER JOIN dbo.COMPTES_ADHERENT ca ON ca.id = h.ID_COMPTE
+        LEFT JOIN dbo.DEVISES dv ON dv.ID = h.ID_DEVISE
+    WHERE o.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+        AND o.ID_TYPE_OPERATION = 'DEPO'
+        AND ISNULL(o.ANNULE, 0) = 0
+        AND UPPER(ISNULL(h.SENS, '')) IN ('C', 'CREDIT')
+    GROUP BY o.ID,
+        o.DATE_OPERATION,
+        ca.ID_ADHERENT,
+        h.ID_DEVISE,
+        dv.CODE,
+        o.NUM_TRANSACTION,
+        o.NUMERO_RECU,
+        o.ID_POINT_SERVICE
+    UNION ALL
+    SELECT 'API_MOBILE',
+        oa.CODE,
+        oa.DATE_OPERATION,
+        ca.ID_ADHERENT,
+        MAX(ABS(ISNULL(h.MONTANT_OPERATION, 0))),
+        h.ID_DEVISE,
+        dv.CODE,
+        oa.NUM_TRANSACTION,
+        oa.NUMERO_RECU,
+        oa.ID_POINT_SERVICE
+    FROM dbo.OPERATIONS_API oa
+        INNER JOIN dbo.HDPM_API h ON h.ID_OPERATION = oa.CODE
+        INNER JOIN dbo.COMPTES_ADHERENT ca ON ca.id = h.ID_COMPTE
+        LEFT JOIN dbo.DEVISES dv ON dv.ID = h.ID_DEVISE
+    WHERE oa.DATE_OPERATION BETWEEN @date_debut AND @date_fin
+        AND oa.ID_TYPE_OPERATION = 'MOB_DEPO'
+        AND ISNULL(oa.ANNULE, 0) = 0
+        AND UPPER(ISNULL(h.SENS, '')) IN ('C', 'CREDIT')
+    GROUP BY oa.CODE,
+        oa.DATE_OPERATION,
+        ca.ID_ADHERENT,
+        h.ID_DEVISE,
+        dv.CODE,
+        oa.NUM_TRANSACTION,
+        oa.NUMERO_RECU,
+        oa.ID_POINT_SERVICE
+),
+depots_classes AS (
+    SELECT d.*,
+        CASE
+            WHEN UPPER(ISNULL(d.code_devise, '')) = 'USD'
+                AND d.montant_depot >= 10
+                AND d.montant_depot < 25 THEN 'USD 10 a 24.99'
+            WHEN UPPER(ISNULL(d.code_devise, '')) = 'USD'
+                AND d.montant_depot >= 25
+                AND d.montant_depot < 50 THEN 'USD 25 a 49.99'
+            WHEN UPPER(ISNULL(d.code_devise, '')) = 'USD'
+                AND d.montant_depot >= 50
+                AND d.montant_depot < 100 THEN 'USD 50 a 99.99'
+            WHEN UPPER(ISNULL(d.code_devise, '')) = 'USD'
+                AND d.montant_depot >= 100 THEN 'USD 100 et plus'
+            WHEN UPPER(ISNULL(d.code_devise, '')) = 'CDF'
+                AND d.montant_depot >= 125000
+                AND d.montant_depot < 200000 THEN 'CDF 125000 a 199999'
+            WHEN UPPER(ISNULL(d.code_devise, '')) = 'CDF'
+                AND d.montant_depot >= 200000 THEN 'CDF 200000 et plus'
+        END AS tranche_depot
+    FROM depots d
+)
+SELECT ecv.id_client,
+    ecv.code_client,
+    ecv.num_manuel,
+    ecv.nom_client,
+    ecv.prenoms_client,
+    ecv.code_categorie_client,
+    ecv.categorie_client,
+    ecv.code_type_client,
+    ecv.type_client,
+    ecv.telephone,
+    ecv.id_agence,
+    ecv.code_agence,
+    ecv.nom_agence,
+    dc.code_devise,
+    dc.tranche_depot,
+    COUNT(DISTINCT dc.id_operation) AS nb_depots,
+    SUM(dc.montant_depot) AS volume_depots,
+    MIN(dc.DATE_OPERATION) AS premier_depot,
+    MAX(dc.DATE_OPERATION) AS dernier_depot,
+    MAX(dc.montant_depot) AS plus_gros_depot
+FROM depots_classes dc
+    LEFT JOIN dbo.extra_clients_view ecv ON ecv.id_client = dc.ID_ADHERENT
+WHERE dc.tranche_depot IS NOT NULL
+GROUP BY ecv.id_client,
+    ecv.code_client,
+    ecv.num_manuel,
+    ecv.nom_client,
+    ecv.prenoms_client,
+    ecv.code_categorie_client,
+    ecv.categorie_client,
+    ecv.code_type_client,
+    ecv.type_client,
+    ecv.telephone,
+    ecv.id_agence,
+    ecv.code_agence,
+    ecv.nom_agence,
+    dc.code_devise,
+    dc.tranche_depot
+ORDER BY CASE dc.tranche_depot
+        WHEN 'USD 100 et plus' THEN 1
+        WHEN 'USD 50 a 99.99' THEN 2
+        WHEN 'USD 25 a 49.99' THEN 3
+        WHEN 'USD 10 a 24.99' THEN 4
+        WHEN 'CDF 200000 et plus' THEN 5
+        WHEN 'CDF 125000 a 199999' THEN 6
+        ELSE 7
+    END,
+    volume_depots DESC,
+    nb_depots DESC;
 
 
 
