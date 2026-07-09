@@ -1,4 +1,4 @@
-﻿/*
+/*
  Catalogue de requetes de controle interne - base BB_VISION_PRO
  Tables principales analysees :
  - ADHERENTS : 
@@ -45,6 +45,7 @@ DECLARE @id_devise_reporting int = NULL;
  */
 /*
  01. Volumetrie des tables principales
+ Export : 01_volumetrie_des_tables_principales
  Objectif : donner une vue rapide du nombre de lignes disponibles dans les tables d'analyse.
  Lecture : sert de controle de presence des donnees avant les analyses detaillees.
  */
@@ -69,6 +70,7 @@ SELECT 'ADHERENTS',
 FROM dbo.ADHERENTS;
 /*
  02. Volumetrie des operations par mois, source et statut annule
+ Export : 02_volumetrie_des_operations_par_mois_source_et_statut_annule
  Objectif : suivre le nombre d'operations par mois, par source et selon le statut d'annulation.
  Lecture : permet d'identifier les pics d'activite et les mois anormaux.
  */
@@ -97,6 +99,7 @@ ORDER BY mois,
     statut_annule;
 /*
  03. Operations creees mais non validees
+ Export : 03_operations_creees_mais_non_validees
  Objectif : lister les operations actives dont la validation est absente ou incomplete.
  Lecture : met en evidence les operations a regulariser ou a expliquer.
  */
@@ -144,6 +147,7 @@ ORDER BY DATE_OPERATION,
     source_table;
 /*
  04. Operations saisies apres la date d'operation
+ Export : 04_operations_saisies_apres_la_date_d_operation
  Objectif : detecter les operations enregistrees apres leur date effective.
  Lecture : un delai important peut signaler une saisie tardive ou un rattrapage manuel.
  */
@@ -192,6 +196,7 @@ ORDER BY delai_saisie_jours DESC,
     DATE_OPERATION;
 /*
  05. Operations validees avant la saisie ou avant la date d'operation
+ Export : 05_operations_validees_avant_la_saisie_ou_avant_la_date_d_operation
  Objectif : identifier les incoherences chronologiques entre operation, saisie et validation.
  Lecture : ces cas doivent etre verifies car ils peuvent reveler un probleme de workflow ou de donnees.
  */
@@ -257,6 +262,7 @@ WHERE oa.DATE_OPERATION BETWEEN @date_debut AND @date_fin
 ORDER BY DATE_OPERATION;
 /*
  06. Operations sans utilisateur, point de service ou type operation
+ Export : 06_operations_sans_utilisateur_point_de_service_ou_type_operation
  Objectif : reperer les operations avec des champs de rattachement essentiels manquants.
  Lecture : ces absences limitent la tracabilite operationnelle et le reporting par agence/utilisateur.
  */
@@ -301,6 +307,7 @@ ORDER BY DATE_OPERATION,
     source_table;
 /*
  07. Doublons de numero de transaction dans OPERATIONS
+ Export : 07_doublons_de_numero_de_transaction_dans_operations
  Objectif : detecter les numeros de transaction utilises plusieurs fois dans le back-office.
  Lecture : chaque doublon doit etre rapproche du metier pour distinguer cas normal, reprise ou anomalie.
  */
@@ -317,6 +324,7 @@ ORDER BY nb_operations DESC,
     NUM_TRANSACTION;
 /*
  08. Doublons de numero de recu dans OPERATIONS
+ Export : 08_doublons_de_numero_de_recu_dans_operations
  Objectif : detecter les recus partages par plusieurs operations.
  Lecture : utile pour verifier l'unicite documentaire et les risques de double comptabilisation.
  */
@@ -333,6 +341,7 @@ ORDER BY nb_operations DESC,
     NUMERO_RECU;
 /*
  09. Doublons metier potentiels : meme date, utilisateur, type, reference et description
+ Export : 09_doublons_metier_potentiels_meme_date_utilisateur_type_reference_et_description
  Objectif : identifier les operations tres similaires pouvant correspondre a une double saisie.
  Lecture : le resultat doit etre examine operation par operation avec les justificatifs.
  */
@@ -358,6 +367,7 @@ ORDER BY nb_doublons DESC,
     DATE_OPERATION;
 /*
  10. Operations annulees sans operation annulee referencee
+ Export : 10_operations_annulees_sans_operation_annulee_referencee
  Objectif : lister les operations marquees annulees sans lien vers l'operation d'origine.
  Lecture : absence de reference = tracabilite d'annulation incomplete.
  */
@@ -376,6 +386,7 @@ WHERE DATE_OPERATION BETWEEN @date_debut AND @date_fin
 ORDER BY DATE_OPERATION;
 /*
  11. Operations referencees comme annulees mais introuvables
+ Export : 11_operations_referencees_comme_annulees_mais_introuvables
  Objectif : verifier que les references d'annulation pointent vers une operation existante.
  Lecture : les lignes retournees indiquent des liens rompus ou des donnees manquantes.
  */
@@ -390,6 +401,7 @@ WHERE o.ID_OPERATION_ANNULE IS NOT NULL
 ORDER BY o.DATE_OPERATION;
 /*
  12. HDPM sans operation back-office correspondante
+ Export : 12_hdpm_sans_operation_back_office_correspondante
  Objectif : detecter les ecritures comptables HDPM rattachees a une operation inexistante.
  Lecture : ces cas doivent etre expliques car ils cassent le lien operation-comptabilite.
  */
@@ -410,6 +422,7 @@ WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
 ORDER BY h.DATE_OPERATION;
 /*
  13. Operations back-office sans ecriture HDPM
+ Export : 13_operations_back_office_sans_ecriture_hdpm
  Objectif : identifier les operations actives sans impact comptable retrouve dans HDPM.
  Lecture : utile pour verifier l'exhaustivite de la comptabilisation.
  */
@@ -428,6 +441,7 @@ WHERE o.DATE_OPERATION BETWEEN @date_debut AND @date_fin
 ORDER BY o.DATE_OPERATION;
 /*
  14. Equilibre debit/credit par operation dans HDPM
+ Export : 14_equilibre_debit_credit_par_operation_dans_hdpm
  Objectif : controler que les ecritures back-office sont equilibrees entre debit et credit.
  Lecture : un ecart non nul signale une anomalie comptable potentielle.
  */
@@ -477,6 +491,7 @@ ORDER BY ABS(
     ) DESC;
 /*
  15. Equilibre debit/credit par operation dans HDPM_API
+ Export : 15_equilibre_debit_credit_par_operation_dans_hdpm_api
  Objectif : controler l'equilibre debit/credit des ecritures issues de l'API mobile.
  Lecture : chaque operation mobile devrait generalement avoir une paire debit/credit equilibree.
  */
@@ -526,6 +541,7 @@ ORDER BY ABS(
     ) DESC;
 /*
  16. Lignes HDPM avec montant nul, negatif ou sens absent
+ Export : 16_lignes_hdpm_avec_montant_nul_negatif_ou_sens_absent
  Objectif : reperer les ecritures comptables dont les montants ou le sens sont invalides/incomplets.
  Lecture : ces lignes sont prioritaires pour controle de qualite des donnees comptables.
  */
@@ -574,6 +590,7 @@ ORDER BY DATE_OPERATION,
     source_table;
 /*
  17. Ecritures comptables avec date valeur differente de la date operation
+ Export : 17_ecritures_comptables_avec_date_valeur_differente_de_la_date_operation
  Objectif : lister les ecritures dont la date valeur differe de la date d'operation.
  Lecture : un ecart important peut etre normal mais doit etre justifie selon la procedure.
  */
@@ -594,6 +611,7 @@ WHERE DATE_OPERATION BETWEEN @date_debut AND @date_fin
 ORDER BY ABS(DATEDIFF(day, DATE_OPERATION, DATE_VALEUR)) DESC;
 /*
  18. Mouvements HDPM sans compte ou avec compte inexistant
+ Export : 18_mouvements_hdpm_sans_compte_ou_avec_compte_inexistant
  Objectif : verifier le rattachement de chaque ecriture a un compte existant.
  Lecture : les lignes retournees indiquent un probleme de referentiel compte.
  */
@@ -614,6 +632,7 @@ WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
 ORDER BY h.DATE_OPERATION;
 /*
  19. Mouvements sur comptes clotures/inactifs selon ETAT
+ Export : 19_mouvements_sur_comptes_clotures_inactifs_selon_etat
  Objectif : detecter les mouvements passes sur des comptes dont l'etat n'est pas actif/ouvert.
  Lecture : ces mouvements doivent etre justifies ou corriges selon le statut du compte.
  */
@@ -633,6 +652,7 @@ WHERE h.DATE_OPERATION BETWEEN @date_debut AND @date_fin
 ORDER BY h.DATE_OPERATION;
 /*
  20. Rapprochement OPERATIONS vs OPERATIONS_API par NUM_TRANSACTION
+ Export : 20_rapprochement_operations_vs_operations_api_par_num_transaction
  Objectif : comparer les operations back-office et API sur les references communes.
  Lecture : signale les absences ou differences de date, recu, point de service ou type operation.
  */
@@ -674,6 +694,7 @@ ORDER BY COALESCE(o.DATE_OPERATION, oa.DATE_OPERATION),
     statut_rapprochement;
 /*
  21. Rapprochement des totaux HDPM vs HDPM_API par reference operation
+ Export : 21_rapprochement_des_totaux_hdpm_vs_hdpm_api_par_reference_operation
  Objectif : comparer les volumes et montants comptables entre HDPM et HDPM_API.
  Lecture : met en evidence les operations presentes dans une source mais pas l'autre ou avec ecarts.
  */
@@ -734,6 +755,7 @@ WHERE b.ID_OPERATION IS NULL
 ORDER BY ABS(ISNULL(b.debit_bo, 0) - ISNULL(a.debit_api, 0)) + ABS(ISNULL(b.credit_bo, 0) - ISNULL(a.credit_api, 0)) DESC;
 /*
  22. Operations par utilisateur avec volumes et delais moyens
+ Export : 22_operations_par_utilisateur_avec_volumes_et_delais_moyens
  Objectif : mesurer l'activite et les delais moyens de saisie par utilisateur.
  Lecture : aide a reperer les profils atypiques ou les besoins de supervision.
  */
@@ -767,6 +789,7 @@ GROUP BY o.ID_UTILISATEUR,
 ORDER BY nb_operations DESC;
 /*
  23. Operations saisies et validees par le meme utilisateur
+ Export : 23_operations_saisies_et_validees_par_le_meme_utilisateur
  Objectif : detecter les cas d'auto-validation.
  Lecture : utile pour verifier la separation des taches et les habilitations.
  */
@@ -787,6 +810,7 @@ WHERE o.DATE_OPERATION BETWEEN @date_debut AND @date_fin
 ORDER BY o.DATE_OPERATION;
 /*
  24. Adherents inscrits en doublon par code
+ Export : 24_adherents_inscrits_en_doublon_par_code
  Objectif : verifier l'unicite du code adherent.
  Lecture : les doublons peuvent perturber le KYC, les comptes et les reportings clients.
  */
@@ -807,6 +831,7 @@ ORDER BY nb_adherents DESC,
     CODE;
 /*
  25. Adherents sans informations essentielles
+ Export : 25_adherents_sans_informations_essentielles
  Objectif : reperer les fiches adherents incompletes sur les champs de base.
  Lecture : sert au nettoyage KYC et a l'amelioration de la qualite du referentiel client.
  */
@@ -834,6 +859,7 @@ ORDER BY a.DATE_INSCRIPTION,
     a.CODE;
 /*
  26. Adherents non valides ou droit d'adhesion non paye
+ Export : 26_adherents_non_valides_ou_droit_d_adhesion_non_paye
  Objectif : identifier les adherents non valides ou dont le droit d'adhesion n'est pas paye.
  Lecture : a rapprocher avec les ouvertures de comptes et l'activite transactionnelle.
  */
@@ -854,6 +880,7 @@ WHERE ISNULL(a.EST_VALIDE, 0) = 0
 ORDER BY a.DATE_INSCRIPTION DESC;
 /*
  27. Adherents inscrits apres leur derniere modification
+ Export : 27_adherents_inscrits_apres_leur_derniere_modification
  Objectif : detecter une incoherence chronologique dans les dates adherent.
  Lecture : peut indiquer une reprise de donnees ou une date de modification incorrecte.
  */
@@ -873,6 +900,7 @@ WHERE a.DATE_INSCRIPTION IS NOT NULL
 ORDER BY a.DATE_INSCRIPTION DESC;
 /*
  28. Adherents sans compte adherent ou avec compte adherent introuvable
+ Export : 28_adherents_sans_compte_adherent_ou_avec_compte_adherent_introuvable
  Objectif : verifier le rattachement de l'adherent a son compte adherent.
  Lecture : les cas retournes peuvent bloquer l'analyse par client et le suivi KYC.
  */
@@ -892,6 +920,7 @@ WHERE a.ID_COMPTE_ADHERENT IS NULL
 ORDER BY a.DATE_INSCRIPTION DESC;
 /*
  29. Synthese mensuelle des montants HDPM par point de service, devise et sens
+ Export : 29_synthese_mensuelle_des_montants_hdpm_par_point_de_service_devise_et_sens
  Objectif : produire une vision agregee des mouvements comptables par agence, devise et sens.
  Lecture : utile pour tableaux de bord mensuels et comparaison entre agences.
  */
@@ -933,6 +962,7 @@ ORDER BY mois,
     h.SENS;
 /*
  30. Top operations par montant cumule HDPM
+ Export : 30_top_operations_par_montant_cumule_hdpm
  Objectif : lister les operations les plus importantes en montant comptable cumule.
  Lecture : priorise les controles sur les operations a impact financier eleve.
  */
@@ -947,6 +977,7 @@ GROUP BY h.ID_OPERATION
 ORDER BY SUM(ISNULL(h.MONTANT_OPERATION, 0)) DESC;
 /*
  31. Operations API sans ecritures HDPM_API rattachees
+ Export : 31_operations_api_sans_ecritures_hdpm_api_rattachees
  Objectif : verifier que chaque operation API active a des ecritures comptables API.
  Lecture : absence d'ecriture = anomalie d'integration ou de comptabilisation potentielle.
  */
@@ -971,6 +1002,7 @@ ORDER BY oa.DATE_OPERATION,
     oa.ID;
 /*
  32. Operations API mobiles sans paire debit/credit equilibree dans HDPM_API
+ Export : 32_operations_api_mobiles_sans_paire_debit_credit_equilibree_dans_hdpm_api
  Objectif : controler que les operations mobiles ont une paire debit/credit coherente.
  Lecture : signale les mobiles incomplets, desequilibres ou mal rattaches.
  */
@@ -1059,6 +1091,7 @@ ORDER BY oa.DATE_OPERATION,
     oa.ID;
 /*
  33. Operations API annulees et leurs ecritures HDPM_API
+ Export : 33_operations_api_annulees_et_leurs_ecritures_hdpm_api
  Objectif : documenter les operations API annulees avec leur impact comptable.
  Lecture : facilite la revue des annulations mobile banking.
  */
@@ -1088,6 +1121,7 @@ ORDER BY oa.DATE_OPERATION,
     oa.ID;
 /*
  34. Synthese des operations API par statut annulation et type
+ Export : 34_synthese_des_operations_api_par_statut_annulation_et_type
  Objectif : suivre l'activite API par mois, type operation et statut d'annulation.
  Lecture : utile pour surveiller les tendances mobile banking.
  */
@@ -1113,6 +1147,7 @@ ORDER BY mois,
     statut_annulation;
 /*
  35. Pics de fin de mois dans OPERATIONS par type operation
+ Export : 35_pics_de_fin_de_mois_dans_operations_par_type_operation
  Objectif : identifier les volumes importants passes en fin de mois.
  Lecture : permet de distinguer traitements batch, regularisations et anomalies de concentration.
  */
@@ -1131,6 +1166,7 @@ ORDER BY DATE_OPERATION,
     nb_operations DESC;
 /*
  36. Liste de tous les depots et retraits, back-office et API mobile
+ Export : 36_liste_de_tous_les_depots_et_retraits_back_office_et_api_mobile
  Objectif : obtenir le detail unifie des depots/retraits toutes sources.
  Lecture : base de travail pour extraction Excel, controle LBC-FT et investigations transactionnelles.
  */
@@ -1205,6 +1241,7 @@ ORDER BY DATE_OPERATION,
     SENS;
 /*
  37. Liste de tous les mouvements comptables, tous types confondus
+ Export : 37_liste_de_tous_les_mouvements_comptables_tous_types_confondus
  Objectif : produire un listing complet HDPM + HDPM_API sans filtrer les types operation.
  Lecture : sert d'export exhaustif des mouvements comptables sur la periode.
  */
@@ -1275,6 +1312,7 @@ ORDER BY DATE_OPERATION,
     id_ecriture;
 /*
  38. Synthese Excel LBC-FT : depots, retraits et mobile banking
+ Export : 38_synthese_excel_lbc_ft_depots_retraits_et_mobile_banking
  Objectif : produire une table directement exploitable pour certaines lignes du reporting BCC/LBC-FT.
  Lecture : renseigne section, ligne Excel, rubrique, nombre, volume et commentaire.
  */
@@ -1400,6 +1438,7 @@ WHERE ID_TYPE_OPERATION = 'MOB_DEPO'
 ORDER BY ligne_excel;
 /*
  39. Fractionnement potentiel : plusieurs mouvements sous seuil mais cumul au-dessus du seuil
+ Export : 39_fractionnement_potentiel_plusieurs_mouvements_sous_seuil_mais_cumul_au_dessus_du_seuil
  Objectif : detecter les clients avec plusieurs operations sous seuil dont le cumul depasse le seuil journalier.
  Lecture : cas typique de surveillance LBC-FT sur contournement possible des seuils.
  */
@@ -1506,6 +1545,7 @@ ORDER BY montant_cumule DESC,
     DATE_OPERATION;
 /*
  40. Operations inhabituelles par client : volume periode vs moyenne des 3 mois precedents
+ Export : 40_operations_inhabituelles_par_client_volume_periode_vs_moyenne_des_3_mois_precedents
  Objectif : comparer le volume de la periode avec l'historique recent du client.
  Lecture : les multiples eleves ou l'absence d'historique doivent etre investigues.
  */
@@ -1590,6 +1630,7 @@ WHERE p.volume_periode >= @seuil_10k_usd_cdf
 ORDER BY p.volume_periode DESC;
 /*
  41. Clients avec forte activite mais donnees KYC incompletes ou atypiques
+ Export : 41_clients_avec_forte_activite_mais_donnees_kyc_incompletes_ou_atypiques
  Objectif : croiser volume transactionnel et qualite des donnees adherent.
  Lecture : priorise les dossiers KYC incomplets ayant une activite significative.
  */
@@ -1637,6 +1678,7 @@ WHERE volume_lignes >= @seuil_10k_usd_cdf
 ORDER BY volume_lignes DESC;
 /*
  42. Depots et retraits agreges par client
+ Export : 42_depots_et_retraits_agreges_par_client
  Objectif : calculer nombres et volumes de depots/retraits par adherent.
  Lecture : base pour profilage client et suivi commercial/risque.
  */
@@ -1711,6 +1753,7 @@ GROUP BY ID_ADHERENT,
 ORDER BY volume_total DESC;
 /*
  43. Top clients par volume de mouvements
+ Export : 43_top_clients_par_volume_de_mouvements
  Objectif : afficher les 50 clients les plus actifs en montant sur la periode.
  Lecture : utile pour selectionner les dossiers a examiner en priorite.
  */
@@ -1757,6 +1800,7 @@ GROUP BY ID_ADHERENT,
 ORDER BY volume_total DESC;
 /*
  44. Analyse detaillee des operations annulees
+ Export : 44_analyse_detaillee_des_operations_annulees
  Objectif : lister les annulations avec utilisateur, validateur et references operationnelles.
  Lecture : facilite la revue des annulations et de leur justification.
  */
@@ -1804,6 +1848,7 @@ ORDER BY DATE_OPERATION,
     id_operation;
 /*
  45. Utilisateurs a risque : volumes, annulations, saisies tardives et auto-validation
+ Export : 45_utilisateurs_a_risque_volumes_annulations_saisies_tardives_et_auto_validation
  Objectif : identifier les utilisateurs dont l'activite presente des signaux de supervision.
  Lecture : combine volume, annulations, saisies tardives et separation des taches.
  */
@@ -1867,6 +1912,7 @@ ORDER BY nb_annulations DESC,
     nb_operations DESC;
 /*
  46. Analyse par point de service / agence
+ Export : 46_analyse_par_point_de_service_agence
  Objectif : agreger les operations par agence, type et indicateurs d'anomalie.
  Lecture : compare les agences et identifie les points de service atypiques.
  */
@@ -1898,6 +1944,7 @@ GROUP BY o.ID_POINT_SERVICE,
 ORDER BY nb_operations DESC;
 /*
  47. Detail mobile banking par type operation
+ Export : 47_detail_mobile_banking_par_type_operation
  Objectif : suivre les operations API par type mobile, mois et point de service.
  Lecture : aide au reporting mobile banking et au controle de l'equilibre debit/credit.
  */
@@ -1943,6 +1990,7 @@ ORDER BY mois,
     oa.ID_POINT_SERVICE;
 /*
  48. Rubriques LBC-FT non couvertes automatiquement et pistes de mapping
+ Export : 48_rubriques_lbc_ft_non_couvertes_automatiquement_et_pistes_de_mapping
  Objectif : documenter les rubriques du reporting qui necessitent encore une source ou un mapping metier.
  Lecture : sert de checklist pour completer le reporting BCC/LBC-FT au-dela des mouvements financiers.
  */
@@ -1988,6 +2036,7 @@ FROM (
 ORDER BY rubrique_reporting;
 /*
  49. Produits d'epargne inactifs encore utilises par des comptes
+ Export : 49_produits_d_epargne_inactifs_encore_utilises_par_des_comptes
  Objectif : identifier les comptes encore rattaches a des produits d'epargne inactifs.
  Lecture : ces comptes doivent etre verifies pour confirmer si le produit devait encore etre exploite ou etre cloture/migre.
  */
@@ -2016,6 +2065,7 @@ ORDER BY pe.LIBELLE,
     c.NUM_CPTE;
 /*
  50. Produits d'epargne non valides encore utilises par des comptes
+ Export : 50_produits_d_epargne_non_valides_encore_utilises_par_des_comptes
  Objectif : reperer les comptes rattaches a des produits non valides.
  Lecture : utile pour la regularisation des parametres produits et le nettoyage du portefeuille epargne.
  */
@@ -2044,6 +2094,7 @@ ORDER BY pe.LIBELLE,
     c.NUM_CPTE;
 /*
  51. Produits sans depot/retrait autorise mais avec mouvements sur les comptes
+ Export : 51_produits_sans_depot_retrait_autorise_mais_avec_mouvements_sur_les_comptes
  Objectif : controler la coherence entre les regles produit et les mouvements observes.
  Lecture : dans cette lecture, un mouvement crediteur sur un compte client est assimile a un depot et un mouvement debiteur a un retrait.
  */
@@ -2111,6 +2162,7 @@ ORDER BY nb_mouvements DESC,
     montant_total DESC;
 /*
  52. Incoherences entre devise du produit, du compte et du mouvement
+ Export : 52_incoherences_entre_devise_du_produit_du_compte_et_du_mouvement
  Objectif : detecter les differences de devise susceptibles de fausser les traitements epargne.
  Lecture : une incoherence doit etre analysee selon la regle metier du produit, du compte et du mouvement comptable.
  */
@@ -2151,6 +2203,7 @@ ORDER BY h.DATE_OPERATION DESC,
     c.NUM_CPTE;
 /*
  53. Comptes rattaches a un produit epargne inexistant ou invalide
+ Export : 53_comptes_rattaches_a_un_produit_epargne_inexistant_ou_invalide
  Objectif : lister les comptes sans produit reference ou lies a un produit non exploitable.
  Lecture : ces cas perturbent la supervision du portefeuille et doivent etre regularises en priorite.
  */
@@ -2185,6 +2238,7 @@ ORDER BY anomalie,
     c.NUM_CPTE;
 /*
  54. Mouvements HDPM_VIEW sans compte, avec compte inexistant ou sans operation rattachee
+ Export : 54_mouvements_hdpm_view_sans_compte_avec_compte_inexistant_ou_sans_operation_rattachee
  Objectif : controler les references minimales des mouvements.
  Lecture : cette requete exploite HDPM_VIEW comme source de reference pour les mouvements back-office et API/mobile.
  */
@@ -2225,6 +2279,7 @@ ORDER BY h.DATE_OPERATION DESC,
     anomalie;
 /*
  55. Mouvements avec montant nul, negatif ou superieur au seuil de revue
+ Export : 55_mouvements_avec_montant_nul_negatif_ou_superieur_au_seuil_de_revue
  Objectif : isoler les montants qui meritent une verification prioritaire.
  Lecture : le seuil eleve s'appuie sur @seuil_10k_usd_cdf s'il est renseigne, sinon une valeur pilote de 10 000 000.
  */
@@ -2262,6 +2317,7 @@ ORDER BY ABS(ISNULL(h.MONTANT_REEL, h.MONTANT_OPERATION)) DESC,
     h.DATE_OPERATION DESC;
 /*
  56. Depots et retraits par client, compte, agence, devise et produit
+ Export : 56_depots_et_retraits_par_client_compte_agence_devise_et_produit
  Objectif : produire une lecture consolidee de l'activite epargne sur la periode.
  Lecture : les credits sur compte client sont lus comme depots et les debits comme retraits/sorties.
  */
@@ -2323,6 +2379,7 @@ ORDER BY montant_total DESC,
     nb_mouvements DESC;
 /*
  57. Analyse des gros mouvements par periode
+ Export : 57_analyse_des_gros_mouvements_par_periode
  Objectif : suivre les mouvements superieurs au seuil de revue par mois, agence et devise.
  Lecture : utile pour la supervision LBC-FT, le pilotage des pics d'activite et la revue des operations sensibles.
  */
@@ -2357,6 +2414,7 @@ ORDER BY mois,
     volume_total DESC;
 /*
  58. Analyse des mouvements par point de service
+ Export : 58_analyse_des_mouvements_par_point_de_service
  Objectif : comparer l'activite mouvements entre points de service.
  Lecture : aide a cibler les agences les plus actives et celles qui demandent une revue plus fine.
  */
@@ -2392,6 +2450,7 @@ ORDER BY nb_mouvements DESC,
     total_credits + total_debits DESC;
 /*
  59. Demandes de credit sans pret accorde
+ Export : 59_demandes_de_credit_sans_pret_accorde
  Objectif : suivre les demandes recues qui n'ont pas encore abouti a un pret.
  Lecture : utile pour le pipeline credit, les relances et la supervision des dossiers en attente.
  */
@@ -2429,6 +2488,7 @@ ORDER BY dc.DATE_RECEPTION DESC,
     dc.MONTANT_DEMANDE DESC;
 /*
  60. Prets incomplets : sans dossier, sans compte credit, sans compte epargne ou sans cycle
+ Export : 60_prets_incomplets_sans_dossier_sans_compte_credit_sans_compte_epargne_ou_sans_cycle
  Objectif : identifier les prets dont la structure de reference est incomplete.
  Lecture : un pret incomplet expose a des limites de suivi, de recouvrement ou de reporting.
  */
@@ -2501,6 +2561,7 @@ ORDER BY p.DATE_DECAISSEMENT DESC,
     p.MONTANT DESC;
 /*
  61. Cycles de pret avec echeance depassee et non cloturee
+ Export : 61_cycles_de_pret_avec_echeance_depassee_et_non_cloturee
  Objectif : detecter les cycles encore ouverts au-dela de leur fin d'echeance.
  Lecture : ces cas signalent un besoin de suivi credit, de recouvrement ou de regularisation de cloture.
  */
@@ -2533,6 +2594,7 @@ ORDER BY jours_de_depassement DESC,
     cp.FIN_ECHEANCE;
 /*
  62. Comparaison entre montant demande et montant accorde
+ Export : 62_comparaison_entre_montant_demande_et_montant_accorde
  Objectif : comparer le montant demande au niveau de la demande, du dossier et du pret.
  Lecture : utile pour suivre les reductions, les renegociations et les ecarts d'octroi.
  */
@@ -2569,6 +2631,7 @@ ORDER BY ABS(
     dc.DATE_RECEPTION DESC;
 /*
  63. Analyse des credits par agence, produit, devise et etat
+ Export : 63_analyse_des_credits_par_agence_produit_devise_et_etat
  Objectif : fournir une vue d'aide a la decision sur le pipeline de credit.
  Lecture : la devise est lue depuis le pret lorsqu'elle existe, sinon depuis le produit credit.
  */
@@ -2610,6 +2673,7 @@ ORDER BY total_demande DESC,
     nb_demandes DESC;
 /*
  64. Clients avec forte activite d'epargne et credit actif
+ Export : 64_clients_avec_forte_activite_d_epargne_et_credit_actif
  Objectif : cibler les clients tres actifs en epargne qui ont aussi un pret encore ouvert.
  Lecture : un pret est considere actif ici s'il n'est ni solde, ni sorti, ni passe en perte.
  */
@@ -2659,6 +2723,7 @@ ORDER BY e.volume_epargne DESC,
     c.nb_prets_actifs DESC;
 /*
  65. Clients avec plusieurs demandes de credit sur une meme periode
+ Export : 65_clients_avec_plusieurs_demandes_de_credit_sur_une_meme_periode
  Objectif : detecter les clients qui multiplient les demandes sur un meme mois.
  Lecture : utile pour la vigilance commerciale, la qualite du pipeline et la revue du risque.
  */
@@ -2694,6 +2759,7 @@ ORDER BY nb_demandes DESC,
     montant_total_demande DESC;
 /*
  66. Agences avec volume eleve de mouvements ou de credits
+ Export : 66_agences_avec_volume_eleve_de_mouvements_ou_de_credits
  Objectif : rapprocher la pression operationnelle entre activite mouvement et activite credit.
  Lecture : la source indique si le volume provient des mouvements epargne ou du pipeline credit.
  */
@@ -2727,6 +2793,7 @@ ORDER BY source_volume,
     volume_total DESC;
 /*
  67. Produits d'epargne les plus utilises et produits credit les plus sollicites
+ Export : 67_produits_d_epargne_les_plus_utilises_et_produits_credit_les_plus_sollicites
  Objectif : donner une lecture rapide des produits les plus mobilises.
  Lecture : la source distingue le produit epargne du produit credit.
  */
@@ -2760,6 +2827,7 @@ ORDER BY source_produit,
     volume_total DESC;
 /*
  68. Anomalies a prioriser pour audit
+ Export : 68_anomalies_a_prioriser_pour_audit
  Objectif : produire une synthese courte des principaux signaux d'alerte.
  Lecture : ce tableau sert de point d'entree pour prioriser les revues d'audit et de supervision.
  */
@@ -2878,6 +2946,7 @@ ORDER BY nb_cas DESC,
     anomalie;
 /*
  69. Prets decaisses sans validation prealable exploitable
+ Export : 69_prets_decaisses_sans_validation_prealable_exploitable
  Objectif : verifier qu'un pret a bien fait l'objet d'une validation exploitable avant deboursement.
  Lecture : signale les prets sans validation, sans validation favorable ou avec validation enregistree apres deboursement.
  */
@@ -2952,6 +3021,7 @@ ORDER BY COALESCE(ds.date_premier_debloc, p.DATE_DECAISSEMENT) DESC,
     p.MONTANT DESC;
 /*
  70. Couverture de garantie insuffisante par rapport a la tranche
+ Export : 70_couverture_de_garantie_insuffisante_par_rapport_a_la_tranche
  Objectif : comparer la valeur des garanties a la couverture attendue pour le dossier.
  Lecture : utile pour verifier les dossiers dont la garantie reelle reste en dessous du minimum attendu.
  */
@@ -3064,6 +3134,7 @@ ORDER BY ecart_valeur_garantie,
     ) DESC;
 /*
  71. Caution financiere insuffisante par rapport au dossier
+ Export : 71_caution_financiere_insuffisante_par_rapport_au_dossier
  Objectif : rapprocher la caution constatee, le taux attendu et le minimum parametre.
  Lecture : signale les prets dont la caution financiere reste absente ou insuffisante.
  */
@@ -3202,6 +3273,7 @@ ORDER BY p.DATE_DECAISSEMENT DESC,
     p.MONTANT DESC;
 /*
  72. Garanties sans garant identifiable ou sans piece exploitable
+ Export : 72_garanties_sans_garant_identifiable_ou_sans_piece_exploitable
  Objectif : reperer les garanties rattachees a un dossier mais sans garant correctement documente.
  Lecture : permet de cibler les dossiers dont la garantie existe sur le papier mais reste fragile juridiquement.
  */
@@ -3262,6 +3334,7 @@ ORDER BY COALESCE(
     g.VALEUR DESC;
 /*
  73. Dossiers avec analyse obligatoire absente ou inachevee
+ Export : 73_dossiers_avec_analyse_obligatoire_absente_ou_inachevee
  Objectif : verifier l'existence des analyses de revenu et de projet quand la tranche les exige.
  Lecture : tres utile pour les controles d'octroi et la revue de la qualite documentaire.
  */
@@ -3347,6 +3420,7 @@ ORDER BY COALESCE(
     dc.MONTANT_DEMANDE DESC;
 /*
  74. Decaissements sans support exploitable ou avec montant incoherent
+ Export : 74_decaissements_sans_support_exploitable_ou_avec_montant_incoherent
  Objectif : rapprocher le pret, le ou les deblocages et l'operation de support.
  Lecture : permet d'isoler les cas sans trace de deblocage ou avec montant tire incoherent.
  */
@@ -3420,6 +3494,7 @@ ORDER BY COALESCE(ds.date_premier_debloc, p.DATE_DECAISSEMENT) DESC,
     p.MONTANT DESC;
 /*
  75. Credits de groupe avec nombre de beneficiaires hors norme
+ Export : 75_credits_de_groupe_avec_nombre_de_beneficiaires_hors_norme
  Objectif : identifier les dossiers collectifs dont le nombre de beneficiaires semble incoherent.
  Lecture : le manuel Likelemba recommande une taille de groupe maitrisee, generalement entre 5 et 10 membres.
  */
@@ -3464,6 +3539,7 @@ ORDER BY dc.DATE_RECEPTION DESC,
     dc.MONTANT_DEMANDE DESC;
 /*
  76. Nombre de prets actifs au-dela de la limite du produit
+ Export : 76_nombre_de_prets_actifs_au_dela_de_la_limite_du_produit
  Objectif : comparer le nombre de prets actifs d'un client a la limite parametree sur le produit.
  Lecture : aide a detecter les situations de cumul a relire avant nouvel octroi.
  */
@@ -3502,6 +3578,7 @@ ORDER BY a.nb_prets_actifs DESC,
     a.encours_total DESC;
 /*
  77. Mainlevee ou retrait de garantie avant solde du pret
+ Export : 77_mainlevee_ou_retrait_de_garantie_avant_solde_du_pret
  Objectif : verifier qu'une garantie n'a pas ete retiree alors que le pret reste non solde.
  Lecture : cible les mainlevees a relire en priorite car elles peuvent fragiliser le recouvrement.
  */
@@ -3578,6 +3655,7 @@ ORDER BY ra.date_premier_retrait_garantie DESC,
     p.MONTANT DESC;
 /*
  78. Demandes de reechelonnement sans validation exploitable
+ Export : 78_demandes_de_reechelonnement_sans_validation_exploitable
  Objectif : controler les demandes de reechelonnement non validees ou rattachees a un pret deja sorti du portefeuille normal.
  Lecture : permet d'isoler les reechelonnements a regulariser ou a justifier.
  */
@@ -3652,6 +3730,7 @@ ORDER BY COALESCE(
     p.MONTANT DESC;
 /*
  79. Prets marques reechelonnes sans demande formelle
+ Export : 79_prets_marques_reechelonnes_sans_demande_formelle
  Objectif : verifier qu'un pret marque comme reechelonne dispose d'une demande correspondante.
  Lecture : tres utile quand le traitement systeme a ete fait avant ou sans formalisation du dossier.
  */
@@ -3688,6 +3767,7 @@ ORDER BY p.DATE_REECH DESC,
     p.MONTANT DESC;
 /*
  80. Prets en contentieux avec incoherences de transfert ou de montant
+ Export : 80_prets_en_contentieux_avec_incoherences_de_transfert_ou_de_montant
  Objectif : relire les passages en contentieux dont la date ou le montant semble incoherent.
  Lecture : aide a fiabiliser le suivi des dossiers sensibles et la piste d'audit.
  */
@@ -3746,6 +3826,7 @@ ORDER BY COALESCE(pcx.DATE_TRANSFERT, p.DATE_PERTE, p.DATE_SORTIE) DESC,
     ISNULL(pcx.MONTANT_CONTENTIEUX, 0) DESC;
 /*
  81. Validations de dossier incoherentes avec le dossier ou le pret
+ Export : 81_validations_de_dossier_incoherentes_avec_le_dossier_ou_le_pret
  Objectif : comparer les montants, echeances et periodes valides avec les valeurs du dossier et du pret.
  Lecture : cible les validations a relire avant revue d'octroi ou mission d'audit.
  */
@@ -3836,6 +3917,7 @@ ORDER BY v.dateValidation DESC,
     dc.NUM_DEMANDE;
 /*
  82. Types de garantie utilises mais non parametres pour l'agence
+ Export : 82_types_de_garantie_utilises_mais_non_parametres_pour_l_agence
  Objectif : verifier que le type de garantie utilise est bien autorise pour le point de service et la devise concernes.
  Lecture : pratique pour la revue du parametre produit et la regularisation des garanties hors cadre.
  */
@@ -3877,6 +3959,7 @@ ORDER BY COALESCE(d.DATE_DECISION, dc.DATE_RECEPTION) DESC,
     g.VALEUR DESC;
 /*
  83. Cycles de pret sans echeancier TABAMOR exploitable
+ Export : 83_cycles_de_pret_sans_echeancier_tabamor_exploitable
  Objectif : verifier qu'un cycle de pret dispose bien d'un plan d'amortissement lisible.
  Lecture : un cycle sans echeancier fiable complique le suivi, le rappel des echeances et la piste d'audit.
  */
@@ -3933,6 +4016,7 @@ ORDER BY COALESCE(p.DATE_DECAISSEMENT, cp.DATE_DEBUT) DESC,
     cp.MONTANT DESC;
 /*
  84. Taux d'impaye du portefeuille par tranche de montant et par devise
+ Export : 84_taux_d_impaye_du_portefeuille_par_tranche_de_montant_et_par_devise
  Objectif : repérer les tranches de crédit et les devises qui concentrent le plus de cycles échus non clôturés.
  Lecture : en l'absence d'un montant impayé direct dans CYCLES_PRET, l'indicateur utilise ici le montant des cycles échus non clôturés comme proxy pragmatique du risque d'impayé.
  */
@@ -3991,6 +4075,7 @@ ORDER BY bp.devise_pret,
     END;
 /*
  85. Clients qui terminent leur crédit par mois ou sur la période
+ Export : 85_clients_qui_terminent_leur_credit_par_mois_ou_sur_la_periode
  Objectif : suivre la fidélisation et les clôtures effectives de prêts sur une période donnée.
  Lecture : un prêt terminé est ici un prêt avec DATE_SOLDE renseignée. Le résultat aide à suivre les clients qui bouclent un cycle et peuvent revenir dans le pipeline, avec une lecture mensuelle, par devise et par agence.
  */
@@ -4055,6 +4140,7 @@ ORDER BY mois_solde DESC,
     montant_total_credits_termines DESC;
 /*
  86. Synthese de renouvellement après clôture de crédit
+ Export : 86_synthese_de_renouvellement_apres_cloture_de_credit
  Objectif : mesurer, par mois, devise et agence, la part des clients soldés qui reviennent ensuite sur un nouveau prêt.
  Lecture : un renouvellement est estimé lorsqu'un client ayant soldé un prêt sur la période reçoit un nouveau prêt avec une date de décaissement ou d'effet postérieure à la date de solde.
  */
@@ -4128,6 +4214,7 @@ ORDER BY ps.mois_solde DESC,
     ps.nom_agence;
 /*
  87. Delai de renouvellement apres clôture
+ Export : 87_delai_de_renouvellement_apres_cloture
  Objectif : qualifier la vitesse de retour des clients après solde afin d'identifier les cycles rapidement reconduits, les retours plus lents et les clients qui ne reviennent pas encore.
  Lecture : un renouvellement rapide correspond ici à un nouveau prêt dans les 30 jours, moyen entre 31 et 90 jours, tardif au-delà de 90 jours. Sans nouveau prêt après solde, le dossier reste classé en attente de renouvellement.
  */
@@ -4221,6 +4308,7 @@ ORDER BY mois_solde DESC,
     END;
 /*
  88. Renouvellement dans la même agence ou avec changement d'agence
+ Export : 88_renouvellement_dans_la_meme_agence_ou_avec_changement_d_agence
  Objectif : identifier si les clients renouvelés restent dans leur agence d'origine ou basculent vers une autre agence.
  Lecture : la comparaison se fait entre l'agence du prêt soldé et l'agence du premier prêt repris après solde. Sans nouveau prêt, le client reste classé en attente de renouvellement.
  */
@@ -4317,6 +4405,7 @@ ORDER BY mois_solde DESC,
     END;
 /*
  89. Evolution du montant au renouvellement
+ Export : 89_evolution_du_montant_au_renouvellement
  Objectif : mesurer si le premier prêt repris après solde est d'un montant plus élevé, plus faible ou stable par rapport au prêt clôturé.
  Lecture : la comparaison se fait entre le montant du prêt soldé et celui du premier nouveau prêt du même client. Sans nouveau prêt, le dossier reste en attente de renouvellement.
  */
@@ -4413,6 +4502,7 @@ ORDER BY mois_solde DESC,
 
 /*
  90. Liste des clients avec leurs comptes et devises
+ Export : 90_liste_des_clients_avec_leurs_comptes_et_devises
  Objectif : obtenir le portefeuille client-compte avec les informations de devise et d'agence.
  Lecture : une ligne correspond a un compte rattache a un client. Renseigner @id_devise_reporting pour limiter a une devise.
  */
@@ -4459,6 +4549,7 @@ ORDER BY ecv.code_client,
 
 /*
  91. Credits en cours ou termines avec echeances impayees sur la periode
+ Export : 91_credits_en_cours_ou_termines_avec_echeances_impayees_sur_la_periode
  Objectif : lister les prets dont au moins une echeance attendue sur la periode n'est pas totalement remboursee.
  Lecture : compare TABAMOR (attendu) avec REMBOURS_CRD (remboursements rattaches a l'echeance, valides jusqu'a @date_fin). Le statut distingue les prets encore en cours et ceux deja soldes dans le SIG.
  */
@@ -4561,6 +4652,7 @@ ORDER BY ip.montant_impaye DESC,
 
 /*
  92. Clients avec depots frequents par semaine sur la periode
+ Export : 92_clients_avec_depots_frequents_par_semaine_sur_la_periode
  Objectif : identifier les clients qui effectuent des depots 3 a 5 fois par semaine ou plus.
  Lecture : une operation de depot est comptee une seule fois par client et par operation. Les lignes non rattachees a COMPTES_ADHERENT sont exclues pour eviter les contreparties caisse/banque.
  */
@@ -4653,6 +4745,7 @@ ORDER BY ds.nb_depots_semaine DESC,
 
 /*
  93. Clients avec depots par tranche USD/CDF sur la periode
+ Export : 93_clients_avec_depots_par_tranche_usd_cdf_sur_la_periode
  Objectif : reperer les clients qui effectuent des depots dans les tranches de montant sensibles definies pour USD et CDF.
  Lecture : USD est classe en 10-24.99, 25-49.99, 50-99.99, 100 et plus. CDF est classe en 125000-199999 et 200000 et plus. Les depots inferieurs aux seuils ne sortent pas.
  */
@@ -4782,6 +4875,82 @@ ORDER BY CASE dc.tranche_depot
     END,
     volume_depots DESC,
     nb_depots DESC;
+
+/*
+ 94. Decalage, transfert d'echeance et reechelonnement de credit
+ Export : 94_decalage_transfert_d_echeance_et_reechelonnement_de_credit
+ Objectif : lister les demandes de reechelonnement sur la periode et comparer la date validee avec PRETS.DATE_REECH.
+ Lecture : dr.DATE_VALIDATION represente la validation de la demande; PRETS.DATE_REECH represente la date appliquee sur le pret; un ecart signale un decalage a justifier.
+ */
+WITH echeancier AS (
+    SELECT cp.ID_PRET,
+        COUNT(t.ID) AS nb_echeances_actuelles,
+        MIN(t.DATE_ECHEANCE) AS premiere_echeance_actuelle,
+        MAX(t.DATE_ECHEANCE) AS derniere_echeance_actuelle,
+        SUM(ISNULL(t.CAPITAL, 0)) AS capital_planifie,
+        SUM(ISNULL(t.INTERET, 0)) AS interet_planifie,
+        SUM(ISNULL(t.COMMISSION, 0)) AS commission_planifiee
+    FROM dbo.CYCLES_PRET cp
+        LEFT JOIN dbo.TABAMOR t ON t.ID_CYCLE_PRET = cp.ID
+    GROUP BY cp.ID_PRET
+)
+SELECT dr.ID AS id_demande_reechelonnement,
+    dr.DATE_VALIDATION AS date_validation_reechelonnement,
+    p.ID AS id_pret,
+    p.NUMERO_PRET,
+    p.NUMERO_CONTRAT,
+    p.DATE_DECAISSEMENT,
+    p.DATE_EFFET,
+    p.DATE_REECH,
+    p.DATE_SOLDE,
+    p.MONTANT AS montant_pret,
+    dv.CODE AS devise_pret,
+    ecv.id_client,
+    ecv.code_client,
+    ecv.nom_client,
+    ecv.prenoms_client,
+    ecv.code_type_client,
+    ecv.type_client,
+    ecv.code_agence,
+    ecv.nom_agence,
+    dc.NUM_DEMANDE,
+    dc.REF_DEMANDE,
+    d.NUM_DOSSIER,
+    dr.NBRE_ECHEANCE_CONSERVEES,
+    dr.NBRE_ECHEANCE_NLLES,
+    dr.NBRE_PERIODE_DIFFERE,
+    dr.NBRE_PERIODE_GRACE,
+    e.nb_echeances_actuelles,
+    e.premiere_echeance_actuelle,
+    e.derniere_echeance_actuelle,
+    e.capital_planifie,
+    e.interet_planifie,
+    e.commission_planifiee,
+    CASE
+        WHEN dr.DATE_VALIDATION IS NULL THEN 'Demande non validee'
+        WHEN p.DATE_REECH IS NULL THEN 'Demande validee mais pret sans DATE_REECH'
+        WHEN dr.DATE_VALIDATION <> p.DATE_REECH THEN 'Ecart entre DATE_VALIDATION et DATE_REECH'
+        ELSE 'Reechelonnement coherent'
+    END AS statut_controle
+FROM dbo.DEMANDES_REECHELONNEMENT dr
+    INNER JOIN dbo.PRETS p ON p.ID = dr.ID_PRET
+    LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
+    LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+    LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    LEFT JOIN dbo.extra_clients_view ecv ON ecv.id_client = dc.ID_ADHERENT
+    LEFT JOIN echeancier e ON e.ID_PRET = p.ID
+WHERE COALESCE(
+        dr.DATE_VALIDATION,
+        p.DATE_REECH,
+        p.DATE_LAST_MODIFIED
+    ) BETWEEN @date_debut AND @date_fin
+ORDER BY COALESCE(
+        dr.DATE_VALIDATION,
+        p.DATE_REECH,
+        p.DATE_LAST_MODIFIED
+    ) DESC,
+    ecv.code_client,
+    p.NUMERO_PRET;
 
 
 
