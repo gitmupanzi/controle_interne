@@ -1,16 +1,43 @@
+# Python
 .venv/
+venv/
+env/
 __pycache__/
-*.pyc
+**/__pycache__/
+*.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
 
+# Environment / secrets
 .env
+.env.*
+!.env.example
 
+# Runtime outputs
 exports/
 *.log
+*.tmp
+*.bak
+*.bak_*
 
+# Office / OS temporary files
+~$*
 Thumbs.db
+desktop.ini
 .DS_Store
 
-# line_list/*
-# !line_list/.gitkeep
-# data/vision/*
+# Local data drops
+line_list/*
+!line_list/.gitkeep
+
+# Vision extracts and generated analysis files.
+# Keep source SQL/Markdown files versionable; ignore heavy exports by default.
+data/vision/*
+!data/vision/*.sql
+!data/vision/*.md
+
+# SOP documents are usually large/local references.
+SOP/*
+!SOP/.gitkeep

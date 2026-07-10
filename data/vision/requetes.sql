@@ -4952,5 +4952,109 @@ ORDER BY COALESCE(
     ecv.code_client,
     p.NUMERO_PRET;
 
+/*
+ 95. Credits en cours ou termines avec echeances sans impayees sur la periode
+ Export : 95_credits_en_cours_ou_termines_avec_echeances_sans_impayees_sur_la_periode
+ Objectif : lister les prets dont les echeances attendues sur la periode sont totalement remboursees.
+ Lecture : compare TABAMOR (attendu) avec REMBOURS_CRD (remboursements rattaches a l'echeance, valides jusqu'a @date_fin). Le pret est retenu seulement si chaque echeance de la periode est totalement couverte.
+ */
+WITH remboursements_echeance AS (
+    SELECT r.ID_TABAMORT,
+        SUM(ISNULL(r.CAPITAL, 0)) AS capital_rembourse,
+        SUM(ISNULL(r.INTERET, 0)) AS interet_rembourse,
+        SUM(ISNULL(r.COMMISSION, 0)) AS commission_remboursee,
+        SUM(ISNULL(r.EPARGNE, 0)) AS epargne_remboursee,
+        SUM(ISNULL(r.PENALITE, 0)) AS penalite_remboursee
+    FROM dbo.REMBOURS_CRD r
+        INNER JOIN dbo.OPERATIONS_CRD oc ON oc.ID = r.ID_OPERATION_CRD
+        INNER JOIN dbo.OPERATIONS o ON o.ID = oc.ID_OPERATION
+    WHERE o.DATE_OPERATION <= @date_fin
+        AND ISNULL(o.ANNULE, 0) = 0
+    GROUP BY r.ID_TABAMORT
+),
+echeances_periode AS (
+    SELECT t.ID AS id_echeance,
+        t.ID_CYCLE_PRET,
+        t.DATE_ECHEANCE,
+        ISNULL(t.CAPITAL, 0) AS capital_attendu,
+        ISNULL(t.INTERET, 0) AS interet_attendu,
+        ISNULL(t.COMMISSION, 0) AS commission_attendue,
+        ISNULL(t.EPARGNE, 0) AS epargne_attendue,
+        ISNULL(t.CAPITAL, 0) + ISNULL(t.INTERET, 0) + ISNULL(t.COMMISSION, 0) + ISNULL(t.EPARGNE, 0) AS total_attendu,
+        ISNULL(re.capital_rembourse, 0) AS capital_rembourse,
+        ISNULL(re.interet_rembourse, 0) AS interet_rembourse,
+        ISNULL(re.commission_remboursee, 0) AS commission_remboursee,
+        ISNULL(re.epargne_remboursee, 0) AS epargne_remboursee,
+        ISNULL(re.capital_rembourse, 0) + ISNULL(re.interet_rembourse, 0) + ISNULL(re.commission_remboursee, 0) + ISNULL(re.epargne_remboursee, 0) AS total_rembourse
+    FROM dbo.TABAMOR t
+        LEFT JOIN remboursements_echeance re ON re.ID_TABAMORT = t.ID
+    WHERE t.DATE_ECHEANCE BETWEEN @date_debut AND @date_fin
+        AND ISNULL(t.CAPITAL, 0) + ISNULL(t.INTERET, 0) + ISNULL(t.COMMISSION, 0) + ISNULL(t.EPARGNE, 0) > 0
+),
+echeances_sans_impayees_pret AS (
+    SELECT cp.ID_PRET,
+        COUNT(*) AS nb_echeances_periode,
+        MIN(ep.DATE_ECHEANCE) AS premiere_echeance_periode,
+        MAX(ep.DATE_ECHEANCE) AS derniere_echeance_periode,
+        SUM(ep.total_attendu) AS total_attendu,
+        SUM(ep.total_rembourse) AS total_rembourse,
+        SUM(ep.total_attendu - ep.total_rembourse) AS montant_restant,
+        SUM(ep.capital_attendu - ep.capital_rembourse) AS capital_restant,
+        SUM(ep.interet_attendu - ep.interet_rembourse) AS interet_restant,
+        SUM(ep.commission_attendue - ep.commission_remboursee) AS commission_restante,
+        SUM(ep.epargne_attendue - ep.epargne_remboursee) AS epargne_restante
+    FROM echeances_periode ep
+        INNER JOIN dbo.CYCLES_PRET cp ON cp.ID = ep.ID_CYCLE_PRET
+    GROUP BY cp.ID_PRET
+    HAVING MAX(ep.total_attendu - ep.total_rembourse) <= 0.01
+)
+SELECT CASE
+        WHEN p.DATE_SOLDE IS NULL
+            OR p.DATE_SOLDE > @date_fin THEN 'Pret en cours'
+        ELSE 'Pret termine'
+    END AS statut_pret,
+    ecv.code_categorie_client,
+    ecv.categorie_client,
+    ecv.code_type_client,
+    ecv.type_client,
+    ecv.id_client,
+    ecv.code_client,
+    ecv.num_manuel,
+    ecv.nom_client,
+    ecv.prenoms_client,
+    ecv.id_agence,
+    ecv.code_agence,
+    ecv.nom_agence,
+    p.ID AS id_pret,
+    p.NUMERO_PRET,
+    p.NUMERO_CONTRAT,
+    p.DATE_DECAISSEMENT,
+    p.DATE_EFFET,
+    p.DATE_SOLDE,
+    p.MONTANT AS montant_pret,
+    ISNULL(dv.CODE, 'Non renseignee') AS devise_pret,
+    dc.NUM_DEMANDE,
+    dc.REF_DEMANDE,
+    d.NUM_DOSSIER,
+    esip.nb_echeances_periode,
+    esip.premiere_echeance_periode,
+    esip.derniere_echeance_periode,
+    esip.total_attendu,
+    esip.total_rembourse,
+    esip.montant_restant,
+    esip.capital_restant,
+    esip.interet_restant,
+    esip.commission_restante,
+    esip.epargne_restante
+FROM echeances_sans_impayees_pret esip
+    INNER JOIN dbo.PRETS p ON p.ID = esip.ID_PRET
+    LEFT JOIN dbo.DEVISES dv ON dv.ID = p.ID_DEVISE
+    LEFT JOIN dbo.DOSSIERS_CREDIT d ON d.ID = p.ID_DOSSIER_CREDIT
+    LEFT JOIN dbo.DEMANDES_CREDIT dc ON dc.ID = d.ID_DEMANDE
+    LEFT JOIN dbo.extra_clients_view ecv ON ecv.id_client = dc.ID_ADHERENT
+ORDER BY esip.total_rembourse DESC,
+    esip.premiere_echeance_periode,
+    ecv.code_client;
+
 
 
