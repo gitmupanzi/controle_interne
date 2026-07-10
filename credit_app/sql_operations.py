@@ -752,8 +752,12 @@ def build_cancelled_operations_table(df: pd.DataFrame) -> pd.DataFrame:
 def build_risky_users_table(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "operateur" not in df.columns:
         return pd.DataFrame()
+    working = df.copy()
+    for flag_column in ["annule", "saisie_tardive", "auto_validation"]:
+        if flag_column not in working.columns:
+            working[flag_column] = False
     grouped = (
-        df.groupby("operateur", dropna=False)
+        working.groupby("operateur", dropna=False)
         .agg(
             nb_operations=("operation_id", "nunique"),
             nb_annulations=("annule", lambda s: int(s.fillna(False).sum())),

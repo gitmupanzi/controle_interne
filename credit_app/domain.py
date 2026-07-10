@@ -47,6 +47,7 @@ DATE_COLUMNS = [
     "date_demande",
     "date_decision",
     "date_operation",
+    "date_saisie",
     "date_entree",
     "date_activation",
     "date_revocation",
@@ -345,6 +346,8 @@ def build_standardized_dataframe(
 
     if standardize_columns and "client_id" not in standardized.columns and "code_client" in standardized.columns:
         standardized["client_id"] = standardized["code_client"]
+    if standardize_columns and "devise" not in standardized.columns and "code_devise" in standardized.columns:
+        standardized["devise"] = standardized["code_devise"]
 
     for column in NUMERIC_COLUMNS:
         if column in standardized.columns:
@@ -1476,7 +1479,16 @@ def build_watchlist(df: pd.DataFrame) -> pd.DataFrame:
 
     def mark(mask: pd.Series, label: str) -> None:
         nonlocal watch_mask, alert_reasons
-        normalized_mask = mask.fillna(False)
+        if not isinstance(mask, pd.Series):
+            normalized_mask = pd.Series(bool(mask), index=df.index)
+        elif pd.api.types.is_bool_dtype(mask):
+            normalized_mask = mask.reindex(df.index).fillna(False)
+        elif pd.api.types.is_numeric_dtype(mask):
+            normalized_mask = pd.to_numeric(mask.reindex(df.index), errors="coerce").fillna(0).ne(0)
+        else:
+            text_mask = mask.reindex(df.index).astype("string").str.strip().str.lower()
+            normalized_mask = text_mask.isin({"1", "true", "vrai", "yes", "oui", "y", "o"})
+        normalized_mask = normalized_mask.astype(bool)
         watch_mask = watch_mask | normalized_mask
         alert_reasons = alert_reasons.mask(normalized_mask, alert_reasons + label + "; ")
 
@@ -1604,7 +1616,16 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
 
     def mark(mask: pd.Series, label: str) -> None:
         nonlocal watch_mask, alert_reasons
-        normalized_mask = mask.fillna(False)
+        if not isinstance(mask, pd.Series):
+            normalized_mask = pd.Series(bool(mask), index=df.index)
+        elif pd.api.types.is_bool_dtype(mask):
+            normalized_mask = mask.reindex(df.index).fillna(False)
+        elif pd.api.types.is_numeric_dtype(mask):
+            normalized_mask = pd.to_numeric(mask.reindex(df.index), errors="coerce").fillna(0).ne(0)
+        else:
+            text_mask = mask.reindex(df.index).astype("string").str.strip().str.lower()
+            normalized_mask = text_mask.isin({"1", "true", "vrai", "yes", "oui", "y", "o"})
+        normalized_mask = normalized_mask.astype(bool)
         watch_mask = watch_mask | normalized_mask
         alert_reasons = alert_reasons.mask(normalized_mask, alert_reasons + label + "; ")
 

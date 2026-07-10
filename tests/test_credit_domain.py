@@ -41,6 +41,7 @@ from credit_app.sql_operations import (
     build_high_activity_kyc_table,
     build_lbcft_reporting_table,
     build_mobile_banking_summary_table,
+    build_risky_users_table,
     has_minimum_sql_bundle,
     infer_sql_bundle_role,
     missing_sql_bundle_roles,
@@ -187,6 +188,24 @@ class CreditDomainTests(unittest.TestCase):
         self.assertIn("nb_lignes_hdpm_api", result.columns)
         self.assertIn("total_debit", result.columns)
         self.assertIn("total_credit", result.columns)
+
+    def test_sql_operations_risky_users_table_handles_missing_auto_validation(self) -> None:
+        df = pd.DataFrame(
+            {
+                "operation_id": range(55),
+                "operateur": ["User 1"] * 55,
+                "annule": [0] * 55,
+                "saisie_tardive": [0] * 55,
+                "agence": ["Agence 1"] * 55,
+                "type_operation": ["Depot"] * 55,
+            }
+        )
+
+        result = build_risky_users_table(df)
+
+        self.assertFalse(result.empty)
+        self.assertIn("nb_auto_validations", result.columns)
+        self.assertEqual(int(result.iloc[0]["nb_auto_validations"]), 0)
 
     def test_reference_mapping_file_is_loaded(self) -> None:
         self.assertGreaterEqual(get_reference_column_count(), 100)
@@ -722,6 +741,25 @@ class CreditDomainTests(unittest.TestCase):
         self.assertEqual(provenance_df["solde_total"].sum(), 0)
         self.assertIn("Agent 1", agent_df["agent_credit"].tolist())
         self.assertIn("Lot A", provenance_df["Provenance"].tolist())
+
+    def test_operations_watchlist_accepts_numeric_alert_flags(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "operation_id": [1, 2],
+                "operation_non_validee": [1, 0],
+                "saisie_tardive": [0, 1],
+                "annule": [0, 0],
+                "operateur": ["User 1", "User 2"],
+                "agence": ["Agence 1", "Agence 1"],
+                "type_operation": ["Depot", "Retrait"],
+            }
+        )
+
+        watchlist = build_cycle_watchlist(raw, "operations_depot_retrait")
+
+        self.assertEqual(len(watchlist), 2)
+        self.assertTrue(any("Opération non validée" in str(value) for value in watchlist["motif_alerte"]))
+        self.assertTrue(any("Saisie tardive" in str(value) for value in watchlist["motif_alerte"]))
 
     def test_epargne_watchlist_surfaces_advanced_vigilance_signals(self) -> None:
         raw = pd.DataFrame(

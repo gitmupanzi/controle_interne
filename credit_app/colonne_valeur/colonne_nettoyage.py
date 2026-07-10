@@ -388,6 +388,10 @@ PERFECT_VISION_COLUMN_ALIASES: dict[str, list[str]] = {
         "cohorte_decaissement",
         "date_effet",
     ],
+    "date_saisie": [
+        "DATE_SAISIE",
+        "date_saisie",
+    ],
     "montant_accorde": [
         "MONTANT",
         "montant_pret",
@@ -429,6 +433,28 @@ PERFECT_VISION_COLUMN_ALIASES: dict[str, list[str]] = {
         "produit_credit",
         "produit_epargne",
         "produit",
+    ],
+    "code_devise": [
+        "code_devise",
+        "CODE_DEVISE",
+    ],
+    "devise": [
+        "devise_pret",
+        "devise_reference",
+    ],
+    "centre_cout": [
+        "centre_cout",
+        "centre cout",
+        "code_centre_cout",
+    ],
+    "Numéro de la pièce d’identité": [
+        "Numero de la piece d'identite",
+        "numero_piece_identite",
+        "numero piece identite",
+    ],
+    "Mode Désabonné": [
+        "Mode Desabonne",
+        "mode_desabonne",
     ],
     "compte_id": [
         "Compte",
