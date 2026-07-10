@@ -215,6 +215,74 @@ class CreditDomainTests(unittest.TestCase):
         self.assertEqual(standardized.loc[0, "niveau_risque_calcule"], "Faible")
         self.assertEqual(standardized.loc[0, "statut_dossier"], "Approuvé")
 
+    def test_standardization_maps_perfect_vision_line_list_aliases(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "ID_ADHERENT": ["A1"],
+                "code_adherent": ["CLI1"],
+                "NOM_ADHERENT": ["Client Test"],
+                "DATE_RECEPTION": ["2026-06-01"],
+                "DATE_DECAISSEMENT": ["2026-06-15"],
+                "MONTANT": [1000],
+                "ETAT_DEMANDE": ["approuve"],
+                "nom_agence_demande": ["Agence Centre"],
+                "produit_credit": ["Lisungi"],
+            }
+        )
+
+        standardized, mapping = build_standardized_dataframe(raw)
+
+        self.assertEqual(mapping["ID_ADHERENT"], "client_id")
+        self.assertEqual(mapping["code_adherent"], "code_client")
+        self.assertEqual(mapping["NOM_ADHERENT"], "nom_client")
+        self.assertEqual(mapping["DATE_RECEPTION"], "date_demande")
+        self.assertEqual(mapping["DATE_DECAISSEMENT"], "date_operation")
+        self.assertEqual(mapping["MONTANT"], "montant_accorde")
+        self.assertEqual(standardized.loc[0, "client_id"], "A1")
+        self.assertEqual(standardized.loc[0, "code_client"], "CLI1")
+        self.assertEqual(standardized.loc[0, "nom_client"], "Client Test")
+        self.assertEqual(standardized.loc[0, "agence"], "Agence Centre")
+        self.assertEqual(standardized.loc[0, "type_produit"], "Lisungi")
+
+    def test_standardization_coalesces_duplicate_canonical_columns(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "montant_pret": [None, 2000],
+                "MONTANT": [1000, None],
+                "DATE_OPERATION": [None, "2026-06-15"],
+                "DATE_DECAISSEMENT": ["2026-06-01", None],
+            }
+        )
+
+        standardized, _ = build_standardized_dataframe(raw)
+
+        self.assertEqual(list(standardized.columns).count("montant_accorde"), 1)
+        self.assertEqual(list(standardized.columns).count("date_operation"), 1)
+        self.assertEqual(standardized.loc[0, "montant_accorde"], 1000)
+        self.assertEqual(standardized.loc[1, "montant_accorde"], 2000)
+        self.assertEqual(standardized.loc[0, "date_operation"], pd.Timestamp("2026-06-01"))
+        self.assertEqual(standardized.loc[1, "date_operation"], pd.Timestamp("2026-06-15"))
+
+    def test_standardization_can_keep_original_column_names(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "ID_ADHERENT": ["A1"],
+                "code_client": ["CLI1"],
+                "MONTANT": [1000],
+            }
+        )
+
+        standardized, mapping = build_standardized_dataframe(raw, standardize_columns=False)
+
+        self.assertEqual(mapping["ID_ADHERENT"], "ID_ADHERENT")
+        self.assertEqual(mapping["code_client"], "code_client")
+        self.assertEqual(mapping["MONTANT"], "MONTANT")
+        self.assertIn("ID_ADHERENT", standardized.columns)
+        self.assertIn("code_client", standardized.columns)
+        self.assertIn("MONTANT", standardized.columns)
+        self.assertNotIn("client_id", standardized.columns)
+        self.assertNotIn("montant_accorde", standardized.columns)
+
     def test_quality_checks_detect_inconsistencies(self) -> None:
         raw = pd.DataFrame(
             {
@@ -634,6 +702,25 @@ class CreditDomainTests(unittest.TestCase):
         self.assertIn("Format international", phone_df["qualite_telephone"].tolist())
         self.assertIn("Autre format", phone_df["qualite_telephone"].tolist())
         self.assertIn("0 champ manquant", kyc_df["classe_completude"].tolist())
+        self.assertIn("Lot A", provenance_df["Provenance"].tolist())
+
+    def test_epargne_agent_and_provenance_tables_handle_missing_balance(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "Gestionnaire": ["Agent 1", "Agent 1", "Agent 2"],
+                "Code client": ["C1", "C2", "C3"],
+                "Compte": ["ACC-1", "ACC-2", "ACC-3"],
+                "Provenance": ["Lot A", "Lot A", "Lot B"],
+            }
+        )
+
+        standardized, _ = build_standardized_dataframe(raw)
+        agent_df = build_epargne_agent_portfolio_table(standardized)
+        provenance_df = build_provenance_summary_table(standardized)
+
+        self.assertEqual(agent_df["solde_total"].sum(), 0)
+        self.assertEqual(provenance_df["solde_total"].sum(), 0)
+        self.assertIn("Agent 1", agent_df["agent_credit"].tolist())
         self.assertIn("Lot A", provenance_df["Provenance"].tolist())
 
     def test_epargne_watchlist_surfaces_advanced_vigilance_signals(self) -> None:

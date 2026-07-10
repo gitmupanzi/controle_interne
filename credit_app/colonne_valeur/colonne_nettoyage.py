@@ -350,6 +350,113 @@ DEFAULT_CANONICAL_ALIASES: dict[str, list[str]] = {
     ],
 }
 
+PERFECT_VISION_COLUMN_ALIASES: dict[str, list[str]] = {
+    "client_id": [
+        "id_adherent",
+        "ID_ADHERENT",
+    ],
+    "code_client": [
+        "code_adherent",
+        "CODE_ADHERENT",
+    ],
+    "nom_client": [
+        "NOM_ADHERENT",
+        "nom_adherent",
+        "nom_du_client",
+    ],
+    "dossier_id": [
+        "id_dossier_credit",
+        "ID_DOSSIER_CREDIT",
+        "NUM_DOSSIER",
+        "num_dossier",
+    ],
+    "date_demande": [
+        "DATE_RECEPTION",
+        "date_reception",
+    ],
+    "date_decision": [
+        "DATE_DECISION",
+    ],
+    "date_operation": [
+        "DATE_OPERATION",
+        "DATE_DECAISSEMENT",
+        "date_decaissement",
+        "date_situation",
+        "mois_decaissement",
+        "mois_solde",
+        "mois_echeance",
+        "cohorte_decaissement",
+        "date_effet",
+    ],
+    "montant_accorde": [
+        "MONTANT",
+        "montant_pret",
+        "montant_initial",
+        "montant_decaisse",
+        "montant_initial_total",
+        "mtt_pret",
+        "total_pret",
+        "total_accorde_dossier",
+    ],
+    "solde_final": [
+        "encours_total",
+        "encours_restant",
+        "mtt_encours",
+        "current_encours",
+        "encours_reference_credit",
+    ],
+    "solde_compte": [
+        "solde_epargne",
+        "solde_epargne_client",
+        "solde_moyen_compte",
+        "solde_caution",
+    ],
+    "retard_jours": [
+        "jours_de_depassement",
+    ],
+    "statut_dossier": [
+        "ETAT_DEMANDE",
+        "ETAT_DOSSIER",
+        "statut_pipeline",
+    ],
+    "agence": [
+        "nom_agence",
+        "nom_agence_demande",
+        "nom_agence_compte",
+        "nom_point_service_demande",
+    ],
+    "type_produit": [
+        "produit_credit",
+        "produit_epargne",
+        "produit",
+    ],
+    "compte_id": [
+        "Compte",
+        "compte",
+        "ID_COMPTE_CREDIT",
+        "id_compte_credit",
+        "numero_compte_credit",
+        "num_compte_credit",
+    ],
+    "agent_id": [
+        "Matricule agent",
+        "matricule agent",
+        "id_agent",
+        "NUM_MATRICULE",
+        "num_matricule",
+    ],
+    "numero_reference": [
+        "NUMERO_PRET",
+        "numero_pret",
+        "NUM_DEMANDE",
+        "REF_DEMANDE",
+    ],
+    "operateur": [
+        "login_utilisateur",
+        "nom_utilisateur",
+    ],
+}
+
 
 def normalize_column_label(value: Any) -> str:
     text = "" if value is None else str(value)
@@ -436,6 +543,11 @@ def build_effective_column_mapping(
 ) -> dict[str, str]:
     mapping_lookup = build_default_column_mapping() if include_defaults else {}
     mapping_lookup.update(load_excel_column_mapping(mapping_file))
+    for canonical_name, aliases in PERFECT_VISION_COLUMN_ALIASES.items():
+        for alias in aliases:
+            normalized = normalize_column_label(alias)
+            if normalized:
+                mapping_lookup[normalized] = canonical_name
     return mapping_lookup
 
 

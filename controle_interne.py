@@ -185,30 +185,43 @@ def configure_page() -> None:
 
 
 @st.cache_data(show_spinner=False)
-def prepare_dataset(file_bytes: bytes, filename: str, sheet_name: str | None) -> dict:
+def prepare_dataset(
+    file_bytes: bytes,
+    filename: str,
+    sheet_name: str | None,
+    standardize_columns: bool,
+) -> dict:
     raw_df = load_dataframe_from_bytes(file_bytes, filename, sheet_name)
-    return _prepare_payload_from_dataframe(raw_df)
+    return _prepare_payload_from_dataframe(raw_df, standardize_columns=standardize_columns)
 
 
 @st.cache_data(show_spinner=False)
-def prepare_dataset_from_path(file_path: str, sheet_name: str | None) -> dict:
+def prepare_dataset_from_path(
+    file_path: str,
+    sheet_name: str | None,
+    standardize_columns: bool,
+) -> dict:
     raw_df = load_dataframe_from_path(file_path, sheet_name)
-    return _prepare_payload_from_dataframe(raw_df)
+    return _prepare_payload_from_dataframe(raw_df, standardize_columns=standardize_columns)
 
 
 @st.cache_data(show_spinner=False)
-def prepare_compiled_dataset_from_paths(file_paths: tuple[str, ...], sheet_name: str) -> dict:
+def prepare_compiled_dataset_from_paths(
+    file_paths: tuple[str, ...],
+    sheet_name: str,
+    standardize_columns: bool,
+) -> dict:
     raw_df, compilation_log_df = charger_fichiers_excel(
         liste_fichiers=list(file_paths),
         sheet_name=sheet_name,
         colonne_source="Provenance",
         suffixer_doublons=False,
-        renommer_variable=True,
+        renommer_variable=standardize_columns,
         variables_brute=False,
         sheet_log=True,
         log_only_changed=True,
     )
-    payload = _prepare_payload_from_dataframe(raw_df)
+    payload = _prepare_payload_from_dataframe(raw_df, standardize_columns=standardize_columns)
     payload["compilation_log_df"] = compilation_log_df
     payload["compiled_files"] = list(file_paths)
     payload["column_collisions_df"] = extraire_attr_dataframe(raw_df.attrs.get("column_collisions", []))
@@ -217,14 +230,18 @@ def prepare_compiled_dataset_from_paths(file_paths: tuple[str, ...], sheet_name:
 
 
 @st.cache_data(show_spinner=False)
-def prepare_compiled_dataset_from_uploads(uploaded_items: tuple[tuple[str, bytes], ...], sheet_name: str) -> dict:
+def prepare_compiled_dataset_from_uploads(
+    uploaded_items: tuple[tuple[str, bytes], ...],
+    sheet_name: str,
+    standardize_columns: bool,
+) -> dict:
     with tempfile.TemporaryDirectory(prefix="controle_interne_compile_") as temp_dir:
         temp_paths: list[str] = []
         for filename, file_bytes in uploaded_items:
             temp_path = Path(temp_dir) / filename
             temp_path.write_bytes(file_bytes)
             temp_paths.append(str(temp_path))
-        payload = prepare_compiled_dataset_from_paths(tuple(temp_paths), sheet_name)
+        payload = prepare_compiled_dataset_from_paths(tuple(temp_paths), sheet_name, standardize_columns)
     payload["compiled_files"] = [filename for filename, _ in uploaded_items]
     return payload
 
@@ -233,11 +250,12 @@ def prepare_compiled_dataset_from_uploads(uploaded_items: tuple[tuple[str, bytes
 def prepare_epargne_bundles_from_uploads(
     uploaded_items: tuple[tuple[str, bytes], ...],
     sheet_name: str | None,
+    standardize_columns: bool,
 ) -> list[dict[str, object]]:
     frames: list[tuple[str, pd.DataFrame]] = []
     for filename, file_bytes in uploaded_items:
         raw_df = load_dataframe_from_bytes(file_bytes, filename, sheet_name)
-        standardized_df, _ = build_standardized_dataframe(raw_df)
+        standardized_df, _ = build_standardized_dataframe(raw_df, standardize_columns=standardize_columns)
         frames.append((filename, standardized_df))
     return build_epargne_bundles_from_standardized_frames(frames)
 
@@ -246,11 +264,12 @@ def prepare_epargne_bundles_from_uploads(
 def prepare_epargne_bundles_from_paths(
     file_paths: tuple[str, ...],
     sheet_name: str | None,
+    standardize_columns: bool,
 ) -> list[dict[str, object]]:
     frames: list[tuple[str, pd.DataFrame]] = []
     for file_path in file_paths:
         raw_df = load_dataframe_from_path(file_path, sheet_name)
-        standardized_df, _ = build_standardized_dataframe(raw_df)
+        standardized_df, _ = build_standardized_dataframe(raw_df, standardize_columns=standardize_columns)
         frames.append((Path(file_path).name, standardized_df))
     return build_epargne_bundles_from_standardized_frames(frames)
 
@@ -282,10 +301,11 @@ def _load_named_frames_from_uploads(
 def prepare_sql_operations_dataset_from_paths(
     file_paths: tuple[str, ...],
     sheet_name: str | None,
+    standardize_columns: bool,
 ) -> dict:
     named_frames = _load_named_frames_from_paths(file_paths, sheet_name)
     raw_df = build_operations_depot_retrait_dataset(named_frames)
-    payload = _prepare_payload_from_dataframe(raw_df)
+    payload = _prepare_payload_from_dataframe(raw_df, standardize_columns=standardize_columns)
     payload["compiled_files"] = list(file_paths)
     payload["sql_bundle_roles"] = {
         Path(file_name).name: infer_sql_bundle_role(Path(file_name).name) or "inconnu"
@@ -298,10 +318,11 @@ def prepare_sql_operations_dataset_from_paths(
 def prepare_sql_operations_dataset_from_uploads(
     uploaded_items: tuple[tuple[str, bytes], ...],
     sheet_name: str | None,
+    standardize_columns: bool,
 ) -> dict:
     named_frames = _load_named_frames_from_uploads(uploaded_items, sheet_name)
     raw_df = build_operations_depot_retrait_dataset(named_frames)
-    payload = _prepare_payload_from_dataframe(raw_df)
+    payload = _prepare_payload_from_dataframe(raw_df, standardize_columns=standardize_columns)
     payload["compiled_files"] = [filename for filename, _ in uploaded_items]
     payload["sql_bundle_roles"] = {
         filename: infer_sql_bundle_role(filename) or "inconnu"
@@ -310,8 +331,8 @@ def prepare_sql_operations_dataset_from_uploads(
     return payload
 
 
-def _prepare_payload_from_dataframe(raw_df: pd.DataFrame) -> dict:
-    standardized_df, mapping = build_standardized_dataframe(raw_df)
+def _prepare_payload_from_dataframe(raw_df: pd.DataFrame, *, standardize_columns: bool = True) -> dict:
+    standardized_df, mapping = build_standardized_dataframe(raw_df, standardize_columns=standardize_columns)
     quality_df = build_quality_checks(standardized_df)
     missing_df = build_missing_values_frame(standardized_df)
     mapping_df = build_mapping_frame(mapping)
@@ -355,6 +376,50 @@ def _preferred_included_file_index(file_names: list[str]) -> int:
         if "base_donnees_brute_credit" in name.lower():
             return index
     return 0
+
+
+FILE_CYCLE_SLUG_TO_APP_KEY = {
+    "caisse_et_guichet": "caisse",
+    "comptable_et_financier": "comptable",
+    "ressources_humaines_et_administration": "rh_admin",
+    "sauvegarde_et_continuite_activite": "continuite",
+    "securite_systeme_information": "si",
+    "tresorerie_et_banque": "tresorerie",
+}
+
+
+def _infer_cycle_key_from_file_name(file_name: str, cycle_keys: list[str]) -> str | None:
+    stem = Path(file_name).stem.lower()
+    for cycle_slug, app_cycle_key in sorted(
+        FILE_CYCLE_SLUG_TO_APP_KEY.items(),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    ):
+        marker = f"_cycle_{cycle_slug}_"
+        if marker in stem or stem.endswith(f"_cycle_{cycle_slug}"):
+            return app_cycle_key if app_cycle_key in cycle_keys else None
+    for cycle_key in sorted(cycle_keys, key=len, reverse=True):
+        marker = f"_cycle_{cycle_key.lower()}_"
+        if marker in stem or stem.endswith(f"_cycle_{cycle_key.lower()}"):
+            return cycle_key
+    return None
+
+
+def _filter_paths_by_cycle(
+    paths: list[Path],
+    cycle_key: str,
+    cycle_keys: list[str],
+) -> list[Path]:
+    cycle_paths = [
+        path
+        for path in paths
+        if _infer_cycle_key_from_file_name(path.name, cycle_keys) == cycle_key
+    ]
+    return cycle_paths or paths
+
+
+def _contains_sql_bundle_role(file_names: list[str]) -> bool:
+    return any(infer_sql_bundle_role(file_name) is not None for file_name in file_names)
 
 
 def _is_sql_operations_cycle(cycle_key: str) -> bool:
@@ -528,12 +593,6 @@ def main() -> None:
     render_professional_header()
 
     available_files = list_available_line_list_files()
-    available_excel_files = [
-        path for path in available_files if path.suffix.lower() in {".xlsx", ".xls"}
-    ]
-    available_sql_bundle_files = [
-        path for path in available_files if infer_sql_bundle_role(path.name) is not None
-    ]
     cycle_options = list_cycle_keys()
     default_cycle_index = cycle_options.index(DEFAULT_CYCLE_KEY) if DEFAULT_CYCLE_KEY in cycle_options else 0
     render_sidebar_intro_card(
@@ -554,9 +613,15 @@ def main() -> None:
     )
     sql_operations_cycle = _is_sql_operations_cycle(selected_cycle_key)
     selected_cycle = get_cycle_spec(selected_cycle_key)
+    cycle_available_files = _filter_paths_by_cycle(available_files, selected_cycle_key, cycle_options)
+    cycle_available_excel_files = [
+        path for path in cycle_available_files if path.suffix.lower() in {".xlsx", ".xls"}
+    ]
     with st.sidebar.expander("Repère du cycle", expanded=False):
         st.caption(selected_cycle["summary"])
         st.caption(selected_cycle["control_objective"])
+        if cycle_available_files:
+            st.caption(f"{len(cycle_available_files)} fichier(s) local(aux) disponible(s) pour ce cycle.")
 
     render_sidebar_section("Source des données", "Téléversez un fichier ou utilisez une base déjà stockée.")
     if "credit_source_mode" not in st.session_state:
@@ -633,7 +698,11 @@ def main() -> None:
                 ]
                 if detected_roles:
                     st.sidebar.caption("Rôles détectés : " + ", ".join(detected_roles))
-                missing_roles = missing_sql_bundle_roles([file.name for file in uploaded_files])
+                missing_roles = (
+                    missing_sql_bundle_roles([file.name for file in uploaded_files])
+                    if detected_roles
+                    else []
+                )
                 if missing_roles:
                     st.sidebar.warning(
                         "Fichiers encore attendus : "
@@ -647,7 +716,7 @@ def main() -> None:
                 else "Téléversez au moins deux fichiers Excel détaillés pour lancer une compilation."
             )
     elif source_mode == "Charger un fichier inclus":
-        selectable_paths = available_sql_bundle_files if sql_operations_cycle else available_files
+        selectable_paths = cycle_available_files
         if selectable_paths:
             available_names = [path.name for path in selectable_paths]
             selected_name = st.sidebar.selectbox(
@@ -669,7 +738,7 @@ def main() -> None:
                 else "Aucun fichier `.xlsx`, `.xls` ou `.csv` n'a été trouvé dans `line_list/`."
             )
     else:
-        selectable_compilation_files = available_sql_bundle_files if sql_operations_cycle else available_excel_files
+        selectable_compilation_files = cycle_available_excel_files
         if len(selectable_compilation_files) >= 2:
             compile_filter = st.sidebar.text_input(
                 "Filtre nom fichier",
@@ -720,7 +789,12 @@ def main() -> None:
                     f"{len(selected_compilation_paths)} fichier(s) sélectionné(s) pour une analyse groupée."
                 )
                 if sql_operations_cycle:
-                    missing_roles = missing_sql_bundle_roles([path.name for path in selected_compilation_paths])
+                    has_bundle_roles = _contains_sql_bundle_role([path.name for path in selected_compilation_paths])
+                    missing_roles = (
+                        missing_sql_bundle_roles([path.name for path in selected_compilation_paths])
+                        if has_bundle_roles
+                        else []
+                    )
                     if missing_roles:
                         st.sidebar.warning(
                             "Fichiers encore attendus : "
@@ -743,8 +817,16 @@ def main() -> None:
             )
 
     with st.sidebar.expander("Référence et stockage", expanded=False):
+        standardize_columns = st.checkbox(
+            "Renommer automatiquement les colonnes",
+            value=True,
+            key="credit_standardize_columns",
+            help="Désactivez cette option pour conserver les noms de colonnes du fichier chargé.",
+        )
         st.caption(
             f"Référence de renommage active : `data/Rename_columns.xlsx` ({get_reference_column_count()} alias)"
+            if standardize_columns
+            else "Renommage désactivé : les colonnes du fichier sont conservées telles quelles."
         )
         st.caption("Vous pouvez déposer vos fichiers de travail dans `line_list/` pour les relire ensuite sans téléversement.")
 
@@ -756,7 +838,7 @@ def main() -> None:
     elif source_mode == "Téléverser plusieurs fichiers":
         source_ready = (
             has_minimum_sql_bundle([file.name for file in uploaded_files])
-            if sql_operations_cycle
+            if sql_operations_cycle and _contains_sql_bundle_role([file.name for file in uploaded_files])
             else len(uploaded_files) >= 2 and bool(sheet_name)
         )
     elif source_mode == "Charger un fichier inclus":
@@ -764,7 +846,7 @@ def main() -> None:
     else:
         source_ready = (
             has_minimum_sql_bundle([path.name for path in selected_compilation_paths])
-            if sql_operations_cycle
+            if sql_operations_cycle and _contains_sql_bundle_role([path.name for path in selected_compilation_paths])
             else len(selected_compilation_paths) >= 2 and bool(sheet_name)
         )
 
@@ -805,24 +887,24 @@ def main() -> None:
                 sheet_name = st.sidebar.selectbox("Feuille Excel", sheets, index=0)
 
         with st.spinner("Préparation de la base en cours..."):
-            payload = prepare_dataset(file_bytes, filename, sheet_name)
+            payload = prepare_dataset(file_bytes, filename, sheet_name, standardize_columns)
     elif source_mode == "Téléverser plusieurs fichiers":
         uploaded_items = tuple((file.name, file.getvalue()) for file in uploaded_files)
         with st.spinner("Compilation et préparation des fichiers téléversés en cours..."):
-            if sql_operations_cycle:
-                payload = prepare_sql_operations_dataset_from_uploads(uploaded_items, sheet_name)
+            if sql_operations_cycle and _contains_sql_bundle_role([file.name for file in uploaded_files]):
+                payload = prepare_sql_operations_dataset_from_uploads(uploaded_items, sheet_name, standardize_columns)
             else:
-                payload = prepare_compiled_dataset_from_uploads(uploaded_items, sheet_name or "")
+                payload = prepare_compiled_dataset_from_uploads(uploaded_items, sheet_name or "", standardize_columns)
     elif source_mode == "Charger un fichier inclus":
         with st.spinner("Préparation de la base en cours..."):
-            payload = prepare_dataset_from_path(str(selected_local_path), sheet_name)
+            payload = prepare_dataset_from_path(str(selected_local_path), sheet_name, standardize_columns)
     else:
         compiled_paths = tuple(str(path) for path in selected_compilation_paths)
         with st.spinner("Compilation et préparation des bases en cours..."):
-            if sql_operations_cycle:
-                payload = prepare_sql_operations_dataset_from_paths(compiled_paths, sheet_name)
+            if sql_operations_cycle and _contains_sql_bundle_role([path.name for path in selected_compilation_paths]):
+                payload = prepare_sql_operations_dataset_from_paths(compiled_paths, sheet_name, standardize_columns)
             else:
-                payload = prepare_compiled_dataset_from_paths(compiled_paths, sheet_name or "")
+                payload = prepare_compiled_dataset_from_paths(compiled_paths, sheet_name or "", standardize_columns)
 
     raw_df = payload["raw_df"]
     standardized_df = payload["standardized_df"]
@@ -943,12 +1025,16 @@ def main() -> None:
             epargne_bundles = build_epargne_bundles_from_standardized_frames([(filename, standardized_df)])
         elif source_mode == "Téléverser plusieurs fichiers":
             uploaded_items = tuple((file.name, file.getvalue()) for file in uploaded_files)
-            epargne_bundles = prepare_epargne_bundles_from_uploads(uploaded_items, sheet_name)
+            epargne_bundles = prepare_epargne_bundles_from_uploads(uploaded_items, sheet_name, standardize_columns)
         elif source_mode == "Charger un fichier inclus" and selected_local_path is not None:
-            epargne_bundles = prepare_epargne_bundles_from_paths((str(selected_local_path),), sheet_name)
+            epargne_bundles = prepare_epargne_bundles_from_paths(
+                (str(selected_local_path),),
+                sheet_name,
+                standardize_columns,
+            )
         elif source_mode == "Compiler plusieurs fichiers inclus":
             compiled_paths = tuple(str(path) for path in selected_compilation_paths)
-            epargne_bundles = prepare_epargne_bundles_from_paths(compiled_paths, sheet_name)
+            epargne_bundles = prepare_epargne_bundles_from_paths(compiled_paths, sheet_name, standardize_columns)
 
     recognized_columns = sum(
         1

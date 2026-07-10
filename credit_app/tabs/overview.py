@@ -396,6 +396,226 @@ def _sum_numeric_value(df: pd.DataFrame, candidates: list[str]) -> float | None:
     return float(values.sum())
 
 
+def _sum_column(df: pd.DataFrame, column: str) -> float | None:
+    if column not in df.columns:
+        return None
+    values = pd.to_numeric(df[column], errors="coerce").dropna()
+    if values.empty:
+        return None
+    return float(values.sum())
+
+
+def _safe_ratio(numerator: float | None, denominator: float | None) -> float | None:
+    if numerator is None or denominator in (None, 0):
+        return None
+    return numerator / denominator
+
+
+def _format_percent_points(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "-"
+    return f"{float(value):.1f}%"
+
+
+def _build_perfect_vision_credit_cards(df: pd.DataFrame) -> list[tuple[str, str, str, str]]:
+    encours = _sum_column(df, "solde_final")
+    par_30 = _sum_column(df, "par_30_plus")
+    par_90 = _sum_column(df, "par_90_plus")
+    provision = _sum_column(df, "mtt_provision") or _sum_column(df, "provision_total")
+    arriere = _sum_column(df, "montant_operation")
+    prets_actifs = _sum_column(df, "nb_prets_actifs")
+    if prets_actifs is None and "id_pret" in df.columns:
+        prets_actifs = float(df["id_pret"].dropna().nunique())
+
+    if all(value is None for value in [encours, par_30, par_90, provision, arriere, prets_actifs]):
+        return []
+
+    return [
+        ("Prêts actifs", "-" if prets_actifs is None else f"{int(prets_actifs):,}".replace(",", " "), "Portefeuille Perfect Vision", "blue"),
+        ("Encours", format_currency(encours), "Encours crédit restant", "navy"),
+        ("PAR 30+", format_currency(par_30), format_percent(_safe_ratio(par_30, encours)), "orange"),
+        ("PAR 90+", format_currency(par_90), format_percent(_safe_ratio(par_90, encours)), "red"),
+        ("Provision", format_currency(provision), format_percent(_safe_ratio(provision, encours)), "slate"),
+        ("Arriérés", format_currency(arriere), "Montants échus non couverts", "orange"),
+    ]
+
+
+def _render_perfect_vision_par_trend(df: pd.DataFrame, cycle_key: str) -> None:
+    if "date_operation" not in df.columns or "solde_final" not in df.columns:
+        return
+    par_candidates = [column for column in ["par_1_plus", "par_30_plus", "par_90_plus"] if column in df.columns]
+    if not par_candidates and "par_30_pct" not in df.columns:
+        return
+
+    working = df.copy()
+    working["date_operation"] = pd.to_datetime(working["date_operation"], errors="coerce")
+    working = working.dropna(subset=["date_operation"])
+    if working.empty:
+        return
+    working["periode"] = working["date_operation"].dt.to_period("M").dt.to_timestamp()
+    working["solde_final"] = pd.to_numeric(working["solde_final"], errors="coerce").fillna(0)
+    for column in par_candidates:
+        working[column] = pd.to_numeric(working[column], errors="coerce").fillna(0)
+
+    grouped = working.groupby("periode", dropna=False).agg(encours=("solde_final", "sum")).reset_index()
+    for column in par_candidates:
+        grouped[column] = working.groupby("periode", dropna=False)[column].sum().values
+        grouped[f"{column}_pct_calcule"] = grouped[column].div(grouped["encours"]).where(grouped["encours"].ne(0)) * 100
+
+    if "par_30_pct" in working.columns and "par_30_plus_pct_calcule" not in grouped.columns:
+        grouped["par_30_pct_calcule"] = working.groupby("periode", dropna=False)["par_30_pct"].mean().values
+
+    rate_columns = [
+        column
+        for column in ["par_1_plus_pct_calcule", "par_30_plus_pct_calcule", "par_90_plus_pct_calcule", "par_30_pct_calcule"]
+        if column in grouped.columns
+    ]
+    if not rate_columns:
+        return
+
+    labels = {
+        "par_1_plus_pct_calcule": "PAR 1+",
+        "par_30_plus_pct_calcule": "PAR 30+",
+        "par_90_plus_pct_calcule": "PAR 90+",
+        "par_30_pct_calcule": "PAR 30+",
+    }
+    trend_df = grouped.melt(
+        id_vars=["periode"],
+        value_vars=rate_columns,
+        var_name="indicateur",
+        value_name="taux",
+    )
+    trend_df["indicateur"] = trend_df["indicateur"].map(labels)
+
+    render_panel_title("Tendance encours et PAR")
+    left, right = st.columns((1.15, 1))
+    with left:
+        fig = px.line(trend_df, x="periode", y="taux", color="indicateur", markers=True)
+        style_standard_line(fig, height=340)
+        st_plot(fig, key=f"overview_perfect_vision_par_trend_{cycle_key}", height=340)
+    with right:
+        fig = px.bar(grouped, x="periode", y="encours", color_discrete_sequence=["#2b74ca"])
+        style_standard_vertical_bar(fig, height=340, tickangle=-25)
+        st_plot(fig, key=f"overview_perfect_vision_encours_trend_{cycle_key}", height=340)
+
+
+def _render_perfect_vision_retention(df: pd.DataFrame, cycle_key: str) -> None:
+    if "retention_pct" not in df.columns and "retention_90j_pct" not in df.columns:
+        return
+
+    working = df.copy()
+    if "date_operation" in working.columns:
+        working["date_operation"] = pd.to_datetime(working["date_operation"], errors="coerce")
+        working = working.dropna(subset=["date_operation"])
+        working["periode"] = working["date_operation"].dt.to_period("M").dt.to_timestamp()
+    else:
+        working["periode"] = range(len(working))
+    if working.empty:
+        return
+
+    for column in ["retention_pct", "retention_90j_pct", "nb_clients_arrives_echeance", "nb_clients_renouveles", "nb_clients_renouveles_90j", "delai_moyen_renouvellement_jours"]:
+        if column in working.columns:
+            working[column] = pd.to_numeric(working[column], errors="coerce")
+
+    cards = []
+    if "retention_pct" in working.columns:
+        cards.append(("Rétention", _format_percent_points(working["retention_pct"].mean()), "Clients renouvelés", "green"))
+    if "retention_90j_pct" in working.columns:
+        cards.append(("Rétention 90j", _format_percent_points(working["retention_90j_pct"].mean()), "Renouvelés sous 90 jours", "blue"))
+    if "nb_clients_arrives_echeance" in working.columns:
+        cards.append(("Arrivés à échéance", f"{int(working['nb_clients_arrives_echeance'].sum()):,}".replace(",", " "), "Base renouvelable", "slate"))
+    if "delai_moyen_renouvellement_jours" in working.columns:
+        delay = working["delai_moyen_renouvellement_jours"].dropna()
+        cards.append(("Délai moyen", "-" if delay.empty else f"{delay.mean():.1f} j", "Renouvellement", "orange"))
+    if cards:
+        render_panel_title("Rétention et renouvellement")
+        render_kpi_cards(cards)
+
+    value_columns = [column for column in ["retention_pct", "retention_90j_pct"] if column in working.columns]
+    if value_columns:
+        trend = working.groupby("periode", dropna=False)[value_columns].mean().reset_index()
+        trend_df = trend.melt(id_vars=["periode"], value_vars=value_columns, var_name="indicateur", value_name="taux")
+        trend_df["indicateur"] = trend_df["indicateur"].map({"retention_pct": "Rétention", "retention_90j_pct": "Rétention 90j"})
+        left, right = st.columns((1.15, 1))
+        with left:
+            fig = px.line(trend_df, x="periode", y="taux", color="indicateur", markers=True)
+            style_standard_line(fig, height=340)
+            st_plot(fig, key=f"overview_perfect_vision_retention_{cycle_key}", height=340)
+        with right:
+            group_column = "agence" if "agence" in working.columns else "type_produit" if "type_produit" in working.columns else None
+            if group_column:
+                grouped = working.groupby(group_column, dropna=False)[value_columns].mean().reset_index().head(15)
+                grouped_df = grouped.melt(id_vars=[group_column], value_vars=value_columns, var_name="indicateur", value_name="taux")
+                grouped_df["indicateur"] = grouped_df["indicateur"].map({"retention_pct": "Rétention", "retention_90j_pct": "Rétention 90j"})
+                fig = px.bar(grouped_df, x=group_column, y="taux", color="indicateur", barmode="group")
+                style_standard_vertical_bar(fig, height=340, tickangle=-25)
+                st_plot(fig, key=f"overview_perfect_vision_retention_group_{cycle_key}", height=340)
+
+
+def _render_perfect_vision_credit_overview(df: pd.DataFrame, cycle_key: str) -> None:
+    cards = _build_perfect_vision_credit_cards(df)
+    if not cards:
+        return
+
+    render_panel_title("Lecture Perfect Vision")
+    render_kpi_cards(cards)
+
+    bucket_columns = [
+        ("1-30 jours", "par_1_30"),
+        ("31-60 jours", "par_31_60"),
+        ("61-90 jours", "par_61_90"),
+        ("91-180 jours", "par_91_180"),
+        ("180+ jours", "par_180_plus"),
+    ]
+    bucket_rows = [
+        {"tranche_retard": label, "montant": _sum_column(df, column) or 0.0}
+        for label, column in bucket_columns
+        if column in df.columns
+    ]
+
+    left, right = st.columns((1, 1.15))
+    with left:
+        if bucket_rows:
+            par_df = pd.DataFrame(bucket_rows)
+            render_panel_title("Ancienneté du PAR")
+            fig = px.bar(
+                par_df,
+                x="tranche_retard",
+                y="montant",
+                color="tranche_retard",
+                color_discrete_sequence=["#d9a441", "#e78a1f", "#cf4752", "#9b2c2c", "#611818"],
+            )
+            style_standard_vertical_bar(fig, height=340, tickangle=0)
+            st_plot(fig, key=f"overview_perfect_vision_par_buckets_{cycle_key}", height=340)
+
+    with right:
+        group_column = "agence" if "agence" in df.columns else "type_produit" if "type_produit" in df.columns else None
+        if group_column and "solde_final" in df.columns:
+            grouped = (
+                df.assign(solde_final=pd.to_numeric(df["solde_final"], errors="coerce").fillna(0))
+                .groupby(group_column, dropna=False)["solde_final"]
+                .sum()
+                .sort_values(ascending=False)
+                .head(10)
+                .reset_index()
+            )
+            if not grouped.empty:
+                render_panel_title(f"Top encours par {group_column.replace('_', ' ')}")
+                fig = px.bar(
+                    grouped,
+                    x=group_column,
+                    y="solde_final",
+                    color="solde_final",
+                    color_continuous_scale=["#dbe8f9", "#2b74ca", "#0b2c63"],
+                )
+                style_standard_vertical_bar(fig, height=340, tickangle=-25)
+                fig.update_layout(coloraxis_showscale=False)
+                st_plot(fig, key=f"overview_perfect_vision_encours_{cycle_key}", height=340)
+
+    _render_perfect_vision_par_trend(df, cycle_key)
+    _render_perfect_vision_retention(df, cycle_key)
+
+
 def _build_credit_like_cards(df: pd.DataFrame, cycle_key: str) -> list[tuple[str, str, str, str]]:
     metrics = build_summary_metrics(df)
     snapshot = build_operational_snapshot(df)
@@ -479,6 +699,7 @@ def _build_credit_like_cards(df: pd.DataFrame, cycle_key: str) -> list[tuple[str
 
 def _render_credit_like_overview(df: pd.DataFrame, monthly_df: pd.DataFrame, cycle_key: str) -> None:
     render_kpi_cards(_build_credit_like_cards(df, cycle_key))
+    _render_perfect_vision_credit_overview(df, cycle_key)
     left, right = st.columns((1.1, 1))
 
     with left:

@@ -30,5 +30,6 @@ desktop.ini
 
 # Depots de donnees locales
 line_list/*
+!line_list/.gitkeep
 data/vision/*
 SOP/*

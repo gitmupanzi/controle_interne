@@ -160,6 +160,154 @@ def _format_share(value: object) -> str:
     return f"{float(numeric) * 100:,.2f}%".replace(",", " ")
 
 
+def _render_perfect_vision_credit_portfolio(df: pd.DataFrame, cycle_key: str) -> None:
+    if cycle_key not in {"credit", "likelemba"} or "solde_final" not in df.columns:
+        return
+
+    render_panel_title("Analyses portefeuille Perfect Vision")
+    left, right = st.columns((1.05, 1))
+
+    with left:
+        group_columns = [column for column in ["client_id", "nom_client", "type_client"] if column in df.columns]
+        if group_columns:
+            working = df.copy()
+            working["solde_final"] = pd.to_numeric(working["solde_final"], errors="coerce").fillna(0)
+            top_clients = (
+                working.groupby(group_columns, dropna=False)
+                .agg(encours=("solde_final", "sum"))
+                .reset_index()
+                .sort_values("encours", ascending=False)
+                .head(20)
+            )
+            if not top_clients.empty:
+                render_panel_title("Top encours clients")
+                st.dataframe(top_clients, width="stretch", hide_index=True)
+
+    with right:
+        concentration_columns = [column for column in ["encours_top_10_pct", "part_top_10_pct", "nb_prets_top_10_pct"] if column in df.columns]
+        if concentration_columns:
+            display_columns = [column for column in ["agence", "type_produit", "devise", "solde_final", *concentration_columns] if column in df.columns]
+            concentration_df = df[display_columns].copy()
+            for column in ["solde_final", "encours_top_10_pct", "part_top_10_pct", "nb_prets_top_10_pct"]:
+                if column in concentration_df.columns:
+                    concentration_df[column] = pd.to_numeric(concentration_df[column], errors="coerce")
+            sort_column = "part_top_10_pct" if "part_top_10_pct" in concentration_df.columns else "encours_top_10_pct"
+            concentration_df = concentration_df.sort_values(sort_column, ascending=False).head(20)
+            render_panel_title("Concentration des encours")
+            st.dataframe(concentration_df, width="stretch", hide_index=True)
+        elif "type_produit" in df.columns:
+            product_df = (
+                df.assign(solde_final=pd.to_numeric(df["solde_final"], errors="coerce").fillna(0))
+                .groupby("type_produit", dropna=False)["solde_final"]
+                .sum()
+                .sort_values(ascending=False)
+                .head(12)
+                .reset_index()
+            )
+            if not product_df.empty:
+                render_panel_title("Encours par produit")
+                fig = px.bar(
+                    product_df,
+                    x="type_produit",
+                    y="solde_final",
+                    color="solde_final",
+                    color_continuous_scale=["#dbe8f9", "#2b74ca", "#0b2c63"],
+                )
+                style_standard_vertical_bar(fig, height=340, tickangle=-25)
+                fig.update_layout(coloraxis_showscale=False)
+                st_plot(fig, key=f"portfolio_perfect_vision_product_{cycle_key}", height=340)
+
+    coverage_columns = [
+        column
+        for column in [
+            "client_id",
+            "nom_client",
+            "numero_reference",
+            "solde_final",
+            "solde_compte",
+            "valeur_garantie",
+            "exposition_nette_non_couverte",
+            "principal_couvert",
+        ]
+        if column in df.columns
+    ]
+    if "exposition_nette_non_couverte" in coverage_columns:
+        coverage_df = df[coverage_columns].copy()
+        for column in ["solde_final", "solde_compte", "valeur_garantie", "exposition_nette_non_couverte", "principal_couvert"]:
+            if column in coverage_df.columns:
+                coverage_df[column] = pd.to_numeric(coverage_df[column], errors="coerce")
+        coverage_df = coverage_df.sort_values("exposition_nette_non_couverte", ascending=False).head(50)
+        render_panel_title("Couverture crédit par épargne et garanties")
+        st.dataframe(coverage_df, width="stretch", hide_index=True)
+
+    _render_perfect_vision_credit_segments(df, cycle_key)
+
+
+def _render_perfect_vision_credit_segments(df: pd.DataFrame, cycle_key: str) -> None:
+    if cycle_key not in {"credit", "likelemba"}:
+        return
+
+    segment_left, segment_right = st.columns((1.05, 1))
+
+    with segment_left:
+        if "tranche_montant_initial" in df.columns and "solde_final" in df.columns:
+            working = df.copy()
+            for column in ["solde_final", "par_1_plus", "par_30_plus", "par_90_plus", "nb_clients", "nb_prets"]:
+                if column in working.columns:
+                    working[column] = pd.to_numeric(working[column], errors="coerce").fillna(0)
+            aggregations: dict[str, tuple[str, str]] = {"encours": ("solde_final", "sum")}
+            for column in ["par_1_plus", "par_30_plus", "par_90_plus", "nb_clients", "nb_prets"]:
+                if column in working.columns:
+                    aggregations[column] = (column, "sum")
+            tranche_df = working.groupby("tranche_montant_initial", dropna=False).agg(**aggregations).reset_index()
+            if "par_30_plus" in tranche_df.columns:
+                tranche_df["taux_par_30"] = tranche_df["par_30_plus"].div(tranche_df["encours"]).where(tranche_df["encours"].ne(0)) * 100
+            if "par_90_plus" in tranche_df.columns:
+                tranche_df["taux_par_90"] = tranche_df["par_90_plus"].div(tranche_df["encours"]).where(tranche_df["encours"].ne(0)) * 100
+            if not tranche_df.empty:
+                render_panel_title("PAR par tranche de montant initial")
+                y_column = "taux_par_30" if "taux_par_30" in tranche_df.columns else "encours"
+                fig = px.bar(
+                    tranche_df,
+                    x="tranche_montant_initial",
+                    y=y_column,
+                    color=y_column,
+                    color_continuous_scale=["#f9e7c2", "#e78a1f", "#9b2c2c"],
+                )
+                style_standard_vertical_bar(fig, height=350, tickangle=-25)
+                fig.update_layout(coloraxis_showscale=False)
+                st_plot(fig, key=f"portfolio_perfect_vision_tranche_{cycle_key}", height=350)
+                st.dataframe(tranche_df, width="stretch", hide_index=True)
+
+    with segment_right:
+        if {"age_cohorte_mois", "par_30_sur_initial_pct"}.issubset(df.columns):
+            working = df.copy()
+            working["age_cohorte_mois"] = pd.to_numeric(working["age_cohorte_mois"], errors="coerce")
+            working["par_30_sur_initial_pct"] = pd.to_numeric(working["par_30_sur_initial_pct"], errors="coerce")
+            group_column = "type_produit" if "type_produit" in working.columns else "agence" if "agence" in working.columns else None
+            working = working.dropna(subset=["age_cohorte_mois", "par_30_sur_initial_pct"])
+            if not working.empty:
+                render_panel_title("Vintage PAR par cohorte")
+                if group_column:
+                    vintage_df = (
+                        working.groupby(["age_cohorte_mois", group_column], dropna=False)["par_30_sur_initial_pct"]
+                        .mean()
+                        .reset_index()
+                    )
+                    fig = px.line(
+                        vintage_df,
+                        x="age_cohorte_mois",
+                        y="par_30_sur_initial_pct",
+                        color=group_column,
+                        markers=True,
+                    )
+                else:
+                    vintage_df = working.groupby("age_cohorte_mois", dropna=False)["par_30_sur_initial_pct"].mean().reset_index()
+                    fig = px.line(vintage_df, x="age_cohorte_mois", y="par_30_sur_initial_pct", markers=True)
+                fig.update_layout(height=350)
+                st_plot(fig, key=f"portfolio_perfect_vision_vintage_{cycle_key}", height=350)
+
+
 def _build_proportion_comment(share: object, is_total: bool = False) -> str:
     if is_total:
         return "Vue globale de la structure du portefeuille."
@@ -890,6 +1038,8 @@ def render_portfolio_tab(
             f"Le regroupement principal utilisé est `{primary_group}`." if primary_group else "Aucun regroupement principal n'a été détecté.",
         ],
     )
+
+    _render_perfect_vision_credit_portfolio(df, cycle_key)
 
     col1, col2 = st.columns(2)
 

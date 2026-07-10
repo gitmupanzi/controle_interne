@@ -260,6 +260,34 @@ def _coerce_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(series, errors="coerce")
 
 
+def _numeric_series_or_zero(df: pd.DataFrame, column: str) -> pd.Series:
+    if column not in df.columns:
+        return pd.Series(0, index=df.index, dtype="float64")
+    return pd.to_numeric(df[column], errors="coerce").fillna(0)
+
+
+def _coalesce_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if not df.columns.duplicated().any():
+        return df
+
+    coalesced_columns: dict[str, pd.Series] = {}
+    ordered_columns: list[str] = []
+    for column in df.columns:
+        if column in coalesced_columns:
+            continue
+        same_name = df.loc[:, df.columns == column]
+        ordered_columns.append(column)
+        if isinstance(same_name, pd.Series) or same_name.shape[1] == 1:
+            coalesced_columns[column] = same_name.iloc[:, 0] if isinstance(same_name, pd.DataFrame) else same_name
+        else:
+            coalesced_columns[column] = same_name.apply(
+                lambda row: row.dropna().iloc[0] if row.notna().any() else pd.NA,
+                axis=1,
+            )
+
+    return pd.DataFrame(coalesced_columns, index=df.index)[ordered_columns]
+
+
 def _normalize_series_values(series: pd.Series, mapping: dict[str, str]) -> pd.Series:
     return series.apply(
         lambda value: mapping.get(normalize_text(value), str(value).strip()) if pd.notna(value) else value
@@ -299,11 +327,24 @@ def derive_risk_level(row: pd.Series) -> str:
     return "Non renseigné"
 
 
-def build_standardized_dataframe(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
+def build_standardized_dataframe(
+    df: pd.DataFrame,
+    *,
+    standardize_columns: bool = True,
+) -> tuple[pd.DataFrame, dict[str, str]]:
     standardized = df.copy()
-    mapping = {column: standardize_column_name(column) for column in standardized.columns}
-    standardized = standardized.rename(columns=mapping)
+    mapping = (
+        {column: standardize_column_name(column) for column in standardized.columns}
+        if standardize_columns
+        else {column: column for column in standardized.columns}
+    )
+    if standardize_columns:
+        standardized = standardized.rename(columns=mapping)
+    standardized = _coalesce_duplicate_columns(standardized)
     standardized = _apply_reference_value_cleaning(standardized)
+
+    if standardize_columns and "client_id" not in standardized.columns and "code_client" in standardized.columns:
+        standardized["client_id"] = standardized["code_client"]
 
     for column in NUMERIC_COLUMNS:
         if column in standardized.columns:
@@ -944,7 +985,7 @@ def build_epargne_agent_portfolio_table(df: pd.DataFrame, top_n: int = 10) -> pd
         return pd.DataFrame(columns=columns)
 
     grouped = (
-        working_df.assign(solde_compte=pd.to_numeric(working_df.get("solde_compte"), errors="coerce").fillna(0))
+        working_df.assign(solde_compte=_numeric_series_or_zero(working_df, "solde_compte"))
         .groupby("agent_credit", dropna=False)
         .agg(
             nombre_comptes=("agent_credit", "size"),
@@ -1039,7 +1080,7 @@ def build_provenance_summary_table(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
 
     grouped = (
-        working_df.assign(solde_compte=pd.to_numeric(working_df.get("solde_compte"), errors="coerce").fillna(0))
+        working_df.assign(solde_compte=_numeric_series_or_zero(working_df, "solde_compte"))
         .groupby("Provenance", dropna=False)
         .agg(
             nombre_lignes=("Provenance", "size"),

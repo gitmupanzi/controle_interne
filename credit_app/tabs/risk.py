@@ -68,6 +68,68 @@ def _render_operations_risk_block(df: pd.DataFrame, conversion_rate: float) -> N
         st.dataframe(kyc_df.head(50), width="stretch", hide_index=True)
 
 
+def _render_perfect_vision_credit_risk(df: pd.DataFrame, cycle_key: str) -> None:
+    if cycle_key not in {"credit", "likelemba"} or "solde_final" not in df.columns:
+        return
+
+    provision_column = "mtt_provision" if "mtt_provision" in df.columns else "provision_total" if "provision_total" in df.columns else None
+    if not any(column in df.columns for column in ["par_30_plus", "par_90_plus", "montant_operation"]) and provision_column is None:
+        return
+
+    group_column = get_first_existing_column(df, ["agence", "type_produit", "devise"])
+    if not group_column:
+        return
+
+    working = df.copy()
+    for column in ["solde_final", "par_30_plus", "par_90_plus", "montant_operation", provision_column]:
+        if column and column in working.columns:
+            working[column] = pd.to_numeric(working[column], errors="coerce").fillna(0)
+
+    aggregations: dict[str, tuple[str, str]] = {"encours": ("solde_final", "sum")}
+    if "par_30_plus" in working.columns:
+        aggregations["par_30_plus"] = ("par_30_plus", "sum")
+    if "par_90_plus" in working.columns:
+        aggregations["par_90_plus"] = ("par_90_plus", "sum")
+    if "montant_operation" in working.columns:
+        aggregations["arrieres"] = ("montant_operation", "sum")
+    if provision_column:
+        aggregations["provision"] = (provision_column, "sum")
+
+    grouped = working.groupby(group_column, dropna=False).agg(**aggregations).reset_index()
+    if grouped.empty:
+        return
+
+    if "par_30_plus" in grouped.columns:
+        grouped["taux_par_30"] = grouped["par_30_plus"].div(grouped["encours"]).where(grouped["encours"].ne(0))
+    if "par_90_plus" in grouped.columns:
+        grouped["taux_par_90"] = grouped["par_90_plus"].div(grouped["encours"]).where(grouped["encours"].ne(0))
+    sort_column = "par_90_plus" if "par_90_plus" in grouped.columns else "par_30_plus" if "par_30_plus" in grouped.columns else "encours"
+    grouped = grouped.sort_values(sort_column, ascending=False).head(15)
+
+    render_panel_title("Risque PAR Perfect Vision")
+    left, right = st.columns((1.1, 1))
+    with left:
+        y_column = "par_90_plus" if "par_90_plus" in grouped.columns else "par_30_plus" if "par_30_plus" in grouped.columns else "encours"
+        fig = px.bar(
+            grouped,
+            x=group_column,
+            y=y_column,
+            color=y_column,
+            color_continuous_scale=["#f9e7c2", "#e78a1f", "#9b2c2c"],
+        )
+        style_standard_vertical_bar(fig, height=360, tickangle=-25)
+        fig.update_layout(coloraxis_showscale=False)
+        st_plot(fig, key=f"risk_perfect_vision_par_{cycle_key}", height=360)
+    with right:
+        display_columns = [group_column, "encours"]
+        display_columns.extend(
+            column
+            for column in ["par_30_plus", "taux_par_30", "par_90_plus", "taux_par_90", "arrieres", "provision"]
+            if column in grouped.columns
+        )
+        st.dataframe(grouped[display_columns], width="stretch", hide_index=True)
+
+
 def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate: float = 2800.0) -> None:
     if df.empty:
         st.warning("Aucune donnée n'est disponible dans cet onglet.")
@@ -295,6 +357,8 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate
         if not group_risk.empty:
             render_panel_title(f"Zones les plus exposées par {primary_group.replace('_', ' ')}")
             st.dataframe(group_risk, width="stretch", hide_index=True)
+
+    _render_perfect_vision_credit_risk(df, cycle_key)
 
     if cycle_key == "operations_depot_retrait":
         _render_operations_risk_block(df, conversion_rate)
