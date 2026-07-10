@@ -10,34 +10,25 @@ __pycache__/
 .ruff_cache/
 .ipynb_checkpoints/
 
-# Environment / secrets
+# Environnement / secrets
 .env
 .env.*
 !.env.example
 
-# Runtime outputs
+# Sorties d'execution
 exports/
 *.log
 *.tmp
 *.bak
 *.bak_*
 
-# Office / OS temporary files
+# Fichiers temporaires Office / systeme
 ~$*
 Thumbs.db
 desktop.ini
 .DS_Store
 
-# Local data drops
+# Depots de donnees locales
 line_list/*
-!line_list/.gitkeep
-
-# Vision extracts and generated analysis files.
-# Keep source SQL/Markdown files versionable; ignore heavy exports by default.
 data/vision/*
-!data/vision/*.sql
-!data/vision/*.md
-
-# SOP documents are usually large/local references.
 SOP/*
-!SOP/.gitkeep
