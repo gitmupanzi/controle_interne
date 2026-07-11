@@ -7,6 +7,7 @@ import pandas as pd
 from credit_app.services.mpesa_analysis import (
     MpesaPreparedData,
     build_g2_dat_crosscheck,
+    build_g2_entry_report,
     build_load_report,
     build_mpesa_statement,
     create_excel_export,
@@ -200,6 +201,36 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(result.iloc[0]["variation_dat_operation"]), 1000.0)
         self.assertEqual(result.iloc[0]["mode_rapprochement"], "Receipt No = ref_no + DAT operation")
         self.assertEqual(float(result.iloc[0]["dat_final_client_devise"]), 5000.0)
+
+    def test_g2_entry_report_builds_detail_and_summary(self) -> None:
+        prepared = _sample_prepared_data()
+        g2 = pd.DataFrame(
+            [
+                {
+                    "Receipt No.\xa0": "TX001",
+                    "Completion Time\xa0": "2026-07-11 10:23:05",
+                    "Opposite Party\xa0": "0812345678 - CLIENT TEST",
+                    "Currency\xa0": "CDF",
+                    "Transaction Amount\xa0": "CDF 1,000.00",
+                    "Balance\xa0": "CDF 2,000.00",
+                    "Transaction Status\xa0": "Completed",
+                }
+            ]
+        )
+        prepared = MpesaPreparedData(
+            prepared.transactions,
+            prepared.current_savings,
+            prepared.fixed_savings,
+            prepared.loans,
+            prepared.load_report,
+            prepare_g2_transactions(g2),
+        )
+
+        report = build_g2_entry_report(prepared)
+
+        self.assertEqual(report["detail"].iloc[0]["details_rapport"], "DAT")
+        self.assertEqual(float(report["detail"].iloc[0]["montant"]), 1000.0)
+        self.assertIn("Total CDF", report["synthese"]["details_rapport"].tolist())
 
 
 if __name__ == "__main__":

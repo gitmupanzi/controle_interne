@@ -730,6 +730,73 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
     return output[present + rest].reset_index(drop=True)
 
 
+def classify_g2_entry_report(row: pd.Series) -> str:
+    reference_dat = str(row.get("reference_dat_operation", "") or "").strip()
+    references = normalize_label(row.get("references_transactions", ""))
+    account_types = normalize_label(row.get("account_types_transactions", ""))
+    descriptions = normalize_label(row.get("descriptions_transactions", ""))
+    text = f"{references} {account_types} {descriptions}"
+    if reference_dat:
+        return "DAT"
+    if "ln" in references or "loan" in account_types or "principle" in account_types or "remboursement" in text:
+        return "Remboursement prets"
+    return "Depot normal"
+
+
+def build_g2_entry_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame]:
+    detail = build_g2_dat_crosscheck(prepared)
+    if detail.empty:
+        return {"detail": pd.DataFrame(), "synthese": pd.DataFrame()}
+
+    report = detail.copy()
+    report["details_rapport"] = report.apply(classify_g2_entry_report, axis=1)
+    report["montant"] = pd.to_numeric(report.get("transaction_amount_numeric", 0), errors="coerce").fillna(0).abs()
+    report["date"] = pd.to_datetime(report.get("completion_time"), errors="coerce")
+    report["duree"] = np.where(
+        report["details_rapport"].eq("DAT"),
+        report.get("produits_dat", pd.Series("", index=report.index)).astype("string").fillna(""),
+        "-",
+    )
+    report["compte_cree"] = pd.to_datetime(report.get("date_transaction_ref_no"), errors="coerce")
+    report["receipt_no"] = report.get("receipt_no", pd.Series("", index=report.index))
+    report["opposite_party"] = report.get("opposite_party", pd.Series("", index=report.index))
+    report["currency_code"] = report.get("currency_code", pd.Series("", index=report.index))
+
+    detail_columns = [
+        "date",
+        "receipt_no",
+        "details_rapport",
+        "opposite_party",
+        "duree",
+        "compte_cree",
+        "montant",
+        "currency_code",
+        "customer_id_ref_no",
+        "reference_dat_operation",
+        "solde_dat_operation_avant",
+        "solde_dat_operation_apres",
+        "variation_dat_operation",
+        "mode_rapprochement",
+        "statut_rapprochement_dat",
+    ]
+    detail_columns = [column for column in detail_columns if column in report.columns]
+    report_detail = report[detail_columns].sort_values(["currency_code", "date"], ascending=[True, False]).reset_index(drop=True)
+
+    synthese = (
+        report.groupby(["currency_code", "details_rapport"], as_index=False, dropna=False)
+        .agg(nombre=("receipt_no", "count"), montant=("montant", "sum"))
+        .sort_values(["currency_code", "details_rapport"])
+    )
+    totals = (
+        report.groupby("currency_code", as_index=False, dropna=False)
+        .agg(nombre=("receipt_no", "count"), montant=("montant", "sum"))
+    )
+    totals["details_rapport"] = "Total " + totals["currency_code"].astype("string").fillna("")
+    synthese = concat_frames_stable([synthese, totals[synthese.columns]]).reset_index(drop=True)
+
+    return {"detail": report_detail, "synthese": synthese}
+
+
 def search_customers(query: object, prepared: MpesaPreparedData) -> pd.DataFrame:
     text = str(query).strip()
     if not text:
@@ -1107,6 +1174,8 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         "Mouvements_Epargne": report.get("mouvements_epargne", pd.DataFrame()),
         "Credits": report.get("credits", pd.DataFrame()),
         "G2_DAT": report.get("g2_dat", pd.DataFrame()),
+        "Rapport_G2_Synthese": report.get("rapport_g2_synthese", pd.DataFrame()),
+        "Rapport_G2_Detail": report.get("rapport_g2_detail", pd.DataFrame()),
         "Diagnostics": report.get("diagnostics", pd.DataFrame()),
     }
     buffer = BytesIO()

@@ -15,6 +15,7 @@ from credit_app.services.mpesa_analysis import (
     TRANSACTION_REQUIRED_COLUMNS,
     MpesaPreparedData,
     build_diagnostics,
+    build_g2_entry_report,
     build_g2_dat_crosscheck,
     build_load_report,
     build_mpesa_statement,
@@ -520,6 +521,37 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     )
     st.caption(f"{len(filtered)} ligne(s) G2 affichee(s).")
     st.dataframe(filtered, width="stretch", hide_index=True)
+
+    if report is None:
+        g2_report = build_g2_entry_report(prepared)
+        synthese = g2_report.get("synthese", pd.DataFrame())
+        detail = g2_report.get("detail", pd.DataFrame())
+        if not synthese.empty:
+            render_panel_title("Synthese des encaissements G2")
+            st.dataframe(synthese, width="stretch", hide_index=True)
+        if not detail.empty:
+            render_panel_title("Detail des encaissements G2")
+            detail_view = _apply_local_multiselect_filters(
+                detail,
+                ["currency_code", "details_rapport", "mode_rapprochement", "statut_rapprochement_dat"],
+                key_prefix="mpesa_g2_entry_report_filter",
+            )
+            st.caption(f"{len(detail_view)} ligne(s) du rapport affichee(s).")
+            st.dataframe(detail_view, width="stretch", hide_index=True)
+        report_bytes = create_excel_export(
+            {
+                "rapport_g2_synthese": synthese,
+                "rapport_g2_detail": detail,
+                "g2_dat": g2_dat,
+            }
+        )
+        st.download_button(
+            "Telecharger le rapport G2 fusionne",
+            data=report_bytes,
+            file_name="rapport_encaissements_g2_bisou_bisou.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+        )
 
 
 def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) -> None:
