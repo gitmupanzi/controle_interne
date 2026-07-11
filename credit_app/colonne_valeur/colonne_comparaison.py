@@ -594,7 +594,7 @@ def _comparer_fichiers_sur_colonne_detail(
     )
     cles_uniques_2 = _extraire_valeur_dict(
         comparaison_cles,
-        "Uniquement dans le deuxiÃ¨me DataFrame",
+        "Uniquement dans le deuxième DataFrame",
         "Uniquement dans le deuxième DataFrame",
         "uniquement_dans_df2",
         default=[],

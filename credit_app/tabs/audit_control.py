@@ -574,26 +574,26 @@ def render_audit_control_tab(cycle_key: str = "credit", standardized_df: pd.Data
         )
 
     if cycle_key == "__legacy_operations_depot_retrait__":
-        render_panel_title("Catalogue des contrÃ´les SQL de revue")
+        render_panel_title("Catalogue des contrôles SQL de revue")
         st.dataframe(build_sql_operations_control_catalog_table(), width="stretch", hide_index=True, height=430)
         render_summary_box(
             "Comment exploiter ce catalogue",
             [
-                "Chaque contrÃ´le SQL sert Ã  prolonger une alerte du tableau de bord jusqu'au niveau du dÃ©tail opÃ©rationnel.",
-                "Les blocs 49 Ã  53 portent surtout sur les produits d'Ã©pargne et les comptes, 54 Ã  58 sur les mouvements, 59 Ã  63 sur le crÃ©dit et 64 Ã  68 sur la priorisation du risque.",
-                "En mission, l'idÃ©e est simple : repÃ©rer un signal dans l'application, ouvrir le contrÃ´le SQL correspondant, puis documenter le constat, la cause et la suite Ã  donner.",
+                "Chaque contrôle SQL sert à prolonger une alerte du tableau de bord jusqu'au niveau du détail opérationnel.",
+                "Les blocs 49 à 53 portent surtout sur les produits d'épargne et les comptes, 54 à 58 sur les mouvements, 59 à 63 sur le crédit et 64 à 68 sur la priorisation du risque.",
+                "En mission, l'idée est simple : repérer un signal dans l'application, ouvrir le contrôle SQL correspondant, puis documenter le constat, la cause et la suite à donner.",
             ],
         )
 
     if cycle_key == "operations_depot_retrait":
-        render_panel_title("Catalogue des controles SQL de revue")
+        render_panel_title("Catalogue des contrôles SQL de revue")
         st.dataframe(build_sql_operations_control_catalog_table(), width="stretch", hide_index=True, height=430)
         render_summary_box(
             "Comment exploiter ce catalogue",
             [
-                "Chaque controle SQL sert a prolonger une alerte du tableau de bord jusqu'au niveau du detail operationnel.",
-                "Les blocs 49 a 53 portent surtout sur les produits d'epargne et les comptes, 54 a 58 sur les mouvements, 59 a 63 sur le credit et 64 a 68 sur la priorisation du risque.",
-                "En mission, l'idee est simple : reperer un signal dans l'application, ouvrir le controle SQL correspondant, puis documenter le constat, la cause et la suite a donner.",
+                "Chaque contrôle SQL sert à prolonger une alerte du tableau de bord jusqu'au niveau du détail opérationnel.",
+                "Les blocs 49 à 53 portent surtout sur les produits d'épargne et les comptes, 54 à 58 sur les mouvements, 59 à 63 sur le crédit et 64 à 68 sur la priorisation du risque.",
+                "En mission, l'idée est simple : repérer un signal dans l'application, ouvrir le contrôle SQL correspondant, puis documenter le constat, la cause et la suite à donner.",
             ],
         )
 

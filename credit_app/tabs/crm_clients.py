@@ -249,7 +249,7 @@ def render_crm_clients_tab(df: pd.DataFrame) -> None:
         render_filtered_dataframe(
             action_df,
             key_prefix="crm_actions_prioritaires",
-            preferred_columns=["Gestionnaire", "Origine", "Province", "CatÃ©gorie", "Lecture"],
+            preferred_columns=["Gestionnaire", "Origine", "Province", "Catégorie", "Lecture"],
             max_rows=200,
         )
     with top_right:
@@ -266,6 +266,6 @@ def render_crm_clients_tab(df: pd.DataFrame) -> None:
             render_filtered_dataframe(
                 relance_df,
                 key_prefix="crm_relances",
-                preferred_columns=["Gestionnaire", "Province", "CatÃ©gorie", "Lecture"],
+                preferred_columns=["Gestionnaire", "Province", "Catégorie", "Lecture"],
                 max_rows=200,
             )

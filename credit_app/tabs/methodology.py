@@ -31,20 +31,20 @@ def _build_standardization_table() -> pd.DataFrame:
         return pd.DataFrame(
             [
                 {
-                    "RÃ¨gle utile": "RÃ©fÃ©rences minimales",
-                    "Lecture": "Un mouvement doit rester rattachÃ© Ã  un compte, une opÃ©ration, un point de service et une devise lisibles.",
+                    "Règle utile": "Références minimales",
+                    "Lecture": "Un mouvement doit rester rattaché à un compte, une opération, un point de service et une devise lisibles.",
                 },
                 {
-                    "RÃ¨gle utile": "CohÃ©rence produit / mouvement",
-                    "Lecture": "Les rÃ¨gles du produit d'Ã©pargne doivent rester cohÃ©rentes avec les dÃ©pÃ´ts, retraits et devises observÃ©s.",
+                    "Règle utile": "Cohérence produit / mouvement",
+                    "Lecture": "Les règles du produit d'épargne doivent rester cohérentes avec les dépôts, retraits et devises observés.",
                 },
                 {
-                    "RÃ¨gle utile": "Montants sensibles",
-                    "Lecture": "Les montants nuls, nÃ©gatifs, trÃ¨s Ã©levÃ©s ou concentrÃ©s sur une pÃ©riode demandent une revue prioritaire.",
+                    "Règle utile": "Montants sensibles",
+                    "Lecture": "Les montants nuls, négatifs, très élevés ou concentrés sur une période demandent une revue prioritaire.",
                 },
                 {
-                    "RÃ¨gle utile": "Lecture croisÃ©e Ã©pargne / crÃ©dit",
-                    "Lecture": "Les clients trÃ¨s actifs, les agences trÃ¨s exposÃ©es et les demandes rÃ©pÃ©tÃ©es doivent Ãªtre relus de faÃ§on globale.",
+                    "Règle utile": "Lecture croisée épargne / crédit",
+                    "Lecture": "Les clients très actifs, les agences très exposées et les demandes répétées doivent être relus de façon globale.",
                 },
             ]
         )
@@ -239,20 +239,20 @@ def _build_cycle_rule_table(cycle_key: str) -> pd.DataFrame:
         return pd.DataFrame(
             [
                 {
-                    "Regle utile": "References minimales",
-                    "Lecture": "Un mouvement doit rester rattache a un compte, une operation, un point de service et une devise lisibles.",
+                    "Règle utile": "Références minimales",
+                    "Lecture": "Un mouvement doit rester rattaché à un compte, une opération, un point de service et une devise lisibles.",
                 },
                 {
-                    "Regle utile": "Coherence produit / mouvement",
-                    "Lecture": "Les regles du produit d'epargne doivent rester coherentes avec les depots, retraits et devises observes.",
+                    "Règle utile": "Cohérence produit / mouvement",
+                    "Lecture": "Les règles du produit d'épargne doivent rester cohérentes avec les dépôts, retraits et devises observés.",
                 },
                 {
-                    "Regle utile": "Montants sensibles",
-                    "Lecture": "Les montants nuls, negatifs, tres eleves ou concentres sur une periode demandent une revue prioritaire.",
+                    "Règle utile": "Montants sensibles",
+                    "Lecture": "Les montants nuls, négatifs, très élevés ou concentrés sur une période demandent une revue prioritaire.",
                 },
                 {
-                    "Regle utile": "Lecture croisee epargne / credit",
-                    "Lecture": "Les clients tres actifs, les agences tres exposees et les demandes repetees doivent etre relus de facon globale.",
+                    "Règle utile": "Lecture croisée épargne / crédit",
+                    "Lecture": "Les clients très actifs, les agences très exposées et les demandes répétées doivent être relus de façon globale.",
                 },
             ]
         )
@@ -603,28 +603,28 @@ def _build_standardization_table() -> pd.DataFrame:
         [
             {
                 "Bloc": "Colonnes",
-                "Principe": "Les colonnes proches du referentiel metier sont reconnues puis renommees.",
-                "Utilite": "Permet de charger des bases Excel ou CSV non uniformes.",
+                "Principe": "Les colonnes proches du référentiel métier sont reconnues puis renommées.",
+                "Utilité": "Permet de charger des bases Excel ou CSV non uniformes.",
             },
             {
-                "Bloc": "Referentiel",
-                "Principe": "Le fichier `data/Rename_columns.xlsx` complete les alias internes.",
-                "Utilite": "Adapte la lecture aux habitudes locales de nommage.",
+                "Bloc": "Référentiel",
+                "Principe": "Le fichier `data/Rename_columns.xlsx` complète les alias internes.",
+                "Utilité": "Adapte la lecture aux habitudes locales de nommage.",
             },
             {
                 "Bloc": "Dates",
                 "Principe": "Les dates utiles sont converties quand le format est exploitable.",
-                "Utilite": "Active les filtres de periode et les series temporelles.",
+                "Utilité": "Active les filtres de période et les séries temporelles.",
             },
             {
                 "Bloc": "Montants",
-                "Principe": "Les montants, durees, retards, ages et scores sont nettoyes puis convertis.",
-                "Utilite": "Fiabilise les calculs et reduit les erreurs de type.",
+                "Principe": "Les montants, durées, retards, âges et scores sont nettoyés puis convertis.",
+                "Utilité": "Fiabilise les calculs et réduit les erreurs de type.",
             },
             {
-                "Bloc": "Valeurs metier",
-                "Principe": "Les statuts, sexes et autres valeurs recurrentes sont harmonises.",
-                "Utilite": "Evite les doublons de libelles dans les tableaux et graphiques.",
+                "Bloc": "Valeurs métier",
+                "Principe": "Les statuts, sexes et autres valeurs récurrentes sont harmonisés.",
+                "Utilité": "Évite les doublons de libellés dans les tableaux et graphiques.",
             },
         ]
     )
@@ -768,26 +768,26 @@ def render_methodology_tab(cycle_key: str = "credit", standardized_df: pd.DataFr
             render_panel_title("KYC de base")
             st.dataframe(build_general_kyc_requirements_table(), width="stretch", hide_index=True, height=260)
     elif cycle_key == "__legacy_operations_depot_retrait__":
-        render_panel_title("Catalogue des contrÃ´les SQL disponibles")
+        render_panel_title("Catalogue des contrôles SQL disponibles")
         st.dataframe(build_sql_operations_control_catalog_table(), width="stretch", hide_index=True, height=430)
         render_summary_box(
-            "Comment lire ces contrÃ´les SQL",
+            "Comment lire ces contrôles SQL",
             [
-                "Les contrÃ´les 49 Ã  68 complÃ¨tent les analyses dÃ©jÃ  visibles dans les onglets de surveillance, portefeuille et risque.",
-                "Ils relient les flux HDPM, les produits d'Ã©pargne, les demandes de crÃ©dit et les prÃªts dans une mÃªme lecture de contrÃ´le.",
-                "Le plus utile est de partir d'une alerte synthÃ©tique, puis d'ouvrir le contrÃ´le SQL correspondant pour aller jusqu'au dÃ©tail opÃ©rationnel.",
+                "Les contrôles 49 à 68 complètent les analyses déjà visibles dans les onglets de surveillance, portefeuille et risque.",
+                "Ils relient les flux HDPM, les produits d'épargne, les demandes de crédit et les prêts dans une même lecture de contrôle.",
+                "Le plus utile est de partir d'une alerte synthétique, puis d'ouvrir le contrôle SQL correspondant pour aller jusqu'au détail opérationnel.",
             ],
         )
 
     if cycle_key == "operations_depot_retrait":
-        render_panel_title("Catalogue des controles SQL disponibles")
+        render_panel_title("Catalogue des contrôles SQL disponibles")
         st.dataframe(build_sql_operations_control_catalog_table(), width="stretch", hide_index=True, height=430)
         render_summary_box(
-            "Comment lire ces controles SQL",
+            "Comment lire ces contrôles SQL",
             [
-                "Les controles 49 a 68 completent les analyses deja visibles dans les onglets de surveillance, portefeuille et risque.",
-                "Ils relient les flux HDPM, les produits d'epargne, les demandes de credit et les prets dans une meme lecture de controle.",
-                "Le plus utile est de partir d'une alerte synthetique, puis d'ouvrir le controle SQL correspondant pour aller jusqu'au detail operationnel.",
+                "Les contrôles 49 à 68 complètent les analyses déjà visibles dans les onglets de surveillance, portefeuille et risque.",
+                "Ils relient les flux HDPM, les produits d'épargne, les demandes de crédit et les prêts dans une même lecture de contrôle.",
+                "Le plus utile est de partir d'une alerte synthétique, puis d'ouvrir le contrôle SQL correspondant pour aller jusqu'au détail opérationnel.",
             ],
         )
 

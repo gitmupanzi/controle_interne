@@ -937,9 +937,9 @@ def convert_column_to_date(
 
     def expand_year_token(token: str) -> int:
         """
-        RÃ©pare les annÃ©es courtes:
+        Répare les années courtes:
         - %y suit le pivot standard de Python/pandas
-        - 206 -> 2026 (heuristique utile sur les saisies modernes tronquÃ©es)
+        - 206 -> 2026 (heuristique utile sur les saisies modernes tronquées)
         """
         year = int(token)
         if len(token) == 2:
@@ -980,11 +980,11 @@ def convert_column_to_date(
 
     def parse_numeric_date(x: str):
         """
-        Parse strict des dates numÃ©riques avec gestion:
+        Parse strict des dates numériques avec gestion:
         - FR/EN
         - YYYY-MM-DD
         - suffixe heure
-        - annÃ©es tronquÃ©es du type 206 -> 2026
+        - années tronquées du type 206 -> 2026
         """
         match = re.fullmatch(
             r"\s*(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?\s*",
