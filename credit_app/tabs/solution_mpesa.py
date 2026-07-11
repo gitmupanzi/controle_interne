@@ -9,18 +9,22 @@ import streamlit as st
 
 from credit_app.services.mpesa_analysis import (
     CURRENT_SAVINGS_REQUIRED_COLUMNS,
+    CUSTOMERS_REQUIRED_COLUMNS,
     FIXED_SAVINGS_REQUIRED_COLUMNS,
     G2_TRANSACTION_REQUIRED_COLUMNS,
     LOAN_USEFUL_COLUMNS,
     TRANSACTION_REQUIRED_COLUMNS,
     MpesaPreparedData,
     build_diagnostics,
+    build_g2_daily_savings_report,
     build_g2_entry_report,
     build_g2_dat_crosscheck,
     build_load_report,
     build_mpesa_statement,
     create_excel_export,
+    numeric_column,
     prepare_current_savings,
+    prepare_customers,
     prepare_fixed_savings,
     prepare_g2_transactions,
     prepare_loans,
@@ -80,6 +84,7 @@ def _build_prepared_data(
     fixed_raw: pd.DataFrame,
     loans_raw: pd.DataFrame,
     g2_raw: pd.DataFrame,
+    customers_raw: pd.DataFrame,
 ) -> tuple[MpesaPreparedData, dict[str, list[str]]]:
     missing = {
         "Transactions M-PESA": validate_required_columns(transactions_raw, TRANSACTION_REQUIRED_COLUMNS, "Transactions M-PESA")
@@ -93,12 +98,14 @@ def _build_prepared_data(
         else [],
         "Credits": validate_required_columns(loans_raw, {"loan_id", "customer_id"}, "Credits") if not loans_raw.empty else [],
         "Transactions G2": validate_required_columns(g2_raw, G2_TRANSACTION_REQUIRED_COLUMNS, "Transactions G2") if not g2_raw.empty else [],
+        "Clients": validate_required_columns(customers_raw, CUSTOMERS_REQUIRED_COLUMNS, "Clients") if not customers_raw.empty else [],
     }
     transactions = prepare_transactions(transactions_raw) if transactions_raw is not None and not transactions_raw.empty else pd.DataFrame()
     current = prepare_current_savings(current_raw)
     fixed = prepare_fixed_savings(fixed_raw)
     loans = prepare_loans(loans_raw)
     g2_transactions = prepare_g2_transactions(g2_raw)
+    customers = prepare_customers(customers_raw)
     load_report = build_load_report(
         {
             "Transactions M-PESA": transactions,
@@ -106,10 +113,11 @@ def _build_prepared_data(
             "DAT": fixed,
             "Credits": loans,
             "Transactions G2": g2_transactions,
+            "Clients": customers,
         },
         missing,
     )
-    return MpesaPreparedData(transactions, current, fixed, loans, load_report, g2_transactions), missing
+    return MpesaPreparedData(transactions, current, fixed, loans, load_report, g2_transactions, customers), missing
 
 
 def _period_label(transactions: pd.DataFrame) -> str:
@@ -140,6 +148,14 @@ def _filter_value_options(series: pd.Series) -> list[str]:
     return sorted(cleaned.tolist(), key=lambda value: str(value).casefold())
 
 
+def _render_vertical_summary_blocks(summary: pd.DataFrame) -> None:
+    if summary is None or not isinstance(summary, pd.DataFrame) or summary.empty:
+        return
+    table = summary[["currency_code", "details_rapport", "montant"]].copy()
+    table.columns = ["Devise", "Synthese sur le Portail BB Digital", "Montant"]
+    st.dataframe(table, width="stretch", hide_index=True)
+
+
 def _apply_local_multiselect_filters(
     df: pd.DataFrame,
     filter_columns: list[str],
@@ -165,6 +181,7 @@ def _apply_local_multiselect_filters(
                 options=options,
                 default=[],
                 key=f"{key_prefix}_{column}",
+                placeholder="Choose options",
                 help="Aucune valeur selectionnee = toutes les valeurs.",
             )
         if selected_values:
@@ -216,7 +233,14 @@ def _filter_statement(statement: pd.DataFrame) -> pd.DataFrame:
             filtered = filtered.loc[filtered["currency_code"].eq(selected_currency)]
     operation_types = sorted(filtered["type_operation"].dropna().astype(str).unique()) if "type_operation" in filtered.columns else []
     if operation_types:
-        selected_types = st.multiselect("Type d'operation", operation_types, default=operation_types, key="mpesa_filter_type")
+        selected_types = st.multiselect(
+            "Type d'operation",
+            operation_types,
+            default=[],
+            key="mpesa_filter_type",
+            placeholder="Choose options",
+            help="Aucune option choisie = tous les types d'operation.",
+        )
         if selected_types:
             filtered = filtered.loc[filtered["type_operation"].isin(selected_types)]
     if "created_at" in filtered.columns:
@@ -413,8 +437,8 @@ def _render_overview(prepared: MpesaPreparedData) -> None:
     tx = prepared.transactions
     clients = tx["customer_id"].dropna().astype(str).nunique() if "customer_id" in tx.columns else 0
     mpesa = tx.loc[tx["account_type"].eq("MPESA ACCOUNT")] if "account_type" in tx.columns else tx
-    total_in = pd.to_numeric(mpesa.get("cr", 0), errors="coerce").fillna(0).sum()
-    total_out = pd.to_numeric(mpesa.get("dr", 0), errors="coerce").fillna(0).sum()
+    total_in = numeric_column(mpesa, "cr").sum()
+    total_out = numeric_column(mpesa, "dr").sum()
     render_kpi_cards(
         [
             ("Lignes Transactions", _format_count(len(tx)), "Fichier M-PESA", "blue"),
@@ -477,6 +501,59 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         st.info("Aucun fichier Transactions G2 charge. Chargez `Transaction g2.xlsx` pour rapprocher les telephones G2 avec les DAT.")
         return
 
+    daily_report = build_g2_daily_savings_report(prepared)
+    daily_detail = daily_report.get("detail", pd.DataFrame())
+    daily_synthese = daily_report.get("synthese", pd.DataFrame())
+    daily_pivot = daily_report.get("pivot", pd.DataFrame())
+    daily_vertical_summary = daily_report.get("vertical_summary", pd.DataFrame())
+    if not daily_detail.empty:
+        render_summary_box(
+            "Rapport journalier epargnes normales / DAT",
+            [
+                "Le telephone extrait de `Opposite Party` est croise avec `msisdn` du fichier Turbo.",
+                "`Compte creer` provient du `created_at` de l'epargne courante si le fichier est charge; sinon la date DAT sert de repli.",
+                "Les lignes DAT sont affectees par montant/date du DAT; les autres restent en depot normal.",
+            ],
+        )
+        render_panel_title("Synthese journaliere par devise")
+        _render_vertical_summary_blocks(daily_vertical_summary)
+
+        render_panel_title("Detail journalier type rapport envoye")
+        daily_view = _apply_local_multiselect_filters(
+            daily_detail,
+            ["currency_code", "details_rapport", "duree", "dat_match_rule", "transaction_status"],
+            key_prefix="mpesa_daily_g2_report_filter",
+        )
+        st.caption(f"{len(daily_view)} ligne(s) du rapport journalier affichee(s).")
+        display_columns = [
+            "date",
+            "receipt_no",
+            "currency_code",
+            "details_rapport",
+            "opposite_party",
+            "duree",
+            "compte_cree",
+            "montant",
+        ]
+        display_columns = [column for column in display_columns if column in daily_view.columns]
+        st.dataframe(daily_view[display_columns], width="stretch", hide_index=True)
+
+        daily_bytes = create_excel_export(
+            {
+                "rapport_journalier_pivot": daily_pivot,
+                "rapport_journalier_vertical": daily_vertical_summary,
+                "rapport_journalier_synthese": daily_synthese,
+                "rapport_journalier_detail": daily_detail,
+            }
+        )
+        st.download_button(
+            "Telecharger le rapport journalier epargnes DAT",
+            data=daily_bytes,
+            file_name="rapport_journalier_epargnes_dat_g2.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+        )
+
     render_summary_box(
         "Rapprochement G2 / DAT",
         [
@@ -503,7 +580,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         if "reference_dat_operation" in g2_dat.columns
         else 0
     )
-    total_dat = float(pd.to_numeric(g2_dat.get("dat_final_client_devise", 0), errors="coerce").fillna(0).sum())
+    total_dat = float(numeric_column(g2_dat, "dat_final_client_devise").sum())
     render_kpi_cards(
         [
             ("Transactions G2", _format_count(len(g2_dat)), "Lignes analysees", "blue"),
@@ -519,16 +596,35 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         ["currency_code", "mode_rapprochement", "statut_rapprochement_dat", "transaction_status", "customer_id_dat", "phone_prefixe"],
         key_prefix="mpesa_g2_dat_filter",
     )
+    display_columns = [
+        "receipt_no",
+        "completion_time",
+        "currency_code",
+        "transaction_amount",
+        "opposite_party",
+        "customer_id_ref_no",
+        "dat_operation",
+        "solde_dat_operation",
+        "dat_final",
+        "produits_dat",
+        "maturites_dat",
+        "mode_rapprochement",
+        "statut_rapprochement_dat",
+    ]
+    display_columns = [column for column in display_columns if column in filtered.columns]
+    filtered_display = filtered[display_columns].copy() if display_columns else filtered
     st.caption(f"{len(filtered)} ligne(s) G2 affichee(s).")
-    st.dataframe(filtered, width="stretch", hide_index=True)
+    st.dataframe(filtered_display, width="stretch", hide_index=True)
 
     if report is None:
         g2_report = build_g2_entry_report(prepared)
         synthese = g2_report.get("synthese", pd.DataFrame())
         detail = g2_report.get("detail", pd.DataFrame())
+        pivot = g2_report.get("pivot", pd.DataFrame())
+        vertical_summary = g2_report.get("vertical_summary", pd.DataFrame())
         if not synthese.empty:
             render_panel_title("Synthese des encaissements G2")
-            st.dataframe(synthese, width="stretch", hide_index=True)
+            _render_vertical_summary_blocks(vertical_summary)
         if not detail.empty:
             render_panel_title("Detail des encaissements G2")
             detail_view = _apply_local_multiselect_filters(
@@ -540,6 +636,8 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             st.dataframe(detail_view, width="stretch", hide_index=True)
         report_bytes = create_excel_export(
             {
+                "rapport_g2_pivot": pivot,
+                "rapport_g2_vertical": vertical_summary,
                 "rapport_g2_synthese": synthese,
                 "rapport_g2_detail": detail,
                 "g2_dat": g2_dat,
@@ -626,24 +724,27 @@ def render_solution_mpesa_tab() -> None:
         g2_file = st.file_uploader("Transactions G2", type=["xlsx", "xls"], key="mpesa_g2_file")
     with upload_col2:
         fixed_file = st.file_uploader("Comptes DAT / epargne bloquee", type=["xlsx", "xls"], key="mpesa_fixed_file")
+        customers_file = st.file_uploader("Clients", type=["xlsx", "xls"], key="mpesa_customers_file")
         loans_file = st.file_uploader("Credits", type=["xlsx", "xls"], key="mpesa_loans_file")
 
     _render_expected_columns("Colonnes attendues - Transactions", TRANSACTION_REQUIRED_COLUMNS)
     _render_expected_columns("Colonnes attendues - Epargne courante", CURRENT_SAVINGS_REQUIRED_COLUMNS)
     _render_expected_columns("Colonnes attendues - DAT", FIXED_SAVINGS_REQUIRED_COLUMNS)
     _render_expected_columns("Colonnes attendues - Transactions G2", G2_TRANSACTION_REQUIRED_COLUMNS)
+    _render_expected_columns("Colonnes attendues - Clients", CUSTOMERS_REQUIRED_COLUMNS)
 
     try:
         transactions_raw = _uploaded_dataframe(transactions_file)
         current_raw = _uploaded_dataframe(current_file)
         fixed_raw = _uploaded_dataframe(fixed_file)
+        customers_raw = _uploaded_dataframe(customers_file)
         loans_raw = _uploaded_dataframe(loans_file)
         g2_raw = _uploaded_dataframe(g2_file)
     except ValueError as exc:
         st.error(str(exc))
         return
 
-    prepared, missing = _build_prepared_data(transactions_raw, current_raw, fixed_raw, loans_raw, g2_raw)
+    prepared, missing = _build_prepared_data(transactions_raw, current_raw, fixed_raw, loans_raw, g2_raw, customers_raw)
     sub_tabs = st.tabs(["Importation", "Vue d'ensemble", "Extrait client", "DAT", "G2 / DAT", "Credits", "Controle des donnees"])
     report: dict[str, Any] | None = None
     with sub_tabs[0]:

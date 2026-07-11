@@ -83,6 +83,7 @@ def apply_local_multiselect_filters(
                 options=options,
                 default=[],
                 key=f"{_safe_key(key_prefix)}_{_safe_key(column)}",
+                placeholder="Choose options",
                 help="Aucune valeur selectionnee = toutes les valeurs.",
             )
         if selected_values:
@@ -92,6 +93,18 @@ def apply_local_multiselect_filters(
     for column, selected_values in active_filters.items():
         filtered = filtered.loc[filtered[column].astype("string").str.strip().isin(selected_values)].copy()
     return filtered.reset_index(drop=True)
+
+
+def _render_dataframe(
+    df: pd.DataFrame,
+    *,
+    hide_index: bool,
+    height: int | str | None,
+) -> None:
+    kwargs: dict[str, object] = {"width": "stretch", "hide_index": hide_index}
+    if height is not None:
+        kwargs["height"] = height
+    st.dataframe(df, **kwargs)
 
 
 def render_filtered_dataframe(
@@ -104,7 +117,7 @@ def render_filtered_dataframe(
     hide_index: bool = True,
 ) -> pd.DataFrame:
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
-        st.dataframe(pd.DataFrame(), width="stretch", hide_index=hide_index, height=height)
+        _render_dataframe(pd.DataFrame(), hide_index=hide_index, height=height)
         return pd.DataFrame()
 
     filter_columns = pick_filter_columns(df, preferred_columns)
@@ -116,6 +129,5 @@ def render_filtered_dataframe(
         + (f" | {len(shown):,}".replace(",", " ") + " affichee(s)" if max_rows is not None else "")
         + "."
     )
-    st.dataframe(shown, width="stretch", hide_index=hide_index, height=height)
+    _render_dataframe(shown, hide_index=hide_index, height=height)
     return filtered
-

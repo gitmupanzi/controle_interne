@@ -6,12 +6,16 @@ import pandas as pd
 
 from credit_app.services.mpesa_analysis import (
     MpesaPreparedData,
+    build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
     build_g2_entry_report,
+    build_diagnostics,
     build_load_report,
     build_mpesa_statement,
     create_excel_export,
+    numeric_column,
     prepare_current_savings,
+    prepare_customers,
     prepare_fixed_savings,
     prepare_g2_transactions,
     prepare_loans,
@@ -166,6 +170,23 @@ class MpesaAnalysisTests(unittest.TestCase):
 
         self.assertGreater(len(export), 5000)
 
+    def test_build_statement_accepts_transactions_only(self) -> None:
+        prepared = _sample_prepared_data()
+        prepared = MpesaPreparedData(
+            transactions=prepared.transactions,
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=prepared.load_report,
+        )
+
+        report = build_mpesa_statement(prepared, "1001", {"CDF": None})
+
+        self.assertEqual(len(report["extrait"]), 2)
+        self.assertTrue(report["dat_final"].empty)
+        self.assertTrue(report["credits"].empty)
+        self.assertEqual(float(report["synthese"].iloc[0]["dat_final"]), 0.0)
+
     def test_g2_transactions_extract_phone_and_match_dat(self) -> None:
         prepared = _sample_prepared_data()
         g2 = pd.DataFrame(
@@ -198,6 +219,8 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(result.iloc[0]["reference_dat_operation"], "FA001")
         self.assertEqual(float(result.iloc[0]["solde_dat_operation_avant"]), 4000.0)
         self.assertEqual(float(result.iloc[0]["solde_dat_operation_apres"]), 5000.0)
+        self.assertEqual(float(result.iloc[0]["solde_dat_operation"]), 5000.0)
+        self.assertEqual(float(result.iloc[0]["dat_final"]), 5000.0)
         self.assertEqual(float(result.iloc[0]["variation_dat_operation"]), 1000.0)
         self.assertEqual(result.iloc[0]["mode_rapprochement"], "Receipt No = ref_no + DAT operation")
         self.assertEqual(float(result.iloc[0]["dat_final_client_devise"]), 5000.0)
@@ -231,6 +254,149 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(report["detail"].iloc[0]["details_rapport"], "DAT")
         self.assertEqual(float(report["detail"].iloc[0]["montant"]), 1000.0)
         self.assertIn("Total CDF", report["synthese"]["details_rapport"].tolist())
+        self.assertIn("montant_DAT", report["pivot"].columns)
+        self.assertEqual(float(report["pivot"].iloc[0]["montant_DAT"]), 1000.0)
+
+    def test_daily_g2_savings_report_matches_dat_by_phone_currency_and_amount(self) -> None:
+        g2 = pd.DataFrame(
+            [
+                {
+                    "Receipt No.\xa0": "DAT001",
+                    "Completion Time\xa0": "2026-07-11 12:47:24",
+                    "Opposite Party\xa0": "243826325569 - CLIENT DAT",
+                    "Currency\xa0": "CDF",
+                    "Transaction Amount\xa0": "Fc 5,000",
+                    "Transaction Status\xa0": "Completed",
+                },
+                {
+                    "Receipt No.\xa0": "DAT002",
+                    "Completion Time\xa0": "2026-07-11 12:44:13",
+                    "Opposite Party\xa0": "243826325569 - CLIENT DAT",
+                    "Currency\xa0": "CDF",
+                    "Transaction Amount\xa0": "Fc 80,000",
+                    "Transaction Status\xa0": "Completed",
+                },
+                {
+                    "Receipt No.\xa0": "LOAN001",
+                    "Completion Time\xa0": "2026-07-11 12:43:23",
+                    "Opposite Party\xa0": "243835549888 - CLIENT CREDIT",
+                    "Currency\xa0": "CDF",
+                    "Transaction Amount\xa0": "Fc 1,285",
+                    "Transaction Status\xa0": "Completed",
+                },
+                {
+                    "Receipt No.\xa0": "SAVE001",
+                    "Completion Time\xa0": "2026-07-11 10:18:58",
+                    "Opposite Party\xa0": "243822452403 - CLIENT EPARGNE",
+                    "Currency\xa0": "CDF",
+                    "Transaction Amount\xa0": "Fc 2,000",
+                    "Transaction Status\xa0": "Completed",
+                },
+            ]
+        )
+        fixed = pd.DataFrame(
+            [
+                {
+                    "customer_id": 37478,
+                    "msisdn": "243826325569",
+                    "product_name": "3 Months",
+                    "account_type": "3 MONTH Fixed Account",
+                    "balance": 85000,
+                    "currency_code": "CDF",
+                    "date_approved": "2026-07-11 11:44:14",
+                    "maturity_date": "2026-10-11 11:44:14",
+                },
+                {
+                    "customer_id": 26303,
+                    "msisdn": "243835549888",
+                    "product_name": "1 Month",
+                    "account_type": "1 Month Fixed Account",
+                    "balance": 1500,
+                    "currency_code": "CDF",
+                    "date_approved": "2026-07-11 11:46:11",
+                    "maturity_date": "2026-08-11 11:46:11",
+                },
+            ]
+        )
+        current = pd.DataFrame(
+            [
+                {
+                    "customer_id": 37478,
+                    "msisdn": "243826325569",
+                    "product_name": "Open Savings",
+                    "account_type": "Current account",
+                    "balance": 0,
+                    "currency_code": "CDF",
+                    "created_at": "2026-07-10 22:37:54",
+                    "updated_at": "2026-07-11 08:00:00",
+                }
+            ]
+        )
+        customers = pd.DataFrame(
+            [
+                {
+                    "msisdn1": "243826325569",
+                    "created_at": "2026-07-09 09:30:00",
+                }
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=prepare_current_savings(current),
+            fixed_savings=prepare_fixed_savings(fixed),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+            g2_transactions=prepare_g2_transactions(g2),
+            customers=prepare_customers(customers),
+        )
+
+        report = build_g2_daily_savings_report(prepared)
+        detail = report["detail"].set_index("receipt_no")
+
+        self.assertEqual(detail.loc["DAT001", "details_rapport"], "DAT")
+        self.assertEqual(detail.loc["DAT002", "details_rapport"], "DAT")
+        self.assertEqual(detail.loc["LOAN001", "details_rapport"], "Remboursement prets")
+        self.assertEqual(detail.loc["SAVE001", "details_rapport"], "Depot normal")
+        self.assertEqual(pd.Timestamp(detail.loc["DAT001", "compte_cree"]), pd.Timestamp("2026-07-09 09:30:00"))
+        self.assertEqual(pd.Timestamp(detail.loc["DAT001", "compte_cree_client"]), pd.Timestamp("2026-07-09 09:30:00"))
+        self.assertEqual(pd.Timestamp(detail.loc["DAT001", "compte_cree_epargne_courante"]), pd.Timestamp("2026-07-10 22:37:54"))
+        self.assertEqual(pd.Timestamp(detail.loc["DAT001", "compte_cree_dat"]), pd.Timestamp("2026-07-11 11:44:14"))
+        pivot = report["pivot"].set_index("currency_code")
+        self.assertEqual(float(pivot.loc["CDF", "montant_DAT"]), 85000.0)
+        self.assertEqual(float(pivot.loc["CDF", "montant_Remboursement prets"]), 1285.0)
+
+    def test_numeric_column_handles_missing_columns_like_zero_series(self) -> None:
+        frame = pd.DataFrame({"customer_id": ["1", "2"]})
+
+        values = numeric_column(frame, "cr")
+
+        self.assertEqual(values.tolist(), [0.0, 0.0])
+        self.assertEqual(float(values.sum()), 0.0)
+
+    def test_diagnostics_accept_transactions_without_amount_columns(self) -> None:
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(
+                [
+                    {
+                        "customer_id": "1",
+                        "reference_id": "REF001",
+                        "ref_no": "G2REF",
+                        "created_at": "2026-07-11",
+                        "currency_code": "CDF",
+                        "account_type": "MPESA ACCOUNT",
+                    }
+                ]
+            ),
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+        )
+
+        diagnostics = build_diagnostics(prepared)
+
+        self.assertFalse(diagnostics.empty)
+        self.assertIn("Mouvements dr = 0 et cr = 0", diagnostics["controle"].tolist())
 
 
 if __name__ == "__main__":

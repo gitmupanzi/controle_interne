@@ -55,6 +55,11 @@ G2_TRANSACTION_REQUIRED_COLUMNS = {
     "Opposite Party",
 }
 
+CUSTOMERS_REQUIRED_COLUMNS = {
+    "msisdn1",
+    "created_at",
+}
+
 LOAN_USEFUL_COLUMNS = {
     "loan_id",
     "customer_id",
@@ -127,6 +132,7 @@ class MpesaPreparedData:
     loans: pd.DataFrame
     load_report: pd.DataFrame
     g2_transactions: pd.DataFrame = field(default_factory=pd.DataFrame)
+    customers: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def _is_empty_text(value: Any) -> bool:
@@ -295,6 +301,8 @@ def prepare_fixed_savings(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     frame = _normalize_common_columns(dataframe if dataframe is not None else pd.DataFrame())
     if "balance" in frame.columns:
         frame["balance"] = pd.to_numeric(frame["balance"], errors="coerce").fillna(0.0)
+    if "created_at" not in frame.columns and "date_approved" in frame.columns:
+        frame["created_at"] = frame["date_approved"]
     return frame
 
 
@@ -308,6 +316,12 @@ def prepare_loans(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     return frame
 
 
+def prepare_customers(dataframe: pd.DataFrame | None) -> pd.DataFrame:
+    frame = remove_export_index_columns(dataframe if dataframe is not None else pd.DataFrame())
+    frame = _normalize_common_columns(frame)
+    return frame
+
+
 def _parse_money_series(series: pd.Series) -> pd.Series:
     cleaned = (
         series.astype("string")
@@ -317,6 +331,13 @@ def _parse_money_series(series: pd.Series) -> pd.Series:
         .replace("", pd.NA)
     )
     return pd.to_numeric(cleaned, errors="coerce")
+
+
+def numeric_column(frame: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
+    if isinstance(frame, pd.DataFrame) and column in frame.columns:
+        return pd.to_numeric(frame[column], errors="coerce").fillna(default)
+    index = frame.index if isinstance(frame, pd.DataFrame) else None
+    return pd.Series(default, index=index, dtype="float64")
 
 
 def _extract_phone_from_opposite_party(series: pd.Series) -> pd.Series:
@@ -501,6 +522,12 @@ def build_dat_final(fixed_savings: pd.DataFrame, customer_id: str) -> dict[str, 
     return frame.groupby("currency_code", dropna=False)["balance"].sum().to_dict()
 
 
+def filter_customer_frame(frame: pd.DataFrame, customer_id: str) -> pd.DataFrame:
+    if frame is None or not isinstance(frame, pd.DataFrame) or frame.empty or "customer_id" not in frame.columns:
+        return pd.DataFrame()
+    return frame.loc[frame["customer_id"].astype("string").eq(str(customer_id))].copy()
+
+
 def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None = None) -> pd.DataFrame:
     g2 = prepared.g2_transactions
     fixed = prepared.fixed_savings
@@ -532,8 +559,8 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
         fixed_tx = tx.loc[tx["account_type"].eq("FIXED SAVINGS")].copy() if "account_type" in tx.columns else pd.DataFrame()
         if not fixed_tx.empty:
             fixed_tx["variation_dat_operation"] = (
-                pd.to_numeric(fixed_tx.get("bal_after", 0), errors="coerce").fillna(0)
-                - pd.to_numeric(fixed_tx.get("bal_before", 0), errors="coerce").fillna(0)
+                numeric_column(fixed_tx, "bal_after")
+                - numeric_column(fixed_tx, "bal_before")
             )
             fixed_tx["reference_dat_operation_ligne"] = fixed_tx["reference_id"].apply(
                 lambda value: extract_prefixed_reference(value, "FA")
@@ -599,7 +626,7 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
 
     dat = fixed.copy()
     dat["phone_prefixe"] = normalize_phone(dat["msisdn"])
-    dat["balance"] = pd.to_numeric(dat.get("balance", 0), errors="coerce").fillna(0)
+    dat["balance"] = numeric_column(dat, "balance")
     dat["currency_code"] = clean_text(dat["currency_code"]).str.upper() if "currency_code" in dat.columns else ""
     dat_by_customer = (
         dat.groupby(["customer_id", "currency_code"], as_index=False, dropna=False)
@@ -630,7 +657,7 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
         output = output.drop(columns=["customer_id"])
     output = output.merge(dat_by_phone, on=["phone_prefixe", "currency_code"], how="left")
 
-    output["nb_lignes_fixed_savings"] = pd.to_numeric(output.get("nb_lignes_fixed_savings", 0), errors="coerce").fillna(0).astype(int)
+    output["nb_lignes_fixed_savings"] = numeric_column(output, "nb_lignes_fixed_savings").astype(int)
     for column in [
         "reference_dat_operation",
         "descriptions_dat_operation",
@@ -660,6 +687,9 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
     output["nombre_dat_client_devise"] = output["nombre_dat_par_ref_no"].where(has_dat_by_ref, output["nombre_dat_par_phone"])
     output["produits_dat"] = output["produits_dat_par_ref_no"].where(has_dat_by_ref, output["produits_dat_par_phone"])
     output["maturites_dat"] = output["maturites_dat_par_ref_no"].where(has_dat_by_ref, output["maturites_dat_par_phone"])
+    output["dat_operation"] = output["reference_dat_operation"].astype("string").fillna("").replace("", pd.NA)
+    output["solde_dat_operation"] = pd.to_numeric(output["solde_dat_operation_apres"], errors="coerce")
+    output["dat_final"] = pd.to_numeric(output["dat_final_client_devise"], errors="coerce")
 
     if customer_id is not None:
         customer_text = str(customer_id)
@@ -706,6 +736,9 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
         "telephones_ref_no",
         "references_transactions",
         "references_dat_transactions",
+        "dat_operation",
+        "solde_dat_operation",
+        "dat_final",
         "reference_dat_operation",
         "solde_dat_operation_avant",
         "solde_dat_operation_apres",
@@ -743,14 +776,117 @@ def classify_g2_entry_report(row: pd.Series) -> str:
     return "Depot normal"
 
 
+def build_entry_pivot(detail: pd.DataFrame) -> pd.DataFrame:
+    if detail is None or not isinstance(detail, pd.DataFrame) or detail.empty:
+        return pd.DataFrame()
+    required_columns = {"currency_code", "details_rapport", "montant"}
+    if not required_columns.issubset(detail.columns):
+        return pd.DataFrame()
+
+    work = detail.copy()
+    work["currency_code"] = clean_text(work["currency_code"]).str.upper()
+    work["details_rapport"] = clean_text(work["details_rapport"])
+    work["montant"] = numeric_column(work, "montant")
+    amount_pivot = (
+        work.pivot_table(
+            index="currency_code",
+            columns="details_rapport",
+            values="montant",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reset_index()
+        .rename_axis(None, axis=1)
+    )
+    count_pivot = (
+        work.pivot_table(
+            index="currency_code",
+            columns="details_rapport",
+            values="montant",
+            aggfunc="count",
+            fill_value=0,
+        )
+        .reset_index()
+        .rename_axis(None, axis=1)
+    )
+    amount_categories = [column for column in amount_pivot.columns if column != "currency_code"]
+    count_categories = [column for column in count_pivot.columns if column != "currency_code"]
+    amount_pivot = amount_pivot.rename(columns={column: f"montant_{column}" for column in amount_categories})
+    count_pivot = count_pivot.rename(columns={column: f"nombre_{column}" for column in count_categories})
+    pivot = amount_pivot.merge(count_pivot, on="currency_code", how="outer").fillna(0)
+
+    preferred_details = ["DAT", "Depot normal", "Remboursement prets"]
+    for detail_name in preferred_details:
+        amount_column = f"montant_{detail_name}"
+        count_column = f"nombre_{detail_name}"
+        if amount_column not in pivot.columns:
+            pivot[amount_column] = 0.0
+        if count_column not in pivot.columns:
+            pivot[count_column] = 0
+
+    amount_columns = [column for column in pivot.columns if column.startswith("montant_")]
+    count_columns = [column for column in pivot.columns if column.startswith("nombre_")]
+    pivot["montant_total"] = pivot[amount_columns].sum(axis=1)
+    pivot["nombre_total"] = pivot[count_columns].sum(axis=1)
+
+    ordered = ["currency_code"]
+    for detail_name in preferred_details:
+        ordered.extend([f"montant_{detail_name}", f"nombre_{detail_name}"])
+    ordered.extend(["montant_total", "nombre_total"])
+    rest = [column for column in pivot.columns if column not in ordered]
+    return pivot[ordered + rest].sort_values("currency_code").reset_index(drop=True)
+
+
+def build_entry_vertical_summary(detail: pd.DataFrame) -> pd.DataFrame:
+    if detail is None or not isinstance(detail, pd.DataFrame) or detail.empty:
+        return pd.DataFrame(columns=["currency_code", "details_rapport", "montant"])
+    required_columns = {"currency_code", "details_rapport", "montant"}
+    if not required_columns.issubset(detail.columns):
+        return pd.DataFrame(columns=["currency_code", "details_rapport", "montant"])
+
+    work = detail.copy()
+    work["currency_code"] = clean_text(work["currency_code"]).str.upper()
+    work["details_rapport"] = clean_text(work["details_rapport"])
+    work["montant"] = numeric_column(work, "montant")
+    grouped = (
+        work.groupby(["currency_code", "details_rapport"], as_index=False, dropna=False)
+        .agg(montant=("montant", "sum"))
+    )
+    currencies = sorted(value for value in grouped["currency_code"].dropna().astype(str).unique() if value)
+    categories = ["DAT", "Depot normal", "Remboursement prets"]
+    rows: list[dict[str, object]] = []
+    for currency in currencies:
+        currency_group = grouped.loc[grouped["currency_code"].eq(currency)]
+        values = {
+            str(row["details_rapport"]): float(row["montant"])
+            for _, row in currency_group.iterrows()
+        }
+        for category in categories:
+            rows.append(
+                {
+                    "currency_code": currency,
+                    "details_rapport": category,
+                    "montant": values.get(category, 0.0),
+                }
+            )
+        rows.append(
+            {
+                "currency_code": currency,
+                "details_rapport": f"Total {currency}",
+                "montant": sum(values.values()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def build_g2_entry_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame]:
     detail = build_g2_dat_crosscheck(prepared)
     if detail.empty:
-        return {"detail": pd.DataFrame(), "synthese": pd.DataFrame()}
+        return {"detail": pd.DataFrame(), "synthese": pd.DataFrame(), "pivot": pd.DataFrame(), "vertical_summary": pd.DataFrame()}
 
     report = detail.copy()
     report["details_rapport"] = report.apply(classify_g2_entry_report, axis=1)
-    report["montant"] = pd.to_numeric(report.get("transaction_amount_numeric", 0), errors="coerce").fillna(0).abs()
+    report["montant"] = numeric_column(report, "transaction_amount_numeric").abs()
     report["date"] = pd.to_datetime(report.get("completion_time"), errors="coerce")
     report["duree"] = np.where(
         report["details_rapport"].eq("DAT"),
@@ -794,7 +930,294 @@ def build_g2_entry_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame
     totals["details_rapport"] = "Total " + totals["currency_code"].astype("string").fillna("")
     synthese = concat_frames_stable([synthese, totals[synthese.columns]]).reset_index(drop=True)
 
-    return {"detail": report_detail, "synthese": synthese}
+    return {
+        "detail": report_detail,
+        "synthese": synthese,
+        "pivot": build_entry_pivot(report_detail),
+        "vertical_summary": build_entry_vertical_summary(report_detail),
+    }
+
+
+def _is_round_savings_amount(amount: object, currency: object) -> bool:
+    value = pd.to_numeric(pd.Series([amount]), errors="coerce").iloc[0]
+    if pd.isna(value) or value <= 0:
+        return False
+    currency_text = str(currency or "").upper()
+    if currency_text == "CDF":
+        return abs(value % 500) < 0.01 or abs(value % 500 - 500) < 0.01
+    if currency_text == "USD":
+        return abs(value % 1) < 0.01
+    return True
+
+
+def _best_subset_for_target(items: list[tuple[int, float]], target: float, tolerance: float = 0.01) -> list[int]:
+    if not items or pd.isna(target) or target <= 0:
+        return []
+    best: list[int] = []
+    best_diff = float("inf")
+
+    def walk(position: int, selected: list[int], total: float) -> bool:
+        nonlocal best, best_diff
+        diff = abs(total - target)
+        if diff < best_diff:
+            best = selected.copy()
+            best_diff = diff
+        if diff <= tolerance:
+            return True
+        if position >= len(items) or total > target + tolerance:
+            return False
+        for index in range(position, len(items)):
+            row_index, amount = items[index]
+            if walk(index + 1, selected + [row_index], total + amount):
+                return True
+        return False
+
+    walk(0, [], 0.0)
+    return best if best_diff <= tolerance else []
+
+
+def _build_daily_dat_assignments(g2: pd.DataFrame, fixed: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "receipt_no",
+        "dat_customer_id",
+        "duree",
+        "compte_cree",
+        "maturity_date",
+        "dat_balance",
+        "dat_match_rule",
+    ]
+    if g2.empty:
+        return pd.DataFrame(columns=columns)
+
+    assignments = pd.DataFrame({"receipt_no": g2.get("receipt_no", pd.Series(dtype="string"))})
+    for column in columns[1:]:
+        assignments[column] = pd.NA
+    if fixed.empty or "msisdn" not in fixed.columns:
+        return assignments
+
+    dat = fixed.copy()
+    dat["phone_prefixe"] = normalize_phone(dat["msisdn"])
+    dat["currency_code"] = clean_text(dat.get("currency_code", pd.Series("", index=dat.index))).str.upper()
+    dat["balance"] = numeric_column(dat, "balance")
+    dat["compte_cree"] = pd.to_datetime(
+        dat.get("created_at", dat.get("date_approved", pd.Series(pd.NaT, index=dat.index))),
+        errors="coerce",
+    )
+    if "product_name" not in dat.columns:
+        dat["product_name"] = dat.get("account_type", pd.Series("", index=dat.index))
+    dat["jour_creation"] = dat["compte_cree"].dt.date
+
+    tx = g2.copy()
+    tx["receipt_no"] = clean_identifier(tx.get("receipt_no", pd.Series("", index=tx.index)))
+    tx["phone_prefixe"] = normalize_phone(tx.get("phone_prefixe", tx.get("phone", pd.Series("", index=tx.index))))
+    tx["currency_code"] = clean_text(tx.get("currency_code", pd.Series("", index=tx.index))).str.upper()
+    tx["montant"] = numeric_column(tx, "transaction_amount_numeric").abs()
+    tx["date"] = pd.to_datetime(tx.get("completion_time", pd.Series(pd.NaT, index=tx.index)), errors="coerce")
+    tx["jour"] = tx["date"].dt.date
+
+    assignment_by_receipt: dict[str, dict[str, object]] = {}
+    group_columns = ["phone_prefixe", "currency_code", "jour"]
+    for group_key, group in tx.groupby(group_columns, dropna=False):
+        phone, currency, day = group_key
+        if _is_empty_text(phone) or _is_empty_text(currency) or pd.isna(day):
+            continue
+        dat_group = dat.loc[
+            dat["phone_prefixe"].astype("string").eq(str(phone))
+            & dat["currency_code"].astype("string").eq(str(currency))
+            & dat["jour_creation"].eq(day)
+        ].copy()
+        if dat_group.empty:
+            continue
+
+        unassigned = {
+            int(index): float(value)
+            for index, value in group["montant"].items()
+            if not pd.isna(value) and float(value) > 0
+        }
+        dat_group = dat_group.sort_values(["compte_cree", "balance"], ascending=[False, False])
+        for dat_index, dat_row in dat_group.iterrows():
+            items = sorted(unassigned.items(), key=lambda item: item[1], reverse=True)
+            selected_indexes = _best_subset_for_target(items, float(dat_row.get("balance", 0)))
+            if not selected_indexes:
+                continue
+            for tx_index in selected_indexes:
+                receipt_no = str(tx.loc[tx_index, "receipt_no"])
+                assignment_by_receipt[receipt_no] = {
+                    "dat_customer_id": dat_row.get("customer_id", pd.NA),
+                    "duree": dat_row.get("product_name", pd.NA),
+                    "compte_cree": dat_row.get("compte_cree", pd.NaT),
+                    "maturity_date": dat_row.get("maturity_date", pd.NaT),
+                    "dat_balance": dat_row.get("balance", np.nan),
+                    "dat_match_rule": "telephone + devise + montant DAT du jour",
+                }
+                unassigned.pop(tx_index, None)
+
+        has_dat_assignment = any(
+            str(receipt_no) in assignment_by_receipt
+            for receipt_no in group["receipt_no"].astype("string").fillna("")
+        )
+        if has_dat_assignment:
+            latest_dat = dat_group.iloc[0]
+            for tx_index, amount in unassigned.items():
+                if _is_round_savings_amount(amount, currency):
+                    receipt_no = str(tx.loc[tx_index, "receipt_no"])
+                    assignment_by_receipt[receipt_no] = {
+                        "dat_customer_id": latest_dat.get("customer_id", pd.NA),
+                        "duree": latest_dat.get("product_name", pd.NA),
+                        "compte_cree": latest_dat.get("compte_cree", pd.NaT),
+                        "maturity_date": latest_dat.get("maturity_date", pd.NaT),
+                        "dat_balance": latest_dat.get("balance", np.nan),
+                        "dat_match_rule": "telephone + devise + DAT du jour + montant arrondi",
+                    }
+
+    for index, receipt_no in assignments["receipt_no"].astype("string").fillna("").items():
+        match = assignment_by_receipt.get(str(receipt_no))
+        if not match:
+            continue
+        for column, value in match.items():
+            assignments.loc[index, column] = value
+    return assignments[columns]
+
+
+def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame]:
+    g2 = prepared.g2_transactions
+    if g2.empty:
+        return {"detail": pd.DataFrame(), "synthese": pd.DataFrame(), "pivot": pd.DataFrame(), "vertical_summary": pd.DataFrame()}
+
+    report = g2.copy()
+    report["receipt_no"] = clean_identifier(report.get("receipt_no", pd.Series("", index=report.index)))
+    report["date"] = pd.to_datetime(report.get("completion_time"), errors="coerce")
+    report["montant"] = numeric_column(report, "transaction_amount_numeric").abs()
+    report["currency_code"] = clean_text(report.get("currency_code", pd.Series("", index=report.index))).str.upper()
+    report["phone_prefixe"] = normalize_phone(report.get("phone_prefixe", report.get("phone", pd.Series("", index=report.index))))
+
+    assignments = _build_daily_dat_assignments(report, prepared.fixed_savings)
+    if not assignments.empty:
+        report = report.merge(assignments, on="receipt_no", how="left")
+    else:
+        report["dat_customer_id"] = pd.NA
+        report["duree"] = pd.NA
+        report["compte_cree"] = pd.NaT
+        report["maturity_date"] = pd.NaT
+        report["dat_balance"] = np.nan
+        report["dat_match_rule"] = pd.NA
+
+    is_dat = report["dat_customer_id"].astype("string").fillna("").ne("")
+    report["details_rapport"] = np.where(is_dat, "DAT", "Depot normal")
+    report["duree"] = report["duree"].where(is_dat, "-")
+    report["compte_cree_dat"] = pd.to_datetime(report["compte_cree"], errors="coerce")
+
+    customers = prepared.customers
+    if not customers.empty and {"msisdn1", "created_at"}.issubset(customers.columns):
+        customer_accounts = customers.copy()
+        customer_accounts["phone_prefixe"] = normalize_phone(customer_accounts["msisdn1"])
+        customer_accounts["compte_cree_client"] = pd.to_datetime(customer_accounts["created_at"], errors="coerce")
+        customer_summary = (
+            customer_accounts.dropna(subset=["phone_prefixe", "compte_cree_client"])
+            .sort_values("compte_cree_client")
+            .groupby("phone_prefixe", as_index=False, dropna=False)
+            .agg(compte_cree_client=("compte_cree_client", "min"))
+        )
+        report = report.merge(customer_summary, on="phone_prefixe", how="left")
+    else:
+        report["compte_cree_client"] = pd.NaT
+
+    current = prepared.current_savings
+    if not current.empty and {"msisdn", "currency_code", "created_at"}.issubset(current.columns):
+        current_accounts = current.copy()
+        current_accounts["phone_prefixe"] = normalize_phone(current_accounts["msisdn"])
+        current_accounts["currency_code"] = clean_text(current_accounts["currency_code"]).str.upper()
+        current_accounts["compte_cree_epargne_courante"] = pd.to_datetime(current_accounts["created_at"], errors="coerce")
+        current_summary = (
+            current_accounts.dropna(subset=["phone_prefixe", "currency_code", "compte_cree_epargne_courante"])
+            .sort_values("compte_cree_epargne_courante")
+            .groupby(["phone_prefixe", "currency_code"], as_index=False, dropna=False)
+            .agg(
+                current_customer_id=("customer_id", first_non_empty),
+                compte_cree_epargne_courante=("compte_cree_epargne_courante", "min"),
+            )
+        )
+        report = report.merge(current_summary, on=["phone_prefixe", "currency_code"], how="left")
+    else:
+        report["current_customer_id"] = pd.NA
+        report["compte_cree_epargne_courante"] = pd.NaT
+    report["compte_cree"] = (
+        pd.to_datetime(report["compte_cree_client"], errors="coerce")
+        .combine_first(pd.to_datetime(report["compte_cree_epargne_courante"], errors="coerce"))
+        .combine_first(report["compte_cree_dat"])
+    )
+
+    has_same_day_dat_phone = pd.Series(False, index=report.index)
+    fixed = prepared.fixed_savings
+    if not fixed.empty and "msisdn" in fixed.columns:
+        dat = fixed.copy()
+        dat["phone_prefixe"] = normalize_phone(dat["msisdn"])
+        dat["currency_code"] = clean_text(dat.get("currency_code", pd.Series("", index=dat.index))).str.upper()
+        dat["compte_cree"] = pd.to_datetime(
+            dat.get("created_at", dat.get("date_approved", pd.Series(pd.NaT, index=dat.index))),
+            errors="coerce",
+        )
+        dat_keys = set(
+            dat.dropna(subset=["phone_prefixe", "currency_code", "compte_cree"])
+            .assign(jour=lambda frame: frame["compte_cree"].dt.date)
+            [["phone_prefixe", "currency_code", "jour"]]
+            .astype("string")
+            .itertuples(index=False, name=None)
+        )
+        tx_keys = (
+            report.assign(jour=report["date"].dt.date)[["phone_prefixe", "currency_code", "jour"]]
+            .astype("string")
+            .itertuples(index=False, name=None)
+        )
+        has_same_day_dat_phone = pd.Series([key in dat_keys for key in tx_keys], index=report.index)
+
+    unusual_same_day_dat_amount = (
+        ~is_dat
+        & has_same_day_dat_phone
+        & ~report.apply(lambda row: _is_round_savings_amount(row.get("montant"), row.get("currency_code")), axis=1)
+    )
+    report.loc[unusual_same_day_dat_amount, "details_rapport"] = "Remboursement prets"
+
+    detail_columns = [
+        "date",
+        "receipt_no",
+        "details_rapport",
+        "opposite_party",
+        "phone_prefixe",
+        "duree",
+        "compte_cree",
+        "montant",
+        "currency_code",
+        "current_customer_id",
+        "dat_customer_id",
+        "compte_cree_client",
+        "compte_cree_epargne_courante",
+        "compte_cree_dat",
+        "maturity_date",
+        "dat_balance",
+        "dat_match_rule",
+        "transaction_status",
+    ]
+    detail_columns = [column for column in detail_columns if column in report.columns]
+    detail = report[detail_columns].sort_values(["currency_code", "date"], ascending=[True, False]).reset_index(drop=True)
+
+    synthese = (
+        detail.groupby(["currency_code", "details_rapport"], as_index=False, dropna=False)
+        .agg(nombre=("receipt_no", "count"), montant=("montant", "sum"))
+        .sort_values(["currency_code", "details_rapport"])
+    )
+    totals = (
+        detail.groupby("currency_code", as_index=False, dropna=False)
+        .agg(nombre=("receipt_no", "count"), montant=("montant", "sum"))
+    )
+    totals["details_rapport"] = "Total " + totals["currency_code"].astype("string").fillna("")
+    synthese = concat_frames_stable([synthese, totals[synthese.columns]]).reset_index(drop=True)
+    return {
+        "detail": detail,
+        "synthese": synthese,
+        "pivot": build_entry_pivot(detail),
+        "vertical_summary": build_entry_vertical_summary(detail),
+    }
 
 
 def search_customers(query: object, prepared: MpesaPreparedData) -> pd.DataFrame:
@@ -869,9 +1292,9 @@ def build_mpesa_statement(
     opening_balances = opening_balances or {}
     transactions = prepared.transactions
     tx_client = transactions.loc[transactions["customer_id"].eq(str(customer_id))].copy()
-    dat_client = prepared.fixed_savings.loc[prepared.fixed_savings["customer_id"].eq(str(customer_id))].copy()
-    savings_client = prepared.current_savings.loc[prepared.current_savings["customer_id"].eq(str(customer_id))].copy()
-    loans_client = prepared.loans.loc[prepared.loans["customer_id"].eq(str(customer_id))].copy() if not prepared.loans.empty else pd.DataFrame()
+    dat_client = filter_customer_frame(prepared.fixed_savings, str(customer_id))
+    savings_client = filter_customer_frame(prepared.current_savings, str(customer_id))
+    loans_client = filter_customer_frame(prepared.loans, str(customer_id))
 
     if tx_client.empty:
         raise ValueError(f"Aucune transaction trouvee pour le client {customer_id}.")
@@ -880,7 +1303,7 @@ def build_mpesa_statement(
         situation_date = pd.to_datetime(transactions["created_at"], errors="coerce").max()
         dat_client["statut_dat"] = np.select(
             [
-                pd.to_numeric(dat_client.get("balance", 0), errors="coerce").fillna(0).le(0),
+                numeric_column(dat_client, "balance").le(0),
                 dat_client.get("maturity_date", pd.Series(pd.NaT, index=dat_client.index)).notna()
                 & dat_client.get("maturity_date", pd.Series(pd.NaT, index=dat_client.index)).lt(situation_date),
             ],
@@ -1086,11 +1509,13 @@ def build_diagnostics(prepared: MpesaPreparedData, customer_id: str | None = Non
     add("Lignes sans ref_no", ref_no_missing, "OK" if ref_no_missing == 0 else "Information")
     invalid_dates = int(pd.to_datetime(tx["created_at"], errors="coerce").isna().sum()) if "created_at" in tx.columns else len(tx)
     add("Dates invalides", invalid_dates, "OK" if invalid_dates == 0 else "A verifier")
-    zero_moves = int((pd.to_numeric(tx.get("dr", 0), errors="coerce").fillna(0).eq(0) & pd.to_numeric(tx.get("cr", 0), errors="coerce").fillna(0).eq(0)).sum())
+    dr_values = numeric_column(tx, "dr")
+    cr_values = numeric_column(tx, "cr")
+    zero_moves = int((dr_values.eq(0) & cr_values.eq(0)).sum())
     add("Mouvements dr = 0 et cr = 0", zero_moves, "OK" if zero_moves == 0 else "A verifier")
-    both_dr_cr = int((pd.to_numeric(tx.get("dr", 0), errors="coerce").fillna(0).gt(0) & pd.to_numeric(tx.get("cr", 0), errors="coerce").fillna(0).gt(0)).sum())
+    both_dr_cr = int((dr_values.gt(0) & cr_values.gt(0)).sum())
     add("Lignes avec dr > 0 et cr > 0", both_dr_cr, "OK" if both_dr_cr == 0 else "A verifier")
-    negative_balance = int((pd.to_numeric(tx.get("bal_before", 0), errors="coerce").fillna(0).lt(0) | pd.to_numeric(tx.get("bal_after", 0), errors="coerce").fillna(0).lt(0)).sum())
+    negative_balance = int((numeric_column(tx, "bal_before").lt(0) | numeric_column(tx, "bal_after").lt(0)).sum())
     add("Soldes bal_before/bal_after negatifs", negative_balance, "OK" if negative_balance == 0 else "A verifier")
     empty_currency = int(tx["currency_code"].apply(_is_empty_text).sum()) if "currency_code" in tx.columns else len(tx)
     add("currency_code vide", empty_currency, "OK" if empty_currency == 0 else "A verifier")
@@ -1174,8 +1599,14 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         "Mouvements_Epargne": report.get("mouvements_epargne", pd.DataFrame()),
         "Credits": report.get("credits", pd.DataFrame()),
         "G2_DAT": report.get("g2_dat", pd.DataFrame()),
+        "Rapport_G2_Pivot": report.get("rapport_g2_pivot", pd.DataFrame()),
+        "Rapport_G2_Vertical": report.get("rapport_g2_vertical", pd.DataFrame()),
         "Rapport_G2_Synthese": report.get("rapport_g2_synthese", pd.DataFrame()),
         "Rapport_G2_Detail": report.get("rapport_g2_detail", pd.DataFrame()),
+        "Rapport_Journalier_Pivot": report.get("rapport_journalier_pivot", pd.DataFrame()),
+        "Rapport_Journalier_Vertical": report.get("rapport_journalier_vertical", pd.DataFrame()),
+        "Rapport_Journalier_Synthese": report.get("rapport_journalier_synthese", pd.DataFrame()),
+        "Rapport_Journalier_Detail": report.get("rapport_journalier_detail", pd.DataFrame()),
         "Diagnostics": report.get("diagnostics", pd.DataFrame()),
     }
     buffer = BytesIO()

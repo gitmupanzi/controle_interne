@@ -16,6 +16,9 @@ L’application permet de :
 - conserver une synthèse standard visible pendant toute la navigation
 - produire des analyses par onglet : vue d’ensemble, audit et contrôle, surveillance, portefeuille, risque, qualité, export et méthode
 - générer des watchlists, des lectures métier et des actions prioritaires selon le cycle actif
+- analyser la solution M-PESA / Bisou Bisou Digital par chargement de fichiers Excel
+- rapprocher les transactions G2 avec les comptes d’épargne courante, les comptes DAT et le fichier clients Turbo
+- produire un rapport journalier des encaissements G2 par devise, avec détail, synthèse verticale et exports Excel
 
 L’objectif est de fournir à la direction, au contrôle interne, à la conformité et aux responsables opérationnels une lecture exploitable des risques, anomalies, volumes, écarts de procédure et points de contrôle.
 
@@ -48,25 +51,38 @@ Chaque cycle dispose :
 ### Environnement Python utilisé
 
 ```text
+Ordinateur principal :
+C:\Users\Benjamin-mupanzi\AppData\Local\anaconda3
+
+Autre ordinateur :
 C:\ProgramData\anaconda3
+```
+
+Pour éviter de modifier toutes les commandes, définir d’abord la variable `$PYTHON` selon l’ordinateur utilisé :
+
+```powershell
+$PYTHON = 'C:\Users\Benjamin-mupanzi\AppData\Local\anaconda3\python.exe'
+
+# Sur un autre ordinateur :
+# $PYTHON = 'C:\ProgramData\anaconda3\python.exe'
 ```
 
 ### Installer les dépendances
 
 ```powershell
-& 'C:\ProgramData\anaconda3\python.exe' -m pip install -r requirements.txt
+& $PYTHON -m pip install -r requirements.txt
 ```
 
 ### Lancer l’application
 
 ```powershell
-& 'C:\ProgramData\anaconda3\python.exe' -m streamlit run .\controle_interne.py
+& $PYTHON -m streamlit run .\controle_interne.py
 ```
 
 ### Lancer les tests
 
 ```powershell
-& 'C:\ProgramData\anaconda3\python.exe' -m unittest discover -s tests -v
+& $PYTHON -m unittest discover -s tests -v
 ```
 
 ## Sources de données
@@ -77,6 +93,7 @@ L’application supporte :
 - le téléversement de plusieurs fichiers Excel détaillés pour compilation
 - la relecture de fichiers déjà déposés dans `line_list/`
 - la compilation de plusieurs fichiers inclus présents dans `line_list/`
+- le chargement indépendant des fichiers M-PESA / G2 / Turbo dans l’onglet `Solution M-PESA`
 
 Références de standardisation :
 
@@ -137,6 +154,7 @@ Pour le cycle épargne, le taux `2300` signifie :
 - `Qualité`
 - `Export`
 - `Méthode`
+- `Solution M-PESA`
 
 Onglet conditionnel :
 
@@ -154,6 +172,7 @@ Onglet conditionnel :
 - `Qualité` : expose les anomalies, les valeurs manquantes et le mapping source vers standard.
 - `Export` : permet de télécharger les données standardisées et un pack Excel.
 - `Méthode` : documente les conventions, les règles de lecture, la couverture et les limites d’interprétation.
+- `Solution M-PESA` : analyse les transactions M-PESA/G2 et les fichiers Turbo par téléversement, sans connexion directe à Perfect Vision.
 
 ## Fonctions métier déjà intégrées
 
@@ -294,6 +313,78 @@ Ce rapport permet notamment :
 
 Si une seule extraction est présente, l’application le signale simplement avec un message en français courant.
 
+## Solution M-PESA / G2 / Turbo
+
+L’onglet `Solution M-PESA` est un module indépendant qui fonctionne par téléversement de fichiers Excel. Il sert à analyser les encaissements M-PESA/G2, les comptes d’épargne courante et les dépôts à terme issus de la solution Bisou Bisou Digital / Turbo.
+
+### Fichiers acceptés
+
+Les fichiers sont chargés directement dans l’onglet :
+
+- `Transactions M-PESA`
+  Fichier interne des mouvements M-PESA, utile quand il contient notamment `customer_id`, `msisdn1`, `account_type`, `ref_no`, `dr`, `cr`, `bal_before`, `bal_after`, `created_at`.
+- `Transactions G2`
+  Fichier des transactions G2 du jour, avec `Receipt No`, `Completion Time`, `Opposite Party`, `Transaction Status`, `Currency`, `Transaction Amount`, `Balance`.
+- `Comptes d’épargne courante`
+  Fichier Turbo des comptes courants, avec `customer_id`, `msisdn`, `currency_code`, `created_at`, `updated_at`.
+- `Comptes DAT / épargne bloquée`
+  Fichier Turbo des comptes DAT, avec `customer_id`, `msisdn`, `product_name`, `account_type`, `balance`, `currency_code`, `date_approved`, `maturity_date`.
+- `Clients`
+  Fichier client Turbo, avec `msisdn1` et `created_at`. Il sert à retrouver la date de création du compte à partir du numéro de téléphone.
+- `Crédits`
+  Fichier facultatif pour enrichir l’extrait client et les diagnostics.
+
+### Règles de rapprochement
+
+L’application normalise les numéros de téléphone au format `243...`, puis croise les données selon les règles suivantes :
+
+- `Transactions G2.Opposite Party` sert à extraire le téléphone du client.
+- `Transactions G2.Currency` est comparé à `currency_code` quand la source contient une devise.
+- Le fichier `Clients` est prioritaire pour retrouver `Compte créer` via `msisdn1`.
+- Si la date client n’est pas trouvée, l’application utilise `created_at` du compte d’épargne courante.
+- Si aucune date d’épargne courante n’est disponible, l’application utilise la date DAT (`created_at` ou `date_approved`) comme repli.
+- Les lignes DAT sont identifiées à partir du téléphone, de la devise, du jour et du montant DAT.
+- Les autres lignes restent en `Depot normal`, sauf signal particulier classé en `Remboursement prets`.
+
+### Restitutions disponibles
+
+Le sous-onglet `G2 / DAT` produit :
+
+- une synthèse verticale des encaissements G2 dans un seul tableau :
+  `Devise`, `Synthese sur le Portail BB Digital`, `Montant`
+- un détail unique des encaissements G2 avec `currency_code`, au lieu de tableaux séparés CDF et USD
+- un rapprochement global G2 / DAT
+- un export Excel du rapport journalier
+
+Exemple de synthèse attendue :
+
+```text
+Devise | Synthese sur le Portail BB Digital | Montant
+CDF    | DAT                                | 363 000
+CDF    | Depot normal                       | 1 735 000
+CDF    | Remboursement prets                | 1 285
+CDF    | Total CDF                          | 2 099 285
+USD    | DAT                                | 1 550
+USD    | Depot normal                       | 408
+USD    | Remboursement prets                | 0
+USD    | Total USD                          | 1 958
+```
+
+### Exports M-PESA
+
+Les exports Excel du module peuvent contenir :
+
+- `G2_DAT`
+- `Rapport_G2_Pivot`
+- `Rapport_G2_Vertical`
+- `Rapport_G2_Synthese`
+- `Rapport_G2_Detail`
+- `Rapport_Journalier_Pivot`
+- `Rapport_Journalier_Vertical`
+- `Rapport_Journalier_Synthese`
+- `Rapport_Journalier_Detail`
+- `Diagnostics`
+
 ## Cycle Suivi clients CRM
 
 Le cycle `Suivi clients CRM` est conçu pour les exports CRMPlus Zoho.
@@ -357,6 +448,8 @@ L’onglet `Export` permet de télécharger :
   les contrôles qualité
   le mapping des colonnes
 
+Le module `Solution M-PESA` dispose aussi de ses propres exports Excel pour les rapports G2/DAT et les diagnostics de chargement.
+
 ## Structure du projet
 
 ```text
@@ -371,6 +464,8 @@ controle_interne/
 |   |-- control_references.py
 |   |-- domain.py
 |   |-- ui.py
+|   |-- services/
+|   |   |-- mpesa_analysis.py
 |   |-- colonne_valeur/
 |   |   |-- colonne_nettoyage.py
 |   |   |-- valeurs_nettoyage.py
@@ -389,6 +484,8 @@ controle_interne/
 |   |   |-- quality.py
 |   |   |-- export.py
 |   |   |-- methodology.py
+|   |   |-- solution_mpesa.py
+|   |   |-- table_filters.py
 |-- data/
 |   |-- Rename_columns.xlsx
 |   |-- Replace_values.xlsx
@@ -396,23 +493,26 @@ controle_interne/
 |-- SOP/
 |-- tests/
 |   |-- test_credit_domain.py
+|   |-- test_mpesa_analysis.py
 ```
 
 ## Fichiers principaux
 
-- application principale : [controle_interne.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/controle_interne.py)
-- logique métier : [credit_app/domain.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/domain.py)
-- référentiels métiers : [credit_app/control_references.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/control_references.py)
-- cycles et presets : [credit_app/cycles.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/cycles.py)
-- composants UI : [credit_app/ui.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/ui.py)
-- synthèse standard : [credit_app/tabs/overview.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/overview.py)
-- audit et contrôle : [credit_app/tabs/audit_control.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/audit_control.py)
-- actions CRM : [credit_app/tabs/crm_clients.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/crm_clients.py)
-- surveillance : [credit_app/tabs/surveillance.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/surveillance.py)
-- portefeuille : [credit_app/tabs/portfolio.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/portfolio.py)
-- risque : [credit_app/tabs/risk.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/risk.py)
-- qualité : [credit_app/tabs/quality.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/quality.py)
-- méthode : [credit_app/tabs/methodology.py](/C:/Users/Benjamin%20MUPANZI/Documents/controle_interne/credit_app/tabs/methodology.py)
+- application principale : [controle_interne.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/controle_interne.py>)
+- logique métier : [credit_app/domain.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/domain.py>)
+- référentiels métiers : [credit_app/control_references.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/control_references.py>)
+- cycles et presets : [credit_app/cycles.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/cycles.py>)
+- composants UI : [credit_app/ui.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/ui.py>)
+- synthèse standard : [credit_app/tabs/overview.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/tabs/overview.py>)
+- audit et contrôle : [credit_app/tabs/audit_control.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/tabs/audit_control.py>)
+- actions CRM : [credit_app/tabs/crm_clients.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/tabs/crm_clients.py>)
+- surveillance : [credit_app/tabs/surveillance.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/tabs/surveillance.py>)
+- portefeuille : [credit_app/tabs/portfolio.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/tabs/portfolio.py>)
+- risque : [credit_app/tabs/risk.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/tabs/risk.py>)
+- qualité : [credit_app/tabs/quality.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/tabs/quality.py>)
+- méthode : [credit_app/tabs/methodology.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/tabs/methodology.py>)
+- solution M-PESA : [credit_app/tabs/solution_mpesa.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/tabs/solution_mpesa.py>)
+- analyses M-PESA : [credit_app/services/mpesa_analysis.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/services/mpesa_analysis.py>)
 
 ## Vérification
 
@@ -428,11 +528,12 @@ Les tests couvrent notamment :
 - le cycle épargne
 - le cycle CRM
 - les règles de contrôle renforcées pour l’épargne et le crédit
+- la solution M-PESA, le rapprochement G2/DAT et les rapports journaliers
 
 Commande de vérification :
 
 ```powershell
-& 'C:\ProgramData\anaconda3\python.exe' -m unittest discover -s tests -v
+& $PYTHON -m unittest discover -s tests -v
 ```
 
 ## Confidentialité

@@ -438,22 +438,19 @@ def _sql_bundle_role_label(role: str | None) -> str:
     return labels.get(str(role), "Fichier complémentaire")
 
 
-def _normalize_multiselect_with_all(
+def _normalize_multiselect_options(
     key: str,
     options: list[str],
-    default_to_all: bool = True,
 ) -> list[str]:
-    normalized_options = ["Toutes"] + options if options else ["Toutes"]
+    normalized_options = options
     current_value = st.session_state.get(key)
     if not isinstance(current_value, list) or any(value not in normalized_options for value in current_value):
-        st.session_state[key] = ["Toutes"] if default_to_all else []
-    if not st.session_state[key] and default_to_all:
-        st.session_state[key] = ["Toutes"]
+        st.session_state[key] = []
     return normalized_options
 
 
 def _resolve_multiselect_selection(values: list[str]) -> list[str] | None:
-    if not values or "Toutes" in values:
+    if not values:
         return None
     return values
 
@@ -575,11 +572,14 @@ def _build_cycle_sidebar_filters(
         if not options:
             continue
         widget_key = f"credit_filter_sel_{column_name}"
-        widget_options = _normalize_multiselect_with_all(widget_key, options)
+        widget_options = _normalize_multiselect_options(widget_key, options)
         selected_values = st.sidebar.multiselect(
             f"{_filter_column_label(column_name)} ({len(options)})",
             widget_options,
+            default=[],
             key=widget_key,
+            placeholder="Choose options",
+            help="Aucune option choisie = toutes les valeurs.",
         )
         selected_filters[column_name] = _resolve_multiselect_selection(selected_values)
     return selected_filters
