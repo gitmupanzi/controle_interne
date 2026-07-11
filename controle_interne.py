@@ -91,6 +91,7 @@ from credit_app.tabs.portfolio import (
 )
 from credit_app.tabs.quality import render_quality_tab
 from credit_app.tabs.risk import render_risk_tab
+from credit_app.tabs.solution_mpesa import render_solution_mpesa_tab
 from credit_app.tabs.surveillance import render_surveillance_tab
 from credit_app.sql_operations import (
     build_operations_depot_retrait_dataset,
@@ -851,28 +852,32 @@ def main() -> None:
         )
 
     if not source_ready:
-        render_context_row(
-            [
-                ("Cycle", selected_cycle["label"]),
-                ("Source", "Aucun fichier"),
-                ("Formats", "Excel, CSV ou bundle multi-fichiers"),
-                ("Analyses", "Vue d'ensemble, portefeuille, risque, qualité"),
-                ("Mode", "Fichier unique, groupement ou compilation"),
-            ]
-        )
-        render_summary_box(
-            "Pour commencer",
-            [
-                selected_cycle["summary"],
-                (
-                    "Chargez le bundle SQL d'opérations en ajoutant au minimum les fichiers OPERATIONS, HDPM et ADHERENTS."
-                    if sql_operations_cycle
-                    else "Chargez un fichier Excel ou CSV, utilisez un fichier déjà disponible pour les tests, ou regroupez plusieurs bases détaillées."
-                ),
-                "L'application reconnaît automatiquement plusieurs variantes de colonnes métier.",
-                "Le fichier `data/Rename_columns.xlsx` est aussi pris en compte pour harmoniser les noms de colonnes.",
-            ],
-        )
+        start_tabs = st.tabs(["Demarrage Perfect Vision", "Solution M-PESA"])
+        with start_tabs[0]:
+            render_context_row(
+                [
+                    ("Cycle", selected_cycle["label"]),
+                    ("Source", "Aucun fichier"),
+                    ("Formats", "Excel, CSV ou bundle multi-fichiers"),
+                    ("Analyses", "Vue d'ensemble, portefeuille, risque, qualite"),
+                    ("Mode", "Fichier unique, groupement ou compilation"),
+                ]
+            )
+            render_summary_box(
+                "Pour commencer",
+                [
+                    selected_cycle["summary"],
+                    (
+                        "Chargez le bundle SQL d'operations en ajoutant au minimum les fichiers OPERATIONS, HDPM et ADHERENTS."
+                        if sql_operations_cycle
+                        else "Chargez un fichier Excel ou CSV, utilisez un fichier deja disponible pour les tests, ou regroupez plusieurs bases detaillees."
+                    ),
+                    "L'application reconnait automatiquement plusieurs variantes de colonnes metier.",
+                    "Le fichier `data/Rename_columns.xlsx` est aussi pris en compte pour harmoniser les noms de colonnes.",
+                ],
+            )
+        with start_tabs[1]:
+            render_solution_mpesa_tab()
         render_footer()
         return
 
@@ -1188,6 +1193,7 @@ def main() -> None:
             "Portefeuille",
             "Risque",
             "Qualité",
+            "Solution M-PESA",
             "Export",
             "Méthode",
         ]
@@ -1244,8 +1250,10 @@ def main() -> None:
             cycle_key=selected_cycle_key,
         )
     with tabs[tab_index + 4]:
-        render_export_tab(filtered_df, payload["quality_df"], payload["mapping_df"])
+        render_solution_mpesa_tab()
     with tabs[tab_index + 5]:
+        render_export_tab(filtered_df, payload["quality_df"], payload["mapping_df"])
+    with tabs[tab_index + 6]:
         render_methodology_tab(selected_cycle_key, standardized_df)
 
     render_footer()

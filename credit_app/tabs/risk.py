@@ -22,6 +22,7 @@ from credit_app.sql_operations import (
     build_high_activity_kyc_table,
     build_unusual_operations_table,
 )
+from credit_app.tabs.table_filters import render_filtered_dataframe
 from credit_app.ui import (
     render_kpi_cards,
     render_panel_title,
@@ -52,20 +53,35 @@ def _render_operations_risk_block(df: pd.DataFrame, conversion_rate: float) -> N
         if fractionnement_df.empty:
             st.info("Aucun cas de fractionnement potentiel n'a été détecté sur le périmètre courant.")
         else:
-            st.dataframe(fractionnement_df.head(50), width="stretch", hide_index=True)
+            render_filtered_dataframe(
+                fractionnement_df,
+                key_prefix="risk_fractionnement",
+                preferred_columns=["client_id", "code_client", "devise", "agence", "type_operation"],
+                max_rows=50,
+            )
 
     with top_right:
         render_panel_title("Clients aux opérations inhabituelles")
         if unusual_df.empty:
             st.info("Aucun client inhabituel n'est ressorti avec les règles actuelles.")
         else:
-            st.dataframe(unusual_df.head(50), width="stretch", hide_index=True)
+            render_filtered_dataframe(
+                unusual_df,
+                key_prefix="risk_unusual_operations",
+                preferred_columns=["client_id", "code_client", "devise", "agence", "type_operation"],
+                max_rows=50,
+            )
 
     render_panel_title("Clients à forte activité avec KYC incomplet")
     if kyc_df.empty:
         st.info("Aucun client à forte activité avec KYC incomplet n'a été détecté.")
     else:
-        st.dataframe(kyc_df.head(50), width="stretch", hide_index=True)
+        render_filtered_dataframe(
+            kyc_df,
+            key_prefix="risk_high_activity_kyc",
+            preferred_columns=["client_id", "code_client", "devise", "agence", "motif_alerte"],
+            max_rows=50,
+        )
 
 
 def _render_perfect_vision_credit_risk(df: pd.DataFrame, cycle_key: str) -> None:
@@ -127,7 +143,11 @@ def _render_perfect_vision_credit_risk(df: pd.DataFrame, cycle_key: str) -> None
             for column in ["par_30_plus", "taux_par_30", "par_90_plus", "taux_par_90", "arrieres", "provision"]
             if column in grouped.columns
         )
-        st.dataframe(grouped[display_columns], width="stretch", hide_index=True)
+        render_filtered_dataframe(
+            grouped[display_columns],
+            key_prefix=f"risk_perfect_vision_grouped_{cycle_key}",
+            preferred_columns=[group_column],
+        )
 
 
 def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate: float = 2800.0) -> None:
@@ -356,7 +376,11 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate
         )
         if not group_risk.empty:
             render_panel_title(f"Zones les plus exposées par {primary_group.replace('_', ' ')}")
-            st.dataframe(group_risk, width="stretch", hide_index=True)
+            render_filtered_dataframe(
+                group_risk,
+                key_prefix=f"risk_group_exposure_{cycle_key}",
+                preferred_columns=[primary_group],
+            )
 
     _render_perfect_vision_credit_risk(df, cycle_key)
 
@@ -367,4 +391,9 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate
     if watchlist.empty:
         st.success("Aucune ligne d'alerte n'a été détectée sur le périmètre courant.")
     else:
-        st.dataframe(watchlist.head(200), width="stretch", hide_index=True)
+        render_filtered_dataframe(
+            watchlist,
+            key_prefix=f"risk_watchlist_{cycle_key}",
+            preferred_columns=["niveau_risque", "motif_alerte", "agence", "type_produit", "devise", "statut_remboursement"],
+            max_rows=200,
+        )

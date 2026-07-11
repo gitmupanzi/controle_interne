@@ -27,6 +27,7 @@ from credit_app.sql_operations import (
     normalize_operations_analysis_frame,
     build_top_clients_table,
 )
+from credit_app.tabs.table_filters import render_filtered_dataframe
 from credit_app.ui import (
     render_kpi_cards,
     render_panel_title,
@@ -181,7 +182,11 @@ def _render_perfect_vision_credit_portfolio(df: pd.DataFrame, cycle_key: str) ->
             )
             if not top_clients.empty:
                 render_panel_title("Top encours clients")
-                st.dataframe(top_clients, width="stretch", hide_index=True)
+                render_filtered_dataframe(
+                    top_clients,
+                    key_prefix=f"portfolio_top_clients_{cycle_key}",
+                    preferred_columns=["client_id", "nom_client", "type_client"],
+                )
 
     with right:
         concentration_columns = [column for column in ["encours_top_10_pct", "part_top_10_pct", "nb_prets_top_10_pct"] if column in df.columns]
@@ -194,7 +199,11 @@ def _render_perfect_vision_credit_portfolio(df: pd.DataFrame, cycle_key: str) ->
             sort_column = "part_top_10_pct" if "part_top_10_pct" in concentration_df.columns else "encours_top_10_pct"
             concentration_df = concentration_df.sort_values(sort_column, ascending=False).head(20)
             render_panel_title("Concentration des encours")
-            st.dataframe(concentration_df, width="stretch", hide_index=True)
+            render_filtered_dataframe(
+                concentration_df,
+                key_prefix=f"portfolio_concentration_{cycle_key}",
+                preferred_columns=["agence", "type_produit", "devise"],
+            )
         elif "type_produit" in df.columns:
             product_df = (
                 df.assign(solde_final=pd.to_numeric(df["solde_final"], errors="coerce").fillna(0))
@@ -238,7 +247,11 @@ def _render_perfect_vision_credit_portfolio(df: pd.DataFrame, cycle_key: str) ->
                 coverage_df[column] = pd.to_numeric(coverage_df[column], errors="coerce")
         coverage_df = coverage_df.sort_values("exposition_nette_non_couverte", ascending=False).head(50)
         render_panel_title("Couverture crédit par épargne et garanties")
-        st.dataframe(coverage_df, width="stretch", hide_index=True)
+        render_filtered_dataframe(
+            coverage_df,
+            key_prefix=f"portfolio_coverage_{cycle_key}",
+            preferred_columns=["client_id", "nom_client", "agence", "type_produit", "devise"],
+        )
 
     _render_perfect_vision_credit_segments(df, cycle_key)
 
@@ -277,7 +290,11 @@ def _render_perfect_vision_credit_segments(df: pd.DataFrame, cycle_key: str) -> 
                 style_standard_vertical_bar(fig, height=350, tickangle=-25)
                 fig.update_layout(coloraxis_showscale=False)
                 st_plot(fig, key=f"portfolio_perfect_vision_tranche_{cycle_key}", height=350)
-                st.dataframe(tranche_df, width="stretch", hide_index=True)
+                render_filtered_dataframe(
+                    tranche_df,
+                    key_prefix=f"portfolio_tranche_{cycle_key}",
+                    preferred_columns=["tranche_montant_initial"],
+                )
 
     with segment_right:
         if {"age_cohorte_mois", "par_30_sur_initial_pct"}.issubset(df.columns):
@@ -1135,7 +1152,11 @@ def render_portfolio_tab(
             )
             if not summary_df.empty:
                 render_panel_title(f"{primary_group.replace('_', ' ').title()}")
-                st.dataframe(summary_df, width="stretch", hide_index=True)
+                render_filtered_dataframe(
+                    summary_df,
+                    key_prefix=f"portfolio_summary_{cycle_key}_{primary_group}",
+                    preferred_columns=[primary_group],
+                )
 
     if primary_group and secondary_group and amount_column:
         pivot = pd.pivot_table(
@@ -1147,10 +1168,20 @@ def render_portfolio_tab(
             fill_value=0,
         )
         render_panel_title("Lecture croisée")
-        st.dataframe(pivot, width="stretch")
+        render_filtered_dataframe(
+            pivot.reset_index(),
+            key_prefix=f"portfolio_pivot_{cycle_key}",
+            preferred_columns=[primary_group],
+            hide_index=True,
+        )
 
     render_panel_title("Cas à suivre")
     if watchlist.empty:
         st.success("Aucun point sensible n'a été détecté avec les règles actuelles.")
     else:
-        st.dataframe(watchlist.head(200), width="stretch", hide_index=True)
+        render_filtered_dataframe(
+            watchlist,
+            key_prefix=f"portfolio_watchlist_{cycle_key}",
+            preferred_columns=["motif_alerte", "niveau_risque", "agence", "type_produit", "devise"],
+            max_rows=200,
+        )

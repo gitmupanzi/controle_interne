@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from credit_app.tabs.table_filters import render_filtered_dataframe
 from credit_app.ui import render_kpi_cards, render_panel_title, render_summary_box
 
 
@@ -245,7 +246,12 @@ def render_crm_clients_tab(df: pd.DataFrame) -> None:
     top_left, top_right = st.columns((1, 1))
     with top_left:
         render_panel_title("Corrections prioritaires")
-        st.dataframe(action_df.head(200), width="stretch", hide_index=True)
+        render_filtered_dataframe(
+            action_df,
+            key_prefix="crm_actions_prioritaires",
+            preferred_columns=["Gestionnaire", "Origine", "Province", "CatÃ©gorie", "Lecture"],
+            max_rows=200,
+        )
     with top_right:
         render_panel_title("Relances inactivité / blocage")
         relance_mask = (
@@ -257,4 +263,9 @@ def render_crm_clients_tab(df: pd.DataFrame) -> None:
         if relance_df.empty:
             st.info("Aucune relance spécifique n'est actuellement isolée sur ce périmètre.")
         else:
-            st.dataframe(relance_df, width="stretch", hide_index=True)
+            render_filtered_dataframe(
+                relance_df,
+                key_prefix="crm_relances",
+                preferred_columns=["Gestionnaire", "Province", "CatÃ©gorie", "Lecture"],
+                max_rows=200,
+            )

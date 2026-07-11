@@ -24,6 +24,7 @@ from credit_app.sql_operations import (
     build_point_service_summary_table,
     build_risky_users_table,
 )
+from credit_app.tabs.table_filters import render_filtered_dataframe
 from credit_app.ui import (
     render_panel_title,
     render_summary_box,
@@ -263,12 +264,20 @@ def _render_epargne_surveillance_block(df: pd.DataFrame, watchlist: pd.DataFrame
         if multi_clients_df.empty:
             st.info("Aucun client avec plusieurs comptes n'a été détecté.")
         else:
-            st.dataframe(_prepare_multi_account_clients_display_table(multi_clients_df), width="stretch", hide_index=True)
+            render_filtered_dataframe(
+                _prepare_multi_account_clients_display_table(multi_clients_df),
+                key_prefix="surveillance_epargne_multi_clients",
+                preferred_columns=["Client", "Agence", "Gestionnaire", "Devise"],
+            )
 
     with mid_right:
         if not provenance_df.empty and len(provenance_df) > 1:
             render_panel_title("Comparaison des extractions")
-            st.dataframe(_prepare_provenance_display_table(provenance_df), width="stretch", hide_index=True)
+            render_filtered_dataframe(
+                _prepare_provenance_display_table(provenance_df),
+                key_prefix="surveillance_epargne_provenance",
+                preferred_columns=["Provenance"],
+            )
         else:
             st.info("Une seule extraction est disponible pour les données actuelles.")
 
@@ -316,14 +325,24 @@ def _render_operations_surveillance_block(df: pd.DataFrame, conversion_rate: flo
         if risky_users_df.empty:
             st.info("Aucun profil utilisateur sensible n'est isolé avec les règles actuelles.")
         else:
-            st.dataframe(_rename_columns_for_display(risky_users_df.head(30)), width="stretch", hide_index=True)
+            render_filtered_dataframe(
+                _rename_columns_for_display(risky_users_df),
+                key_prefix="surveillance_operations_risky_users",
+                preferred_columns=["Operateur", "Agence", "Type operation"],
+                max_rows=30,
+            )
 
     with top_right:
         render_panel_title("Points de service / agences")
         if point_service_df.empty:
             st.info("Aucun regroupement par point de service n'est disponible.")
         else:
-            st.dataframe(_rename_columns_for_display(point_service_df.head(30)), width="stretch", hide_index=True)
+            render_filtered_dataframe(
+                _rename_columns_for_display(point_service_df),
+                key_prefix="surveillance_operations_point_service",
+                preferred_columns=["Agence", "Point service", "Devise"],
+                max_rows=30,
+            )
 
     bottom_left, bottom_right = st.columns((1, 1))
 
@@ -332,14 +351,24 @@ def _render_operations_surveillance_block(df: pd.DataFrame, conversion_rate: flo
         if high_activity_kyc_df.empty:
             st.info("Aucun client très actif avec KYC incomplet n'a été détecté.")
         else:
-            st.dataframe(_rename_columns_for_display(high_activity_kyc_df.head(30)), width="stretch", hide_index=True)
+            render_filtered_dataframe(
+                _rename_columns_for_display(high_activity_kyc_df),
+                key_prefix="surveillance_operations_high_activity_kyc",
+                preferred_columns=["Client", "Agence", "Devise", "Motif alerte"],
+                max_rows=30,
+            )
 
     with bottom_right:
         render_panel_title("Opérations annulées")
         if cancelled_df.empty:
             st.info("Aucune opération annulée n'est présente sur le périmètre courant.")
         else:
-            st.dataframe(_rename_columns_for_display(cancelled_df.head(30)), width="stretch", hide_index=True)
+            render_filtered_dataframe(
+                _rename_columns_for_display(cancelled_df),
+                key_prefix="surveillance_operations_cancelled",
+                preferred_columns=["Agence", "Operateur", "Type operation", "Devise"],
+                max_rows=30,
+            )
 
 
 def render_surveillance_tab(
@@ -420,7 +449,11 @@ def render_surveillance_tab(
             )
             if not ranking_df.empty:
                 render_panel_title(_group_title(primary_group))
-                st.dataframe(_prepare_activity_display_table(ranking_df, primary_group), width="stretch", hide_index=True)
+                render_filtered_dataframe(
+                    _prepare_activity_display_table(ranking_df, primary_group),
+                    key_prefix=f"surveillance_ranking_primary_{cycle_key}",
+                    preferred_columns=[primary_group, "Niveau risque"],
+                )
             else:
                 st.info("Aucun classement principal n'est disponible pour les données actuelles.")
         else:
@@ -437,10 +470,10 @@ def render_surveillance_tab(
             )
             if not ranking_df.empty:
                 render_panel_title(_group_title(secondary_group))
-                st.dataframe(
+                render_filtered_dataframe(
                     _prepare_activity_display_table(ranking_df, secondary_group),
-                    width="stretch",
-                    hide_index=True,
+                    key_prefix=f"surveillance_ranking_secondary_{cycle_key}",
+                    preferred_columns=[secondary_group, "Niveau risque"],
                 )
             else:
                 st.info("Aucun classement secondaire n'est disponible pour les données actuelles.")
@@ -454,10 +487,20 @@ def render_surveillance_tab(
 
     render_panel_title("Cas prioritaires")
     if not watchlist.empty:
-        st.dataframe(_prepare_watchlist_display_table(watchlist.head(50)), width="stretch", hide_index=True)
+        render_filtered_dataframe(
+            _prepare_watchlist_display_table(watchlist),
+            key_prefix=f"surveillance_watchlist_{cycle_key}",
+            preferred_columns=["motif_alerte", "niveau_risque", "agence", "type_produit", "devise"],
+            max_rows=50,
+        )
     else:
         st.success("Aucun élément prioritaire n'a été détecté avec les règles de surveillance actuelles.")
 
     render_panel_title("Aperçu")
     preview_columns = [column for column in df.columns if column not in {"mois_demande"}]
-    st.dataframe(_rename_columns_for_display(df[preview_columns].head(200)), width="stretch", hide_index=True)
+    render_filtered_dataframe(
+        _rename_columns_for_display(df[preview_columns]),
+        key_prefix=f"surveillance_preview_{cycle_key}",
+        preferred_columns=["Agence", "Type operation", "Devise", "Statut", "Niveau risque"],
+        max_rows=200,
+    )

@@ -5,6 +5,7 @@ import plotly.express as px
 import streamlit as st
 
 from credit_app.domain import build_epargne_kyc_completeness_table
+from credit_app.tabs.table_filters import render_filtered_dataframe
 from credit_app.ui import (
     render_kpi_cards,
     render_panel_title,
@@ -58,7 +59,11 @@ def render_quality_tab(
 
     if not quality_df.empty:
         render_panel_title("Contrôles qualité")
-        st.dataframe(quality_df, width="stretch", hide_index=True)
+        render_filtered_dataframe(
+            quality_df,
+            key_prefix=f"quality_checks_{cycle_key}",
+            preferred_columns=["controle", "statut", "gravite", "cycle"],
+        )
 
         fig = px.bar(
             quality_df,
@@ -119,11 +124,20 @@ def render_quality_tab(
 
     with left:
         render_panel_title("Valeurs manquantes")
-        st.dataframe(missing_df.head(25), width="stretch", hide_index=True)
+        render_filtered_dataframe(
+            missing_df,
+            key_prefix=f"quality_missing_{cycle_key}",
+            preferred_columns=["colonne"],
+            max_rows=25,
+        )
 
     with right:
         render_panel_title("Mapping des colonnes")
-        st.dataframe(mapping_df, width="stretch", hide_index=True)
+        render_filtered_dataframe(
+            mapping_df,
+            key_prefix=f"quality_mapping_{cycle_key}",
+            preferred_columns=["colonne_source", "colonne_standard"],
+        )
 
     if cycle_key == "epargne":
         kyc_df = build_epargne_kyc_completeness_table(standardized_df)
@@ -142,4 +156,8 @@ def render_quality_tab(
                 style_standard_vertical_bar(fig, height=340, tickangle=-20)
                 st_plot(fig, key="quality_epargne_kyc", height=340)
             with kyc_right:
-                st.dataframe(kyc_df, width="stretch", hide_index=True)
+                render_filtered_dataframe(
+                    kyc_df,
+                    key_prefix="quality_epargne_kyc_table",
+                    preferred_columns=["classe_completude"],
+                )
