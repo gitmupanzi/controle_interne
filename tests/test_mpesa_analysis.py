@@ -11,6 +11,7 @@ from credit_app.services.mpesa_analysis import (
     build_g2_entry_report,
     build_diagnostics,
     build_load_report,
+    build_savings_final,
     build_mpesa_statement,
     create_excel_export,
     numeric_column,
@@ -372,6 +373,24 @@ class MpesaAnalysisTests(unittest.TestCase):
 
         self.assertEqual(values.tolist(), [0.0, 0.0])
         self.assertEqual(float(values.sum()), 0.0)
+
+    def test_savings_final_accepts_file_without_balance_column(self) -> None:
+        current = prepare_current_savings(
+            pd.DataFrame(
+                [
+                    {
+                        "customer_id": 1001,
+                        "msisdn": "0812345678",
+                        "currency_code": "CDF",
+                        "created_at": "2026-07-11",
+                    }
+                ]
+            )
+        )
+
+        result = build_savings_final(current, "1001")
+
+        self.assertEqual(result, {})
 
     def test_diagnostics_accept_transactions_without_amount_columns(self) -> None:
         prepared = MpesaPreparedData(

@@ -505,20 +505,24 @@ def add_reconstructed_balance(
 
 
 def build_savings_final(current_savings: pd.DataFrame, customer_id: str) -> dict[str, float]:
-    if current_savings.empty or "customer_id" not in current_savings.columns:
+    required_columns = {"customer_id", "currency_code", "balance"}
+    if current_savings.empty or not required_columns.issubset(current_savings.columns):
         return {}
     frame = current_savings.loc[current_savings["customer_id"].eq(customer_id)].copy()
     if frame.empty:
         return {}
+    frame["balance"] = numeric_column(frame, "balance")
     return frame.groupby("currency_code", dropna=False)["balance"].sum().to_dict()
 
 
 def build_dat_final(fixed_savings: pd.DataFrame, customer_id: str) -> dict[str, float]:
-    if fixed_savings.empty or "customer_id" not in fixed_savings.columns:
+    required_columns = {"customer_id", "currency_code", "balance"}
+    if fixed_savings.empty or not required_columns.issubset(fixed_savings.columns):
         return {}
     frame = fixed_savings.loc[fixed_savings["customer_id"].eq(customer_id)].copy()
     if frame.empty:
         return {}
+    frame["balance"] = numeric_column(frame, "balance")
     return frame.groupby("currency_code", dropna=False)["balance"].sum().to_dict()
 
 
