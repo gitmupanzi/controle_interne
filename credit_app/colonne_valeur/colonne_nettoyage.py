@@ -539,13 +539,13 @@ def _resolve_mapping_columns(mapping_df: pd.DataFrame) -> tuple[str, str]:
 def load_excel_column_mapping(mapping_file: Union[str, Path] = mapping_file_path) -> dict[str, str]:
     path = Path(mapping_file)
     if not path.exists():
-        return {}
+        raise FileNotFoundError(f"Fichier de renommage introuvable : {path}")
 
     try:
         mapping_df = pd.read_excel(path, dtype=str).dropna(how="all")
-    except Exception:
+    except Exception as exc:
         logger.exception("Impossible de charger le fichier de mapping %s", path)
-        return {}
+        raise ValueError(f"Impossible de charger le fichier de renommage {path.name} : {exc}") from exc
 
     if mapping_df.empty:
         return {}
@@ -553,10 +553,22 @@ def load_excel_column_mapping(mapping_file: Union[str, Path] = mapping_file_path
     source_column, target_column = _resolve_mapping_columns(mapping_df)
     lookup: dict[str, str] = {}
 
-    for original, renamed in mapping_df[[source_column, target_column]].dropna().itertuples(index=False):
+    essential = mapping_df[[source_column, target_column]]
+    empty_essential = essential.isna() | essential.astype("string").apply(lambda column: column.str.strip().eq(""))
+    if bool(empty_essential.any(axis=None)):
+        raise ValueError(
+            f"Le fichier {path.name} contient une règle avec un nom source ou cible vide."
+        )
+
+    for original, renamed in essential.itertuples(index=False):
         original_key = normalize_column_label(original)
         renamed_value = str(renamed).strip()
         if original_key and renamed_value:
+            existing = lookup.get(original_key)
+            if existing is not None and normalize_column_label(existing) != normalize_column_label(renamed_value):
+                raise ValueError(
+                    f"Règle contradictoire dans {path.name} pour la colonne `{original}`."
+                )
             lookup[original_key] = renamed_value
 
     return lookup

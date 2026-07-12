@@ -8,6 +8,10 @@ import plotly.graph_objects as go
 import streamlit as st
 
 
+CHART_COLORWAY = ["#1553A1", "#D97B16", "#2D7D46", "#8A5A9E", "#D5A021"]
+CHART_NEUTRAL = "#5F6F82"
+
+
 def inject_professional_credit_css() -> None:
     st.markdown(
         """
@@ -36,7 +40,7 @@ def inject_professional_credit_css() -> None:
 
     .main .block-container {
         max-width: 1480px;
-        padding-top: 1.15rem;
+        padding-top: 0.85rem;
         padding-bottom: 2rem;
     }
 
@@ -213,9 +217,9 @@ def inject_professional_credit_css() -> None:
     .credit-hero {
         position: relative;
         overflow: hidden;
-        padding: 1.35rem 1.75rem;
+        padding: 1.15rem 1.45rem;
         margin-bottom: 1.1rem;
-        border-radius: 24px;
+        border-radius: 20px;
         color: #ffffff;
         background:
             linear-gradient(120deg, rgba(255,255,255,0.10), rgba(255,255,255,0.02)),
@@ -378,13 +382,88 @@ def inject_professional_credit_css() -> None:
     }
 
     .credit-panel-title {
-        margin: 0.35rem 0 0.55rem;
+        margin: 0.55rem 0 0.5rem;
         color: var(--credit-blue-dark);
-        font-size: 0.95rem;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
+        font-size: 1rem;
+        letter-spacing: 0.015em;
         font-weight: 800;
     }
+
+    .credit-section-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+        margin: 1.15rem 0 0.75rem;
+        padding-bottom: 0.65rem;
+        border-bottom: 1px solid rgba(11, 44, 99, 0.10);
+    }
+
+    .credit-section-header h2 {
+        color: var(--credit-blue-dark);
+        font-size: clamp(1.15rem, 1.8vw, 1.45rem);
+        line-height: 1.2;
+        margin: 0;
+    }
+
+    .credit-section-header p {
+        color: #526a86;
+        font-size: 0.84rem;
+        margin: 0.24rem 0 0;
+        max-width: 52rem;
+    }
+
+    .credit-section-badge {
+        flex: 0 0 auto;
+        padding: 0.3rem 0.65rem;
+        border-radius: 999px;
+        background: #eaf2ff;
+        color: #1553a1;
+        font-size: 0.7rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
+
+    .credit-empty-state {
+        padding: 1.25rem 1.35rem;
+        border: 1px dashed rgba(21, 83, 161, 0.28);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.78);
+        margin: 0.7rem 0 1rem;
+    }
+
+    .credit-empty-state .empty-title {
+        color: var(--credit-blue-dark);
+        font-size: 1rem;
+        font-weight: 800;
+        margin-bottom: 0.25rem;
+    }
+
+    .credit-empty-state .empty-message {
+        color: #526a86;
+        font-size: 0.86rem;
+        line-height: 1.45;
+    }
+
+    .credit-chart-guide {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.65rem;
+        margin: 0.55rem 0 0.9rem;
+    }
+
+    .credit-chart-guide > div {
+        padding: 0.65rem 0.75rem;
+        border-radius: 14px;
+        background: rgba(255,255,255,0.78);
+        border: 1px solid rgba(11,44,99,0.08);
+        color: #415a77;
+        font-size: 0.76rem;
+        line-height: 1.35;
+    }
+
+    .credit-chart-guide strong { color: #0b2c63; }
 
     .credit-summary-box {
         padding: 0.95rem 1rem;
@@ -410,7 +489,10 @@ def inject_professional_credit_css() -> None:
     .stTabs [data-baseweb="tab-list"] {
         gap: 0.5rem;
         margin-bottom: 1rem;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        scrollbar-width: thin;
+        padding-bottom: 0.35rem;
     }
 
     .stTabs [data-baseweb="tab"] {
@@ -421,6 +503,7 @@ def inject_professional_credit_css() -> None:
         border: 1px solid rgba(11, 44, 99, 0.10);
         color: #173963;
         font-weight: 700;
+        flex: 0 0 auto;
     }
 
     .stTabs [aria-selected="true"] {
@@ -447,10 +530,10 @@ def inject_professional_credit_css() -> None:
 
     div[data-testid="stPlotlyChart"] {
         background: rgba(255, 255, 255, 0.92);
-        border-radius: 20px;
-        padding: 0.55rem 0.75rem 0.25rem;
+        border-radius: 16px;
+        padding: 0.35rem 0.5rem 0.15rem;
         border: 1px solid rgba(11, 44, 99, 0.08);
-        box-shadow: 0 14px 28px rgba(11, 44, 99, 0.08);
+        box-shadow: 0 8px 20px rgba(11, 44, 99, 0.06);
         margin-bottom: 0.75rem;
     }
 
@@ -471,6 +554,13 @@ def inject_professional_credit_css() -> None:
         font-weight: 700;
     }
 
+    button:focus-visible,
+    [role="tab"]:focus-visible,
+    input:focus-visible {
+        outline: 3px solid rgba(21, 83, 161, 0.28) !important;
+        outline-offset: 2px;
+    }
+
     .credit-footer {
         margin-top: 1.25rem;
         padding: 0.85rem 1rem;
@@ -488,24 +578,52 @@ def inject_professional_credit_css() -> None:
             font-size: clamp(1rem, 1.45vw, 1.4rem);
         }
     }
+
+    @media (max-width: 900px) {
+        .main .block-container { padding: 0.65rem 0.8rem 1.5rem; }
+        .credit-hero { padding: 1rem 1.05rem; border-radius: 16px; }
+        .credit-context-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
+        .credit-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; }
+        .credit-chart-guide { grid-template-columns: 1fr; }
+        .credit-section-header { align-items: center; }
+    }
+
+    @media (max-width: 560px) {
+        .credit-context-row,
+        .credit-kpi-grid { grid-template-columns: 1fr; }
+        .credit-section-header { display: block; }
+        .credit-section-badge { display: inline-block; margin-top: 0.5rem; }
+        .credit-hero p { font-size: 0.88rem; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+            scroll-behavior: auto !important;
+            transition-duration: 0.01ms !important;
+            animation-duration: 0.01ms !important;
+        }
+    }
 </style>
         """,
         unsafe_allow_html=True,
     )
 
 
-def render_professional_header() -> None:
+def render_professional_header(
+    cycle_label: str | None = None,
+    cycle_summary: str | None = None,
+) -> None:
+    badge = cycle_label or "Contrôle interne"
+    summary = cycle_summary or (
+        "Standardisez une base Excel ou CSV, harmonisez la lecture des opérations et "
+        "pilotez les risques, la conformité et les actions de contrôle."
+    )
     st.markdown(
-        """
+        f"""
 <div class="credit-hero">
-  <div class="credit-hero-badge">Contrôle interne</div>
+  <div class="credit-hero-badge">{html.escape(badge)}</div>
   <h1>Contrôle interne IMF</h1>
-  <p>
-    Standardisez une base Excel ou CSV, harmonisez la lecture des opérations et
-    des cycles d'activité d'une institution de microfinance, puis restituez dans
-    une interface unique les analyses de contrôle interne, de risque, de
-    conformité et de supervision.
-  </p>
+  <p>{html.escape(summary)}</p>
 </div>
         """,
         unsafe_allow_html=True,
@@ -618,6 +736,51 @@ def render_panel_title(title: str) -> None:
     st.markdown(f"<div class='credit-panel-title'>{html.escape(str(title))}</div>", unsafe_allow_html=True)
 
 
+def render_dashboard_section(title: str, description: str, badge: str | None = None) -> None:
+    badge_html = (
+        f"<div class='credit-section-badge'>{html.escape(str(badge))}</div>"
+        if badge
+        else ""
+    )
+    st.markdown(
+        f"""
+<div class="credit-section-header">
+  <div>
+    <h2>{html.escape(str(title))}</h2>
+    <p>{html.escape(str(description))}</p>
+  </div>
+  {badge_html}
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_empty_state(title: str, message: str) -> None:
+    st.markdown(
+        f"""
+<div class="credit-empty-state">
+  <div class="empty-title">{html.escape(str(title))}</div>
+  <div class="empty-message">{html.escape(str(message))}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_chart_guide() -> None:
+    st.markdown(
+        """
+<div class="credit-chart-guide">
+  <div><strong>Survoler</strong><br>Affiche les valeurs et la catégorie exacte.</div>
+  <div><strong>Cliquer sur la légende</strong><br>Masque ou réaffiche une série.</div>
+  <div><strong>Barre d’outils</strong><br>Zoomez ou exportez le graphique en PNG.</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_summary_box(lead: str, lines: list[str]) -> None:
     content = "".join(f"<li>{html.escape(str(line))}</li>" for line in lines)
     st.markdown(
@@ -632,21 +795,38 @@ def render_summary_box(lead: str, lines: list[str]) -> None:
 
 
 def style_plotly_figure(fig: go.Figure, height: int | None = None) -> go.Figure:
+    trace_count = len(fig.data)
+    has_selectable_pie_categories = any(
+        str(getattr(trace, "type", "")).lower() == "pie"
+        and getattr(trace, "labels", None) is not None
+        and len(trace.labels) > 1
+        for trace in fig.data
+    )
+    named_traces = [
+        trace
+        for trace in fig.data
+        if str(getattr(trace, "name", "")).strip() not in {"", "None", "trace 0"}
+    ]
+    should_show_legend = has_selectable_pie_categories or (trace_count > 1 and len(named_traces) > 1)
     fig.update_layout(
         template="plotly_white",
+        colorway=CHART_COLORWAY,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#20344f", size=11),
+        font=dict(color="#20344f", size=11, family="Arial, sans-serif"),
+        showlegend=should_show_legend if fig.layout.showlegend is None else fig.layout.showlegend,
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=1.03,
+            y=1.02,
             xanchor="left",
             x=0,
             bgcolor="rgba(255,255,255,0)",
             font=dict(size=10),
+            itemclick="toggle",
+            itemdoubleclick="toggleothers",
         ),
-        margin=dict(l=42, r=20, t=46, b=42),
+        margin=dict(l=52, r=28, t=38, b=52),
         hoverlabel=dict(
             bgcolor="rgba(255,255,255,0.97)",
             bordercolor="rgba(11, 44, 99, 0.16)",
@@ -655,12 +835,16 @@ def style_plotly_figure(fig: go.Figure, height: int | None = None) -> go.Figure:
     )
     fig.update_xaxes(
         showgrid=False,
+        automargin=True,
+        separatethousands=True,
         linecolor="rgba(9,37,79,0.10)",
         tickfont=dict(size=9, color="#58708f"),
         title_font=dict(size=10, color="#58708f"),
     )
     fig.update_yaxes(
         showgrid=True,
+        automargin=True,
+        separatethousands=True,
         gridcolor="rgba(9,37,79,0.08)",
         zeroline=False,
         tickfont=dict(size=9, color="#58708f"),
@@ -679,7 +863,7 @@ def style_standard_vertical_bar(fig: go.Figure, *, height: int = 360, tickangle:
     )
     fig.update_layout(
         height=height,
-        showlegend=False,
+        showlegend=len(fig.data) > 1,
         bargap=0.22,
         xaxis_tickangle=tickangle,
         yaxis=dict(gridcolor="rgba(15, 53, 103, 0.08)", zeroline=False),
@@ -695,7 +879,7 @@ def style_standard_horizontal_bar(fig: go.Figure, *, height: int = 360) -> go.Fi
     )
     fig.update_layout(
         height=height,
-        showlegend=False,
+        showlegend=len(fig.data) > 1,
         bargap=0.18,
         xaxis=dict(gridcolor="rgba(15, 53, 103, 0.08)", zeroline=False),
         yaxis=dict(gridcolor="rgba(15, 53, 103, 0.00)", zeroline=False),
@@ -704,9 +888,13 @@ def style_standard_horizontal_bar(fig: go.Figure, *, height: int = 360) -> go.Fi
 
 
 def style_standard_line(fig: go.Figure, *, height: int = 360, tickangle: int = -25) -> go.Figure:
+    fig.update_traces(
+        line=dict(width=2.6),
+        marker=dict(size=6, line=dict(width=1, color="#ffffff")),
+    )
     fig.update_layout(
         height=height,
-        showlegend=False,
+        showlegend=len(fig.data) > 1,
         xaxis_tickangle=tickangle,
         yaxis=dict(gridcolor="rgba(15, 53, 103, 0.08)", zeroline=False),
         hovermode="x unified",
@@ -715,13 +903,31 @@ def style_standard_line(fig: go.Figure, *, height: int = 360, tickangle: int = -
 
 
 def style_standard_donut(fig: go.Figure, *, height: int = 360) -> go.Figure:
+    max_slice_count = max(
+        (
+            len(labels)
+            for trace in fig.data
+            for labels in [getattr(trace, "labels", None)]
+            if labels is not None
+        ),
+        default=0,
+    )
     fig.update_traces(
-        textinfo="percent",
+        textinfo="label+percent" if max_slice_count <= 5 else "percent",
+        textposition="auto",
         textfont_size=12,
         marker=dict(line=dict(color="rgba(255,255,255,0.92)", width=2)),
         sort=False,
+        hovertemplate="%{label}<br>%{value:,.0f} (%{percent})<extra></extra>",
     )
-    fig.update_layout(height=height, legend=dict(orientation="h"))
+    fig.update_layout(
+        height=height,
+        # Plotly allows users to click legend entries to keep only the desired
+        # categories. Keep this interaction available even for two slices.
+        showlegend=max_slice_count > 1,
+        legend=dict(orientation="h"),
+        margin=dict(l=30, r=30, t=30, b=44),
+    )
     return fig
 
 
@@ -733,7 +939,9 @@ def style_standard_histogram(fig: go.Figure, *, height: int = 360, tickangle: in
     )
     fig.update_layout(
         height=height,
-        showlegend=False,
+        # A histogram split by category creates one trace per category. Its
+        # legend must remain clickable so users can isolate a population.
+        showlegend=len(fig.data) > 1,
         bargap=0.06,
         xaxis_tickangle=tickangle,
         yaxis=dict(gridcolor="rgba(15, 53, 103, 0.08)", zeroline=False),
@@ -844,9 +1052,9 @@ def _build_plotly_config(fig: go.Figure) -> dict[str, Any]:
 
     config: dict[str, Any] = {
         "displaylogo": False,
-        "displayModeBar": True,
+        "displayModeBar": "hover",
         "responsive": True,
-        "scrollZoom": True,
+        "scrollZoom": False,
         "doubleClick": "reset",
         "showTips": False,
         "toImageButtonOptions": {
@@ -883,7 +1091,21 @@ def st_plot(
     height: int | None = None,
     annotate_values: bool | None = None,
     annotation_min_value: float | None = None,
+    title: str | None = None,
+    subtitle: str | None = None,
+    source_note: str | None = None,
 ) -> Any:
+    if fig is None or not fig.data:
+        st.info("Aucune donnée disponible pour ce graphique avec les filtres actuels.")
+        return None
+    if title:
+        title_text = f"<b>{html.escape(str(title))}</b>"
+        if subtitle:
+            title_text += f"<br><span style='font-size:11px;color:#58708f'>{html.escape(str(subtitle))}</span>"
+        fig.update_layout(
+            title=dict(text=title_text, x=0, xanchor="left", font=dict(size=15, color="#0b2c63")),
+            margin=dict(t=72),
+        )
     if annotate_values is None:
         annotate_values = bool(st.session_state.get("credit_annot_vals", False))
     if annotation_min_value is None:
@@ -894,8 +1116,12 @@ def st_plot(
     fig = sanitize_plotly_figure_for_streamlit(fig)
     config = _build_plotly_config(fig)
     if key is not None:
-        return st.plotly_chart(fig, width="stretch", key=key, config=config)
-    return st.plotly_chart(fig, width="stretch", config=config)
+        result = st.plotly_chart(fig, width="stretch", key=key, config=config)
+    else:
+        result = st.plotly_chart(fig, width="stretch", config=config)
+    if source_note:
+        st.caption(source_note)
+    return result
 
 
 def format_context_value(value: Any) -> str:

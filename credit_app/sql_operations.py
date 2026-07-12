@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from credit_app.data_schema import SQL_ROLE_SCHEMAS, normalize_dataframe_headers, validate_dataframe_schema
+
 
 SQL_BUNDLE_ROLE_ALIASES = {
     "dbo_operations": "operations",
@@ -63,6 +65,12 @@ def _first_notna(values: pd.Series) -> object:
     return non_null.iloc[0] if not non_null.empty else pd.NA
 
 
+def _count_operations(values: pd.Series) -> int:
+    """Count real identifiers, or source rows when identifiers are unavailable."""
+    non_null = values.dropna()
+    return int(non_null.nunique()) if not non_null.empty else int(len(values))
+
+
 def _ensure_client_analysis_columns(df: pd.DataFrame) -> pd.DataFrame:
     work = df.copy()
     if "operation_id" not in work.columns:
@@ -75,11 +83,8 @@ def _ensure_client_analysis_columns(df: pd.DataFrame) -> pd.DataFrame:
         elif "compte_id" in work.columns:
             work["operation_id"] = work["compte_id"]
         else:
-            work["operation_id"] = pd.Series(
-                [f"ligne_{index}" for index in work.index],
-                index=work.index,
-                dtype="object",
-            )
+            # Do not turn a missing essential identifier into fabricated data.
+            work["operation_id"] = pd.Series(pd.NA, index=work.index, dtype="object")
     if "source_mouvement" not in work.columns:
         work["source_mouvement"] = pd.Series("NON_RENSEIGNE", index=work.index, dtype="object")
     if "type_operation" not in work.columns:
@@ -197,7 +202,8 @@ def _normalize_named_frames(named_frames: dict[str, pd.DataFrame]) -> dict[str, 
     for filename, frame in named_frames.items():
         role = infer_sql_bundle_role(filename)
         if role:
-            normalized[role] = frame.copy()
+            role_schema = SQL_ROLE_SCHEMAS.get(role)
+            normalized[role] = normalize_dataframe_headers(frame, role_schema) if role_schema else frame.copy()
     return normalized
 
 
@@ -452,6 +458,11 @@ def _prepare_operations_table(
 
 
 def build_operations_depot_retrait_dataset(named_frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    for filename, frame in named_frames.items():
+        role = infer_sql_bundle_role(filename)
+        role_schema = SQL_ROLE_SCHEMAS.get(role or "")
+        if role_schema is not None:
+            validate_dataframe_schema(frame, role_schema, filename, raise_on_missing=True)
     frames = _normalize_named_frames(named_frames)
     missing_roles = sorted(SQL_BUNDLE_REQUIRED_ROLES - set(frames))
     if missing_roles:
@@ -602,7 +613,7 @@ def build_fractionnement_table(df: pd.DataFrame, conversion_rate: float) -> pd.D
     grouped = (
         work.groupby(["date_operation", "client_id", "nom_client", "type_mouvement", "code_devise"], dropna=False)
         .agg(
-            nb_operations=("operation_id", "nunique"),
+            nb_operations=("operation_id", _count_operations),
             montant_cumule_cdf=("montant_reporting_cdf", "sum"),
             montant_max_unitaire_cdf=("montant_reporting_cdf", "max"),
         )
@@ -633,7 +644,7 @@ def build_unusual_operations_table(df: pd.DataFrame, conversion_rate: float) -> 
     historical = work.loc[pd.to_datetime(work["date_operation"], errors="coerce").lt(current_start)].copy()
     current_agg = (
         current_period.groupby(["client_id", "nom_client"], dropna=False)
-        .agg(nb_operations_periode=("operation_id", "nunique"), volume_periode_cdf=("montant_reporting_cdf", "sum"))
+        .agg(nb_operations_periode=("operation_id", _count_operations), volume_periode_cdf=("montant_reporting_cdf", "sum"))
         .reset_index()
     )
     historical_daily = (
@@ -667,7 +678,7 @@ def build_high_activity_kyc_table(df: pd.DataFrame, conversion_rate: float) -> p
     grouped = (
         work.groupby(["client_id", "nom_client"], dropna=False)
         .agg(
-            nb_operations=("operation_id", "nunique"),
+            nb_operations=("operation_id", _count_operations),
             volume_lignes_cdf=("montant_reporting_cdf", "sum"),
             type_client=("type_client", _first_notna),
             agence_client=("agence_client", _first_notna),
@@ -707,7 +718,7 @@ def build_client_movement_summary_table(df: pd.DataFrame, conversion_rate: float
             volume_depots_cdf=("montant_reporting_cdf", lambda s: float(work.loc[s.index, "montant_reporting_cdf"][work.loc[s.index, "type_mouvement"].isin(["Depot", "Depot mobile"])].sum())),
             nb_retraits=("type_mouvement", lambda s: int(s.isin(["Retrait", "Retrait mobile"]).sum())),
             volume_retraits_cdf=("montant_reporting_cdf", lambda s: float(work.loc[s.index, "montant_reporting_cdf"][work.loc[s.index, "type_mouvement"].isin(["Retrait", "Retrait mobile"])].sum())),
-            nb_operations=("operation_id", "nunique"),
+            nb_operations=("operation_id", _count_operations),
             volume_total_cdf=("montant_reporting_cdf", "sum"),
         )
         .reset_index()
@@ -759,7 +770,7 @@ def build_risky_users_table(df: pd.DataFrame) -> pd.DataFrame:
     grouped = (
         working.groupby("operateur", dropna=False)
         .agg(
-            nb_operations=("operation_id", "nunique"),
+            nb_operations=("operation_id", _count_operations),
             nb_annulations=("annule", lambda s: int(s.fillna(False).sum())),
             nb_saisies_tardives=("saisie_tardive", lambda s: int(s.fillna(False).sum())),
             nb_auto_validations=("auto_validation", lambda s: int(s.fillna(False).sum())),
@@ -789,7 +800,7 @@ def build_point_service_summary_table(df: pd.DataFrame) -> pd.DataFrame:
     grouped = (
         df.groupby(["agence", "type_operation"], dropna=False)
         .agg(
-            nb_operations=("operation_id", "nunique"),
+            nb_operations=("operation_id", _count_operations),
             nb_annulations=("annule", lambda s: int(s.fillna(False).sum())),
             nb_saisies_tardives=("saisie_tardive", lambda s: int(s.fillna(False).sum())),
         )
@@ -820,7 +831,7 @@ def build_mobile_banking_summary_table(df: pd.DataFrame, conversion_rate: float)
             dropna=False,
         )
         .agg(
-            nb_operations=("operation_id", "nunique"),
+            nb_operations=("operation_id", _count_operations),
             nb_lignes_comptables=("nb_ecritures", "sum"),
             total_debit=("total_debit", "sum"),
             total_credit=("total_credit", "sum"),

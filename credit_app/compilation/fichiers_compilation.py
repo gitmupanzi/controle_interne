@@ -376,7 +376,12 @@ def lister_fichiers_excel(dossier_racine, motif_fichier="*LL_Rougeole.xlsx", sen
     return fichiers_trouves
 
 #  Lire les fichiers Excel 
-def lire_fichiers_excel(liste_fichiers, sheet_name="Feuille1", sensible_a_la_casse=False):
+def lire_fichiers_excel(
+    liste_fichiers,
+    sheet_name="Feuille1",
+    sensible_a_la_casse=False,
+    strict=True,
+):
     """
     Lit les fichiers Excel fournis et retourne un dictionnaire de DataFrames.
     
@@ -389,10 +394,12 @@ def lire_fichiers_excel(liste_fichiers, sheet_name="Feuille1", sensible_a_la_cas
         return {}
 
     donnees = {}
+    erreurs: list[str] = []
     for chemin in liste_fichiers:
         chemin = Path(chemin)
         if not chemin.exists() or not chemin.is_file():
             logger.warning("❌ Fichier introuvable ou invalide : %s", chemin)
+            erreurs.append(f"{chemin.name} : fichier introuvable ou invalide")
             continue
         if chemin.name.startswith("~$"):
             continue
@@ -420,6 +427,10 @@ def lire_fichiers_excel(liste_fichiers, sheet_name="Feuille1", sensible_a_la_cas
             logger.info(f"✅ Lu : {nom_fichier} - feuille : {feuille_choisie}")
         except Exception as e:
             logger.warning(f"❌ Erreur avec {nom_fichier} : {e}")
+            erreurs.append(f"{nom_fichier} : {e}")
+
+    if strict and erreurs:
+        raise ValueError("Chargement refusé. " + " | ".join(erreurs))
 
     return donnees
 
@@ -709,6 +720,8 @@ def charger_fichiers_excel(
     sheet_log: bool = False,
     dossier_sortie: Optional[str] = None,
     log_only_changed: bool = False,
+    strict: bool = True,
+    verifier_compatibilite: bool = False,
 ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, pd.DataFrame]]:
     """
     Charge plusieurs fichiers Excel et compile les donnees dans un seul DataFrame.
@@ -813,18 +826,37 @@ def charger_fichiers_excel(
         liste_fichiers = sorted({Path(f) for f in liste_fichiers}, key=lambda p: str(p).lower())
 
     donnees_brutes = lire_fichiers_excel(
-        liste_fichiers, sheet_name=sheet_name, sensible_a_la_casse=sensible_a_la_casse
+        liste_fichiers,
+        sheet_name=sheet_name,
+        sensible_a_la_casse=sensible_a_la_casse,
+        strict=strict,
     )
+    if verifier_compatibilite and len(donnees_brutes) >= 2:
+        from credit_app.services.data_pipeline import assess_compilation_compatibility
+
+        assessment = assess_compilation_compatibility(
+            [
+                (Path(path).name, frame.columns, (sheet_name,))
+                for path, frame in donnees_brutes.items()
+            ]
+        )
+        if not assessment.compatible:
+            raise ValueError("Compilation refusée. " + " ".join(assessment.reasons))
 
     dataframes = []
     logs = []
     logs_collisions = []
     provenance_colonnes: Dict[str, List[Dict[str, str]]] = {}
+    erreurs_traitement: list[str] = []
     for fichier, df in donnees_brutes.items():
         try:
             fichier_path = Path(fichier)
             provenance = fichier_path.stem
             df_orig = df.copy()
+            df = df.copy()
+            df["source_fichier"] = fichier_path.name
+            df["source_feuille"] = sheet_name
+            df["numero_ligne_source"] = pd.RangeIndex(start=2, stop=len(df) + 2)
             df, provenance_df, col_funcs, df_collisions = _preparer_dataframe_colonnes(
                 df=df,
                 fichier_path=fichier_path,
@@ -847,6 +879,10 @@ def charger_fichiers_excel(
 
         except Exception as e:
             logger.warning(f"Erreur lors du traitement de {Path(fichier).name} : {e}")
+            erreurs_traitement.append(f"{Path(fichier).name} : {e}")
+
+    if strict and erreurs_traitement:
+        raise ValueError("Compilation refusée. " + " | ".join(erreurs_traitement))
 
     if not dataframes:
         raise ValueError("Aucun fichier valide n’a été chargé.")

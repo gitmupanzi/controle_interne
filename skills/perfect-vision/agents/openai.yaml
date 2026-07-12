@@ -1,0 +1,4 @@
+interface:
+  display_name: "Perfect Vision"
+  short_description: "Analyser le schéma et les contrôles Perfect Vision"
+  default_prompt: "Utilise $perfect-vision pour analyser le schéma Perfect Vision et préparer une requête de contrôle interne."

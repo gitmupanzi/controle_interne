@@ -1,0 +1,4 @@
+interface:
+  display_name: "Solution M-PESA"
+  short_description: "Contrôler et rapprocher les données M-PESA"
+  default_prompt: "Utilise $solution-mpesa pour contrôler les fichiers M-PESA et expliquer les rapprochements clients."

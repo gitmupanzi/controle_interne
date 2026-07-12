@@ -12,6 +12,7 @@ from credit_app.ui import (
     render_summary_box,
     st_plot,
     style_standard_donut,
+    style_standard_horizontal_bar,
     style_standard_vertical_bar,
 )
 
@@ -65,15 +66,15 @@ def render_quality_tab(
             preferred_columns=["controle", "statut", "gravite", "cycle"],
         )
 
+        chart_df = quality_df.sort_values("nombre_lignes", ascending=True)
         fig = px.bar(
-            quality_df,
-            x="controle",
-            y="nombre_lignes",
-            color="nombre_lignes",
-            color_continuous_scale=["#d9a441", "#c05621", "#9b2c2c"],
+            chart_df,
+            x="nombre_lignes",
+            y="controle",
+            orientation="h",
+            color_discrete_sequence=["#d97b16"],
         )
-        fig.update_layout(coloraxis_showscale=False)
-        style_standard_vertical_bar(fig, height=360, tickangle=-25)
+        style_standard_horizontal_bar(fig, height=360)
         st_plot(fig, key="quality_anomalies_bar", height=360)
 
     chart_left, chart_right = st.columns(2)
@@ -82,16 +83,16 @@ def render_quality_tab(
         if not missing_df.empty:
             render_panel_title("Colonnes les plus incomplètes")
             missing_top = missing_df.head(12).copy()
+            missing_top = missing_top.sort_values("taux_manquant", ascending=True)
             fig = px.bar(
                 missing_top,
-                x="colonne",
-                y="taux_manquant",
-                color="taux_manquant",
-                color_continuous_scale=["#dbe8f9", "#f09b39", "#b9353f"],
+                x="taux_manquant",
+                y="colonne",
+                orientation="h",
+                color_discrete_sequence=["#1553a1"],
             )
-            fig.update_layout(coloraxis_showscale=False)
-            style_standard_vertical_bar(fig, height=360, tickangle=-25)
-            fig.update_yaxes(tickformat=".0%")
+            style_standard_horizontal_bar(fig, height=360)
+            fig.update_xaxes(tickformat=".0%")
             st_plot(fig, key="quality_missing_bar", height=360)
 
     with chart_right:

@@ -1,0 +1,2787 @@
+[
+  {
+    "module": "credit_app/colonne_valeur/__init__.py",
+    "function": "_importer_optionnel",
+    "line_start": 11,
+    "line_end": 21,
+    "parameters": [
+      "instruction_import",
+      "dependance"
+    ],
+    "returns_annotation": "None",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/__init__.py",
+        "line": 24
+      },
+      {
+        "file": "credit_app/colonne_valeur/__init__.py",
+        "line": 26
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_comparaison.py",
+    "function": "_nettoyer_cle_comparaison",
+    "line_start": 23,
+    "line_end": 28,
+    "parameters": [
+      "valeur"
+    ],
+    "returns_annotation": null,
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_comparaison.py",
+        "line": 736
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_comparaison.py",
+    "function": "_charger_dataframe_comparaison",
+    "line_start": 31,
+    "line_end": 54,
+    "parameters": [
+      "source",
+      "feuille"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_comparaison.py",
+        "line": 551
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_comparaison.py",
+        "line": 552
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_comparaison.py",
+        "line": 751
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_comparaison.py",
+        "line": 752
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_comparaison.py",
+    "function": "_extraire_valeur_dict",
+    "line_start": 57,
+    "line_end": 62,
+    "parameters": [
+      "donnees",
+      "default"
+    ],
+    "returns_annotation": null,
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_comparaison.py",
+        "line": 583
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_comparaison.py",
+        "line": 589
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_comparaison.py",
+        "line": 595
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_comparaison.py",
+    "function": "comparer_colonnes_generique",
+    "line_start": 66,
+    "line_end": 219,
+    "parameters": [
+      "df1",
+      "colonnes_df1",
+      "df2",
+      "colonnes_df2",
+      "verbose",
+      "nettoyer",
+      "seuil_similarite"
+    ],
+    "returns_annotation": "Dict[str, List]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_comparaison.py",
+        "line": 573
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_comparaison.py",
+    "function": "associer_colonnes_generique",
+    "line_start": 228,
+    "line_end": 379,
+    "parameters": [
+      "df_sans",
+      "df_avec",
+      "col_nom_sans",
+      "col_reference",
+      "col_resultat",
+      "seuil",
+      "afficher",
+      "export_excel",
+      "logger",
+      "fusion"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 1,
+    "uses_inplace": false,
+    "writes_files": true,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_comparaison.py",
+    "function": "associer_colonnes_generique_fast",
+    "line_start": 381,
+    "line_end": 528,
+    "parameters": [
+      "df_sans",
+      "df_avec",
+      "col_nom_sans",
+      "col_reference",
+      "col_resultat",
+      "seuil",
+      "afficher",
+      "export_excel",
+      "logger",
+      "fusion"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": true,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_comparaison.py",
+    "function": "_comparer_fichiers_sur_colonne_detail",
+    "line_start": 531,
+    "line_end": 645,
+    "parameters": [
+      "fichier1",
+      "fichier2",
+      "colonne",
+      "feuille1",
+      "feuille2",
+      "nettoyer",
+      "export_excel",
+      "prefixe_fichier1",
+      "prefixe_fichier2"
+    ],
+    "returns_annotation": "Dict[str, Union[Dict[str, int], List, pd.DataFrame]]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": true,
+    "writes_files": true,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_comparaison.py",
+    "function": "comparer_fichiers_sur_colonne",
+    "line_start": 648,
+    "line_end": 913,
+    "parameters": [
+      "df_1",
+      "df_2",
+      "colonne_commune",
+      "Ajout_cols_df_1",
+      "Ajout_cols_df_2",
+      "nettoyer",
+      "export_excel",
+      "suffixe_df_1",
+      "suffixe_df_2",
+      "seuil"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": true,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_filtrage.py",
+    "function": "_valider_dataframe",
+    "line_start": 18,
+    "line_end": 20,
+    "parameters": [
+      "df"
+    ],
+    "returns_annotation": "None",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 52
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 170
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 284
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 430
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 488
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 548
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_filtrage.py",
+    "function": "_valider_semaine_iso",
+    "line_start": 23,
+    "line_end": 27,
+    "parameters": [
+      "valeur",
+      "nom_parametre"
+    ],
+    "returns_annotation": "None",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 489
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 490
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 552
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 301
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 310
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 344
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 318
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 319
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 324
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 329
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_filtrage.py",
+    "function": "filtrer_df",
+    "line_start": 33,
+    "line_end": 101,
+    "parameters": [
+      "df",
+      "condition",
+      "colonnes"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_filtrage.py",
+    "function": "filtrer_par_premiere_date",
+    "line_start": 107,
+    "line_end": 238,
+    "parameters": [
+      "df",
+      "colonnes_date",
+      "annee",
+      "garder_colonne",
+      "annee_type",
+      "normalize",
+      "min_date",
+      "max_date"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_filtrage.py",
+    "function": "filtrer_par_semaine",
+    "line_start": 243,
+    "line_end": 403,
+    "parameters": [
+      "df",
+      "colonnes_semaine",
+      "semaines",
+      "condition",
+      "colonnes_a_garder",
+      "tri_par",
+      "ordre_croissant"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_filtrage.py",
+    "function": "filtrer_par_nullite",
+    "line_start": 409,
+    "line_end": 456,
+    "parameters": [
+      "df",
+      "colonnes",
+      "mode"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_filtrage.py",
+    "function": "filtrer_fenetre_iso",
+    "line_start": 459,
+    "line_end": 512,
+    "parameters": [
+      "df",
+      "semaine_min",
+      "semaine_max",
+      "annee"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_filtrage.py",
+    "function": "filtrer_fenetre_iso_cross_year",
+    "line_start": 514,
+    "line_end": 581,
+    "parameters": [
+      "df",
+      "annee_debut",
+      "semaine_debut",
+      "annee_fin",
+      "semaine_fin"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_fusion.py",
+    "function": "fusionner_ligne",
+    "line_start": 19,
+    "line_end": 60,
+    "parameters": [
+      "df_cols",
+      "type_fusion",
+      "separateur"
+    ],
+    "returns_annotation": "pd.Series",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_fusion.py",
+        "line": 129
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_fusion.py",
+        "line": 157
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_fusion.py",
+    "function": "fusionner_colonnes_similaires_ou_groupes",
+    "line_start": 63,
+    "line_end": 175,
+    "parameters": [
+      "df",
+      "method",
+      "groupes_colonnes",
+      "type_fusion",
+      "seuil_similarite",
+      "separateur",
+      "drop"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": true,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 1219
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_fusion.py",
+    "function": "fusionner_fichiers_par_jointure",
+    "line_start": 178,
+    "line_end": 251,
+    "parameters": [
+      "fichiers",
+      "on",
+      "how",
+      "suffixes",
+      "avec_source"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 2,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_fusion.py",
+    "function": "fusionner_fichiers_par_jointure_avance",
+    "line_start": 253,
+    "line_end": 383,
+    "parameters": [
+      "fichiers",
+      "on",
+      "how",
+      "suffixes",
+      "avec_source",
+      "seuil_approx"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 2,
+    "uses_inplace": true,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_fusion.py",
+    "function": "construire_df_final",
+    "line_start": 392,
+    "line_end": 438,
+    "parameters": [
+      "df_clean",
+      "df_compile",
+      "fusionner_func"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_fusion.py",
+        "line": 481
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_fusion.py",
+    "function": "construire_df_final_depuis_noms",
+    "line_start": 441,
+    "line_end": 485,
+    "parameters": [
+      "df_clean_name",
+      "df_compile_name",
+      "fusionner_func"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "normalize_column_label",
+    "line_start": 487,
+    "line_end": 497,
+    "parameters": [
+      "value"
+    ],
+    "returns_annotation": "str",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 512
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 564
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 604
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 504
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 586
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 568
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 568
+      },
+      {
+        "file": "credit_app/domain.py",
+        "line": 166
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "build_default_column_mapping",
+    "line_start": 500,
+    "line_end": 507,
+    "parameters": [],
+    "returns_annotation": "dict[str, str]",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 582
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 624
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "_resolve_mapping_columns",
+    "line_start": 510,
+    "line_end": 535,
+    "parameters": [
+      "mapping_df"
+    ],
+    "returns_annotation": "tuple[str, str]",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 553
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "load_excel_column_mapping",
+    "line_start": 539,
+    "line_end": 574,
+    "parameters": [
+      "mapping_file"
+    ],
+    "returns_annotation": "dict[str, str]",
+    "has_docstring": false,
+    "broad_exception_handlers": 1,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 621
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 583
+      },
+      {
+        "file": "tests/test_data_pipeline.py",
+        "line": 108
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "build_effective_column_mapping",
+    "line_start": 577,
+    "line_end": 589,
+    "parameters": [
+      "mapping_file",
+      "include_defaults"
+    ],
+    "returns_annotation": "dict[str, str]",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 715
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 600
+      },
+      {
+        "file": "credit_app/domain.py",
+        "line": 246
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "resolve_standard_column_name",
+    "line_start": 592,
+    "line_end": 617,
+    "parameters": [
+      "column_name",
+      "mapping_lookup"
+    ],
+    "returns_annotation": "str",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 725
+      },
+      {
+        "file": "credit_app/domain.py",
+        "line": 243
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "get_reference_mapping_count",
+    "line_start": 620,
+    "line_end": 624,
+    "parameters": [
+      "mapping_file"
+    ],
+    "returns_annotation": "int",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/domain.py",
+        "line": 250
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "verifier_colonnes",
+    "line_start": 626,
+    "line_end": 663,
+    "parameters": [
+      "df",
+      "colonnes_attendues",
+      "afficher"
+    ],
+    "returns_annotation": "None",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_fusion.py",
+        "line": 148
+      },
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 901
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "standardiser_nom",
+    "line_start": 666,
+    "line_end": 708,
+    "parameters": [
+      "nom_col"
+    ],
+    "returns_annotation": "str",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 763
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 765
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 1264
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 1278
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 1283
+      },
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 450
+      },
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 600
+      },
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 922
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "renommer_colonnes_selon_mapping",
+    "line_start": 711,
+    "line_end": 734,
+    "parameters": [
+      "df",
+      "mapping_file"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 768
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "standardiser_noms_colonnes",
+    "line_start": 738,
+    "line_end": 770,
+    "parameters": [
+      "df",
+      "mapping_file",
+      "nom_col"
+    ],
+    "returns_annotation": "Union[pd.DataFrame, str]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 1530
+      },
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 247
+      },
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 173
+      },
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 204
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "completer_liste_colonnes",
+    "line_start": 773,
+    "line_end": 791,
+    "parameters": [
+      "colonnes_base",
+      "colonnes_optionnelles",
+      "activer"
+    ],
+    "returns_annotation": "list[str]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "transferer_valeurs_colonnes",
+    "line_start": 794,
+    "line_end": 1155,
+    "parameters": [
+      "df",
+      "colonne_source",
+      "colonne_cible",
+      "mapping",
+      "masque",
+      "colonne_filtre",
+      "valeurs_filtre",
+      "normaliser_filtre_texte",
+      "ecraser",
+      "supprimer_source",
+      "valeur_vide",
+      "ignorer_colonnes_absentes",
+      "retourner_rapport",
+      "dossier_sortie",
+      "nom_fichier_rapport"
+    ],
+    "returns_annotation": "Union[pd.DataFrame, tuple[pd.DataFrame, dict[str, Any]]]",
+    "has_docstring": true,
+    "broad_exception_handlers": 1,
+    "uses_inplace": false,
+    "writes_files": true,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 889
+      },
+      {
+        "file": "credit_app/colonne_valeur/colonne_nettoyage.py",
+        "line": 961
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "harmoniser_schema_colonnes",
+    "line_start": 1158,
+    "line_end": 1416,
+    "parameters": [
+      "df",
+      "colonnes_reference",
+      "alias_colonnes",
+      "valeur_defaut",
+      "garder_colonnes_en_trop",
+      "ajouter_colonnes_absentes",
+      "supprimer_colonnes_vides",
+      "supprimer_lignes_vides",
+      "trier_autres",
+      "supprimer_alias_fusionnes",
+      "config_fusion_colonnes"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": true,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "verifier_alias_colonnes",
+    "line_start": 1419,
+    "line_end": 1509,
+    "parameters": [
+      "df",
+      "alias_colonnes",
+      "colonnes_reference",
+      "afficher"
+    ],
+    "returns_annotation": "dict[str, Any]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_nettoyage.py",
+    "function": "clean_all_column_names",
+    "line_start": 1514,
+    "line_end": 1530,
+    "parameters": [
+      "df",
+      "mapping_file"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 249
+      },
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 202
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_suppression.py",
+    "function": "_indexer_provenance_colonnes",
+    "line_start": 16,
+    "line_end": 43,
+    "parameters": [
+      "provenance_colonnes"
+    ],
+    "returns_annotation": "Dict[str, Dict[str, List[Dict[str, Any]]]]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_suppression.py",
+        "line": 153
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_suppression.py",
+    "function": "_formater_provenance_colonne",
+    "line_start": 46,
+    "line_end": 76,
+    "parameters": [
+      "details"
+    ],
+    "returns_annotation": "str",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_suppression.py",
+        "line": 104
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_suppression.py",
+    "function": "afficher_rapport_colonnes",
+    "line_start": 82,
+    "line_end": 123,
+    "parameters": [
+      "audit"
+    ],
+    "returns_annotation": "str",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/colonne_suppression.py",
+    "function": "colonnes_en_trop",
+    "line_start": 126,
+    "line_end": 225,
+    "parameters": [
+      "df",
+      "colonnes_attendues",
+      "ignorer_unnamed",
+      "ignorer_vides",
+      "normaliser_espaces",
+      "case_insensitive",
+      "log"
+    ],
+    "returns_annotation": "Dict[str, Any]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_completude.py",
+    "function": "_iter_normalized_mapping",
+    "line_start": 17,
+    "line_end": 23,
+    "parameters": [
+      "values"
+    ],
+    "returns_annotation": "Dict[str, Any]",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 115
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 116
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 153
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 154
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_completude.py",
+    "function": "_build_completude_result",
+    "line_start": 26,
+    "line_end": 53,
+    "parameters": [
+      "ref_norm",
+      "df_norm",
+      "seuil_min",
+      "include_extra"
+    ],
+    "returns_annotation": "dict",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 117
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 155
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_completude.py",
+    "function": "normaliser_valeur",
+    "line_start": 55,
+    "line_end": 84,
+    "parameters": [
+      "s"
+    ],
+    "returns_annotation": null,
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_comparaison.py",
+        "line": 744
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 20
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_completude.py",
+    "function": "comparer_listes",
+    "line_start": 87,
+    "line_end": 124,
+    "parameters": [
+      "ref_list",
+      "df_list",
+      "seuil_min"
+    ],
+    "returns_annotation": null,
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_completude.py",
+    "function": "calculer_completude",
+    "line_start": 127,
+    "line_end": 162,
+    "parameters": [
+      "ref_list",
+      "df_list",
+      "seuil_min"
+    ],
+    "returns_annotation": null,
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_completude.py",
+    "function": "_decision_missing",
+    "line_start": 165,
+    "line_end": 181,
+    "parameters": [
+      "pct_missing",
+      "colonne_absente",
+      "seuil_acceptable",
+      "seuil_surveillance"
+    ],
+    "returns_annotation": "str",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 286
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_completude.py",
+    "function": "_normaliser_nom_cle",
+    "line_start": 184,
+    "line_end": 187,
+    "parameters": [
+      "colonne"
+    ],
+    "returns_annotation": "str",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 197
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 200
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_completude.py",
+    "function": "_resoudre_nom_colonne_specification",
+    "line_start": 190,
+    "line_end": 207,
+    "parameters": [
+      "spec_df",
+      "nom_attendu",
+      "obligatoire"
+    ],
+    "returns_annotation": "Optional[str]",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 355
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 360
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 361
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 362
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 363
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_completude.py",
+    "function": "analyser_missing_colonnes",
+    "line_start": 210,
+    "line_end": 311,
+    "parameters": [
+      "df",
+      "colonnes",
+      "considerer_na_like",
+      "seuil_acceptable",
+      "seuil_surveillance",
+      "observations",
+      "arrondi"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 375
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 433
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_completude.py",
+    "function": "analyser_missing_colonnes_modele",
+    "line_start": 314,
+    "line_end": 424,
+    "parameters": [
+      "df",
+      "specification",
+      "colonne_variable",
+      "colonne_bloc",
+      "colonne_priorite",
+      "colonne_type_variable",
+      "colonne_source",
+      "considerer_na_like",
+      "seuil_acceptable",
+      "seuil_surveillance",
+      "arrondi"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_completude.py",
+        "line": 442
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_completude.py",
+    "function": "analyser_valeurs_manquantes_colonnes",
+    "line_start": 427,
+    "line_end": 433,
+    "parameters": [
+      "df",
+      "colonnes"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_completude.py",
+    "function": "analyser_valeurs_manquantes_colonnes_modele",
+    "line_start": 436,
+    "line_end": 442,
+    "parameters": [
+      "df",
+      "specification"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "_is_na_like",
+    "line_start": 53,
+    "line_end": 59,
+    "parameters": [
+      "val"
+    ],
+    "returns_annotation": "bool",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 802
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 744
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 1324
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 728
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 759
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 1302
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 1056
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "_to_clean_string_series",
+    "line_start": 62,
+    "line_end": 72,
+    "parameters": [
+      "s"
+    ],
+    "returns_annotation": "pd.Series",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 194
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 527
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 727
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 758
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 1300
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 1321
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 665
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 1055
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "_read_mapping_dataframe_cached",
+    "line_start": 76,
+    "line_end": 108,
+    "parameters": [
+      "mapping_path_text",
+      "modified_at_ns",
+      "require_variable"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 115
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "_read_mapping_dataframe",
+    "line_start": 111,
+    "line_end": 119,
+    "parameters": [
+      "mapping_file",
+      "require_variable"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 570
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 591
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 642
+      },
+      {
+        "file": "tests/test_data_pipeline.py",
+        "line": 124
+      },
+      {
+        "file": "tests/test_data_pipeline.py",
+        "line": 126
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "get_target_columns",
+    "line_start": 125,
+    "line_end": 156,
+    "parameters": [
+      "df",
+      "cols",
+      "allow_all_if_none"
+    ],
+    "returns_annotation": "List[str]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/colonne_filtrage.py",
+        "line": 436
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 520
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 724
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 736
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 755
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 799
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 906
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 1171
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 1234
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 1246
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 1258
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_suppression.py",
+        "line": 180
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_suppression.py",
+        "line": 197
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_suppression.py",
+        "line": 204
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_suppression.py",
+        "line": 487
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_suppression.py",
+        "line": 491
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_suppression.py",
+        "line": 497
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "strip_accents",
+    "line_start": 162,
+    "line_end": 170,
+    "parameters": [
+      "text"
+    ],
+    "returns_annotation": "object",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 809
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 536
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 959
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "nettoyer_valeurs_vides",
+    "line_start": 176,
+    "line_end": 207,
+    "parameters": [
+      "df",
+      "log"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "clean_phone_number",
+    "line_start": 213,
+    "line_end": 332,
+    "parameters": [
+      "value",
+      "country_code",
+      "add_prefix",
+      "return_mode",
+      "join_sep",
+      "max_numbers"
+    ],
+    "returns_annotation": "Union[str, List[str], pd._libs.missing.NAType]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "clean_email_address",
+    "line_start": 337,
+    "line_end": 494,
+    "parameters": [
+      "value",
+      "return_mode",
+      "join_sep",
+      "max_emails",
+      "allow_domain_completion"
+    ],
+    "returns_annotation": "Union[str, List[str], pd._libs.missing.NAType]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "normaliser_values",
+    "line_start": 499,
+    "line_end": 555,
+    "parameters": [
+      "df",
+      "cols",
+      "case_option",
+      "remove_accents",
+      "log"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "replace_specific_values",
+    "line_start": 561,
+    "line_end": 581,
+    "parameters": [
+      "df",
+      "mapping_file",
+      "log"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 1493
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "verifier_regex_mapping",
+    "line_start": 587,
+    "line_end": 615,
+    "parameters": [
+      "fichier_mapping",
+      "variable"
+    ],
+    "returns_annotation": "None",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 646
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "replace_specific_values_critere",
+    "line_start": 621,
+    "line_end": 716,
+    "parameters": [
+      "df",
+      "mapping_file",
+      "critere",
+      "regex_mode",
+      "clean_before",
+      "strip_lower",
+      "verifier_regex_avant",
+      "log_clean_preview"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/domain.py",
+        "line": 227
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "clean_first_letter_values",
+    "line_start": 722,
+    "line_end": 731,
+    "parameters": [
+      "df",
+      "cols"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "clean_first_letter_only_values",
+    "line_start": 734,
+    "line_end": 750,
+    "parameters": [
+      "df",
+      "cols"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "clean_uppercase_values",
+    "line_start": 753,
+    "line_end": 762,
+    "parameters": [
+      "df",
+      "cols"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "clean_all_values",
+    "line_start": 768,
+    "line_end": 847,
+    "parameters": [
+      "df",
+      "cols",
+      "case_option",
+      "remove_accents",
+      "convert_type",
+      "verbose"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 3,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+        "line": 1494
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "convert_column_to_date",
+    "line_start": 853,
+    "line_end": 1149,
+    "parameters": [
+      "df",
+      "colonnes",
+      "lang",
+      "output"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 4,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "convert_column_to_time",
+    "line_start": 1151,
+    "line_end": 1226,
+    "parameters": [
+      "df",
+      "colonnes",
+      "output"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 1,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "convert_float_to_int",
+    "line_start": 1231,
+    "line_end": 1240,
+    "parameters": [
+      "df",
+      "cols"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "convert_float_to_int_arrondi",
+    "line_start": 1243,
+    "line_end": 1252,
+    "parameters": [
+      "df",
+      "cols"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "convertir_en_int",
+    "line_start": 1255,
+    "line_end": 1265,
+    "parameters": [
+      "df",
+      "colonnes"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "nettoyer_tiret_et_espaces",
+    "line_start": 1271,
+    "line_end": 1282,
+    "parameters": [
+      "texte"
+    ],
+    "returns_annotation": "Optional[str]",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "remplacer_underscores",
+    "line_start": 1288,
+    "line_end": 1305,
+    "parameters": [
+      "df",
+      "colonnes"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "remplacer_espaces_par_underscores",
+    "line_start": 1308,
+    "line_end": 1334,
+    "parameters": [
+      "df",
+      "colonnes"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "trouve_caractere",
+    "line_start": 1340,
+    "line_end": 1347,
+    "parameters": [
+      "provenance",
+      "valeur_avant",
+      "valeur_apres"
+    ],
+    "returns_annotation": "str",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "extraire_prefixe",
+    "line_start": 1350,
+    "line_end": 1360,
+    "parameters": [
+      "texte",
+      "longueur",
+      "mode"
+    ],
+    "returns_annotation": "Optional[str]",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "extraire_nom_generique",
+    "line_start": 1363,
+    "line_end": 1397,
+    "parameters": [
+      "texte"
+    ],
+    "returns_annotation": "Optional[str]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "extraire_suffixe",
+    "line_start": 1400,
+    "line_end": 1410,
+    "parameters": [
+      "texte",
+      "longueur",
+      "mode"
+    ],
+    "returns_annotation": "Optional[str]",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "extraire_texte_et_nombre",
+    "line_start": 1416,
+    "line_end": 1472,
+    "parameters": [
+      "cellule",
+      "valeur_par_defaut",
+      "detecter_annee",
+      "normaliser_texte",
+      "mode"
+    ],
+    "returns_annotation": "Union[str, int, dict, List[Union[str, int, dict]]]",
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_nettoyage.py",
+    "function": "clean_all_values_names",
+    "line_start": 1478,
+    "line_end": 1502,
+    "parameters": [
+      "df",
+      "mapping_file",
+      "apply_mapping",
+      "case_option",
+      "remove_accents",
+      "convert_type"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_suppression.py",
+    "function": "_normaliser_dataframe_comparaison",
+    "line_start": 22,
+    "line_end": 48,
+    "parameters": [
+      "df_source",
+      "colonnes",
+      "normaliser",
+      "type_normalisation"
+    ],
+    "returns_annotation": "Optional[pd.DataFrame]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_suppression.py",
+        "line": 513
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_suppression.py",
+        "line": 209
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_suppression.py",
+    "function": "_est_manquant",
+    "line_start": 51,
+    "line_end": 57,
+    "parameters": [
+      "valeur"
+    ],
+    "returns_annotation": "bool",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/colonne_valeur/valeurs_suppression.py",
+        "line": 543
+      },
+      {
+        "file": "credit_app/colonne_valeur/valeurs_suppression.py",
+        "line": 271
+      }
+    ]
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_suppression.py",
+    "function": "gerer_doublons",
+    "line_start": 60,
+    "line_end": 413,
+    "parameters": [
+      "df",
+      "colonnes_inclues",
+      "colonnes_exclues",
+      "normaliser",
+      "type_normalisation",
+      "keep",
+      "mode",
+      "marquer",
+      "supprimer",
+      "export_path",
+      "colonnes_tri",
+      "tri_ascendant",
+      "reset_index",
+      "colonnes_missing",
+      "logger"
+    ],
+    "returns_annotation": "Union[pd.DataFrame, int, dict]",
+    "has_docstring": true,
+    "broad_exception_handlers": 3,
+    "uses_inplace": false,
+    "writes_files": true,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/colonne_valeur/valeurs_suppression.py",
+    "function": "suggerer_suppression_doublons",
+    "line_start": 416,
+    "line_end": 628,
+    "parameters": [
+      "df",
+      "colonnes_doublons",
+      "colonnes_tri",
+      "colonnes_missing",
+      "colonne_resultat_prioritaire",
+      "valeurs_resultat_prioritaires",
+      "normaliser",
+      "type_normalisation",
+      "export_path",
+      "tri_ascendant",
+      "reset_index",
+      "logger"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 1,
+    "uses_inplace": false,
+    "writes_files": true,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "_construire_provenance_colonnes",
+    "line_start": 26,
+    "line_end": 47,
+    "parameters": [
+      "colonnes_brutes",
+      "colonnes_nettoyees",
+      "fichier_path"
+    ],
+    "returns_annotation": "Dict[str, List[Dict[str, str]]]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 314
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "_fusionner_provenances_colonnes",
+    "line_start": 50,
+    "line_end": 84,
+    "parameters": [
+      "provenance_existante",
+      "nouvelle_provenance"
+    ],
+    "returns_annotation": "Dict[str, List[Dict[str, str]]]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 869
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "_construire_log_collisions_colonnes",
+    "line_start": 87,
+    "line_end": 127,
+    "parameters": [
+      "colonnes_brutes",
+      "colonnes_warning",
+      "colonnes_preparees",
+      "colonnes_finales",
+      "fichier_path",
+      "renommer_variable",
+      "variables_brute"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 278
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "_concatener_logs_dataframes",
+    "line_start": 130,
+    "line_end": 137,
+    "parameters": [
+      "logs"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 914
+      },
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 898
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "extraire_attr_dataframe",
+    "line_start": 140,
+    "line_end": 151,
+    "parameters": [
+      "value"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "controle_interne.py",
+        "line": 233
+      },
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 923
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "_preparer_noms_pour_warning_doublons",
+    "line_start": 154,
+    "line_end": 173,
+    "parameters": [
+      "colonnes_brutes",
+      "variables_brute"
+    ],
+    "returns_annotation": "List[str]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 269
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "_preparer_colonnes_attendues",
+    "line_start": 176,
+    "line_end": 204,
+    "parameters": [
+      "colonnes_attendues",
+      "renommer_variable",
+      "variables_brute",
+      "mapping_colonnes"
+    ],
+    "returns_annotation": "List[str]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 903
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "_preparer_dataframe_colonnes",
+    "line_start": 207,
+    "line_end": 337,
+    "parameters": [
+      "df",
+      "fichier_path",
+      "renommer_variable",
+      "variables_brute",
+      "colonne_source",
+      "mapping_colonnes",
+      "suffixer_doublons"
+    ],
+    "returns_annotation": "Tuple[pd.DataFrame, Dict[str, List[Dict[str, str]]], Dict[str, str], pd.DataFrame]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 860
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "lister_fichiers_excel",
+    "line_start": 348,
+    "line_end": 376,
+    "parameters": [
+      "dossier_racine",
+      "motif_fichier",
+      "sensible_a_la_casse"
+    ],
+    "returns_annotation": null,
+    "has_docstring": false,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 822
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "lire_fichiers_excel",
+    "line_start": 379,
+    "line_end": 435,
+    "parameters": [
+      "liste_fichiers",
+      "sheet_name",
+      "sensible_a_la_casse",
+      "strict"
+    ],
+    "returns_annotation": null,
+    "has_docstring": true,
+    "broad_exception_handlers": 1,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 828
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "detecter_doublons_standardises",
+    "line_start": 438,
+    "line_end": 457,
+    "parameters": [
+      "df",
+      "provenance"
+    ],
+    "returns_annotation": "List[str]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 874
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "rendre_colonnes_uniques",
+    "line_start": 460,
+    "line_end": 478,
+    "parameters": [
+      "cols"
+    ],
+    "returns_annotation": "List[str]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 274
+      },
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 601
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "rendre_colonnes_uniques_techniques",
+    "line_start": 481,
+    "line_end": 507,
+    "parameters": [
+      "cols",
+      "suffixe_technique"
+    ],
+    "returns_annotation": "Tuple[List[str], Dict[str, str]]",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 277
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "renommer_colonnes_avec_provenance",
+    "line_start": 520,
+    "line_end": 538,
+    "parameters": [
+      "df",
+      "provenance",
+      "colonnes_a_renommer"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "afficher_colonnes_standardisees",
+    "line_start": 541,
+    "line_end": 556,
+    "parameters": [
+      "dataframes"
+    ],
+    "returns_annotation": "None",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 890
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "fusionner_colonnes_similaires",
+    "line_start": 559,
+    "line_end": 658,
+    "parameters": [
+      "dataframes",
+      "standardiser_colonnes",
+      "fusionner_colonnes_suffixees",
+      "restaurer_noms_dupliques"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": true,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 891
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "comparer_colonnes_multiples",
+    "line_start": 661,
+    "line_end": 702,
+    "parameters": [
+      "dfs",
+      "valeur_absente"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "charger_fichiers_excel",
+    "line_start": 708,
+    "line_end": 940,
+    "parameters": [
+      "dossier_racine",
+      "liste_fichiers",
+      "motif_fichier",
+      "sheet_name",
+      "colonnes_attendues",
+      "sensible_a_la_casse",
+      "colonne_source",
+      "renommer_variable",
+      "variables_brute",
+      "suffixer_doublons",
+      "mapping_colonnes",
+      "sheet_log",
+      "dossier_sortie",
+      "log_only_changed",
+      "strict",
+      "verifier_compatibilite"
+    ],
+    "returns_annotation": "Union[pd.DataFrame, Tuple[pd.DataFrame, pd.DataFrame]]",
+    "has_docstring": true,
+    "broad_exception_handlers": 1,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "controle_interne.py",
+        "line": 219
+      },
+      {
+        "file": "tests/test_data_pipeline.py",
+        "line": 64
+      },
+      {
+        "file": "tests/test_data_pipeline.py",
+        "line": 81
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "exporter_dataframe_excel",
+    "line_start": 942,
+    "line_end": 1228,
+    "parameters": [
+      "df",
+      "dossier",
+      "base_nom",
+      "sheet_name",
+      "split",
+      "colonne_split",
+      "supprimer_na",
+      "creer_sous_dossiers",
+      "inclure_horodatage",
+      "une_feuille_par_groupe",
+      "ecrire_index"
+    ],
+    "returns_annotation": "list",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": true,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 932
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "fusionner_fichiers_homogenes",
+    "line_start": 1230,
+    "line_end": 1353,
+    "parameters": [
+      "fichiers",
+      "chemin_sortie",
+      "avec_source",
+      "colonne_source",
+      "reset_index",
+      "colonnes_communes_only",
+      "exporter"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 2,
+    "uses_inplace": false,
+    "writes_files": true,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/compilation/fichiers_compilation.py",
+    "function": "log_colonnes",
+    "line_start": 1356,
+    "line_end": 1388,
+    "parameters": [
+      "df_orig",
+      "df_apres",
+      "col_funcs",
+      "fichier"
+    ],
+    "returns_annotation": "pd.DataFrame",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_compilation.py",
+        "line": 878
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_nommage.py",
+    "function": "generer_nom_fichier",
+    "line_start": 12,
+    "line_end": 56,
+    "parameters": [
+      "province_code",
+      "zone",
+      "type_fichier",
+      "maladie",
+      "fusion",
+      "extension",
+      "date"
+    ],
+    "returns_annotation": "str",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/compilation/fichiers_nommage.py",
+    "function": "generer_nom_feuille",
+    "line_start": 59,
+    "line_end": 65,
+    "parameters": [
+      "type_fichier",
+      "maladie"
+    ],
+    "returns_annotation": "str",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/compilation/fichiers_nommage.py",
+    "function": "est_nom_fichier_valide",
+    "line_start": 68,
+    "line_end": 81,
+    "parameters": [
+      "nom",
+      "types_fichiers"
+    ],
+    "returns_annotation": "bool",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  },
+  {
+    "module": "credit_app/compilation/fichiers_nommage.py",
+    "function": "normaliser_zone_texte",
+    "line_start": 84,
+    "line_end": 90,
+    "parameters": [
+      "zone"
+    ],
+    "returns_annotation": "str",
+    "has_docstring": true,
+    "broad_exception_handlers": 0,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": [
+      {
+        "file": "credit_app/compilation/fichiers_nommage.py",
+        "line": 145
+      }
+    ]
+  },
+  {
+    "module": "credit_app/compilation/fichiers_nommage.py",
+    "function": "extraire_infos_nom_fichier",
+    "line_start": 93,
+    "line_end": 172,
+    "parameters": [
+      "nom_fichier"
+    ],
+    "returns_annotation": "Optional[Dict[str, Optional[str]]]",
+    "has_docstring": true,
+    "broad_exception_handlers": 1,
+    "uses_inplace": false,
+    "writes_files": false,
+    "call_sites": []
+  }
+]

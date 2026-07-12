@@ -6,9 +6,37 @@ from pathlib import Path
 
 import pandas as pd
 
+from credit_app.data_schema import (
+    DataSchema,
+    normalize_dataframe_headers,
+    validate_dataframe_schema,
+)
+
 
 LINE_LIST_DIR = Path("line_list")
 SUPPORTED_DATA_SUFFIXES = {".xlsx", ".xls", ".csv"}
+
+
+class DataLoadError(ValueError):
+    """A safe, user-facing error raised while loading a local data file."""
+
+
+def _validate_loaded_frame(
+    dataframe: pd.DataFrame,
+    *,
+    source: str,
+    schema: DataSchema | None,
+    reject_empty: bool,
+) -> pd.DataFrame:
+    if not isinstance(dataframe, pd.DataFrame):
+        raise DataLoadError(f"{source} : la feuille sélectionnée ne contient pas un tableau exploitable.")
+    if reject_empty and (dataframe.empty or len(dataframe.columns) == 0):
+        raise DataLoadError(f"{source} : le fichier est vide ou ne contient aucune ligne de données.")
+    if schema is None:
+        return dataframe
+    normalized = normalize_dataframe_headers(dataframe, schema)
+    validate_dataframe_schema(normalized, schema, source, raise_on_missing=True)
+    return normalized
 
 
 def _detect_csv_separator(sample_text: str) -> str:
@@ -42,8 +70,8 @@ def _read_csv_flexible_from_bytes(file_bytes: bytes) -> pd.DataFrame:
         except Exception as exc:
             last_error = exc
     if last_error is not None:
-        raise last_error
-    raise ValueError("Lecture CSV impossible.")
+        raise DataLoadError(f"Lecture CSV impossible : {last_error}") from last_error
+    raise DataLoadError("Lecture CSV impossible.")
 
 
 def _read_csv_flexible_from_path(path: Path) -> pd.DataFrame:
@@ -61,51 +89,74 @@ def _read_csv_flexible_from_path(path: Path) -> pd.DataFrame:
         except Exception as exc:
             last_error = exc
     if last_error is not None:
-        raise last_error
-    raise ValueError(f"Lecture CSV impossible : {path.name}")
+        raise DataLoadError(f"Lecture CSV impossible pour {path.name} : {last_error}") from last_error
+    raise DataLoadError(f"Lecture CSV impossible : {path.name}")
 
 
 def get_excel_sheet_names(file_bytes: bytes) -> list[str]:
-    with pd.ExcelFile(BytesIO(file_bytes)) as workbook:
-        return workbook.sheet_names
+    try:
+        with pd.ExcelFile(BytesIO(file_bytes)) as workbook:
+            return workbook.sheet_names
+    except Exception as exc:
+        raise DataLoadError(f"Impossible de lire les feuilles du fichier Excel : {exc}") from exc
 
 
 def get_excel_sheet_names_from_path(file_path: str | Path) -> list[str]:
-    with pd.ExcelFile(Path(file_path)) as workbook:
-        return workbook.sheet_names
+    path = Path(file_path)
+    try:
+        with pd.ExcelFile(path) as workbook:
+            return workbook.sheet_names
+    except Exception as exc:
+        raise DataLoadError(f"Impossible de lire les feuilles de {path.name} : {exc}") from exc
 
 
 def load_dataframe_from_bytes(
     file_bytes: bytes,
     filename: str,
     sheet_name: str | None = None,
+    *,
+    schema: DataSchema | None = None,
+    reject_empty: bool = False,
 ) -> pd.DataFrame:
     lower_name = filename.lower()
     buffer = BytesIO(file_bytes)
 
     if lower_name.endswith(".csv"):
-        return _read_csv_flexible_from_bytes(file_bytes)
+        frame = _read_csv_flexible_from_bytes(file_bytes)
+        return _validate_loaded_frame(frame, source=filename, schema=schema, reject_empty=reject_empty)
 
     if lower_name.endswith((".xlsx", ".xls")):
-        return pd.read_excel(buffer, sheet_name=sheet_name)
+        try:
+            frame = pd.read_excel(buffer, sheet_name=0 if sheet_name is None else sheet_name)
+        except Exception as exc:
+            raise DataLoadError(f"Impossible de lire {filename} : {exc}") from exc
+        return _validate_loaded_frame(frame, source=filename, schema=schema, reject_empty=reject_empty)
 
-    raise ValueError(f"Format non supporte : {filename}")
+    raise DataLoadError(f"Format non supporté : {filename}")
 
 
 def load_dataframe_from_path(
     file_path: str | Path,
     sheet_name: str | None = None,
+    *,
+    schema: DataSchema | None = None,
+    reject_empty: bool = False,
 ) -> pd.DataFrame:
     path = Path(file_path)
     lower_name = path.name.lower()
 
     if lower_name.endswith(".csv"):
-        return _read_csv_flexible_from_path(path)
+        frame = _read_csv_flexible_from_path(path)
+        return _validate_loaded_frame(frame, source=path.name, schema=schema, reject_empty=reject_empty)
 
     if lower_name.endswith((".xlsx", ".xls")):
-        return pd.read_excel(path, sheet_name=sheet_name)
+        try:
+            frame = pd.read_excel(path, sheet_name=0 if sheet_name is None else sheet_name)
+        except Exception as exc:
+            raise DataLoadError(f"Impossible de lire {path.name} : {exc}") from exc
+        return _validate_loaded_frame(frame, source=path.name, schema=schema, reject_empty=reject_empty)
 
-    raise ValueError(f"Format non supporte : {path.name}")
+    raise DataLoadError(f"Format non supporté : {path.name}")
 
 
 def list_available_line_list_files() -> list[Path]:

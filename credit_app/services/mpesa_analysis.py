@@ -10,55 +10,23 @@ import numpy as np
 import pandas as pd
 from openpyxl.styles import Font, PatternFill
 
+from credit_app.data_schema import (
+    CURRENT_SAVINGS_SCHEMA,
+    CUSTOMERS_SCHEMA,
+    FIXED_SAVINGS_SCHEMA,
+    G2_TRANSACTIONS_SCHEMA,
+    LOANS_SCHEMA,
+    MPESA_TRANSACTIONS_SCHEMA,
+    DataSchema,
+    validate_dataframe_schema,
+)
 
-TRANSACTION_REQUIRED_COLUMNS = {
-    "id",
-    "customer_id",
-    "msisdn1",
-    "account_type",
-    "reference_id",
-    "currency_code",
-    "dr",
-    "cr",
-    "bal_before",
-    "bal_after",
-    "ref_no",
-    "description",
-    "created_at",
-}
 
-CURRENT_SAVINGS_REQUIRED_COLUMNS = {
-    "customer_id",
-    "msisdn",
-    "product_name",
-    "account_type",
-    "balance",
-    "currency_code",
-    "created_at",
-    "updated_at",
-}
-
-FIXED_SAVINGS_REQUIRED_COLUMNS = {
-    "customer_id",
-    "msisdn",
-    "product_name",
-    "account_type",
-    "balance",
-    "currency_code",
-    "date_approved",
-    "maturity_date",
-}
-
-G2_TRANSACTION_REQUIRED_COLUMNS = {
-    "Receipt No",
-    "Currency",
-    "Opposite Party",
-}
-
-CUSTOMERS_REQUIRED_COLUMNS = {
-    "msisdn1",
-    "created_at",
-}
+TRANSACTION_REQUIRED_COLUMNS = set(MPESA_TRANSACTIONS_SCHEMA.required)
+CURRENT_SAVINGS_REQUIRED_COLUMNS = set(CURRENT_SAVINGS_SCHEMA.required)
+FIXED_SAVINGS_REQUIRED_COLUMNS = set(FIXED_SAVINGS_SCHEMA.required)
+G2_TRANSACTION_REQUIRED_COLUMNS = set(G2_TRANSACTIONS_SCHEMA.required)
+CUSTOMERS_REQUIRED_COLUMNS = set(CUSTOMERS_SCHEMA.required)
 
 LOAN_USEFUL_COLUMNS = {
     "loan_id",
@@ -239,9 +207,20 @@ def validate_required_columns(
     required_columns: set[str],
     file_label: str,
 ) -> list[str]:
-    columns = {_normalize_column_name(column).rstrip(".") for column in dataframe.columns}
-    required = {_normalize_column_name(column).rstrip(".") for column in required_columns}
-    return sorted(required.difference(columns))
+    known_schemas: tuple[DataSchema, ...] = (
+        MPESA_TRANSACTIONS_SCHEMA,
+        CURRENT_SAVINGS_SCHEMA,
+        FIXED_SAVINGS_SCHEMA,
+        G2_TRANSACTIONS_SCHEMA,
+        CUSTOMERS_SCHEMA,
+        LOANS_SCHEMA,
+    )
+    matching_schema = next(
+        (candidate for candidate in known_schemas if set(candidate.required) == set(required_columns)),
+        DataSchema(file_label, frozenset(required_columns)),
+    )
+    result = validate_dataframe_schema(dataframe, matching_schema, file_label)
+    return list(result.missing)
 
 
 def remove_export_index_columns(dataframe: pd.DataFrame) -> pd.DataFrame:

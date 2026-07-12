@@ -37,6 +37,9 @@ from credit_app.ui import (
     render_panel_title,
     render_summary_box,
     st_plot,
+    style_standard_donut,
+    style_standard_line,
+    style_standard_vertical_bar,
 )
 
 
@@ -200,9 +203,21 @@ def _render_import_tab(prepared: MpesaPreparedData, missing: dict[str, list[str]
         st.info("Aucun fichier n'a encore ete charge.")
         return
     st.dataframe(report, width="stretch", hide_index=True)
+    prepared_frames = {
+        "Transactions M-PESA": prepared.transactions,
+        "Epargne courante": prepared.current_savings,
+        "DAT": prepared.fixed_savings,
+        "Credits": prepared.loans,
+        "Transactions G2": prepared.g2_transactions,
+        "Clients": prepared.customers,
+    }
     for label, columns in missing.items():
         if columns:
-            st.warning(f"{label} : colonnes manquantes - {', '.join(columns)}")
+            available = ", ".join(map(str, prepared_frames[label].columns)) or "aucune"
+            st.warning(
+                f"{label} : colonnes obligatoires manquantes : {', '.join(columns)}. "
+                f"Colonnes disponibles : {available}."
+            )
     if not prepared.transactions.empty:
         clients = prepared.transactions["customer_id"].dropna().astype(str).nunique() if "customer_id" in prepared.transactions.columns else 0
         currencies = ", ".join(_currency_options(prepared.transactions)) or "-"
@@ -309,18 +324,21 @@ def _render_statement_charts(statement: pd.DataFrame) -> None:
     with left:
         render_panel_title("Mouvement net M-PESA")
         fig = px.line(chart_df, x="created_at", y="mouvement_net_mpesa", color="currency_code", markers=True)
+        style_standard_line(fig, height=330, tickangle=-20)
         st_plot(fig, key="mpesa_net_movement", height=330)
     with right:
         render_panel_title("Entrees et sorties par jour")
         daily = chart_df.groupby(["jour", "currency_code"], as_index=False).agg(entrees=("entree_mpesa", "sum"), sorties=("sortie_mpesa", "sum"))
         long_daily = daily.melt(id_vars=["jour", "currency_code"], value_vars=["entrees", "sorties"], var_name="sens", value_name="montant")
         fig = px.bar(long_daily, x="jour", y="montant", color="sens", facet_col="currency_code")
+        style_standard_vertical_bar(fig, height=330, tickangle=-20)
         st_plot(fig, key="mpesa_daily_in_out", height=330)
     left, right = st.columns(2)
     with left:
         if "solde_mpesa_apres" in chart_df.columns and chart_df["solde_mpesa_apres"].notna().any():
             render_panel_title("Solde M-PESA")
             fig = px.line(chart_df.dropna(subset=["solde_mpesa_apres"]), x="created_at", y="solde_mpesa_apres", color="currency_code", markers=True)
+            style_standard_line(fig, height=330, tickangle=-20)
             st_plot(fig, key="mpesa_balance", height=330)
         else:
             st.warning("Le solde d'ouverture M-PESA n'a pas ete fourni. Le graphique de solde reel n'est pas affiche.")
@@ -328,17 +346,20 @@ def _render_statement_charts(statement: pd.DataFrame) -> None:
         render_panel_title("Operations par type")
         type_df = chart_df.groupby("type_operation", as_index=False).size().rename(columns={"size": "nombre"})
         fig = px.pie(type_df, names="type_operation", values="nombre", hole=0.48)
+        style_standard_donut(fig, height=330)
         st_plot(fig, key="mpesa_operation_types", height=330)
     left, right = st.columns(2)
     with left:
         if "solde_dat_total_au_moment" in chart_df.columns:
             render_panel_title("DAT total au moment")
             fig = px.line(chart_df, x="created_at", y="solde_dat_total_au_moment", color="currency_code", markers=True)
+            style_standard_line(fig, height=330, tickangle=-20)
             st_plot(fig, key="mpesa_dat_total", height=330)
     with right:
         if "solde_epargne_au_moment" in chart_df.columns:
             render_panel_title("Epargne courante au moment")
             fig = px.line(chart_df, x="created_at", y="solde_epargne_au_moment", color="currency_code", markers=True)
+            style_standard_line(fig, height=330, tickangle=-20)
             st_plot(fig, key="mpesa_savings_balance", height=330)
 
 
@@ -461,7 +482,14 @@ def _render_overview(prepared: MpesaPreparedData) -> None:
         work = work.dropna(subset=["created_at"])
         work["jour"] = work["created_at"].dt.date
         daily = work.groupby(["jour", "currency_code"], as_index=False).agg(dr=("dr", "sum"), cr=("cr", "sum"))
-        fig = px.line(daily, x="jour", y=["dr", "cr"], color="currency_code", markers=True)
+        long_daily = daily.melt(
+            id_vars=["jour", "currency_code"],
+            value_vars=["dr", "cr"],
+            var_name="sens",
+            value_name="montant",
+        )
+        fig = px.line(long_daily, x="jour", y="montant", color="sens", facet_row="currency_code", markers=True)
+        style_standard_line(fig, height=360, tickangle=-20)
         st_plot(fig, key="mpesa_overview_daily", height=360)
 
 

@@ -713,7 +713,7 @@ def _render_credit_like_overview(df: pd.DataFrame, monthly_df: pd.DataFrame, cyc
                 color_discrete_sequence=["#2b74ca"],
             )
             fig.update_traces(marker_line_color="rgba(255,255,255,0.45)", marker_line_width=1.1)
-            fig.update_layout(height=380, showlegend=False)
+            style_standard_vertical_bar(fig, height=380, tickangle=-20)
             st_plot(fig, key=f"overview_status_distribution_{cycle_key}", height=380)
 
     with right:
@@ -736,7 +736,7 @@ def _render_credit_like_overview(df: pd.DataFrame, monthly_df: pd.DataFrame, cyc
                 line=dict(width=3),
                 marker=dict(size=7),
             )
-            fig.update_layout(height=380)
+            style_standard_line(fig, height=380, tickangle=-20)
             st_plot(fig, key=f"overview_monthly_line_{cycle_key}", height=380)
 
     risk_left, risk_right = st.columns((1, 1.2))
@@ -758,7 +758,7 @@ def _render_credit_like_overview(df: pd.DataFrame, monthly_df: pd.DataFrame, cyc
                     "Non renseigné": "#7b8794",
                 },
             )
-            fig.update_layout(height=340)
+            style_standard_donut(fig, height=340)
             st_plot(fig, key=f"overview_risk_pie_{cycle_key}", height=340)
 
     with risk_right:
@@ -775,7 +775,7 @@ def _render_credit_like_overview(df: pd.DataFrame, monthly_df: pd.DataFrame, cyc
                 color_discrete_map={label: "#d77a0f" for label in age_df["tranche_age"].tolist()} | {"Non renseigné": "#a7a9ac"},
             )
             fig.update_traces(marker_line_color="rgba(255,255,255,0.55)", marker_line_width=1.2)
-            fig.update_layout(height=340, showlegend=False, xaxis_tickangle=-25)
+            style_standard_vertical_bar(fig, height=340, tickangle=-20)
             st_plot(fig, key=f"overview_age_buckets_{cycle_key}", height=340)
 
     demo_left, demo_right = st.columns((1, 1.2))
@@ -791,12 +791,12 @@ def _render_credit_like_overview(df: pd.DataFrame, monthly_df: pd.DataFrame, cyc
                 hole=0.55,
                 color="sexe",
                 color_discrete_map={
-                    "Masculin": "#1c2333",
-                    "Féminin": "#d71920",
+                    "Masculin": "#1553a1",
+                    "Féminin": "#d97b16",
                     "Inconnu": "#a7a9ac",
                 },
             )
-            fig.update_layout(height=360)
+            style_standard_donut(fig, height=360)
             st_plot(fig, key=f"overview_sex_pie_{cycle_key}", height=360)
 
     with demo_right:
@@ -823,7 +823,7 @@ def _render_credit_like_overview(df: pd.DataFrame, monthly_df: pd.DataFrame, cyc
                     x=male_values,
                     name="Masculin",
                     orientation="h",
-                    marker=dict(color="#1c2333"),
+                    marker=dict(color="#1553a1"),
                     text=male_text,
                     textposition="outside",
                     cliponaxis=False,
@@ -1048,7 +1048,7 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
                 line=dict(width=3),
                 marker=dict(size=7),
             )
-            fig.update_layout(height=360, xaxis_tickangle=-25)
+            style_standard_line(fig, height=360, tickangle=-20)
             st_plot(fig, key=f"overview_period_{cycle_key}", height=360)
         else:
             st.info("Aucune évolution dans le temps n'a pu être construite pour ce cycle.")
@@ -1068,7 +1068,7 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
                     color_discrete_sequence=["#4b84d7"],
                 )
                 fig.update_traces(marker_line_color="rgba(255,255,255,0.45)", marker_line_width=1.1)
-                fig.update_layout(height=360, showlegend=False)
+                style_standard_horizontal_bar(fig, height=360)
                 st_plot(fig, key=f"overview_group_amount_{cycle_key}", height=360)
             else:
                 st.info("Aucun regroupement par montant n'est disponible pour ce cycle.")
@@ -1116,12 +1116,12 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
                     hole=0.55,
                     color="sexe",
                     color_discrete_map={
-                        "Masculin": "#1c2333",
-                        "Féminin": "#d71920",
+                        "Masculin": "#1553a1",
+                        "Féminin": "#d97b16",
                         "Inconnu": "#a7a9ac",
                     },
                 )
-                fig.update_layout(height=360)
+                style_standard_donut(fig, height=360)
                 st_plot(fig, key=f"overview_generic_sex_{cycle_key}", height=360)
             elif not age_df.empty:
                 render_panel_title("Tranches d'âge")
@@ -1131,7 +1131,7 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
                     y="nombre_lignes",
                     color_discrete_sequence=["#d77a0f"],
                 )
-                fig.update_layout(height=360, showlegend=False, xaxis_tickangle=-25)
+                style_standard_vertical_bar(fig, height=360, tickangle=-20)
                 st_plot(fig, key=f"overview_generic_age_{cycle_key}", height=360)
 
         with demo_right:
@@ -1157,7 +1157,7 @@ def _render_generic_cycle_overview(df: pd.DataFrame, cycle_key: str) -> None:
                         x=male_values,
                         name="Masculin",
                         orientation="h",
-                        marker=dict(color="#1c2333"),
+                        marker=dict(color="#1553a1"),
                         text=male_text,
                         textposition="outside",
                         cliponaxis=False,
@@ -1317,8 +1317,8 @@ def _render_epargne_overview_standard(df: pd.DataFrame) -> None:
                 hole=0.55,
                 color="sexe",
                 color_discrete_map={
-                    "Masculin": "#1c2333",
-                    "Féminin": "#d71920",
+                    "Masculin": "#1553a1",
+                    "Féminin": "#d97b16",
                     "Inconnu": "#a7a9ac",
                 },
             )

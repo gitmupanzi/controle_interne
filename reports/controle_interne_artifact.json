@@ -1,0 +1,192 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "Contrôle interne IMF : validation des cycles",
+    "description": "Synthèse anonymisée des tests fonctionnels, de la qualité des fichiers et de l'alignement avec les procédures de microfinance.",
+    "generatedAt": "2026-07-12T22:10:00+02:00",
+    "cards": [
+      {
+        "id": "files_profiled",
+        "description": "Classeurs inventoriés sans exporter de ligne client.",
+        "dataset": "headline",
+        "sourceId": "quality_inventory",
+        "metrics": [{"label": "Fichiers profilés", "field": "files_profiled", "format": "number"}]
+      },
+      {
+        "id": "cycles_tested",
+        "description": "Cycles disposant d'un classeur Streamlit représentatif et testés de bout en bout.",
+        "dataset": "headline",
+        "sourceId": "functional_results",
+        "metrics": [{"label": "Cycles testés", "field": "cycles_tested", "format": "number"}]
+      },
+      {
+        "id": "successful_files",
+        "description": "Fichiers dont la lecture et la préparation bornée se sont terminées sans exception.",
+        "dataset": "headline",
+        "sourceId": "quality_inventory",
+        "metrics": [{"label": "Lectures réussies", "field": "successful_files", "format": "number"}]
+      },
+      {
+        "id": "sampled_files",
+        "description": "Fichiers volumineux profilés sur 2 000 lignes pour borner le temps et la mémoire.",
+        "dataset": "headline",
+        "sourceId": "quality_inventory",
+        "metrics": [{"label": "Profils bornés", "field": "sampled_files", "format": "number"}]
+      }
+    ],
+    "charts": [
+      {
+        "id": "files_by_cycle",
+        "title": "Fichiers disponibles par cycle",
+        "subtitle": "Le crédit concentre la majorité des extractions de contrôle et de tableau de bord.",
+        "type": "bar",
+        "dataset": "cycle_coverage",
+        "sourceId": "quality_inventory",
+        "valueFormat": "number",
+        "encodings": {
+          "x": {"field": "cycle", "type": "nominal", "label": "Cycle"},
+          "y": {"field": "files", "type": "quantitative", "label": "Nombre de fichiers"},
+          "tooltip": [
+            {"field": "sampled_files", "type": "quantitative", "label": "Profils bornés"},
+            {"field": "load_errors", "type": "quantitative", "label": "Erreurs de lecture"}
+          ]
+        }
+      }
+    ],
+    "tables": [
+      {
+        "id": "cycle_results_table",
+        "title": "Résultats fonctionnels par cycle",
+        "subtitle": "Parcours sur le classeur représentatif de chaque cycle, jusqu'à l'export Excel.",
+        "dataset": "cycle_results",
+        "sourceId": "functional_results",
+        "defaultSort": {"field": "load_seconds", "direction": "desc"},
+        "columns": [
+          {"field": "cycle_label", "label": "Cycle", "type": "text"},
+          {"field": "rows_tested", "label": "Lignes testées", "format": "number"},
+          {"field": "load_seconds", "label": "Lecture (s)", "format": "number"},
+          {"field": "preparation_seconds", "label": "Préparation (s)", "format": "number"},
+          {"field": "status", "label": "État", "type": "text"}
+        ]
+      }
+    ],
+    "sources": [
+      {"id": "quality_inventory", "label": "Inventaire anonymisé de line_list", "path": "reports/line_list_quality_inventory.json"},
+      {"id": "functional_results", "label": "Tests fonctionnels par cycle", "path": "reports/cycle_functional_results.json"},
+      {"id": "procedures", "label": "Manuels et matrices de procédures IMF", "path": "SOP/"}
+    ],
+    "blocks": [
+      {"id": "title", "type": "markdown", "body": "# Contrôle interne IMF : validation des cycles"},
+      {
+        "id": "executive_summary",
+        "type": "markdown",
+        "body": "## Executive Summary\n\n- **Le pipeline fonctionne sur les neuf cycles disposant d'un fichier représentatif.** La détection, la standardisation, les filtres, les indicateurs, les watchlists et l'export Excel ont terminé sans exception.\n- **La confidentialité est préservée.** Les 41 classeurs ont été inventoriés sans conserver de ligne client ni de valeur d'identification dans les rapports.\n- **Le principal risque technique est la volumétrie Excel.** Huit fichiers ont nécessité un profil borné à 2 000 lignes et un essai exhaustif multi-fichiers a dépassé dix minutes.\n- **L'interface explique maintenant la préparation.** Elle distingue l'état prêt, les avertissements, les colonnes harmonisées, les doublons et les champs métier attendus manquants."
+      },
+      {"id": "headline_metrics", "type": "metric-strip", "cardIds": ["files_profiled", "cycles_tested", "successful_files", "sampled_files"]},
+      {
+        "id": "coverage_finding",
+        "type": "markdown",
+        "body": "## Le crédit est le mieux couvert, les cycles support restent plus minces\n\nLes extractions disponibles couvrent fortement le crédit et les opérations de dépôts/retraits. Les cycles caisse, trésorerie, comptabilité, sécurité SI et Likelemba ne disposent chacun que d'un classeur représentatif. **Conséquence :** leur validation fonctionnelle est positive, mais la diversité des formats source reste moins éprouvée.",
+        "sourceId": "quality_inventory"
+      },
+      {"id": "coverage_chart", "type": "chart", "chartId": "files_by_cycle"},
+      {
+        "id": "performance_finding",
+        "type": "markdown",
+        "body": "## La lecture Excel domine le temps de traitement\n\nSur les parcours bornés, la préparation métier reste inférieure à une seconde alors que la lecture Excel peut dépasser dix secondes pour 2 000 lignes. Le premier levier est donc de limiter les relectures, conserver le cache et éviter de profiler intégralement chaque extraction volumineuse à chaque interaction.",
+        "sourceId": "functional_results"
+      },
+      {"id": "cycle_table", "type": "table", "tableId": "cycle_results_table"},
+      {
+        "id": "procedure_alignment",
+        "type": "markdown",
+        "body": "## Les contrôles reflètent les procédures de microfinance\n\nLes SOP structurent le contrôle autour de la traçabilité et de la séparation des tâches : KYC et capacité de remboursement avant crédit, comité et validation avant déblocage, suivi des retards et provisionnement, rapprochement physique/SIG en caisse, double validation des mouvements, sécurité des accès, LBC/FT et suivi des recommandations. Ces thèmes sont reliés aux cycles de l'application sans convertir automatiquement une exigence documentaire en calcul financier."
+      },
+      {
+        "id": "recommendations",
+        "type": "markdown",
+        "body": "## Prochaines actions recommandées\n\n1. Compléter un fichier représentatif pour Money Provider, RH et continuité d'activité.\n2. Définir avec le métier les colonnes réellement bloquantes de chaque cycle ; les champs attendus restent aujourd'hui des avertissements.\n3. Convertir les extractions volumineuses en CSV ou Parquet de travail lorsqu'une validation opérationnelle l'autorise, sans modifier les sources.\n4. Dédupliquer la règle identique de `Rename_columns.xlsx` et confirmer quelle feuille de `Replace_values.xlsx` doit rester la référence.\n5. Ajouter des scénarios de test pour les rapprochements caisse/banque et les seuils LBC/FT dès que leurs résultats de référence sont approuvés."
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "body": "## Questions à confirmer avec les responsables métier\n\n- Quels champs doivent bloquer chaque cycle, et lesquels doivent seulement déclencher un avertissement ?\n- Quelle périodicité et quelle date de référence doivent piloter les contrôles de dormance, PAR et provisionnement ?\n- Les deux feuilles identiques de `Replace_values.xlsx` ont-elles un rôle futur distinct ?"
+      },
+      {
+        "id": "caveats",
+        "type": "markdown",
+        "body": "## Limites et hypothèses\n\nLes huit plus gros classeurs ont été profilés sur 2 000 lignes ; leur lecture, schéma et pipeline ont été testés, mais les taux de qualité obtenus ne doivent pas être extrapolés à toutes les lignes. Les tests n'ont effectué aucune connexion à SQL Server. Les PDF de tableaux de bord servent de repères de présentation et non de source de vérité pour recalculer les indicateurs."
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-07-12T22:10:00+02:00",
+    "status": "ready",
+    "datasets": {
+      "headline": [
+        {"files_profiled": 41, "cycles_tested": 9, "successful_files": 41, "sampled_files": 8}
+      ],
+      "cycle_coverage": [
+        {"cycle": "Crédit", "files": 27, "sampled_files": 0, "load_errors": 0},
+        {"cycle": "Dépôts et retraits", "files": 6, "sampled_files": 3, "load_errors": 0},
+        {"cycle": "Épargne", "files": 2, "sampled_files": 1, "load_errors": 0},
+        {"cycle": "Caisse", "files": 1, "sampled_files": 1, "load_errors": 0},
+        {"cycle": "Comptabilité", "files": 1, "sampled_files": 1, "load_errors": 0},
+        {"cycle": "CRM", "files": 1, "sampled_files": 1, "load_errors": 0},
+        {"cycle": "Likelemba", "files": 1, "sampled_files": 0, "load_errors": 0},
+        {"cycle": "Sécurité SI", "files": 1, "sampled_files": 0, "load_errors": 0},
+        {"cycle": "Trésorerie", "files": 1, "sampled_files": 1, "load_errors": 0}
+      ],
+      "cycle_results": [
+        {"cycle_label": "Crédit", "rows_tested": 298, "load_seconds": 0.841, "preparation_seconds": 0.717, "status": "OK"},
+        {"cycle_label": "Épargne", "rows_tested": 2000, "load_seconds": 16.885, "preparation_seconds": 0.356, "status": "OK"},
+        {"cycle_label": "CRM", "rows_tested": 2000, "load_seconds": 7.935, "preparation_seconds": 0.188, "status": "OK"},
+        {"cycle_label": "Dépôts et retraits", "rows_tested": 2000, "load_seconds": 5.963, "preparation_seconds": 0.122, "status": "OK"},
+        {"cycle_label": "Caisse", "rows_tested": 2000, "load_seconds": 3.760, "preparation_seconds": 0.117, "status": "OK"},
+        {"cycle_label": "Trésorerie", "rows_tested": 2000, "load_seconds": 3.759, "preparation_seconds": 0.110, "status": "OK"},
+        {"cycle_label": "Comptabilité", "rows_tested": 2000, "load_seconds": 10.942, "preparation_seconds": 0.556, "status": "OK"},
+        {"cycle_label": "Sécurité SI", "rows_tested": 82, "load_seconds": 0.052, "preparation_seconds": 0.014, "status": "OK"},
+        {"cycle_label": "Likelemba", "rows_tested": 15, "load_seconds": 0.020, "preparation_seconds": 0.033, "status": "OK"}
+      ]
+    },
+    "accessIssues": []
+  },
+  "sources": [
+    {
+      "id": "quality_inventory",
+      "label": "Inventaire anonymisé de line_list",
+      "path": "reports/line_list_quality_inventory.json",
+      "query": {
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT cycle, COUNT(*) AS files, SUM(CASE WHEN profile_scope LIKE 'sample_%' THEN 1 ELSE 0 END) AS sampled_files, SUM(CASE WHEN status <> 'ok' THEN 1 ELSE 0 END) AS load_errors FROM read_json_auto('reports/line_list_quality_inventory.json') GROUP BY cycle",
+        "description": "Agrège l'inventaire anonymisé par cycle.",
+        "tables_used": ["reports/line_list_quality_inventory.json"],
+        "filters": ["Aucune ligne source exportée", "Profil borné à 2 000 lignes au-delà de 1 Mo"],
+        "executed_at": "2026-07-12T22:00:00+02:00"
+      }
+    },
+    {
+      "id": "functional_results",
+      "label": "Tests fonctionnels par cycle",
+      "path": "reports/cycle_functional_results.json",
+      "query": {
+        "engine": "duckdb",
+        "language": "sql",
+        "sql": "SELECT expected_label AS cycle_label, rows_tested, load_seconds, preparation_seconds, upper(status) AS status FROM read_json_auto('reports/cycle_functional_results.json') WHERE status = 'ok'",
+        "description": "Charge les résultats fonctionnels anonymisés par cycle.",
+        "tables_used": ["reports/cycle_functional_results.json"],
+        "filters": ["2 000 lignes maximum par cycle", "Statut fonctionnel OK"],
+        "executed_at": "2026-07-12T21:59:00+02:00"
+      }
+    },
+    {
+      "id": "procedures",
+      "label": "Manuels et matrices de procédures IMF",
+      "path": "SOP/"
+    }
+  ]
+}

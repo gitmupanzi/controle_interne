@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, List, Union, Optional
 
@@ -71,8 +72,14 @@ def _to_clean_string_series(s: pd.Series) -> pd.Series:
     return s
 
 
-def _read_mapping_dataframe(mapping_file: Union[str, Path], *, require_variable: bool = False) -> pd.DataFrame:
-    mapping_path = Path(mapping_file)
+@lru_cache(maxsize=8)
+def _read_mapping_dataframe_cached(
+    mapping_path_text: str,
+    modified_at_ns: int,
+    require_variable: bool,
+) -> pd.DataFrame:
+    del modified_at_ns  # Included in the cache key to invalidate changed workbooks.
+    mapping_path = Path(mapping_path_text)
     if not mapping_path.exists():
         raise FileNotFoundError(f"Fichier de mapping introuvable : {mapping_path}")
 
@@ -88,9 +95,28 @@ def _read_mapping_dataframe(mapping_file: Union[str, Path], *, require_variable:
 
     for col in required_cols:
         mapping_df[col] = mapping_df[col].astype("string").str.strip()
+    empty_essential = mapping_df[list(required_cols)].isna() | mapping_df[list(required_cols)].eq("")
+    if bool(empty_essential.any(axis=None)):
+        raise ValueError(
+            f"Le fichier {mapping_path.name} contient une règle avec une valeur essentielle vide."
+        )
 
-    mapping_df = mapping_df.dropna(subset=list(required_cols))
+    conflict_columns = ["original", "variable"] if require_variable else ["original"]
+    conflicts = mapping_df.groupby(conflict_columns, dropna=False)["renamed"].nunique().gt(1)
+    if bool(conflicts.any()):
+        raise ValueError(f"Le fichier {mapping_path.name} contient des règles de remplacement contradictoires.")
     return mapping_df
+
+
+def _read_mapping_dataframe(mapping_file: Union[str, Path], *, require_variable: bool = False) -> pd.DataFrame:
+    mapping_path = Path(mapping_file)
+    if not mapping_path.exists():
+        raise FileNotFoundError(f"Fichier de mapping introuvable : {mapping_path}")
+    return _read_mapping_dataframe_cached(
+        str(mapping_path.resolve()),
+        mapping_path.stat().st_mtime_ns,
+        require_variable,
+    ).copy()
 
 
 # ----------------------------------------------------------

@@ -29,6 +29,7 @@ from credit_app.ui import (
     render_summary_box,
     st_plot,
     style_standard_donut,
+    style_standard_horizontal_bar,
     style_standard_histogram,
     style_standard_vertical_bar,
 )
@@ -321,11 +322,13 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate
                     render_panel_title("Motifs d'alerte")
                     fig = px.bar(
                         reason_df,
-                        x="motif_alerte",
-                        y="nombre_lignes",
-                        color_discrete_sequence=["#c05621"],
+                        x="nombre_lignes",
+                        y="motif_alerte",
+                        orientation="h",
+                        color_discrete_sequence=["#d97b16"],
                     )
-                    style_standard_vertical_bar(fig, height=360, tickangle=-25)
+                    style_standard_horizontal_bar(fig, height=360)
+                    fig.update_layout(yaxis=dict(categoryorder="total ascending"))
                     st_plot(fig, key=f"risk_alert_reasons_{cycle_key}", height=360)
         else:
             delay_df = build_delay_bucket_table(df)
@@ -359,11 +362,13 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate
                     render_panel_title("Motifs d'alerte")
                     fig = px.bar(
                         reason_df,
-                        x="motif_alerte",
-                        y="nombre_lignes",
-                        color_discrete_sequence=["#c05621"],
+                        x="nombre_lignes",
+                        y="motif_alerte",
+                        orientation="h",
+                        color_discrete_sequence=["#d97b16"],
                     )
-                    style_standard_vertical_bar(fig, height=360, tickangle=-25)
+                    style_standard_horizontal_bar(fig, height=360)
+                    fig.update_layout(yaxis=dict(categoryorder="total ascending"))
                     st_plot(fig, key=f"risk_alert_reasons_{cycle_key}", height=360)
 
     if primary_group:

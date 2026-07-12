@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -52,12 +53,14 @@ else:
 import streamlit as st
 
 from credit_app.app_loader import (
+    DataLoadError,
     get_excel_sheet_names,
     get_excel_sheet_names_from_path,
     list_available_line_list_files,
     load_dataframe_from_bytes,
     load_dataframe_from_path,
 )
+from credit_app.data_schema import DataSchemaError
 from credit_app.compilation.fichiers_compilation import (
     charger_fichiers_excel,
     extraire_attr_dataframe,
@@ -70,16 +73,15 @@ from credit_app.cycles import (
     list_cycle_keys,
 )
 from credit_app.domain import (
-    build_mapping_frame,
-    build_missing_values_frame,
     build_monthly_series,
-    build_quality_checks,
     build_standardized_dataframe,
     filter_dataframe,
     get_cycle_primary_date_column,
     get_reference_column_count,
     normalize_text,
 )
+from credit_app.components.preparation import render_preparation_status
+from credit_app.services.data_pipeline import build_preparation_summary, prepare_payload_from_dataframe
 from credit_app.tabs.audit_control import render_analyste_credit_tab
 from credit_app.tabs.crm_clients import render_crm_clients_tab
 from credit_app.tabs.export import render_export_tab
@@ -101,9 +103,14 @@ from credit_app.sql_operations import (
 )
 import credit_app.ui as credit_ui
 
+logger = logging.getLogger(__name__)
+
 format_context_value = credit_ui.format_context_value
 inject_professional_credit_css = credit_ui.inject_professional_credit_css
 render_context_row = credit_ui.render_context_row
+render_chart_guide = credit_ui.render_chart_guide
+render_dashboard_section = credit_ui.render_dashboard_section
+render_empty_state = credit_ui.render_empty_state
 render_footer = credit_ui.render_footer
 render_panel_title = credit_ui.render_panel_title
 render_professional_header = credit_ui.render_professional_header
@@ -221,6 +228,7 @@ def prepare_compiled_dataset_from_paths(
         variables_brute=False,
         sheet_log=True,
         log_only_changed=True,
+        verifier_compatibilite=True,
     )
     payload = _prepare_payload_from_dataframe(raw_df, standardize_columns=standardize_columns)
     payload["compilation_log_df"] = compilation_log_df
@@ -333,17 +341,7 @@ def prepare_sql_operations_dataset_from_uploads(
 
 
 def _prepare_payload_from_dataframe(raw_df: pd.DataFrame, *, standardize_columns: bool = True) -> dict:
-    standardized_df, mapping = build_standardized_dataframe(raw_df, standardize_columns=standardize_columns)
-    quality_df = build_quality_checks(standardized_df)
-    missing_df = build_missing_values_frame(standardized_df)
-    mapping_df = build_mapping_frame(mapping)
-    return {
-        "raw_df": raw_df,
-        "standardized_df": standardized_df,
-        "quality_df": quality_df,
-        "missing_df": missing_df,
-        "mapping_df": mapping_df,
-    }
+    return prepare_payload_from_dataframe(raw_df, standardize_columns=standardize_columns)
 
 
 def _get_common_excel_sheets(file_paths: list[Path]) -> list[str]:
@@ -591,7 +589,6 @@ def _count_active_sidebar_filters(selected_filters: dict[str, list[str] | None])
 
 def main() -> None:
     configure_page()
-    render_professional_header()
 
     available_files = list_available_line_list_files()
     cycle_options = list_cycle_keys()
@@ -614,6 +611,7 @@ def main() -> None:
     )
     sql_operations_cycle = _is_sql_operations_cycle(selected_cycle_key)
     selected_cycle = get_cycle_spec(selected_cycle_key)
+    render_professional_header(selected_cycle["label"], selected_cycle["summary"])
     cycle_available_files = _filter_paths_by_cycle(available_files, selected_cycle_key, cycle_options)
     cycle_available_excel_files = [
         path for path in cycle_available_files if path.suffix.lower() in {".xlsx", ".xls"}
@@ -876,40 +874,51 @@ def main() -> None:
                     "Le fichier `data/Rename_columns.xlsx` est aussi pris en compte pour harmoniser les noms de colonnes.",
                 ],
             )
+            render_empty_state(
+                "Aucune base chargée",
+                "Utilisez la barre latérale pour choisir un fichier. Les indicateurs et graphiques apparaîtront après la préparation des données.",
+            )
         with start_tabs[1]:
             render_solution_mpesa_tab()
         render_footer()
         return
 
-    if source_mode == "Téléverser un fichier":
-        file_bytes = uploaded_file.getvalue()
-        filename = uploaded_file.name
-        sheet_name = None
+    try:
+        if source_mode == "Téléverser un fichier":
+            file_bytes = uploaded_file.getvalue()
+            filename = uploaded_file.name
+            sheet_name = None
 
-        if filename.lower().endswith((".xlsx", ".xls")):
-            sheets = get_excel_sheet_names(file_bytes)
-            if sheets:
-                sheet_name = st.sidebar.selectbox("Feuille Excel", sheets, index=0)
+            if filename.lower().endswith((".xlsx", ".xls")):
+                sheets = get_excel_sheet_names(file_bytes)
+                if sheets:
+                    sheet_name = st.sidebar.selectbox("Feuille Excel", sheets, index=0)
 
-        with st.spinner("Préparation de la base en cours..."):
-            payload = prepare_dataset(file_bytes, filename, sheet_name, standardize_columns)
-    elif source_mode == "Téléverser plusieurs fichiers":
-        uploaded_items = tuple((file.name, file.getvalue()) for file in uploaded_files)
-        with st.spinner("Compilation et préparation des fichiers téléversés en cours..."):
-            if sql_operations_cycle and _contains_sql_bundle_role([file.name for file in uploaded_files]):
-                payload = prepare_sql_operations_dataset_from_uploads(uploaded_items, sheet_name, standardize_columns)
-            else:
-                payload = prepare_compiled_dataset_from_uploads(uploaded_items, sheet_name or "", standardize_columns)
-    elif source_mode == "Charger un fichier inclus":
-        with st.spinner("Préparation de la base en cours..."):
-            payload = prepare_dataset_from_path(str(selected_local_path), sheet_name, standardize_columns)
-    else:
-        compiled_paths = tuple(str(path) for path in selected_compilation_paths)
-        with st.spinner("Compilation et préparation des bases en cours..."):
-            if sql_operations_cycle and _contains_sql_bundle_role([path.name for path in selected_compilation_paths]):
-                payload = prepare_sql_operations_dataset_from_paths(compiled_paths, sheet_name, standardize_columns)
-            else:
-                payload = prepare_compiled_dataset_from_paths(compiled_paths, sheet_name or "", standardize_columns)
+            with st.spinner("Préparation de la base en cours..."):
+                payload = prepare_dataset(file_bytes, filename, sheet_name, standardize_columns)
+        elif source_mode == "Téléverser plusieurs fichiers":
+            uploaded_items = tuple((file.name, file.getvalue()) for file in uploaded_files)
+            with st.spinner("Compilation et préparation des fichiers téléversés en cours..."):
+                if sql_operations_cycle and _contains_sql_bundle_role([file.name for file in uploaded_files]):
+                    payload = prepare_sql_operations_dataset_from_uploads(uploaded_items, sheet_name, standardize_columns)
+                else:
+                    payload = prepare_compiled_dataset_from_uploads(uploaded_items, sheet_name or "", standardize_columns)
+        elif source_mode == "Charger un fichier inclus":
+            with st.spinner("Préparation de la base en cours..."):
+                payload = prepare_dataset_from_path(str(selected_local_path), sheet_name, standardize_columns)
+        else:
+            compiled_paths = tuple(str(path) for path in selected_compilation_paths)
+            with st.spinner("Compilation et préparation des bases en cours..."):
+                if sql_operations_cycle and _contains_sql_bundle_role([path.name for path in selected_compilation_paths]):
+                    payload = prepare_sql_operations_dataset_from_paths(compiled_paths, sheet_name, standardize_columns)
+                else:
+                    payload = prepare_compiled_dataset_from_paths(compiled_paths, sheet_name or "", standardize_columns)
+    except (DataLoadError, DataSchemaError, KeyError, ValueError, pd.errors.ParserError) as exc:
+        logger.exception("Échec de préparation de la source %s", filename or source_mode)
+        st.error(f"Impossible de préparer les données : {exc}")
+        st.info("Vérifiez le fichier, la feuille sélectionnée et les colonnes indiquées, puis réessayez.")
+        render_footer()
+        return
 
     raw_df = payload["raw_df"]
     standardized_df = payload["standardized_df"]
@@ -1056,6 +1065,14 @@ def main() -> None:
             
         ]
     )
+    preparation_file_count = max(len(payload.get("compiled_files", [])), 1)
+    preparation_summary = build_preparation_summary(
+        payload,
+        file_count=preparation_file_count,
+        compiled_file_count=(preparation_file_count if preparation_file_count > 1 else 0),
+        expected_columns=selected_cycle.get("expected_columns", []),
+    )
+    render_preparation_status(preparation_summary)
     st.caption(
         f"Fichier : {filename} | Lignes brutes : {len(raw_df):,} | Lignes retenues : {len(filtered_df):,}"
     )
@@ -1169,7 +1186,11 @@ def main() -> None:
             width="stretch",
         )
 
-    render_panel_title("Synthèse standard")
+    render_dashboard_section(
+        "Synthèse du cycle",
+        "Les indicateurs essentiels et les tendances sont calculés sur le périmètre filtré.",
+        badge=selected_cycle["label"],
+    )
     render_summary_box(
         f"Cycle actif : {selected_cycle['label']}",
         [
@@ -1180,20 +1201,26 @@ def main() -> None:
     )
     render_overview_tab(filtered_df, filtered_monthly_df, selected_cycle_key)
 
-    render_panel_title("Analyses détaillées")
+    render_dashboard_section(
+        "Analyses détaillées",
+        "Approfondissez les contrôles, les risques, la qualité et les éléments à exporter.",
+        badge=f"{len(filtered_df):,} lignes".replace(",", " "),
+    )
+    with st.expander("Comment utiliser les graphiques", expanded=False):
+        render_chart_guide()
     tab_labels = [
-        "Rappel de la vue d'ensemble",
-        "Audit et contrôle",
+        "Synthèse",
+        "Contrôles",
     ]
     if selected_cycle_key == "crm_clients":
         tab_labels.append("Actions CRM")
     tab_labels.extend(
         [
-            "Surveillance",
+            "Alertes",
             "Portefeuille",
-            "Risque",
+            "Risques",
             "Qualité",
-            "Solution M-PESA",
+            "M-PESA",
             "Export",
             "Méthode",
         ]

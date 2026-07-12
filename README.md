@@ -22,6 +22,28 @@ L’application permet de :
 
 L’objectif est de fournir à la direction, au contrôle interne, à la conformité et aux responsables opérationnels une lecture exploitable des risques, anomalies, volumes, écarts de procédure et points de contrôle.
 
+## Interface et graphiques
+
+- navigation compacte par cycle, avec onglets défilants sur les petits écrans
+- en-tête et synthèse contextualisés selon le cycle sélectionné
+- palette graphique commune, légendes automatiques et libellés longs protégés
+- barre d’outils Plotly au survol, export PNG et zoom à la molette désactivé
+- états vides explicites lorsqu’une analyse ne dispose pas de données exploitables
+
+La convention détaillée des graphiques est documentée dans `reports/frontend_chart_map.md`.
+
+## Sécurité des connexions SQL
+
+Les identifiants SQL ne doivent jamais être écrits dans le code, le README ou un fichier versionné. Deux modèles sans secret réel sont fournis : `.env.example` et `.streamlit/secrets.toml.example`.
+
+- privilégier l'authentification Windows avec un compte de lecture seule lorsque l'environnement le permet
+- conserver `encrypt = true` et `trust_server_certificate = false`
+- placer les secrets Streamlit réels dans `.streamlit/secrets.toml`, ignoré par Git
+- ne jamais afficher la chaîne de connexion complète dans les journaux ou dans l'interface
+- utiliser `credit_app.security.SqlServerSettings` pour valider la configuration avant la future connexion à Perfect Vision
+
+Les fichiers Python, Markdown, YAML, TOML et JSON sont normalisés en UTF-8 par `.editorconfig` et `.gitattributes`. Le dump historique `data/vision/BB_VISION_PRO.sql` reste en UTF-16 et est lu explicitement comme tel par le skill Perfect Vision.
+
 ## Cycles couverts
 
 La plateforme gère actuellement les cycles suivants :
@@ -459,12 +481,16 @@ controle_interne/
 |-- requirements.txt
 |-- credit_app/
 |   |-- app_loader.py
+|   |-- data_schema.py
+|   |-- components/
+|   |   |-- preparation.py
 |   |-- core.py
 |   |-- cycles.py
 |   |-- control_references.py
 |   |-- domain.py
 |   |-- ui.py
 |   |-- services/
+|   |   |-- data_pipeline.py
 |   |   |-- mpesa_analysis.py
 |   |-- colonne_valeur/
 |   |   |-- colonne_nettoyage.py
@@ -500,6 +526,10 @@ controle_interne/
 
 - application principale : [controle_interne.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/controle_interne.py>)
 - logique métier : [credit_app/domain.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/domain.py>)
+- schémas, alias et validation des colonnes : [credit_app/data_schema.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/data_schema.py>)
+- chargement sécurisé Excel/CSV : [credit_app/app_loader.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/app_loader.py>)
+- pipeline central, détection des cycles et compatibilité des compilations : [credit_app/services/data_pipeline.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/services/data_pipeline.py>)
+- composant de restitution de la préparation : [credit_app/components/preparation.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/components/preparation.py>)
 - référentiels métiers : [credit_app/control_references.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/control_references.py>)
 - cycles et presets : [credit_app/cycles.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/cycles.py>)
 - composants UI : [credit_app/ui.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/ui.py>)
@@ -519,6 +549,11 @@ controle_interne/
 Les tests couvrent notamment :
 
 - la standardisation des colonnes
+- la normalisation des en-têtes, les alias et les colonnes dupliquées
+- les erreurs de schéma avec le fichier, les champs manquants et les champs disponibles
+- le chargement CSV multi-séparateurs et la sélection des feuilles Excel
+- les fichiers vides, dates invalides, montants invalides et valeurs nulles
+- l'absence d'identifiant d'opération sans création de donnée artificielle
 - le nettoyage de certaines valeurs métier
 - les variables dérivées
 - les contrôles qualité
