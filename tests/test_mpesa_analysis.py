@@ -14,6 +14,8 @@ from credit_app.services.mpesa_analysis import (
     build_savings_final,
     build_mpesa_statement,
     create_excel_export,
+    enrich_transactions_with_g2_customer_names,
+    enrich_turbo_with_g2_customer_names,
     numeric_column,
     prepare_current_savings,
     prepare_customers,
@@ -137,6 +139,88 @@ def _sample_prepared_data() -> MpesaPreparedData:
 
 
 class MpesaAnalysisTests(unittest.TestCase):
+    def test_g2_customer_name_enrichment_prioritizes_phone_then_reference(self) -> None:
+        transactions = prepare_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "id": 1,
+                        "customer_id": "1001",
+                        "msisdn1": "0812345678",
+                        "ref_no": "REF-PHONE",
+                    },
+                    {
+                        "id": 2,
+                        "customer_id": "1002",
+                        "msisdn1": "0999999999",
+                        "ref_no": "REF-FALLBACK",
+                    },
+                    {
+                        "id": 3,
+                        "customer_id": "1003",
+                        "msisdn1": "0977777777",
+                        "ref_no": "REF-ABSENT",
+                    },
+                ]
+            )
+        )
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {"Receipt No.": "REF-PHONE", "Opposite Party": "0812345678 - NOM PAR TELEPHONE", "Currency": "CDF"},
+                    {"Receipt No.": "REF-FALLBACK", "Opposite Party": "0822222222 - NOM PAR REFERENCE", "Currency": "CDF"},
+                ]
+            )
+        )
+
+        result = enrich_transactions_with_g2_customer_names(transactions, g2)
+
+        self.assertEqual(result.loc[0, "Nom_client"], "NOM PAR TELEPHONE")
+        self.assertEqual(result.loc[0, "mode_rapprochement_nom_client"], "Telephone G2 = msisdn1 Turbo")
+        self.assertEqual(result.loc[1, "Nom_client"], "NOM PAR REFERENCE")
+        self.assertEqual(result.loc[1, "mode_rapprochement_nom_client"], "Receipt No G2 = ref_no Turbo")
+        self.assertTrue(pd.isna(result.loc[2, "Nom_client"]))
+        self.assertEqual(result.loc[2, "mode_rapprochement_nom_client"], "Nom G2 non rapproche")
+
+    def test_g2_customer_name_enrichment_handles_missing_optional_file(self) -> None:
+        transactions = prepare_transactions(pd.DataFrame([{"id": 1, "msisdn1": "0812345678", "ref_no": "REF-1"}]))
+
+        result = enrich_transactions_with_g2_customer_names(transactions, pd.DataFrame())
+
+        self.assertIn("Nom_client", result.columns)
+        self.assertTrue(pd.isna(result.loc[0, "Nom_client"]))
+        self.assertEqual(result.loc[0, "mode_rapprochement_nom_client"], "Fichier G2 absent")
+
+    def test_g2_customer_name_is_propagated_to_turbo_reports(self) -> None:
+        prepared = _sample_prepared_data()
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {"Receipt No.": "TX001", "Opposite Party": "0812345678 - CLIENT TEST", "Currency": "CDF"},
+                ]
+            )
+        )
+        transactions = enrich_transactions_with_g2_customer_names(prepared.transactions, g2)
+        current = enrich_turbo_with_g2_customer_names(prepared.current_savings, g2, phone_column="msisdn")
+        prepared = MpesaPreparedData(
+            transactions,
+            current,
+            prepared.fixed_savings,
+            prepared.loans,
+            prepared.load_report,
+            g2,
+        )
+
+        report = build_mpesa_statement(prepared, "1001", {"CDF": None})
+        matches = search_customers("1001", prepared)
+        matches_by_name = search_customers("client test", prepared)
+
+        self.assertEqual(report["extrait"].iloc[0]["Nom_client"], "CLIENT TEST")
+        self.assertEqual(report["synthese"].iloc[0]["Nom_client"], "CLIENT TEST")
+        self.assertEqual(report["mouvements_dat"].iloc[0]["Nom_client"], "CLIENT TEST")
+        self.assertIn("CLIENT TEST", matches["Nom_client"].dropna().tolist())
+        self.assertEqual(matches_by_name["customer_id"].dropna().unique().tolist(), ["1001"])
+
     def test_validate_required_columns_detects_missing_values(self) -> None:
         missing = validate_required_columns(pd.DataFrame({"id": [1]}), TRANSACTION_REQUIRED_COLUMNS, "Transactions")
 
@@ -257,6 +341,36 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Total CDF", report["synthese"]["details_rapport"].tolist())
         self.assertIn("montant_DAT", report["pivot"].columns)
         self.assertEqual(float(report["pivot"].iloc[0]["montant_DAT"]), 1000.0)
+
+    def test_g2_repayment_detail_has_priority_over_dat_match(self) -> None:
+        prepared = _sample_prepared_data()
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "Receipt No.": "TX001",
+                        "Completion Time": "2026-07-11 10:23:05",
+                        "Details": "BisouBisouRepayment",
+                        "Opposite Party": "0812345678 - CLIENT TEST",
+                        "Currency": "CDF",
+                        "Transaction Amount": "CDF 1,000.00",
+                    }
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            prepared.transactions,
+            prepared.current_savings,
+            prepared.fixed_savings,
+            prepared.loans,
+            prepared.load_report,
+            g2,
+        )
+
+        detail = build_g2_entry_report(prepared)["detail"]
+
+        self.assertEqual(detail.iloc[0]["details_rapport"], "Remboursement prets")
+        self.assertEqual(detail.iloc[0]["Nom_client"], "CLIENT TEST")
 
     def test_daily_g2_savings_report_matches_dat_by_phone_currency_and_amount(self) -> None:
         g2 = pd.DataFrame(

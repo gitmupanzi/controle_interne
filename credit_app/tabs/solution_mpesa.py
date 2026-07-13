@@ -22,6 +22,8 @@ from credit_app.services.mpesa_analysis import (
     build_load_report,
     build_mpesa_statement,
     create_excel_export,
+    enrich_transactions_with_g2_customer_names,
+    enrich_turbo_with_g2_customer_names,
     numeric_column,
     prepare_current_savings,
     prepare_customers,
@@ -90,18 +92,18 @@ def _build_prepared_data(
     customers_raw: pd.DataFrame,
 ) -> tuple[MpesaPreparedData, dict[str, list[str]]]:
     missing = {
-        "Transactions M-PESA": validate_required_columns(transactions_raw, TRANSACTION_REQUIRED_COLUMNS, "Transactions M-PESA")
+        "Transactions M-PESA_Turbo": validate_required_columns(transactions_raw, TRANSACTION_REQUIRED_COLUMNS, "Transactions M-PESA")
         if not transactions_raw.empty
         else sorted(TRANSACTION_REQUIRED_COLUMNS),
-        "Epargne courante": validate_required_columns(current_raw, CURRENT_SAVINGS_REQUIRED_COLUMNS, "Epargne courante")
+        "Epargne courante_Turbo": validate_required_columns(current_raw, CURRENT_SAVINGS_REQUIRED_COLUMNS, "Epargne courante")
         if not current_raw.empty
         else [],
-        "DAT": validate_required_columns(fixed_raw, FIXED_SAVINGS_REQUIRED_COLUMNS, "DAT")
+        "DAT_Turbo": validate_required_columns(fixed_raw, FIXED_SAVINGS_REQUIRED_COLUMNS, "DAT")
         if not fixed_raw.empty
         else [],
-        "Credits": validate_required_columns(loans_raw, {"loan_id", "customer_id"}, "Credits") if not loans_raw.empty else [],
-        "Transactions G2": validate_required_columns(g2_raw, G2_TRANSACTION_REQUIRED_COLUMNS, "Transactions G2") if not g2_raw.empty else [],
-        "Clients": validate_required_columns(customers_raw, CUSTOMERS_REQUIRED_COLUMNS, "Clients") if not customers_raw.empty else [],
+        "Credits_Turbo": validate_required_columns(loans_raw, {"loan_id", "customer_id"}, "Credits") if not loans_raw.empty else [],
+        "Transactions M-PESA_G2": validate_required_columns(g2_raw, G2_TRANSACTION_REQUIRED_COLUMNS, "Transactions M-PESA_G2") if not g2_raw.empty else [],
+        "Clients_Turbo": validate_required_columns(customers_raw, CUSTOMERS_REQUIRED_COLUMNS, "Clients") if not customers_raw.empty else [],
     }
     transactions = prepare_transactions(transactions_raw) if transactions_raw is not None and not transactions_raw.empty else pd.DataFrame()
     current = prepare_current_savings(current_raw)
@@ -109,14 +111,19 @@ def _build_prepared_data(
     loans = prepare_loans(loans_raw)
     g2_transactions = prepare_g2_transactions(g2_raw)
     customers = prepare_customers(customers_raw)
+    transactions = enrich_transactions_with_g2_customer_names(transactions, g2_transactions)
+    current = enrich_turbo_with_g2_customer_names(current, g2_transactions, phone_column="msisdn")
+    fixed = enrich_turbo_with_g2_customer_names(fixed, g2_transactions, phone_column="msisdn")
+    loans = enrich_turbo_with_g2_customer_names(loans, g2_transactions, phone_column="msisdn1")
+    customers = enrich_turbo_with_g2_customer_names(customers, g2_transactions, phone_column="msisdn1")
     load_report = build_load_report(
         {
-            "Transactions M-PESA": transactions,
-            "Epargne courante": current,
-            "DAT": fixed,
-            "Credits": loans,
-            "Transactions G2": g2_transactions,
-            "Clients": customers,
+            "Transactions M-PESA_Turbo": transactions,
+            "Epargne courante_Turbo": current,
+            "DAT_Turbo": fixed,
+            "Credits_Turbo": loans,
+            "Transactions M-PESA_G2": g2_transactions,
+            "Clients_Turbo": customers,
         },
         missing,
     )
@@ -204,16 +211,17 @@ def _render_import_tab(prepared: MpesaPreparedData, missing: dict[str, list[str]
         return
     st.dataframe(report, width="stretch", hide_index=True)
     prepared_frames = {
-        "Transactions M-PESA": prepared.transactions,
-        "Epargne courante": prepared.current_savings,
-        "DAT": prepared.fixed_savings,
-        "Credits": prepared.loans,
-        "Transactions G2": prepared.g2_transactions,
-        "Clients": prepared.customers,
+        "Transactions M-PESA_Turbo": prepared.transactions,
+        "Epargne courante_Turbo": prepared.current_savings,
+        "DAT_Turbo": prepared.fixed_savings,
+        "Credits_Turbo": prepared.loans,
+        "Transactions M-PESA_G2": prepared.g2_transactions,
+        "Clients_Turbo": prepared.customers,
     }
     for label, columns in missing.items():
         if columns:
-            available = ", ".join(map(str, prepared_frames[label].columns)) or "aucune"
+            frame = prepared_frames.get(label, pd.DataFrame())
+            available = ", ".join(map(str, frame.columns)) or "aucune"
             st.warning(
                 f"{label} : colonnes obligatoires manquantes : {', '.join(columns)}. "
                 f"Colonnes disponibles : {available}."
@@ -368,14 +376,25 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         st.info("Chargez au minimum le fichier Transactions M-PESA pour construire un extrait client.")
         return None
 
+    has_g2_names = (
+        not prepared.g2_transactions.empty
+        and "Nom_client" in prepared.g2_transactions.columns
+        and prepared.g2_transactions["Nom_client"].notna().any()
+    )
+    search_help = (
+        "La recherche accepte un customer_id, un numero de telephone ou un nom client issu du fichier G2."
+        if has_g2_names
+        else "La recherche accepte un customer_id ou un numero de telephone. Chargez G2 pour rechercher aussi par nom."
+    )
     render_summary_box(
         "Recherche client",
         [
-            "La recherche accepte un customer_id ou un numero de telephone.",
+            search_help,
             "Les soldes M-PESA reels ne sont calcules que si le solde d'ouverture est fourni par devise.",
         ],
     )
-    query = st.text_input("Customer ID ou telephone", key="mpesa_customer_query")
+    query_label = "Customer ID, telephone ou nom" if has_g2_names else "Customer ID ou telephone"
+    query = st.text_input(query_label, key="mpesa_customer_query")
     if not query.strip():
         st.info("Saisissez un identifiant client ou un telephone.")
         return None
@@ -387,7 +406,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
     with st.expander("Clients correspondants", expanded=True):
         matches_view = _apply_local_multiselect_filters(
             matches,
-            ["source", "customer_id", "telephone"],
+            ["source", "Nom_client", "customer_id", "telephone"],
             key_prefix="mpesa_customer_matches",
         )
         st.caption(f"{len(matches_view)} correspondance(s) affichee(s).")
@@ -747,19 +766,19 @@ def render_solution_mpesa_tab() -> None:
 
     upload_col1, upload_col2 = st.columns(2)
     with upload_col1:
-        transactions_file = st.file_uploader("Transactions M-PESA", type=["xlsx", "xls"], key="mpesa_transactions_file")
-        current_file = st.file_uploader("Comptes d'epargne courante", type=["xlsx", "xls"], key="mpesa_current_file")
-        g2_file = st.file_uploader("Transactions G2", type=["xlsx", "xls"], key="mpesa_g2_file")
+        transactions_file = st.file_uploader("Transactions M-PESA_Turbo", type=["xlsx", "xls"], key="mpesa_transactions_file")
+        current_file = st.file_uploader("Comptes d'epargne courante_Turbo", type=["xlsx", "xls"], key="mpesa_current_file")
+        g2_file = st.file_uploader("Transactions M-PESA_G2", type=["xlsx", "xls"], key="mpesa_g2_file")
     with upload_col2:
-        fixed_file = st.file_uploader("Comptes DAT / epargne bloquee", type=["xlsx", "xls"], key="mpesa_fixed_file")
-        customers_file = st.file_uploader("Clients", type=["xlsx", "xls"], key="mpesa_customers_file")
-        loans_file = st.file_uploader("Credits", type=["xlsx", "xls"], key="mpesa_loans_file")
+        fixed_file = st.file_uploader("Comptes DAT_Turbo", type=["xlsx", "xls"], key="mpesa_fixed_file")
+        customers_file = st.file_uploader("Clients_Turbo", type=["xlsx", "xls"], key="mpesa_customers_file")
+        loans_file = st.file_uploader("Credits_Turbo", type=["xlsx", "xls"], key="mpesa_loans_file")
 
-    _render_expected_columns("Colonnes attendues - Transactions", TRANSACTION_REQUIRED_COLUMNS)
-    _render_expected_columns("Colonnes attendues - Epargne courante", CURRENT_SAVINGS_REQUIRED_COLUMNS)
-    _render_expected_columns("Colonnes attendues - DAT", FIXED_SAVINGS_REQUIRED_COLUMNS)
-    _render_expected_columns("Colonnes attendues - Transactions G2", G2_TRANSACTION_REQUIRED_COLUMNS)
-    _render_expected_columns("Colonnes attendues - Clients", CUSTOMERS_REQUIRED_COLUMNS)
+    _render_expected_columns("Colonnes attendues - Transactions M-PESA_Turbo", TRANSACTION_REQUIRED_COLUMNS)
+    _render_expected_columns("Colonnes attendues - Epargne courante_Turbo", CURRENT_SAVINGS_REQUIRED_COLUMNS)
+    _render_expected_columns("Colonnes attendues - DAT_Turbo", FIXED_SAVINGS_REQUIRED_COLUMNS)
+    _render_expected_columns("Colonnes attendues - Transactions M-PESA_G2", G2_TRANSACTION_REQUIRED_COLUMNS)
+    _render_expected_columns("Colonnes attendues - Clients_Turbo", CUSTOMERS_REQUIRED_COLUMNS)
 
     try:
         transactions_raw = _uploaded_dataframe(transactions_file)

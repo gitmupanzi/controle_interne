@@ -194,7 +194,7 @@ Onglet conditionnel :
 - `Qualité` : expose les anomalies, les valeurs manquantes et le mapping source vers standard.
 - `Export` : permet de télécharger les données standardisées et un pack Excel.
 - `Méthode` : documente les conventions, les règles de lecture, la couverture et les limites d’interprétation.
-- `Solution M-PESA` : analyse les transactions M-PESA/G2 et les fichiers Turbo par téléversement, sans connexion directe à Perfect Vision.
+- `Solution M-PESA` : analyse les transactions M-PESA_G2 et les fichiers Turbo par téléversement, sans connexion directe à Perfect Vision.
 
 ## Fonctions métier déjà intégrées
 
@@ -337,7 +337,7 @@ Si une seule extraction est présente, l’application le signale simplement ave
 
 ## Solution M-PESA / G2 / Turbo
 
-L’onglet `Solution M-PESA` est un module indépendant qui fonctionne par téléversement de fichiers Excel. Il sert à analyser les encaissements M-PESA/G2, les comptes d’épargne courante et les dépôts à terme issus de la solution Bisou Bisou Digital / Turbo.
+L’onglet `Solution M-PESA` est un module indépendant qui fonctionne par téléversement de fichiers Excel. Il sert à analyser les encaissements M-PESA_G2, les comptes d’épargne courante et les dépôts à terme issus de la solution Bisou Bisou Digital / Turbo.
 
 ### Fichiers acceptés
 

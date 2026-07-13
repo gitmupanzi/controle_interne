@@ -31,6 +31,7 @@ CUSTOMERS_REQUIRED_COLUMNS = set(CUSTOMERS_SCHEMA.required)
 LOAN_USEFUL_COLUMNS = {
     "loan_id",
     "customer_id",
+    "Nom_client",
     "customer",
     "msisdn1",
     "currency_code",
@@ -332,6 +333,19 @@ def _extract_phone_from_opposite_party(series: pd.Series) -> pd.Series:
     return raw_phone.replace({"": pd.NA})
 
 
+def _extract_customer_name_from_opposite_party(series: pd.Series) -> pd.Series:
+    customer_name = (
+        series.astype("string")
+        .fillna("")
+        .str.split("-", n=1)
+        .str[1]
+        .str.replace(r"[\r\n\t]+", " ", regex=True)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+    )
+    return customer_name.replace({"": pd.NA})
+
+
 def prepare_g2_transactions(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     frame = remove_export_index_columns(dataframe if dataframe is not None else pd.DataFrame())
     if frame.empty:
@@ -367,9 +381,11 @@ def prepare_g2_transactions(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     if "opposite_party" in frame.columns:
         frame["phone"] = _extract_phone_from_opposite_party(frame["opposite_party"])
         frame["phone_prefixe"] = normalize_phone(frame["phone"])
+        frame["Nom_client"] = _extract_customer_name_from_opposite_party(frame["opposite_party"])
     else:
         frame["phone"] = pd.NA
         frame["phone_prefixe"] = pd.NA
+        frame["Nom_client"] = pd.NA
     for column in ["transaction_amount", "balance"]:
         if column in frame.columns:
             frame[f"{column}_numeric"] = _parse_money_series(frame[column])
@@ -378,6 +394,90 @@ def prepare_g2_transactions(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     if sort_columns:
         frame = frame.sort_values(sort_columns, na_position="last").reset_index(drop=True)
     return frame
+
+
+def enrich_turbo_with_g2_customer_names(
+    dataframe: pd.DataFrame | None,
+    g2_transactions: pd.DataFrame | None,
+    *,
+    phone_column: str,
+    reference_column: str | None = None,
+) -> pd.DataFrame:
+    """Ajoute le nom G2 a une source Turbo, par telephone puis par reference."""
+    result = dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
+    if result.empty:
+        return result
+
+    existing_name = result.get("Nom_client", pd.Series(pd.NA, index=result.index)).copy()
+    has_existing_name = existing_name.astype("string").fillna("").str.strip().ne("")
+    result["Nom_client"] = existing_name
+    result["mode_rapprochement_nom_client"] = np.where(has_existing_name, "Nom existant Turbo", "Fichier G2 absent")
+    if not isinstance(g2_transactions, pd.DataFrame) or g2_transactions.empty or "Nom_client" not in g2_transactions.columns:
+        return result
+
+    g2 = g2_transactions.copy()
+    g2["__phone_key"] = normalize_phone(
+        g2.get("phone_prefixe", g2.get("phone", pd.Series("", index=g2.index)))
+    )
+    g2["__receipt_key"] = clean_identifier(g2.get("receipt_no", pd.Series("", index=g2.index)))
+    g2["Nom_client"] = clean_text(g2["Nom_client"]).replace("", pd.NA)
+
+    phone_rows = g2.dropna(subset=["__phone_key", "Nom_client"])
+    if not phone_rows.empty:
+        phone_lookup = (
+            phone_rows.groupby("__phone_key", as_index=False, dropna=False)
+            .agg(__nom_par_telephone=("Nom_client", concat_unique))
+        )
+    else:
+        phone_lookup = pd.DataFrame(columns=["__phone_key", "__nom_par_telephone"])
+
+    reference_rows = g2.loc[g2["__receipt_key"].ne("")].dropna(subset=["Nom_client"])
+    if not reference_rows.empty:
+        reference_lookup = (
+            reference_rows.groupby("__receipt_key", as_index=False, dropna=False)
+            .agg(__nom_par_reference=("Nom_client", concat_unique))
+        )
+    else:
+        reference_lookup = pd.DataFrame(columns=["__receipt_key", "__nom_par_reference"])
+
+    result["__row_order"] = np.arange(len(result))
+    result["__nom_existant"] = existing_name
+    result["__phone_key"] = normalize_phone(result.get(phone_column, pd.Series("", index=result.index)))
+    result["__receipt_key"] = clean_identifier(
+        result.get(reference_column, pd.Series("", index=result.index))
+        if reference_column
+        else pd.Series("", index=result.index)
+    )
+    result = result.merge(phone_lookup, on="__phone_key", how="left")
+    result = result.merge(reference_lookup, on="__receipt_key", how="left")
+
+    has_phone_name = result["__nom_par_telephone"].astype("string").fillna("").str.strip().ne("")
+    has_reference_name = result["__nom_par_reference"].astype("string").fillna("").str.strip().ne("")
+    matched_name = result["__nom_par_telephone"].where(has_phone_name, result["__nom_par_reference"])
+    has_existing_name = result["__nom_existant"].astype("string").fillna("").str.strip().ne("")
+    result["Nom_client"] = matched_name.where(has_phone_name | has_reference_name, result["__nom_existant"])
+    result["mode_rapprochement_nom_client"] = np.select(
+        [has_phone_name, ~has_phone_name & has_reference_name, ~has_phone_name & ~has_reference_name & has_existing_name],
+        [f"Telephone G2 = {phone_column} Turbo", f"Receipt No G2 = {reference_column} Turbo", "Nom existant Turbo"],
+        default="Nom G2 non rapproche",
+    )
+    return (
+        result.sort_values("__row_order")
+        .drop(columns=["__row_order", "__nom_existant", "__phone_key", "__receipt_key", "__nom_par_telephone", "__nom_par_reference"])
+        .reset_index(drop=True)
+    )
+
+
+def enrich_transactions_with_g2_customer_names(
+    transactions: pd.DataFrame | None,
+    g2_transactions: pd.DataFrame | None,
+) -> pd.DataFrame:
+    return enrich_turbo_with_g2_customer_names(
+        transactions,
+        g2_transactions,
+        phone_column="msisdn1",
+        reference_column="ref_no",
+    )
 
 
 def build_load_report(files: dict[str, pd.DataFrame], missing: dict[str, list[str]]) -> pd.DataFrame:
@@ -425,13 +525,18 @@ def build_account_events(transactions_client: pd.DataFrame, account_type: str) -
     lines["variation"] = pd.to_numeric(lines["bal_after"], errors="coerce").fillna(0) - pd.to_numeric(
         lines["bal_before"], errors="coerce"
     ).fillna(0)
+    event_aggregations: dict[str, tuple[str, object]] = {
+        "variation": ("variation", "sum"),
+        "references": ("reference_id", concat_unique),
+        "descriptions": ("description", concat_unique),
+    }
+    if "Nom_client" in lines.columns:
+        event_aggregations["Nom_client"] = ("Nom_client", concat_unique)
+    if "mode_rapprochement_nom_client" in lines.columns:
+        event_aggregations["mode_rapprochement_nom_client"] = ("mode_rapprochement_nom_client", concat_unique)
     return (
         lines.groupby(["currency_code", "created_at"], as_index=False, dropna=False)
-        .agg(
-            variation=("variation", "sum"),
-            references=("reference_id", concat_unique),
-            descriptions=("description", concat_unique),
-        )
+        .agg(**event_aggregations)
         .sort_values(["currency_code", "created_at"])
     )
 
@@ -747,11 +852,14 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
 
 
 def classify_g2_entry_report(row: pd.Series) -> str:
+    details = normalize_label(row.get("details", ""))
     reference_dat = str(row.get("reference_dat_operation", "") or "").strip()
     references = normalize_label(row.get("references_transactions", ""))
     account_types = normalize_label(row.get("account_types_transactions", ""))
     descriptions = normalize_label(row.get("descriptions_transactions", ""))
     text = f"{references} {account_types} {descriptions}"
+    if "bisoubisourepayment" in details:
+        return "Remboursement prets"
     if reference_dat:
         return "DAT"
     if "ln" in references or "loan" in account_types or "principle" in account_types or "remboursement" in text:
@@ -886,6 +994,7 @@ def build_g2_entry_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame
         "receipt_no",
         "details_rapport",
         "opposite_party",
+        "Nom_client",
         "duree",
         "compte_cree",
         "montant",
@@ -1085,8 +1194,15 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         report["dat_balance"] = np.nan
         report["dat_match_rule"] = pd.NA
 
-    is_dat = report["dat_customer_id"].astype("string").fillna("").ne("")
-    report["details_rapport"] = np.where(is_dat, "DAT", "Depot normal")
+    is_repayment = report.get("details", pd.Series("", index=report.index)).apply(normalize_label).str.contains(
+        "bisoubisourepayment", regex=False, na=False
+    )
+    is_dat = report["dat_customer_id"].astype("string").fillna("").ne("") & ~is_repayment
+    report["details_rapport"] = np.select(
+        [is_repayment, is_dat],
+        ["Remboursement prets", "DAT"],
+        default="Depot normal",
+    )
     report["duree"] = report["duree"].where(is_dat, "-")
     report["compte_cree_dat"] = pd.to_datetime(report["compte_cree"], errors="coerce")
 
@@ -1166,6 +1282,7 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         "receipt_no",
         "details_rapport",
         "opposite_party",
+        "Nom_client",
         "phone_prefixe",
         "duree",
         "compte_cree",
@@ -1206,7 +1323,7 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
 def search_customers(query: object, prepared: MpesaPreparedData) -> pd.DataFrame:
     text = str(query).strip()
     if not text:
-        return pd.DataFrame(columns=["customer_id", "telephone", "source"])
+        return pd.DataFrame(columns=["customer_id", "Nom_client", "telephone", "source"])
     normalized_phone = normalize_phone(pd.Series([text])).iloc[0]
     frames: list[pd.DataFrame] = []
     source_map = [
@@ -1219,17 +1336,24 @@ def search_customers(query: object, prepared: MpesaPreparedData) -> pd.DataFrame
         if frame.empty or "customer_id" not in frame.columns:
             continue
         columns = ["customer_id"]
+        if "Nom_client" in frame.columns:
+            columns.append("Nom_client")
         if phone_col in frame.columns:
             columns.append(phone_col)
         tmp = frame[columns].copy().rename(columns={phone_col: "telephone"})
+        if "Nom_client" not in tmp.columns:
+            tmp["Nom_client"] = pd.NA
         if "telephone" not in tmp.columns:
             tmp["telephone"] = pd.NA
         tmp["source"] = label
         frames.append(tmp)
     if not frames:
-        return pd.DataFrame(columns=["customer_id", "telephone", "source"])
+        return pd.DataFrame(columns=["customer_id", "Nom_client", "telephone", "source"])
     clients = concat_frames_stable(frames).drop_duplicates()
     mask = clients["customer_id"].astype("string").str.contains(text, case=False, regex=False, na=False)
+    normalized_name = normalize_label(text)
+    if normalized_name:
+        mask = mask | clients["Nom_client"].apply(normalize_label).str.contains(normalized_name, regex=False, na=False)
     if not _is_empty_text(normalized_phone):
         mask = mask | clients["telephone"].astype("string").str.contains(str(normalized_phone), case=False, regex=False, na=False)
     else:
@@ -1302,17 +1426,22 @@ def build_mpesa_statement(
     missing_reference = mpesa["operation_reference"].apply(_is_empty_text)
     mpesa.loc[missing_reference, "operation_reference"] = "LIGNE-" + mpesa.loc[missing_reference, "id"].astype("string")
 
+    statement_aggregations: dict[str, tuple[str, object]] = {
+        "telephone": ("msisdn1", concat_unique),
+        "debit_mpesa": ("dr", "sum"),
+        "credit_mpesa": ("cr", "sum"),
+        "references_internes": ("reference_id", concat_unique),
+        "descriptions": ("description", concat_unique),
+        "account_types": ("account_type", concat_unique),
+        "nombre_lignes_comptables": ("id", "count"),
+    }
+    if "Nom_client" in mpesa.columns:
+        statement_aggregations["Nom_client"] = ("Nom_client", concat_unique)
+    if "mode_rapprochement_nom_client" in mpesa.columns:
+        statement_aggregations["mode_rapprochement_nom_client"] = ("mode_rapprochement_nom_client", concat_unique)
     statement = (
         mpesa.groupby(["customer_id", "currency_code", "created_at", "operation_reference"], as_index=False, dropna=False)
-        .agg(
-            telephone=("msisdn1", concat_unique),
-            debit_mpesa=("dr", "sum"),
-            credit_mpesa=("cr", "sum"),
-            references_internes=("reference_id", concat_unique),
-            descriptions=("description", concat_unique),
-            account_types=("account_type", concat_unique),
-            nombre_lignes_comptables=("id", "count"),
-        )
+        .agg(**statement_aggregations)
         .sort_values(["currency_code", "created_at", "operation_reference"])
     )
 
@@ -1450,6 +1579,7 @@ def build_customer_summary(statement: pd.DataFrame, dat_client: pd.DataFrame, lo
         rows.append(
             {
                 "customer_id": customer_id,
+                "Nom_client": concat_unique(group["Nom_client"]) if "Nom_client" in group.columns else "",
                 "telephone": concat_unique(group["telephone"]),
                 "devise": currency,
                 "nombre_operations_mpesa": int(len(group)),
@@ -1535,6 +1665,8 @@ def format_statement_columns(statement: pd.DataFrame) -> pd.DataFrame:
     ordered = [
         "created_at",
         "customer_id",
+        "Nom_client",
+        "mode_rapprochement_nom_client",
         "telephone",
         "currency_code",
         "type_operation",
