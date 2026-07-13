@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from io import BytesIO
 from typing import Any
 
@@ -18,13 +19,13 @@ from credit_app.services.mpesa_analysis import (
     build_diagnostics,
     build_large_dat_summary,
     build_g2_daily_savings_report,
-    build_g2_entry_report,
     build_g2_dat_crosscheck,
     build_load_report,
     build_mpesa_statement,
     create_excel_export,
     enrich_transactions_with_g2_customer_names,
     enrich_turbo_with_g2_customer_names,
+    filter_g2_transactions_by_completion_time,
     numeric_column,
     prepare_current_savings,
     prepare_customers,
@@ -158,14 +159,6 @@ def _filter_value_options(series: pd.Series) -> list[str]:
         .drop_duplicates()
     )
     return sorted(cleaned.tolist(), key=lambda value: str(value).casefold())
-
-
-def _render_vertical_summary_blocks(summary: pd.DataFrame) -> None:
-    if summary is None or not isinstance(summary, pd.DataFrame) or summary.empty:
-        return
-    table = summary[["currency_code", "details_rapport", "montant"]].copy()
-    table.columns = ["Devise", "Synthese sur le Portail BB Digital", "Montant"]
-    st.dataframe(table, width="stretch", hide_index=True)
 
 
 def _apply_local_multiselect_filters(
@@ -670,74 +663,131 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         st.info("Aucun fichier Transactions G2 charge. Chargez `Transaction g2.xlsx` pour rapprocher les telephones G2 avec les DAT.")
         return
 
-    daily_report = build_g2_daily_savings_report(prepared)
-    daily_detail = daily_report.get("detail", pd.DataFrame())
-    daily_synthese = daily_report.get("synthese", pd.DataFrame())
-    daily_pivot = daily_report.get("pivot", pd.DataFrame())
-    daily_vertical_summary = daily_report.get("vertical_summary", pd.DataFrame())
-    if not daily_detail.empty:
-        render_summary_box(
-            "Rapport journalier epargnes normales / DAT",
-            [
-                "Le telephone extrait de `Opposite Party` est croise avec `msisdn` du fichier Turbo.",
-                "`Compte creer` provient du `created_at` de l'epargne courante si le fichier est charge; sinon la date DAT sert de repli.",
-                "Les lignes DAT sont affectees par montant/date du DAT; les autres restent en depot normal.",
-            ],
+    completion_source = prepared.g2_transactions.get(
+        "completion_time",
+        pd.Series(pd.NaT, index=prepared.g2_transactions.index),
+    )
+    completion_times = pd.to_datetime(completion_source, errors="coerce").dropna()
+    filtered_prepared = prepared
+    date_start = None
+    date_end = None
+    render_panel_title("1. Periode analysee (Completion Time)")
+    if not completion_times.empty:
+        completion_key = f"{completion_times.min():%Y%m%d}_{completion_times.max():%Y%m%d}_{len(completion_times)}"
+        date_columns = st.columns(2)
+        date_start = date_columns[0].date_input(
+            "Completion Time - date de debut",
+            value=completion_times.min().date(),
+            min_value=completion_times.min().date(),
+            max_value=completion_times.max().date(),
+            key=f"mpesa_g2_completion_start_{completion_key}",
         )
-        render_panel_title("Synthese journaliere par devise")
-        _render_vertical_summary_blocks(daily_vertical_summary)
+        date_end = date_columns[1].date_input(
+            "Completion Time - date de fin",
+            value=completion_times.max().date(),
+            min_value=completion_times.min().date(),
+            max_value=completion_times.max().date(),
+            key=f"mpesa_g2_completion_end_{completion_key}",
+        )
+        if date_start > date_end:
+            st.warning("La date de debut doit etre anterieure ou egale a la date de fin.")
+            return
+        filtered_g2 = filter_g2_transactions_by_completion_time(prepared.g2_transactions, date_start, date_end)
+        st.caption(
+            f"{len(filtered_g2)} transaction(s) G2 retenue(s) du {date_start:%d/%m/%Y} au {date_end:%d/%m/%Y}."
+        )
+        if filtered_g2.empty:
+            st.warning("Aucune transaction G2 dans la periode selectionnee.")
+            return
+        filtered_prepared = replace(prepared, g2_transactions=filtered_g2)
+    else:
+        st.caption("Completion Time n'est pas disponible; l'ensemble du fichier G2 est analyse.")
 
-        render_panel_title("Detail journalier type rapport envoye")
+    daily_report = build_g2_daily_savings_report(filtered_prepared)
+    daily_detail = daily_report.get("detail", pd.DataFrame())
+    daily_pivot = daily_report.get("pivot", pd.DataFrame())
+
+    render_summary_box(
+        "Lecture unique du sous-onglet",
+        [
+            "La synthese classe chaque transaction une seule fois : DAT, depot normal ou remboursement de pret.",
+            "Les nombres et montants sont presentes sur une ligne distincte pour chaque devise.",
+            "Le rapprochement `Receipt No. = ref_no` est affiche ensuite comme controle technique, pas comme une seconde analyse.",
+        ],
+    )
+
+    render_panel_title("2. Synthese G2 / DAT par devise")
+    if daily_pivot.empty:
+        st.info("Aucune synthese disponible pour la periode selectionnee.")
+    else:
+        summary_columns = [
+            "currency_code",
+            "nombre_DAT",
+            "montant_DAT",
+            "nombre_Depot normal",
+            "montant_Depot normal",
+            "nombre_Remboursement prets",
+            "montant_Remboursement prets",
+            "nombre_total",
+            "montant_total",
+        ]
+        summary_columns = [column for column in summary_columns if column in daily_pivot.columns]
+        summary_view = daily_pivot[summary_columns].rename(
+            columns={
+                "currency_code": "Devise",
+                "nombre_DAT": "Nombre de DAT",
+                "montant_DAT": "Montant DAT",
+                "nombre_Depot normal": "Nombre de depot normal",
+                "montant_Depot normal": "Montant depot normal",
+                "nombre_Remboursement prets": "Nombre de remboursement de pret",
+                "montant_Remboursement prets": "Montant remboursement de pret",
+                "nombre_total": "Nombre total",
+                "montant_total": "Montant total",
+            }
+        )
+        st.dataframe(summary_view, width="stretch", hide_index=True)
+        st.caption("Les totaux CDF et USD restent separes; aucun montant multidevise n'est additionne.")
+
+    render_panel_title("3. Transactions classees")
+    with st.expander("Afficher le detail des transactions G2", expanded=False):
         daily_view = _apply_local_multiselect_filters(
             daily_detail,
             ["currency_code", "details_rapport", "duree", "dat_match_rule", "transaction_status"],
             key_prefix="mpesa_daily_g2_report_filter",
         )
-        st.caption(f"{len(daily_view)} ligne(s) du rapport journalier affichee(s).")
-        display_columns = [
+        st.caption(f"{len(daily_view)} ligne(s) affichee(s).")
+        detail_columns = [
             "date",
             "receipt_no",
             "currency_code",
             "details_rapport",
+            "Nom_client",
             "opposite_party",
             "duree",
             "compte_cree",
             "montant",
+            "transaction_status",
         ]
-        display_columns = [column for column in display_columns if column in daily_view.columns]
-        st.dataframe(daily_view[display_columns], width="stretch", hide_index=True)
+        detail_columns = [column for column in detail_columns if column in daily_view.columns]
+        st.dataframe(daily_view[detail_columns], width="stretch", hide_index=True)
 
-        daily_bytes = create_excel_export(
-            {
-                "rapport_journalier_pivot": daily_pivot,
-                "rapport_journalier_vertical": daily_vertical_summary,
-                "rapport_journalier_synthese": daily_synthese,
-                "rapport_journalier_detail": daily_detail,
-            }
-        )
-        st.download_button(
-            "Telecharger le rapport journalier epargnes DAT",
-            data=daily_bytes,
-            file_name="rapport_journalier_epargnes_dat_g2.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            width="stretch",
-        )
-
+    render_panel_title("4. Controle de rapprochement G2 / DAT")
     render_summary_box(
-        "Rapprochement G2 / DAT",
+        "Role du controle",
         [
             "`Receipt No.` est rapproche en priorite avec `ref_no` du fichier Transactions M-PESA.",
-            "Le telephone extrait depuis `Opposite Party` reste disponible comme controle ou solution de repli.",
-            "Le DAT est ensuite retrouve via le client identifie et la devise de la transaction.",
+            "Le telephone extrait de `Opposite Party` sert de solution de repli.",
+            "Les lignes non rapprochees restent visibles pour verification.",
         ],
     )
 
     if report is not None:
         g2_dat = report.get("g2_dat", pd.DataFrame())
-        render_panel_title("Transactions G2 du client selectionne")
+        if date_start is not None or date_end is not None:
+            g2_dat = filter_g2_transactions_by_completion_time(g2_dat, date_start, date_end)
+        st.caption("Controle limite au client selectionne dans l'onglet Extrait client.")
     else:
-        g2_dat = build_g2_dat_crosscheck(prepared)
-        render_panel_title("Rapprochement global G2 / DAT")
+        g2_dat = build_g2_dat_crosscheck(filtered_prepared)
 
     if g2_dat.empty:
         st.warning("Aucun rapprochement G2 / DAT disponible pour le perimetre courant.")
@@ -749,76 +799,57 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         if "reference_dat_operation" in g2_dat.columns
         else 0
     )
-    total_dat = float(numeric_column(g2_dat, "dat_final_client_devise").sum())
     render_kpi_cards(
         [
             ("Transactions G2", _format_count(len(g2_dat)), "Lignes analysees", "blue"),
             ("DAT operation", _format_count(dat_operation_count), "Lignes FIXED SAVINGS via ref_no", "green"),
-            ("Clients rapproches", _format_count(matched), "Via ref_no ou telephone", "navy"),
+            ("Transactions rapprochees", _format_count(matched), "Via ref_no ou telephone", "navy"),
             ("Non rapproches", _format_count(len(g2_dat) - matched), "A verifier", "orange"),
-            ("DAT total rapproche", _format_amount(total_dat), "Somme par devise source", "navy"),
         ]
     )
 
-    filtered = _apply_local_multiselect_filters(
-        g2_dat,
-        ["currency_code", "mode_rapprochement", "statut_rapprochement_dat", "transaction_status", "customer_id_dat", "phone_prefixe"],
-        key_prefix="mpesa_g2_dat_filter",
-    )
-    display_columns = [
-        "receipt_no",
-        "completion_time",
-        "currency_code",
-        "transaction_amount",
-        "opposite_party",
-        "customer_id_ref_no",
-        "dat_operation",
-        "solde_dat_operation",
-        "dat_final",
-        "produits_dat",
-        "maturites_dat",
-        "mode_rapprochement",
-        "statut_rapprochement_dat",
-    ]
-    display_columns = [column for column in display_columns if column in filtered.columns]
-    filtered_display = filtered[display_columns].copy() if display_columns else filtered
-    st.caption(f"{len(filtered)} ligne(s) G2 affichee(s).")
-    st.dataframe(filtered_display, width="stretch", hide_index=True)
+    with st.expander("Afficher le detail du controle de rapprochement", expanded=False):
+        filtered = _apply_local_multiselect_filters(
+            g2_dat,
+            ["currency_code", "mode_rapprochement", "statut_rapprochement_dat", "transaction_status", "customer_id_dat", "phone_prefixe"],
+            key_prefix="mpesa_g2_dat_filter",
+        )
+        control_columns = [
+            "receipt_no",
+            "completion_time",
+            "currency_code",
+            "transaction_amount",
+            "opposite_party",
+            "customer_id_ref_no",
+            "dat_operation",
+            "solde_dat_operation",
+            "dat_final",
+            "produits_dat",
+            "maturites_dat",
+            "mode_rapprochement",
+            "statut_rapprochement_dat",
+        ]
+        control_columns = [column for column in control_columns if column in filtered.columns]
+        filtered_display = filtered[control_columns].copy() if control_columns else filtered
+        st.caption(f"{len(filtered)} ligne(s) de controle affichee(s).")
+        st.dataframe(filtered_display, width="stretch", hide_index=True)
 
-    if report is None:
-        g2_report = build_g2_entry_report(prepared)
-        synthese = g2_report.get("synthese", pd.DataFrame())
-        detail = g2_report.get("detail", pd.DataFrame())
-        pivot = g2_report.get("pivot", pd.DataFrame())
-        vertical_summary = g2_report.get("vertical_summary", pd.DataFrame())
-        if not synthese.empty:
-            render_panel_title("Synthese des encaissements G2")
-            _render_vertical_summary_blocks(vertical_summary)
-        if not detail.empty:
-            render_panel_title("Detail des encaissements G2")
-            detail_view = _apply_local_multiselect_filters(
-                detail,
-                ["currency_code", "details_rapport", "mode_rapprochement", "statut_rapprochement_dat"],
-                key_prefix="mpesa_g2_entry_report_filter",
-            )
-            st.caption(f"{len(detail_view)} ligne(s) du rapport affichee(s).")
-            st.dataframe(detail_view, width="stretch", hide_index=True)
-        report_bytes = create_excel_export(
-            {
-                "rapport_g2_pivot": pivot,
-                "rapport_g2_vertical": vertical_summary,
-                "rapport_g2_synthese": synthese,
-                "rapport_g2_detail": detail,
-                "g2_dat": g2_dat,
-            }
-        )
-        st.download_button(
-            "Telecharger le rapport G2 fusionne",
-            data=report_bytes,
-            file_name="rapport_encaissements_g2_bisou_bisou.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            width="stretch",
-        )
+    render_panel_title("5. Export du rapport")
+    report_bytes = create_excel_export(
+        {
+            "rapport_journalier_pivot": daily_pivot,
+            "rapport_journalier_detail": daily_detail,
+            "g2_dat": g2_dat,
+        }
+    )
+    period_suffix = f"{date_start:%Y%m%d}_{date_end:%Y%m%d}" if date_start is not None and date_end is not None else "complet"
+    st.download_button(
+        "Telecharger le rapport G2 / DAT complet",
+        data=report_bytes,
+        file_name=f"rapport_g2_dat_{period_suffix}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        width="stretch",
+    )
 
 
 def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) -> None:

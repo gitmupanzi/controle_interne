@@ -475,26 +475,32 @@ def prepare_g2_transactions(dataframe: pd.DataFrame | None) -> pd.DataFrame:
             "receipt_no": "receipt_no",
             "receipt_no_": "receipt_no",
             "completion_time": "completion_time",
+            "initiation_time": "initiation_time",
             "details": "details",
             "opposite_party": "opposite_party",
             "transaction_status": "transaction_status",
             "currency": "currency_code",
             "transaction_amount": "transaction_amount",
+            "paid_in": "paid_in",
+            "withdrawn": "withdrawn",
             "balance": "balance",
             "operation": "operation",
+            "reason_type": "reason_type",
+            "linked_transaction_id": "linked_transaction_id",
         }.get(key)
         rename_map[column] = standard or key
     frame = frame.rename(columns=rename_map).copy()
 
-    for column in ["receipt_no", "details", "opposite_party", "transaction_status", "currency_code", "operation"]:
+    for column in ["receipt_no", "details", "opposite_party", "transaction_status", "currency_code", "operation", "reason_type"]:
         if column in frame.columns:
             frame[column] = clean_text(frame[column])
     if "receipt_no" in frame.columns:
         frame["receipt_no"] = clean_identifier(frame["receipt_no"])
     if "currency_code" in frame.columns:
         frame["currency_code"] = clean_text(frame["currency_code"]).str.upper()
-    if "completion_time" in frame.columns:
-        frame["completion_time"] = pd.to_datetime(frame["completion_time"], errors="coerce")
+    for column in ["completion_time", "initiation_time"]:
+        if column in frame.columns:
+            frame[column] = pd.to_datetime(frame[column], errors="coerce", format="mixed", dayfirst=True)
     if "opposite_party" in frame.columns:
         frame["phone"] = _extract_phone_from_opposite_party(frame["opposite_party"])
         frame["phone_prefixe"] = normalize_phone(frame["phone"])
@@ -503,14 +509,52 @@ def prepare_g2_transactions(dataframe: pd.DataFrame | None) -> pd.DataFrame:
         frame["phone"] = pd.NA
         frame["phone_prefixe"] = pd.NA
         frame["Nom_client"] = pd.NA
-    for column in ["transaction_amount", "balance"]:
+    for column in ["transaction_amount", "paid_in", "withdrawn", "balance"]:
         if column in frame.columns:
             frame[f"{column}_numeric"] = _parse_money_series(frame[column])
+
+    original_amount = frame.get("transaction_amount_numeric", pd.Series(np.nan, index=frame.index, dtype="float64"))
+    paid_in = frame.get("paid_in_numeric", pd.Series(np.nan, index=frame.index, dtype="float64"))
+    withdrawn = frame.get("withdrawn_numeric", pd.Series(np.nan, index=frame.index, dtype="float64"))
+    paid_in_available = paid_in.notna() & (paid_in.ne(0) | withdrawn.isna())
+    withdrawn_available = withdrawn.notna() & ~paid_in_available
+    derived_amount = paid_in.where(paid_in_available, withdrawn)
+    frame["transaction_amount_numeric"] = original_amount.where(original_amount.notna(), derived_amount)
+    frame["transaction_amount_source"] = np.select(
+        [original_amount.notna(), original_amount.isna() & paid_in_available, original_amount.isna() & withdrawn_available],
+        ["Transaction Amount", "Paid In", "Withdrawn"],
+        default="Montant absent",
+    )
+    if "transaction_amount" not in frame.columns:
+        frame["transaction_amount"] = derived_amount
+    else:
+        frame["transaction_amount"] = frame["transaction_amount"].where(original_amount.notna(), derived_amount)
     frame["source_g2"] = "G2"
     sort_columns = [column for column in ["completion_time", "receipt_no"] if column in frame.columns]
     if sort_columns:
         frame = frame.sort_values(sort_columns, na_position="last").reset_index(drop=True)
     return frame
+
+
+def filter_g2_transactions_by_completion_time(
+    dataframe: pd.DataFrame | None,
+    start_date: Any | None = None,
+    end_date: Any | None = None,
+) -> pd.DataFrame:
+    """Filtre les transactions G2 sur Completion Time, bornes journalieres incluses."""
+    if not isinstance(dataframe, pd.DataFrame) or dataframe.empty:
+        return pd.DataFrame() if dataframe is None else dataframe.copy()
+    if "completion_time" not in dataframe.columns:
+        return dataframe.copy()
+
+    frame = dataframe.copy()
+    completion_time = pd.to_datetime(frame["completion_time"], errors="coerce")
+    mask = completion_time.notna()
+    if start_date is not None:
+        mask &= completion_time.ge(pd.Timestamp(start_date).normalize())
+    if end_date is not None:
+        mask &= completion_time.lt(pd.Timestamp(end_date).normalize() + pd.Timedelta(days=1))
+    return frame.loc[mask].reset_index(drop=True)
 
 
 def enrich_turbo_with_g2_customer_names(
@@ -1045,6 +1089,45 @@ def build_entry_pivot(detail: pd.DataFrame) -> pd.DataFrame:
     return pivot[ordered + rest].sort_values("currency_code").reset_index(drop=True)
 
 
+def build_entry_count_summary(detail: pd.DataFrame) -> pd.DataFrame:
+    """Compte les DAT, depots normaux et remboursements, separement par devise."""
+    columns = [
+        "currency_code",
+        "Nombre de DAT",
+        "Nombre de depot normal",
+        "Nombre de remboursement de pret",
+        "Nombre total",
+    ]
+    if detail is None or not isinstance(detail, pd.DataFrame) or detail.empty:
+        return pd.DataFrame(columns=columns)
+    if not {"currency_code", "details_rapport"}.issubset(detail.columns):
+        return pd.DataFrame(columns=columns)
+
+    work = detail.copy()
+    work["currency_code"] = clean_text(work["currency_code"]).str.upper()
+    work["details_rapport"] = clean_text(work["details_rapport"])
+    grouped = (
+        work.groupby(["currency_code", "details_rapport"], dropna=False)
+        .size()
+        .unstack(fill_value=0)
+    )
+    for category in ["DAT", "Depot normal", "Remboursement prets"]:
+        if category not in grouped.columns:
+            grouped[category] = 0
+    summary = grouped[["DAT", "Depot normal", "Remboursement prets"]].reset_index()
+    summary = summary.rename(
+        columns={
+            "DAT": "Nombre de DAT",
+            "Depot normal": "Nombre de depot normal",
+            "Remboursement prets": "Nombre de remboursement de pret",
+        }
+    )
+    summary["Nombre total"] = summary[
+        ["Nombre de DAT", "Nombre de depot normal", "Nombre de remboursement de pret"]
+    ].sum(axis=1)
+    return summary[columns].sort_values("currency_code").reset_index(drop=True)
+
+
 def build_entry_vertical_summary(detail: pd.DataFrame) -> pd.DataFrame:
     if detail is None or not isinstance(detail, pd.DataFrame) or detail.empty:
         return pd.DataFrame(columns=["currency_code", "details_rapport", "montant"])
@@ -1090,7 +1173,13 @@ def build_entry_vertical_summary(detail: pd.DataFrame) -> pd.DataFrame:
 def build_g2_entry_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame]:
     detail = build_g2_dat_crosscheck(prepared)
     if detail.empty:
-        return {"detail": pd.DataFrame(), "synthese": pd.DataFrame(), "pivot": pd.DataFrame(), "vertical_summary": pd.DataFrame()}
+        return {
+            "detail": pd.DataFrame(),
+            "synthese": pd.DataFrame(),
+            "pivot": pd.DataFrame(),
+            "vertical_summary": pd.DataFrame(),
+            "comptages": build_entry_count_summary(pd.DataFrame()),
+        }
 
     report = detail.copy()
     report["details_rapport"] = report.apply(classify_g2_entry_report, axis=1)
@@ -1144,6 +1233,7 @@ def build_g2_entry_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame
         "synthese": synthese,
         "pivot": build_entry_pivot(report_detail),
         "vertical_summary": build_entry_vertical_summary(report_detail),
+        "comptages": build_entry_count_summary(report_detail),
     }
 
 
@@ -1291,7 +1381,13 @@ def _build_daily_dat_assignments(g2: pd.DataFrame, fixed: pd.DataFrame) -> pd.Da
 def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame]:
     g2 = prepared.g2_transactions
     if g2.empty:
-        return {"detail": pd.DataFrame(), "synthese": pd.DataFrame(), "pivot": pd.DataFrame(), "vertical_summary": pd.DataFrame()}
+        return {
+            "detail": pd.DataFrame(),
+            "synthese": pd.DataFrame(),
+            "pivot": pd.DataFrame(),
+            "vertical_summary": pd.DataFrame(),
+            "comptages": build_entry_count_summary(pd.DataFrame()),
+        }
 
     report = g2.copy()
     report["receipt_no"] = clean_identifier(report.get("receipt_no", pd.Series("", index=report.index)))
@@ -1434,6 +1530,7 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         "synthese": synthese,
         "pivot": build_entry_pivot(detail),
         "vertical_summary": build_entry_vertical_summary(detail),
+        "comptages": build_entry_count_summary(detail),
     }
 
 
@@ -1834,10 +1931,12 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         "Credits": report.get("credits", pd.DataFrame()),
         "G2_DAT": report.get("g2_dat", pd.DataFrame()),
         "Rapport_G2_Pivot": report.get("rapport_g2_pivot", pd.DataFrame()),
+        "Rapport_G2_Comptages": report.get("rapport_g2_comptages", pd.DataFrame()),
         "Rapport_G2_Vertical": report.get("rapport_g2_vertical", pd.DataFrame()),
         "Rapport_G2_Synthese": report.get("rapport_g2_synthese", pd.DataFrame()),
         "Rapport_G2_Detail": report.get("rapport_g2_detail", pd.DataFrame()),
         "Rapport_Journalier_Pivot": report.get("rapport_journalier_pivot", pd.DataFrame()),
+        "Rapport_Journalier_Comptages": report.get("rapport_journalier_comptages", pd.DataFrame()),
         "Rapport_Journalier_Vertical": report.get("rapport_journalier_vertical", pd.DataFrame()),
         "Rapport_Journalier_Synthese": report.get("rapport_journalier_synthese", pd.DataFrame()),
         "Rapport_Journalier_Detail": report.get("rapport_journalier_detail", pd.DataFrame()),

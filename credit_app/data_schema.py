@@ -127,7 +127,11 @@ FIXED_SAVINGS_SCHEMA = schema(
 G2_TRANSACTIONS_SCHEMA = schema(
     "Transactions G2",
     {"Receipt No", "Currency", "Opposite Party"},
-    {"Completion Time", "Transaction Status", "Transaction Amount", "Balance", "Details", "Operation"},
+    {
+        "Completion Time", "Initiation Time", "Transaction Status", "Transaction Amount",
+        "Paid In", "Withdrawn", "Balance", "Details", "Operation", "Reason Type",
+        "Linked Transaction ID",
+    },
     {
         "Receipt No": ("receipt_no", "Receipt No."),
         "Opposite Party": ("opposite_party",),

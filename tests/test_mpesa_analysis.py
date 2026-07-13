@@ -9,6 +9,7 @@ from credit_app.services.mpesa_analysis import (
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
     build_g2_entry_report,
+    build_entry_count_summary,
     build_large_dat_summary,
     build_diagnostics,
     build_load_report,
@@ -17,6 +18,7 @@ from credit_app.services.mpesa_analysis import (
     create_excel_export,
     enrich_transactions_with_g2_customer_names,
     enrich_turbo_with_g2_customer_names,
+    filter_g2_transactions_by_completion_time,
     numeric_column,
     prepare_current_savings,
     prepare_customers,
@@ -140,6 +142,97 @@ def _sample_prepared_data() -> MpesaPreparedData:
 
 
 class MpesaAnalysisTests(unittest.TestCase):
+    def test_g2_count_summary_keeps_currencies_separate_and_fills_missing_categories(self) -> None:
+        detail = pd.DataFrame(
+            [
+                {"currency_code": "CDF", "details_rapport": "DAT"},
+                {"currency_code": "CDF", "details_rapport": "DAT"},
+                {"currency_code": "CDF", "details_rapport": "Depot normal"},
+                {"currency_code": "USD", "details_rapport": "Depot normal"},
+                {"currency_code": "USD", "details_rapport": "Remboursement prets"},
+            ]
+        )
+
+        result = build_entry_count_summary(detail).set_index("currency_code")
+
+        self.assertEqual(int(result.loc["CDF", "Nombre de DAT"]), 2)
+        self.assertEqual(int(result.loc["CDF", "Nombre de remboursement de pret"]), 0)
+        self.assertEqual(int(result.loc["CDF", "Nombre total"]), 3)
+        self.assertEqual(int(result.loc["USD", "Nombre de DAT"]), 0)
+        self.assertEqual(int(result.loc["USD", "Nombre de depot normal"]), 1)
+        self.assertEqual(int(result.loc["USD", "Nombre de remboursement de pret"]), 1)
+        self.assertEqual(int(result.loc["USD", "Nombre total"]), 2)
+
+    def test_filter_g2_completion_time_uses_inclusive_dates(self) -> None:
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {"Receipt No.": "D1", "Completion Time": "10-07-2026 23:59:59", "Currency": "CDF", "Opposite Party": "0811111111 - A"},
+                    {"Receipt No.": "D2", "Completion Time": "11-07-2026 00:00:00", "Currency": "CDF", "Opposite Party": "0822222222 - B"},
+                    {"Receipt No.": "D3", "Completion Time": "11-07-2026 23:59:59", "Currency": "USD", "Opposite Party": "0833333333 - C"},
+                    {"Receipt No.": "D4", "Completion Time": "12-07-2026 00:00:00", "Currency": "USD", "Opposite Party": "0844444444 - D"},
+                ]
+            )
+        )
+
+        result = filter_g2_transactions_by_completion_time(g2, "2026-07-11", "2026-07-11")
+
+        self.assertEqual(result["receipt_no"].tolist(), ["D2", "D3"])
+
+    def test_prepare_g2_transactions_accepts_paid_in_and_withdrawn_format(self) -> None:
+        raw = pd.DataFrame(
+            [
+                {
+                    "Receipt No.": "ORG-IN",
+                    "Completion Time": "11-07-2026 12:47:24",
+                    "Initiation Time": "11-07-2026 12:46:00",
+                    "Details": "BisouBisouC2B",
+                    "Transaction Status": "Completed",
+                    "Currency": "CDF",
+                    "Paid In": 1000.0,
+                    "Withdrawn": None,
+                    "Balance": 5000.0,
+                    "Opposite Party": "0812345678 - CLIENT DEPOT",
+                },
+                {
+                    "Receipt No.": "ORG-REPAY",
+                    "Completion Time": "11-07-2026 13:00:00",
+                    "Initiation Time": "11-07-2026 12:59:00",
+                    "Details": "BisouBisouRepayment",
+                    "Transaction Status": "Completed",
+                    "Currency": "CDF",
+                    "Paid In": 250.0,
+                    "Withdrawn": None,
+                    "Balance": 5250.0,
+                    "Opposite Party": "0812345678 - CLIENT DEPOT",
+                },
+                {
+                    "Receipt No.": "ORG-OUT",
+                    "Completion Time": "11-07-2026 14:00:00",
+                    "Initiation Time": "11-07-2026 13:59:00",
+                    "Details": "Super Transaction",
+                    "Transaction Status": "Completed",
+                    "Currency": "CDF",
+                    "Paid In": None,
+                    "Withdrawn": -500.0,
+                    "Balance": 4750.0,
+                    "Opposite Party": "0812345678 - CLIENT DEPOT",
+                },
+            ]
+        )
+
+        result = prepare_g2_transactions(raw).set_index("receipt_no")
+
+        self.assertEqual(float(result.loc["ORG-IN", "transaction_amount_numeric"]), 1000.0)
+        self.assertEqual(result.loc["ORG-IN", "transaction_amount_source"], "Paid In")
+        self.assertEqual(float(result.loc["ORG-REPAY", "transaction_amount_numeric"]), 250.0)
+        self.assertEqual(result.loc["ORG-REPAY", "transaction_amount_source"], "Paid In")
+        self.assertEqual(float(result.loc["ORG-OUT", "transaction_amount_numeric"]), -500.0)
+        self.assertEqual(result.loc["ORG-OUT", "transaction_amount_source"], "Withdrawn")
+        self.assertEqual(float(result.loc["ORG-OUT", "balance_numeric"]), 4750.0)
+        self.assertEqual(result.loc["ORG-IN", "completion_time"], pd.Timestamp("2026-07-11 12:47:24"))
+        self.assertEqual(result.loc["ORG-IN", "Nom_client"], "CLIENT DEPOT")
+
     def test_large_dat_summary_ranks_clients_by_currency_without_mixing_totals(self) -> None:
         fixed = prepare_fixed_savings(
             pd.DataFrame(
