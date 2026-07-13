@@ -548,6 +548,10 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         st.dataframe(filtered_statement, width="stretch", hide_index=True)
 
     render_panel_title("7. Export")
+    st.caption(
+        "La feuille `Extrait_MPESA` reprend les filtres appliques a l'etape 4. "
+        "Les feuilles Synthese, DAT, epargne, credits, G2/DAT et diagnostics conservent la situation complete du client."
+    )
     export_bytes = create_excel_export(filtered_report)
     st.download_button(
         "Telecharger le rapport complet du client",

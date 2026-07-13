@@ -413,6 +413,8 @@ USD    | Total USD                          | 1 958
 
 Les exports Excel du module peuvent contenir :
 
+Dans `Extrait client`, la feuille `Extrait_MPESA` reprend les filtres appliqués aux mouvements. Les autres feuilles conservent la situation complète du client sélectionné afin de préserver le contexte de contrôle.
+
 - `G2_DAT`
 - `Rapport_G2_Pivot`
 - `Rapport_G2_Vertical`

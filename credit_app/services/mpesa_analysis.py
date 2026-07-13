@@ -2188,6 +2188,10 @@ def build_mpesa_statement(
         .agg(**statement_aggregations)
         .sort_values(["currency_code", "created_at", "operation_reference"])
     )
+    if "Nom_client" not in statement.columns:
+        statement["Nom_client"] = pd.NA
+    if "mode_rapprochement_nom_client" not in statement.columns:
+        statement["mode_rapprochement_nom_client"] = "Nom client non disponible"
 
     statement["reference_dat_operation"] = statement["references_internes"].apply(lambda value: extract_prefixed_reference(value, "FA"))
     statement["reference_credit_operation"] = statement["references_internes"].apply(lambda value: extract_prefixed_reference(value, "LN"))

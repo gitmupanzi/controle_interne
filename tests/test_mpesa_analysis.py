@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 import unittest
 
 import pandas as pd
@@ -620,6 +621,40 @@ class MpesaAnalysisTests(unittest.TestCase):
         export = create_excel_export(report)
 
         self.assertGreater(len(export), 5000)
+
+    def test_customer_excel_export_preserves_filtered_extract_and_required_sheets(self) -> None:
+        prepared = _sample_prepared_data()
+        report = build_mpesa_statement(prepared, "1001", {"CDF": None})
+        filtered_report = dict(report)
+        filtered_report["extrait"] = report["extrait"].iloc[[0]].copy()
+
+        export = create_excel_export(filtered_report)
+        workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
+        required_sheets = {
+            "Synthese",
+            "Extrait_MPESA",
+            "DAT_Final",
+            "Mouvements_DAT",
+            "Mouvements_Epargne",
+            "Credits",
+            "G2_DAT",
+            "Diagnostics",
+        }
+
+        self.assertTrue(required_sheets.issubset(workbook.sheet_names))
+        exported_statement = pd.read_excel(workbook, sheet_name="Extrait_MPESA")
+        exported_summary = pd.read_excel(workbook, sheet_name="Synthese")
+        self.assertEqual(len(exported_statement), 1)
+        self.assertEqual(len(exported_summary), len(report["synthese"]))
+        self.assertIn("operation_reference", exported_statement.columns)
+        self.assertIn("Nom_client", exported_statement.columns)
+        self.assertIn("mouvement_net_mpesa", exported_statement.columns)
+
+        filtered_report["extrait"] = report["extrait"].iloc[0:0].copy()
+        empty_export = create_excel_export(filtered_report)
+        empty_statement = pd.read_excel(BytesIO(empty_export), sheet_name="Extrait_MPESA")
+        self.assertEqual(len(empty_statement), 0)
+        self.assertIn("operation_reference", empty_statement.columns)
 
     def test_build_statement_accepts_transactions_only(self) -> None:
         prepared = _sample_prepared_data()
