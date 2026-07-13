@@ -9,6 +9,7 @@ from credit_app.services.mpesa_analysis import (
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
     build_g2_entry_report,
+    build_large_dat_summary,
     build_diagnostics,
     build_load_report,
     build_savings_final,
@@ -139,6 +140,73 @@ def _sample_prepared_data() -> MpesaPreparedData:
 
 
 class MpesaAnalysisTests(unittest.TestCase):
+    def test_large_dat_summary_ranks_clients_by_currency_without_mixing_totals(self) -> None:
+        fixed = prepare_fixed_savings(
+            pd.DataFrame(
+                [
+                    {
+                        "customer_id": "1001",
+                        "msisdn": "0811111111",
+                        "Nom_client": "CLIENT A",
+                        "product_name": "3 Months",
+                        "account_type": "FIXED SAVINGS",
+                        "balance": 7000,
+                        "currency_code": "CDF",
+                        "date_approved": "2026-06-01",
+                        "maturity_date": "2026-07-20",
+                    },
+                    {
+                        "customer_id": "1001",
+                        "msisdn": "0811111111",
+                        "Nom_client": "CLIENT A",
+                        "product_name": "6 Months",
+                        "account_type": "FIXED SAVINGS",
+                        "balance": 3000,
+                        "currency_code": "CDF",
+                        "date_approved": "2026-05-01",
+                        "maturity_date": "2026-11-01",
+                    },
+                    {
+                        "customer_id": "1002",
+                        "msisdn": "0822222222",
+                        "Nom_client": "CLIENT B",
+                        "product_name": "3 Months",
+                        "account_type": "FIXED SAVINGS",
+                        "balance": 2000,
+                        "currency_code": "CDF",
+                        "date_approved": "2026-06-10",
+                        "maturity_date": "2026-09-10",
+                    },
+                    {
+                        "customer_id": "2001",
+                        "msisdn": "0833333333",
+                        "Nom_client": "CLIENT USD",
+                        "product_name": "3 Months",
+                        "account_type": "FIXED SAVINGS",
+                        "balance": 500,
+                        "currency_code": "USD",
+                        "date_approved": "2026-04-01",
+                        "maturity_date": "2026-07-01",
+                    },
+                ]
+            )
+        )
+
+        result = build_large_dat_summary(fixed, percentile=0.90, as_of_date="2026-07-13")
+        clients = result["clients"]
+        portfolio = result["portefeuille"].set_index("currency_code")
+        cdf = clients.loc[clients["currency_code"].eq("CDF")].set_index("customer_id")
+
+        self.assertEqual(float(cdf.loc["1001", "solde_dat_total"]), 10000.0)
+        self.assertEqual(int(cdf.loc["1001", "nb_comptes_dat"]), 2)
+        self.assertEqual(int(cdf.loc["1001", "rang_devise"]), 1)
+        self.assertTrue(bool(cdf.loc["1001", "est_fort_dat"]))
+        self.assertFalse(bool(cdf.loc["1002", "est_fort_dat"]))
+        self.assertEqual(float(portfolio.loc["CDF", "total_dat"]), 12000.0)
+        self.assertEqual(float(portfolio.loc["USD", "total_dat"]), 500.0)
+        self.assertEqual(float(portfolio.loc["CDF", "solde_echeance_30j"]), 7000.0)
+        self.assertEqual(float(portfolio.loc["USD", "solde_dat_echu"]), 500.0)
+
     def test_g2_customer_name_enrichment_prioritizes_phone_then_reference(self) -> None:
         transactions = prepare_transactions(
             pd.DataFrame(

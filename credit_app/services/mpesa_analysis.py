@@ -286,6 +286,123 @@ def prepare_fixed_savings(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     return frame
 
 
+def build_large_dat_summary(
+    fixed_savings: pd.DataFrame | None,
+    *,
+    percentile: float = 0.90,
+    as_of_date: Any | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Classe les clients DAT par devise et identifie les encours les plus eleves."""
+    empty_result = {"clients": pd.DataFrame(), "portefeuille": pd.DataFrame()}
+    if not isinstance(fixed_savings, pd.DataFrame) or fixed_savings.empty:
+        return empty_result
+
+    required = {"customer_id", "currency_code", "balance"}
+    if not required.issubset(fixed_savings.columns):
+        return empty_result
+
+    percentile = min(max(float(percentile), 0.0), 1.0)
+    reporting_date = pd.Timestamp(as_of_date if as_of_date is not None else pd.Timestamp.now()).normalize()
+    dat = fixed_savings.copy()
+    dat["customer_id"] = clean_identifier(dat["customer_id"])
+    dat["currency_code"] = clean_text(dat["currency_code"]).str.upper()
+    dat["balance"] = pd.to_numeric(dat["balance"], errors="coerce").fillna(0.0)
+    dat = dat.loc[
+        dat["customer_id"].ne("")
+        & dat["currency_code"].ne("")
+        & dat["balance"].gt(0)
+    ].copy()
+    if dat.empty:
+        return empty_result
+
+    for column in ["date_approved", "maturity_date"]:
+        dat[column] = pd.to_datetime(dat.get(column, pd.Series(pd.NaT, index=dat.index)), errors="coerce")
+    for column in ["Nom_client", "msisdn", "product_name", "account_type"]:
+        if column not in dat.columns:
+            dat[column] = pd.NA
+
+    dat["dat_echu"] = dat["maturity_date"].notna() & dat["maturity_date"].lt(reporting_date)
+    dat["echeance_30j"] = (
+        dat["maturity_date"].notna()
+        & dat["maturity_date"].ge(reporting_date)
+        & dat["maturity_date"].le(reporting_date + pd.Timedelta(days=30))
+    )
+    dat["solde_dat_echu"] = dat["balance"].where(dat["dat_echu"], 0.0)
+    dat["solde_echeance_30j"] = dat["balance"].where(dat["echeance_30j"], 0.0)
+
+    clients = (
+        dat.groupby(["customer_id", "currency_code"], as_index=False, dropna=False)
+        .agg(
+            Nom_client=("Nom_client", concat_unique),
+            telephone=("msisdn", concat_unique),
+            produits_dat=("product_name", concat_unique),
+            types_comptes_dat=("account_type", concat_unique),
+            nb_comptes_dat=("balance", "size"),
+            solde_dat_total=("balance", "sum"),
+            plus_fort_dat=("balance", "max"),
+            solde_dat_echu=("solde_dat_echu", "sum"),
+            solde_echeance_30j=("solde_echeance_30j", "sum"),
+            nb_dat_echus=("dat_echu", "sum"),
+            nb_echeances_30j=("echeance_30j", "sum"),
+            date_premier_dat=("date_approved", "min"),
+            date_dernier_dat=("date_approved", "max"),
+            prochaine_echeance=("maturity_date", "min"),
+        )
+    )
+    clients["rang_devise"] = (
+        clients.groupby("currency_code")["solde_dat_total"]
+        .rank(method="dense", ascending=False)
+        .astype("int64")
+    )
+    clients["total_portefeuille_devise"] = clients.groupby("currency_code")["solde_dat_total"].transform("sum")
+    clients["part_portefeuille_pct"] = (
+        clients["solde_dat_total"]
+        .div(clients["total_portefeuille_devise"].replace(0, pd.NA))
+        .mul(100)
+        .fillna(0.0)
+    )
+    clients["seuil_fort_dat"] = clients.groupby("currency_code")["solde_dat_total"].transform(
+        lambda values: values.quantile(percentile)
+    )
+    clients["est_fort_dat"] = clients["solde_dat_total"].ge(clients["seuil_fort_dat"])
+    clients = clients.sort_values(
+        ["currency_code", "solde_dat_total", "customer_id"],
+        ascending=[True, False, True],
+    ).reset_index(drop=True)
+    clients["part_cumulee_pct"] = clients.groupby("currency_code")["part_portefeuille_pct"].cumsum()
+
+    portefeuille = (
+        clients.groupby("currency_code", as_index=False, dropna=False)
+        .agg(
+            total_dat=("solde_dat_total", "sum"),
+            nb_clients_dat=("customer_id", "nunique"),
+            nb_comptes_dat=("nb_comptes_dat", "sum"),
+            solde_median_client=("solde_dat_total", "median"),
+            seuil_fort_dat=("seuil_fort_dat", "first"),
+            nb_clients_forts=("est_fort_dat", "sum"),
+            solde_dat_echu=("solde_dat_echu", "sum"),
+            solde_echeance_30j=("solde_echeance_30j", "sum"),
+        )
+    )
+    concentration = (
+        clients.loc[clients["est_fort_dat"]]
+        .groupby("currency_code", as_index=False)["solde_dat_total"]
+        .sum()
+        .rename(columns={"solde_dat_total": "total_clients_forts"})
+    )
+    portefeuille = portefeuille.merge(concentration, on="currency_code", how="left")
+    portefeuille["total_clients_forts"] = portefeuille["total_clients_forts"].fillna(0.0)
+    portefeuille["concentration_clients_forts_pct"] = (
+        portefeuille["total_clients_forts"]
+        .div(portefeuille["total_dat"].replace(0, pd.NA))
+        .mul(100)
+        .fillna(0.0)
+    )
+    portefeuille["percentile_fort_dat"] = percentile * 100
+    portefeuille["date_analyse"] = reporting_date
+    return {"clients": clients, "portefeuille": portefeuille}
+
+
 def prepare_loans(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     frame = _normalize_common_columns(dataframe if dataframe is not None else pd.DataFrame())
     if not frame.empty and "outstanding_principal" in frame.columns and "outstanding_principle" not in frame.columns:
@@ -1710,6 +1827,8 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         "Synthese": report.get("synthese", pd.DataFrame()),
         "Extrait_MPESA": report.get("extrait", pd.DataFrame()),
         "DAT_Final": report.get("dat_final", pd.DataFrame()),
+        "Forts_DAT": report.get("forts_dat", pd.DataFrame()),
+        "Portefeuille_DAT": report.get("portefeuille_dat", pd.DataFrame()),
         "Mouvements_DAT": report.get("mouvements_dat", pd.DataFrame()),
         "Mouvements_Epargne": report.get("mouvements_epargne", pd.DataFrame()),
         "Credits": report.get("credits", pd.DataFrame()),

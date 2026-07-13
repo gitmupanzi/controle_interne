@@ -16,6 +16,7 @@ from credit_app.services.mpesa_analysis import (
     TRANSACTION_REQUIRED_COLUMNS,
     MpesaPreparedData,
     build_diagnostics,
+    build_large_dat_summary,
     build_g2_daily_savings_report,
     build_g2_entry_report,
     build_g2_dat_crosscheck,
@@ -40,6 +41,7 @@ from credit_app.ui import (
     render_summary_box,
     st_plot,
     style_standard_donut,
+    style_standard_horizontal_bar,
     style_standard_line,
     style_standard_vertical_bar,
 )
@@ -512,7 +514,127 @@ def _render_overview(prepared: MpesaPreparedData) -> None:
         st_plot(fig, key="mpesa_overview_daily", height=360)
 
 
+def _render_large_dat_summary(prepared: MpesaPreparedData) -> None:
+    if prepared.fixed_savings.empty:
+        return
+
+    render_panel_title("Synthese des clients avec de forts DAT")
+    percentile = st.slider(
+        "Seuil des forts DAT (percentile, calcule separement par devise)",
+        min_value=50,
+        max_value=99,
+        value=90,
+        step=1,
+        key="mpesa_large_dat_percentile",
+        help="90 signifie que les clients dont le DAT total se situe dans les 10 % les plus eleves de leur devise sont retenus.",
+    )
+    summary = build_large_dat_summary(prepared.fixed_savings, percentile=percentile / 100)
+    clients = summary["clients"]
+    portefeuille = summary["portefeuille"]
+    if clients.empty or portefeuille.empty:
+        st.info("Aucun DAT positif exploitable pour construire la synthese.")
+        return
+
+    render_summary_box(
+        "Lecture",
+        [
+            "Le seuil est calcule sur le DAT total par client, independamment pour chaque devise.",
+            "Le nom client provient de G2 lorsqu'il est disponible; le customer_id et le telephone restent affiches pour le controle.",
+            "Les DAT echus et les echeances dans les 30 prochains jours permettent de prioriser le suivi.",
+        ],
+    )
+
+    display_columns = [
+        "rang_devise",
+        "customer_id",
+        "Nom_client",
+        "telephone",
+        "currency_code",
+        "nb_comptes_dat",
+        "solde_dat_total",
+        "plus_fort_dat",
+        "part_portefeuille_pct",
+        "part_cumulee_pct",
+        "produits_dat",
+        "date_premier_dat",
+        "date_dernier_dat",
+        "prochaine_echeance",
+        "nb_dat_echus",
+        "solde_dat_echu",
+        "nb_echeances_30j",
+        "solde_echeance_30j",
+    ]
+
+    for currency in portefeuille["currency_code"].astype(str).tolist():
+        portfolio_row = portefeuille.loc[portefeuille["currency_code"].astype(str).eq(currency)].iloc[0]
+        currency_clients = clients.loc[clients["currency_code"].astype(str).eq(currency)].copy()
+        strong_clients = currency_clients.loc[currency_clients["est_fort_dat"]].copy()
+        render_panel_title(f"Forts DAT - {currency}")
+        render_kpi_cards(
+            [
+                ("DAT total", _format_amount(portfolio_row["total_dat"]), f"Devise {currency}", "navy"),
+                ("Clients DAT", _format_count(portfolio_row["nb_clients_dat"]), "Clients avec solde positif", "blue"),
+                ("Seuil fort DAT", _format_amount(portfolio_row["seuil_fort_dat"]), f"Percentile {percentile}", "orange"),
+                ("Clients forts", _format_count(portfolio_row["nb_clients_forts"]), "Au-dessus du seuil", "green"),
+                (
+                    "Concentration",
+                    f"{float(portfolio_row['concentration_clients_forts_pct']):.1f} %",
+                    "Part du DAT detenue par ces clients",
+                    "navy",
+                ),
+                (
+                    "Echeance sous 30 j",
+                    _format_amount(portfolio_row["solde_echeance_30j"]),
+                    f"Devise {currency}",
+                    "orange",
+                ),
+            ]
+        )
+
+        chart_data = strong_clients.head(15).copy()
+        if not chart_data.empty:
+            chart_data["client"] = chart_data["Nom_client"].astype("string").fillna("").str.strip()
+            chart_data["client"] = chart_data["client"].where(chart_data["client"].ne(""), chart_data["customer_id"])
+            chart_data["client"] = chart_data["client"] + " | " + chart_data["customer_id"].astype(str)
+            chart_data = chart_data.sort_values("solde_dat_total", ascending=True)
+            fig = px.bar(
+                chart_data,
+                x="solde_dat_total",
+                y="client",
+                orientation="h",
+                color_discrete_sequence=["#1f77b4"],
+                labels={"solde_dat_total": f"DAT total ({currency})", "client": "Client"},
+                hover_data=["nb_comptes_dat", "part_portefeuille_pct", "prochaine_echeance"],
+            )
+            style_standard_horizontal_bar(fig, height=max(340, 34 * len(chart_data)))
+            st_plot(fig, key=f"mpesa_large_dat_{currency}", height=max(340, 34 * len(chart_data)))
+
+    combined_strong_clients = (
+        clients.loc[clients["est_fort_dat"]]
+        .sort_values(["currency_code", "rang_devise", "customer_id"])
+        .reset_index(drop=True)
+    )
+    render_panel_title("Tableau fusionne des forts DAT - CDF et USD")
+    combined_view = _apply_local_multiselect_filters(
+        combined_strong_clients,
+        ["currency_code", "produits_dat", "Nom_client", "customer_id"],
+        key_prefix="mpesa_large_dat_combined_filter",
+    )
+    st.caption(f"{len(combined_view)} client(s) affiche(s), toutes devises confondues sans addition des montants.")
+    st.dataframe(combined_view[display_columns], width="stretch", hide_index=True)
+
+    export_bytes = create_excel_export({"forts_dat": combined_strong_clients, "portefeuille_dat": portefeuille})
+    st.download_button(
+        "Telecharger la synthese des forts DAT",
+        data=export_bytes,
+        file_name="synthese_clients_forts_dat.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        width="stretch",
+    )
+
+
 def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) -> None:
+    _render_large_dat_summary(prepared)
     if report is not None:
         render_panel_title("DAT final du client")
         dat_view = _apply_local_multiselect_filters(
