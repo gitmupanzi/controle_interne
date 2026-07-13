@@ -346,7 +346,7 @@ Les fichiers sont chargés directement dans l’onglet :
 - `Transactions M-PESA`
   Fichier interne des mouvements M-PESA, utile quand il contient notamment `customer_id`, `msisdn1`, `account_type`, `ref_no`, `dr`, `cr`, `bal_before`, `bal_after`, `created_at`.
 - `Transactions G2`
-  Fichier des transactions G2 du jour, avec `Receipt No`, `Completion Time`, `Opposite Party`, `Transaction Status`, `Currency`, `Transaction Amount`, `Balance`.
+  Fichier des transactions G2 du jour, avec `Receipt No`, `Completion Time`, `Opposite Party`, `Transaction Status`, `Currency`, `Details`, `Reason Type` et `Balance`. Le montant peut être fourni dans `Transaction Amount` ou éclaté dans `Paid In` et `Withdrawn`.
 - `Comptes d’épargne courante`
   Fichier Turbo des comptes courants, avec `customer_id`, `msisdn`, `currency_code`, `created_at`, `updated_at`.
 - `Comptes DAT / épargne bloquée`
@@ -355,6 +355,8 @@ Les fichiers sont chargés directement dans l’onglet :
   Fichier client Turbo, avec `msisdn1` et `created_at`. Il sert à retrouver la date de création du compte à partir du numéro de téléphone.
 - `Crédits`
   Fichier facultatif pour enrichir l’extrait client et les diagnostics.
+- `Clients Perfect (export 122)`
+  Fichier facultatif de contrôle téléphonique avec `Phone_Prefixe`, les identifiants et le nom du client Perfect.
 
 ### Règles de rapprochement
 
@@ -367,16 +369,31 @@ L’application normalise les numéros de téléphone au format `243...`, puis c
 - Si aucune date d’épargne courante n’est disponible, l’application utilise la date DAT (`created_at` ou `date_approved`) comme repli.
 - Les lignes DAT sont identifiées à partir du téléphone, de la devise, du jour et du montant DAT.
 - Les autres lignes restent en `Depot normal`, sauf signal particulier classé en `Remboursement prets`.
+- `Paid In` non nul classe le flux en `Entree`; `Withdrawn` non nul le classe en `Sortie`.
+- Les sorties `BisouBisouB2C` sont classées en `Paiement client B2C` et `BisouBisouLoanRequest` en `Demande de credit`.
+- `Super Transaction` est classé en `Operation interne Bisou`; son sens reste déterminé par `Paid In` ou `Withdrawn`.
+- Une sortie n'est jamais utilisée comme candidate au rapprochement DAT.
+- `Phone_Prefixe` rapproche les clients M-PESA avec Perfect. Un numéro partagé par plusieurs fiches est signalé et agrégé avant la jointure afin de ne pas multiplier les opérations.
 
 ### Restitutions disponibles
 
 Le sous-onglet `G2 / DAT` produit :
 
+- un filtre combiné sur `Completion Time` et le sens : entrées, sorties ou tous les flux
+- une synthèse des entrées, sorties, volumes et soldes nets par devise
+- une ventilation par type d'opération incluant les paiements B2C et demandes de crédit
 - une synthèse verticale des encaissements G2 dans un seul tableau :
   `Devise`, `Synthese sur le Portail BB Digital`, `Montant`
 - un détail unique des encaissements G2 avec `currency_code`, au lieu de tableaux séparés CDF et USD
 - un rapprochement global G2 / DAT
 - un export Excel du rapport journalier
+
+Le sous-onglet `Perferct_client` produit :
+
+- une ligne de synthèse par téléphone M-PESA observé dans Turbo ou G2
+- les statuts `correspondance unique`, `plusieurs clients`, `non trouvé` et `téléphone inexploitable`
+- le détail des opérations observées dans Turbo/G2, avec leur source et leur devise
+- un export Excel séparant la synthèse client du détail des opérations
 
 Exemple de synthèse attendue :
 
@@ -405,6 +422,8 @@ Les exports Excel du module peuvent contenir :
 - `Rapport_Journalier_Vertical`
 - `Rapport_Journalier_Synthese`
 - `Rapport_Journalier_Detail`
+- `Perfect_Clients`
+- `Perfect_Operations`
 - `Diagnostics`
 
 ## Cycle Suivi clients CRM

@@ -15,16 +15,19 @@ from credit_app.services.mpesa_analysis import (
     build_load_report,
     build_savings_final,
     build_mpesa_statement,
+    build_perfect_client_crosscheck,
     create_excel_export,
     enrich_transactions_with_g2_customer_names,
     enrich_turbo_with_g2_customer_names,
     filter_g2_transactions_by_completion_time,
+    filter_g2_transactions_by_direction,
     numeric_column,
     prepare_current_savings,
     prepare_customers,
     prepare_fixed_savings,
     prepare_g2_transactions,
     prepare_loans,
+    prepare_perfect_clients,
     prepare_transactions,
     search_customers,
     validate_required_columns,
@@ -179,6 +182,25 @@ class MpesaAnalysisTests(unittest.TestCase):
 
         self.assertEqual(result["receipt_no"].tolist(), ["D2", "D3"])
 
+    def test_filter_g2_direction_supports_entries_outputs_and_both(self) -> None:
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {"Receipt No.": "IN", "Currency": "CDF", "Paid In": 100, "Opposite Party": "0811111111 - A"},
+                    {"Receipt No.": "OUT", "Currency": "CDF", "Withdrawn": -50, "Opposite Party": "0822222222 - B"},
+                    {"Receipt No.": "CHECK", "Currency": "CDF", "Opposite Party": "0833333333 - C"},
+                ]
+            )
+        )
+
+        entries = filter_g2_transactions_by_direction(g2, "Entrees")
+        outputs = filter_g2_transactions_by_direction(g2, "Sorties")
+        both = filter_g2_transactions_by_direction(g2, None)
+
+        self.assertEqual(entries["receipt_no"].tolist(), ["IN"])
+        self.assertEqual(outputs["receipt_no"].tolist(), ["OUT"])
+        self.assertEqual(set(both["receipt_no"]), {"IN", "OUT", "CHECK"})
+
     def test_prepare_g2_transactions_accepts_paid_in_and_withdrawn_format(self) -> None:
         raw = pd.DataFrame(
             [
@@ -229,9 +251,109 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(result.loc["ORG-REPAY", "transaction_amount_source"], "Paid In")
         self.assertEqual(float(result.loc["ORG-OUT", "transaction_amount_numeric"]), -500.0)
         self.assertEqual(result.loc["ORG-OUT", "transaction_amount_source"], "Withdrawn")
+        self.assertEqual(result.loc["ORG-IN", "sens_flux"], "Entree")
+        self.assertEqual(result.loc["ORG-OUT", "sens_flux"], "Sortie")
+        self.assertEqual(float(result.loc["ORG-IN", "montant_entree"]), 1000.0)
+        self.assertEqual(float(result.loc["ORG-OUT", "montant_sortie"]), 500.0)
+        self.assertEqual(result.loc["ORG-OUT", "type_operation_g2"], "Operation interne Bisou")
         self.assertEqual(float(result.loc["ORG-OUT", "balance_numeric"]), 4750.0)
         self.assertEqual(result.loc["ORG-IN", "completion_time"], pd.Timestamp("2026-07-11 12:47:24"))
         self.assertEqual(result.loc["ORG-IN", "Nom_client"], "CLIENT DEPOT")
+
+    def test_g2_report_classifies_b2c_and_loan_request_as_outflows(self) -> None:
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "Receipt No.": "ENTRY",
+                        "Completion Time": "13-07-2026 08:00:00",
+                        "Details": "BisouBisouC2B",
+                        "Reason Type": "BisouBisouC2B",
+                        "Currency": "CDF",
+                        "Paid In": 1000,
+                        "Opposite Party": "0811111111 - CLIENT ENTREE",
+                    },
+                    {
+                        "Receipt No.": "REPAY",
+                        "Completion Time": "13-07-2026 08:10:00",
+                        "Details": "BisouBisouC2BRepayment",
+                        "Reason Type": "BisouBisouC2BRepayment",
+                        "Currency": "CDF",
+                        "Paid In": 250,
+                        "Opposite Party": "0811111111 - CLIENT ENTREE",
+                    },
+                    {
+                        "Receipt No.": "B2C",
+                        "Completion Time": "13-07-2026 08:20:00",
+                        "Details": "Bisou Bisou B2C payment to client",
+                        "Reason Type": "BisouBisouB2C",
+                        "Currency": "CDF",
+                        "Withdrawn": -400,
+                        "Opposite Party": "0822222222 - CLIENT SORTIE",
+                    },
+                    {
+                        "Receipt No.": "LOAN",
+                        "Completion Time": "13-07-2026 08:30:00",
+                        "Details": "Bisou Bisou Loan Request payment",
+                        "Reason Type": "BisouBisouLoanRequest",
+                        "Currency": "CDF",
+                        "Withdrawn": -1500,
+                        "Opposite Party": "0833333333 - CLIENT CREDIT",
+                    },
+                    {
+                        "Receipt No.": "SUPER",
+                        "Completion Time": "13-07-2026 08:40:00",
+                        "Details": "Super Transaction",
+                        "Reason Type": "Super Transaction",
+                        "Currency": "CDF",
+                        "Withdrawn": -100,
+                        "Opposite Party": "15558 - IMF BISOU",
+                    },
+                ]
+            )
+        )
+        fixed = prepare_fixed_savings(
+            pd.DataFrame(
+                [
+                    {
+                        "customer_id": "3003",
+                        "msisdn": "0833333333",
+                        "product_name": "1 Month",
+                        "account_type": "FIXED SAVINGS",
+                        "balance": 1500,
+                        "currency_code": "CDF",
+                        "date_approved": "2026-07-13 08:30:00",
+                        "maturity_date": "2026-08-13",
+                    }
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(),
+            fixed_savings=fixed,
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+            g2_transactions=g2,
+        )
+
+        report = build_g2_daily_savings_report(prepared)
+        detail = report["detail"].set_index("receipt_no")
+        pivot = report["pivot"].set_index("currency_code")
+
+        self.assertEqual(detail.loc["ENTRY", "sens_flux"], "Entree")
+        self.assertEqual(detail.loc["ENTRY", "details_rapport"], "Depot normal")
+        self.assertEqual(detail.loc["REPAY", "details_rapport"], "Remboursement prets")
+        self.assertEqual(detail.loc["B2C", "sens_flux"], "Sortie")
+        self.assertEqual(detail.loc["B2C", "details_rapport"], "Paiement client B2C")
+        self.assertEqual(detail.loc["LOAN", "details_rapport"], "Demande de credit")
+        self.assertTrue(pd.isna(detail.loc["LOAN", "dat_customer_id"]))
+        self.assertEqual(detail.loc["SUPER", "details_rapport"], "Operation interne Bisou")
+        self.assertEqual(int(pivot.loc["CDF", "nombre_entrees"]), 2)
+        self.assertEqual(int(pivot.loc["CDF", "nombre_sorties"]), 3)
+        self.assertEqual(float(pivot.loc["CDF", "montant_Demande de credit"]), 1500.0)
+        self.assertEqual(float(pivot.loc["CDF", "montant_total_sorties"]), 2000.0)
+        self.assertEqual(float(pivot.loc["CDF", "solde_net_flux"]), -750.0)
 
     def test_large_dat_summary_ranks_clients_by_currency_without_mixing_totals(self) -> None:
         fixed = prepare_fixed_savings(
@@ -381,6 +503,89 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(report["mouvements_dat"].iloc[0]["Nom_client"], "CLIENT TEST")
         self.assertIn("CLIENT TEST", matches["Nom_client"].dropna().tolist())
         self.assertEqual(matches_by_name["customer_id"].dropna().unique().tolist(), ["1001"])
+
+    def test_prepare_perfect_clients_normalizes_only_valid_phone_keys(self) -> None:
+        result = prepare_perfect_clients(
+            pd.DataFrame(
+                [
+                    {"id_client": 1.0, "Phone_Prefixe": "0812345678", "nom_complet": "CLIENT VALIDE"},
+                    {"id_client": 2.0, "Phone_Prefixe": "A VERIFIER", "nom_complet": "CLIENT INVALIDE"},
+                    {"id_client": 3.0, "Phone_Prefixe": "243701234567", "nom_complet": "PREFIXE INVALIDE"},
+                ]
+            )
+        )
+
+        self.assertEqual(result.loc[0, "phone_prefixe"], "243812345678")
+        self.assertTrue(pd.isna(result.loc[1, "phone_prefixe"]))
+        self.assertTrue(pd.isna(result.loc[2, "phone_prefixe"]))
+        self.assertEqual(result.loc[1, "phone_prefixe_source"], "A VERIFIER")
+        self.assertEqual(result.loc[0, "id_client"], "1")
+
+    def test_perfect_crosscheck_aggregates_shared_phone_without_multiplying_operations(self) -> None:
+        prepared = _sample_prepared_data()
+        perfect = prepare_perfect_clients(
+            pd.DataFrame(
+                [
+                    {
+                        "id_client": 10,
+                        "code_client": "P001",
+                        "nom_complet": "NOM PERFECT A",
+                        "Phone_Prefixe": "243812345678",
+                        "Statut_phone": "OK",
+                    },
+                    {
+                        "id_client": 11,
+                        "code_client": "P002",
+                        "nom_complet": "NOM PERFECT B",
+                        "Phone_Prefixe": "0812345678",
+                        "Statut_phone": "OK",
+                    },
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=prepared.transactions,
+            current_savings=prepared.current_savings,
+            fixed_savings=prepared.fixed_savings,
+            loans=prepared.loans,
+            load_report=prepared.load_report,
+            perfect_clients=perfect,
+        )
+
+        report = build_perfect_client_crosscheck(prepared)
+        summary = report["synthese"]
+        operations = report["operations"]
+
+        self.assertEqual(len(summary), 1)
+        self.assertEqual(int(summary.loc[0, "nb_clients_perfect"]), 2)
+        self.assertEqual(
+            summary.loc[0, "statut_rapprochement_perfect"],
+            "Trouve dans Perfect - plusieurs clients",
+        )
+        self.assertEqual(summary.loc[0, "noms_clients_perfect"], "NOM PERFECT A | NOM PERFECT B")
+        self.assertEqual(len(operations), int(summary.loc[0, "nombre_operations_turbo"]))
+        self.assertTrue(operations["nb_clients_perfect"].eq(2).all())
+        self.assertTrue(operations["noms_clients_perfect"].eq("NOM PERFECT A | NOM PERFECT B").all())
+
+    def test_perfect_crosscheck_keeps_unmatched_mpesa_client(self) -> None:
+        prepared = _sample_prepared_data()
+        perfect = prepare_perfect_clients(
+            pd.DataFrame([{"id_client": 10, "Phone_Prefixe": "243999999999", "nom_complet": "AUTRE CLIENT"}])
+        )
+        prepared = MpesaPreparedData(
+            transactions=prepared.transactions,
+            current_savings=prepared.current_savings,
+            fixed_savings=prepared.fixed_savings,
+            loans=prepared.loans,
+            load_report=prepared.load_report,
+            perfect_clients=perfect,
+        )
+
+        summary = build_perfect_client_crosscheck(prepared)["synthese"]
+
+        self.assertEqual(len(summary), 1)
+        self.assertEqual(int(summary.loc[0, "nb_clients_perfect"]), 0)
+        self.assertEqual(summary.loc[0, "statut_rapprochement_perfect"], "Non trouve dans Perfect")
 
     def test_validate_required_columns_detects_missing_values(self) -> None:
         missing = validate_required_columns(pd.DataFrame({"id": [1]}), TRANSACTION_REQUIRED_COLUMNS, "Transactions")

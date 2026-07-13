@@ -17,6 +17,7 @@ from credit_app.data_schema import (
     G2_TRANSACTIONS_SCHEMA,
     LOANS_SCHEMA,
     MPESA_TRANSACTIONS_SCHEMA,
+    PERFECT_CLIENTS_SCHEMA,
     DataSchema,
     validate_dataframe_schema,
 )
@@ -27,6 +28,7 @@ CURRENT_SAVINGS_REQUIRED_COLUMNS = set(CURRENT_SAVINGS_SCHEMA.required)
 FIXED_SAVINGS_REQUIRED_COLUMNS = set(FIXED_SAVINGS_SCHEMA.required)
 G2_TRANSACTION_REQUIRED_COLUMNS = set(G2_TRANSACTIONS_SCHEMA.required)
 CUSTOMERS_REQUIRED_COLUMNS = set(CUSTOMERS_SCHEMA.required)
+PERFECT_CLIENTS_REQUIRED_COLUMNS = set(PERFECT_CLIENTS_SCHEMA.required)
 
 LOAN_USEFUL_COLUMNS = {
     "loan_id",
@@ -92,6 +94,18 @@ KNOWN_ACCOUNT_TYPES = {
     "FIXED SAVINGS",
 }
 
+G2_OPERATION_CATEGORIES = [
+    "DAT",
+    "Depot normal",
+    "Remboursement prets",
+    "Paiement client B2C",
+    "Demande de credit",
+    "Operation interne Bisou",
+    "Autre entree",
+    "Autre sortie",
+    "Flux a verifier",
+]
+
 
 @dataclass(frozen=True)
 class MpesaPreparedData:
@@ -102,6 +116,7 @@ class MpesaPreparedData:
     load_report: pd.DataFrame
     g2_transactions: pd.DataFrame = field(default_factory=pd.DataFrame)
     customers: pd.DataFrame = field(default_factory=pd.DataFrame)
+    perfect_clients: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def _is_empty_text(value: Any) -> bool:
@@ -116,6 +131,32 @@ def normalize_label(value: Any) -> str:
     text = "".join(char for char in text if not unicodedata.combining(char))
     text = re.sub(r"\s+", " ", text).strip().lower()
     return text
+
+
+def classify_g2_business_operation(row: pd.Series, *, dat_matched: bool = False) -> str:
+    """Classe une transaction G2 apres determination independante de son sens."""
+    direction = normalize_label(row.get("sens_flux", ""))
+    details = normalize_label(row.get("details", ""))
+    reason_type = normalize_label(row.get("reason_type", ""))
+    text = f"{reason_type} {details}"
+
+    if "super transaction" in text or "supertransaction" in text:
+        return "Operation interne Bisou"
+    if direction not in {"entree", "sortie"}:
+        return "Flux a verifier"
+    if direction == "sortie":
+        if any(token in text for token in ["bisoubisouloanrequest", "loan request", "loan payment", "loan payement"]):
+            return "Demande de credit"
+        if "bisoubisoub2c" in text or "b2c payment" in text:
+            return "Paiement client B2C"
+        return "Autre sortie"
+    if "bisoubisouc2brepayment" in text or "bisoubisourepayment" in text or "repayment" in text:
+        return "Remboursement prets"
+    if dat_matched:
+        return "DAT"
+    if "bisoubisouc2b" in text or direction == "entree":
+        return "Depot normal"
+    return "Autre entree"
 
 
 def clean_identifier(series: pd.Series) -> pd.Series:
@@ -215,6 +256,7 @@ def validate_required_columns(
         G2_TRANSACTIONS_SCHEMA,
         CUSTOMERS_SCHEMA,
         LOANS_SCHEMA,
+        PERFECT_CLIENTS_SCHEMA,
     )
     matching_schema = next(
         (candidate for candidate in known_schemas if set(candidate.required) == set(required_columns)),
@@ -419,6 +461,383 @@ def prepare_customers(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     return frame
 
 
+def prepare_perfect_clients(dataframe: pd.DataFrame | None) -> pd.DataFrame:
+    """Prepare l'export 122 Perfect sans transformer les numeros invalides en cles de jointure."""
+    frame = remove_export_index_columns(dataframe if dataframe is not None else pd.DataFrame())
+    if frame.empty:
+        return frame
+
+    frame = frame.rename(columns={column: _normalize_business_column_key(column) for column in frame.columns}).copy()
+    for column in ["id_client", "code_client", "num_manuel"]:
+        if column in frame.columns:
+            frame[column] = clean_identifier(frame[column])
+    for column in [
+        "nom_complet",
+        "phone_brut",
+        "phone_prefixe",
+        "statut_phone",
+        "commentaire_phone",
+        "type_client",
+        "categorie_client",
+        "gestionnaire",
+        "collecteur",
+    ]:
+        if column in frame.columns:
+            frame[column] = clean_text(frame[column])
+
+    source_phone = frame.get("phone_prefixe", pd.Series(pd.NA, index=frame.index, dtype="string"))
+    frame["phone_prefixe_source"] = source_phone
+    normalized_phone = normalize_phone(source_phone)
+    valid_phone = normalized_phone.astype("string").str.fullmatch(r"243[89]\d{8}", na=False)
+    frame["phone_prefixe"] = normalized_phone.where(valid_phone, pd.NA)
+    frame["source_perfect"] = "Perfect"
+    return frame.reset_index(drop=True)
+
+
+def _mpesa_identity_source(
+    dataframe: pd.DataFrame | None,
+    *,
+    source: str,
+    system: str,
+    phone_column: str,
+    customer_column: str | None = "customer_id",
+    name_column: str = "Nom_client",
+) -> pd.DataFrame:
+    if not isinstance(dataframe, pd.DataFrame) or dataframe.empty:
+        return pd.DataFrame()
+    frame = dataframe.copy()
+    phone_values = frame.get(phone_column, pd.Series(pd.NA, index=frame.index, dtype="string"))
+    result = pd.DataFrame(index=frame.index)
+    result["phone_prefixe"] = normalize_phone(phone_values)
+    valid_phone = result["phone_prefixe"].astype("string").str.fullmatch(r"243[89]\d{8}", na=False)
+    result["phone_prefixe"] = result["phone_prefixe"].where(valid_phone, pd.NA)
+    result["customer_id_turbo"] = (
+        clean_identifier(frame[customer_column])
+        if customer_column and customer_column in frame.columns
+        else ""
+    )
+    result["nom_client_mpesa"] = (
+        clean_text(frame[name_column]) if name_column in frame.columns else ""
+    )
+    result["source_mpesa"] = source
+    result["systeme_mpesa"] = system
+    fallback = (
+        result["customer_id_turbo"].where(result["customer_id_turbo"].ne(""), frame.index.astype("string"))
+    )
+    result["cle_rapprochement"] = result["phone_prefixe"].astype("string")
+    no_phone = result["phone_prefixe"].isna()
+    result.loc[no_phone, "cle_rapprochement"] = (
+        "SANS-TELEPHONE::" + system + "::" + fallback.loc[no_phone].astype("string")
+    )
+    return result.reset_index(drop=True)
+
+
+def _build_mpesa_identity_population(prepared: MpesaPreparedData) -> pd.DataFrame:
+    frames = [
+        _mpesa_identity_source(prepared.transactions, source="Turbo - Transactions", system="Turbo", phone_column="msisdn1"),
+        _mpesa_identity_source(prepared.customers, source="Turbo - Clients", system="Turbo", phone_column="msisdn1"),
+        _mpesa_identity_source(prepared.current_savings, source="Turbo - Epargne courante", system="Turbo", phone_column="msisdn"),
+        _mpesa_identity_source(prepared.fixed_savings, source="Turbo - DAT", system="Turbo", phone_column="msisdn"),
+        _mpesa_identity_source(prepared.loans, source="Turbo - Credits", system="Turbo", phone_column="msisdn1"),
+        _mpesa_identity_source(
+            prepared.g2_transactions,
+            source="G2 - Transactions",
+            system="G2",
+            phone_column="phone_prefixe",
+            customer_column=None,
+        ),
+    ]
+    population = concat_frames_stable(frames)
+    if population.empty:
+        return pd.DataFrame()
+    output_columns = [
+        "cle_rapprochement", "phone_prefixe", "customer_ids_turbo", "noms_clients_mpesa",
+        "systemes_mpesa", "sources_mpesa", "nb_lignes_sources_mpesa",
+    ]
+    key_counts = population.groupby("cle_rapprochement", dropna=False)["cle_rapprochement"].transform("size")
+    unique_rows = population.loc[
+        key_counts.eq(1),
+        ["cle_rapprochement", "phone_prefixe", "customer_id_turbo", "nom_client_mpesa", "systeme_mpesa", "source_mpesa"],
+    ].rename(
+        columns={
+            "customer_id_turbo": "customer_ids_turbo",
+            "nom_client_mpesa": "noms_clients_mpesa",
+            "systeme_mpesa": "systemes_mpesa",
+            "source_mpesa": "sources_mpesa",
+        }
+    )
+    unique_rows["nb_lignes_sources_mpesa"] = 1
+
+    duplicates = population.loc[key_counts.gt(1)].copy()
+    if duplicates.empty:
+        return unique_rows[output_columns].reset_index(drop=True)
+    duplicate_summary = (
+        duplicates.groupby("cle_rapprochement", as_index=False, dropna=False)
+        .agg(
+            phone_prefixe=("phone_prefixe", first_non_empty),
+            customer_ids_turbo=("customer_id_turbo", concat_unique),
+            noms_clients_mpesa=("nom_client_mpesa", concat_unique),
+            systemes_mpesa=("systeme_mpesa", concat_unique),
+            sources_mpesa=("source_mpesa", concat_unique),
+            nb_lignes_sources_mpesa=("source_mpesa", "size"),
+        )
+    )
+    return concat_frames_stable([unique_rows[output_columns], duplicate_summary[output_columns]]).reset_index(drop=True)
+
+
+def _build_mpesa_operation_detail(prepared: MpesaPreparedData) -> pd.DataFrame:
+    blocks: list[pd.DataFrame] = []
+    transactions = prepared.transactions
+    if isinstance(transactions, pd.DataFrame) and not transactions.empty:
+        turbo = transactions.copy()
+        if "account_type" in turbo.columns and turbo["account_type"].astype("string").eq("MPESA ACCOUNT").any():
+            turbo = turbo.loc[turbo["account_type"].astype("string").eq("MPESA ACCOUNT")].copy()
+        turbo["phone_prefixe"] = normalize_phone(turbo.get("msisdn1", pd.Series(pd.NA, index=turbo.index)))
+        valid_phone = turbo["phone_prefixe"].astype("string").str.fullmatch(r"243[89]\d{8}", na=False)
+        turbo["phone_prefixe"] = turbo["phone_prefixe"].where(valid_phone, pd.NA)
+        turbo["customer_id_turbo"] = clean_identifier(
+            turbo.get("customer_id", pd.Series("", index=turbo.index))
+        )
+        turbo["nom_client_mpesa"] = clean_text(
+            turbo.get("Nom_client", pd.Series("", index=turbo.index))
+        )
+        turbo["date_operation"] = pd.to_datetime(turbo.get("created_at"), errors="coerce")
+        turbo["operation_reference"] = clean_identifier(
+            turbo.get("ref_no", pd.Series("", index=turbo.index))
+        )
+        fallback_reference = clean_identifier(
+            turbo.get("reference_id", pd.Series("", index=turbo.index))
+        )
+        turbo["operation_reference"] = turbo["operation_reference"].where(
+            turbo["operation_reference"].ne(""), fallback_reference
+        )
+        missing_reference = turbo["operation_reference"].eq("")
+        turbo.loc[missing_reference, "operation_reference"] = (
+            "TURBO-LIGNE-" + turbo.index[missing_reference].astype("string")
+        )
+        turbo["currency_code"] = clean_text(
+            turbo.get("currency_code", pd.Series("", index=turbo.index))
+        ).str.upper()
+        turbo["entree_mpesa"] = numeric_column(turbo, "cr")
+        turbo["sortie_mpesa"] = numeric_column(turbo, "dr")
+        turbo["mouvement_net_mpesa"] = turbo["entree_mpesa"] - turbo["sortie_mpesa"]
+        turbo["description_operation"] = clean_text(
+            turbo.get("description", pd.Series("", index=turbo.index))
+        )
+        turbo["type_compte"] = clean_text(
+            turbo.get("account_type", pd.Series("", index=turbo.index))
+        )
+        turbo["source_operation"] = "Turbo"
+        turbo["statut_operation"] = ""
+        group_keys = [
+            "phone_prefixe", "customer_id_turbo", "nom_client_mpesa", "date_operation",
+            "operation_reference", "currency_code", "source_operation", "statut_operation",
+        ]
+        turbo_detail = (
+            turbo.groupby(group_keys, as_index=False, dropna=False)
+            .agg(
+                description_operation=("description_operation", concat_unique),
+                type_compte=("type_compte", concat_unique),
+                entree_mpesa=("entree_mpesa", "sum"),
+                sortie_mpesa=("sortie_mpesa", "sum"),
+                mouvement_net_mpesa=("mouvement_net_mpesa", "sum"),
+                nb_lignes_source=("operation_reference", "size"),
+            )
+        )
+        turbo_detail["montant_operation"] = turbo_detail["mouvement_net_mpesa"].abs()
+        turbo_detail["sens_operation"] = np.select(
+            [turbo_detail["mouvement_net_mpesa"].gt(0), turbo_detail["mouvement_net_mpesa"].lt(0)],
+            ["Entree M-PESA", "Sortie M-PESA"],
+            default="Mouvement nul",
+        )
+        turbo_detail["type_operation"] = turbo_detail.apply(
+            lambda row: classify_mpesa_operation(
+                row["description_operation"], row["type_compte"], row["mouvement_net_mpesa"]
+            ),
+            axis=1,
+        )
+        blocks.append(turbo_detail)
+
+    if isinstance(prepared.g2_transactions, pd.DataFrame) and not prepared.g2_transactions.empty:
+        g2_report = build_g2_daily_savings_report(prepared).get("detail", pd.DataFrame())
+        if not g2_report.empty:
+            g2 = g2_report.copy()
+            g2["phone_prefixe"] = normalize_phone(g2.get("phone_prefixe", pd.Series(pd.NA, index=g2.index)))
+            valid_phone = g2["phone_prefixe"].astype("string").str.fullmatch(r"243[89]\d{8}", na=False)
+            g2["phone_prefixe"] = g2["phone_prefixe"].where(valid_phone, pd.NA)
+            g2["customer_id_turbo"] = ""
+            g2["nom_client_mpesa"] = clean_text(g2.get("Nom_client", pd.Series("", index=g2.index)))
+            g2["date_operation"] = pd.to_datetime(g2.get("date"), errors="coerce")
+            g2["operation_reference"] = clean_identifier(g2.get("receipt_no", pd.Series("", index=g2.index)))
+            g2["currency_code"] = clean_text(g2.get("currency_code", pd.Series("", index=g2.index))).str.upper()
+            g2["type_operation"] = clean_text(g2.get("details_rapport", pd.Series("", index=g2.index)))
+            g2["description_operation"] = g2["type_operation"]
+            g2["type_compte"] = "G2"
+            g2["montant_operation"] = numeric_column(g2, "montant").abs()
+            g2["entree_mpesa"] = np.nan
+            g2["sortie_mpesa"] = np.nan
+            g2["mouvement_net_mpesa"] = np.nan
+            g2["sens_operation"] = clean_text(
+                g2.get("sens_flux", pd.Series("Indetermine", index=g2.index))
+            ).map({"Entree": "Entree G2", "Sortie": "Sortie G2"}).fillna("Flux G2 a verifier")
+            g2["source_operation"] = "G2"
+            g2["statut_operation"] = clean_text(
+                g2.get("transaction_status", pd.Series("", index=g2.index))
+            )
+            g2["nb_lignes_source"] = 1
+            blocks.append(
+                g2[[
+                    "phone_prefixe", "customer_id_turbo", "nom_client_mpesa", "date_operation",
+                    "operation_reference", "currency_code", "type_operation", "description_operation",
+                    "type_compte", "montant_operation", "entree_mpesa", "sortie_mpesa",
+                    "mouvement_net_mpesa", "sens_operation", "source_operation",
+                    "statut_operation", "nb_lignes_source",
+                ]]
+            )
+
+    detail = concat_frames_stable(blocks)
+    if detail.empty:
+        return detail
+    detail["cle_rapprochement"] = detail["phone_prefixe"].astype("string")
+    no_phone = detail["phone_prefixe"].isna()
+    fallback = detail["customer_id_turbo"].astype("string").where(
+        detail["customer_id_turbo"].astype("string").ne(""), detail.index.astype("string")
+    )
+    detail.loc[no_phone, "cle_rapprochement"] = (
+        "SANS-TELEPHONE::" + detail.loc[no_phone, "source_operation"].astype("string") + "::" + fallback.loc[no_phone]
+    )
+    return detail.sort_values(["date_operation", "source_operation"], na_position="last").reset_index(drop=True)
+
+
+def _aggregate_perfect_clients(perfect_clients: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(perfect_clients, pd.DataFrame) or perfect_clients.empty or "phone_prefixe" not in perfect_clients.columns:
+        return pd.DataFrame()
+    perfect = perfect_clients.dropna(subset=["phone_prefixe"]).copy()
+    if perfect.empty:
+        return pd.DataFrame()
+    for column in [
+        "id_client", "code_client", "num_manuel", "nom_complet", "statut_phone",
+        "commentaire_phone", "type_client", "categorie_client", "gestionnaire", "collecteur",
+    ]:
+        if column not in perfect.columns:
+            perfect[column] = ""
+    output_map = {
+        "id_client": "ids_clients_perfect",
+        "code_client": "codes_clients_perfect",
+        "num_manuel": "numeros_manuels_perfect",
+        "nom_complet": "noms_clients_perfect",
+        "statut_phone": "statuts_phone_perfect",
+        "commentaire_phone": "commentaires_phone_perfect",
+        "type_client": "types_clients_perfect",
+        "categorie_client": "categories_clients_perfect",
+        "gestionnaire": "gestionnaires_perfect",
+        "collecteur": "collecteurs_perfect",
+    }
+    output_columns = ["phone_prefixe", "nb_clients_perfect", *output_map.values()]
+    phone_counts = perfect.groupby("phone_prefixe", dropna=False)["phone_prefixe"].transform("size")
+
+    # La plupart des numeros sont uniques : les copier directement evite des milliers
+    # d'appels Python groupby inutiles. Seuls les numeros partages sont agreges.
+    unique_rows = perfect.loc[phone_counts.eq(1), ["phone_prefixe", *output_map]].copy()
+    unique_rows = unique_rows.rename(columns=output_map)
+    unique_rows["nb_clients_perfect"] = 1
+    unique_rows = unique_rows[output_columns]
+
+    duplicate_rows = perfect.loc[phone_counts.gt(1)].copy()
+    if duplicate_rows.empty:
+        return unique_rows.reset_index(drop=True)
+    duplicate_summary = (
+        duplicate_rows.groupby("phone_prefixe", as_index=False, dropna=False)
+        .agg(
+            nb_clients_perfect=("id_client", lambda values: max(1, clean_identifier(values).replace("", pd.NA).nunique())),
+            ids_clients_perfect=("id_client", concat_unique),
+            codes_clients_perfect=("code_client", concat_unique),
+            numeros_manuels_perfect=("num_manuel", concat_unique),
+            noms_clients_perfect=("nom_complet", concat_unique),
+            statuts_phone_perfect=("statut_phone", concat_unique),
+            commentaires_phone_perfect=("commentaire_phone", concat_unique),
+            types_clients_perfect=("type_client", concat_unique),
+            categories_clients_perfect=("categorie_client", concat_unique),
+            gestionnaires_perfect=("gestionnaire", concat_unique),
+            collecteurs_perfect=("collecteur", concat_unique),
+        )
+    )
+    return concat_frames_stable([unique_rows, duplicate_summary[output_columns]]).reset_index(drop=True)
+
+
+def _perfect_match_status(frame: pd.DataFrame, perfect_available: bool) -> pd.Series:
+    if not perfect_available:
+        status = pd.Series("Fichier Perfect absent", index=frame.index, dtype="string")
+    else:
+        matches = numeric_column(frame, "nb_clients_perfect").astype(int)
+        status = pd.Series(
+            np.select(
+                [matches.eq(1), matches.gt(1)],
+                ["Trouve dans Perfect - correspondance unique", "Trouve dans Perfect - plusieurs clients"],
+                default="Non trouve dans Perfect",
+            ),
+            index=frame.index,
+            dtype="string",
+        )
+    return status.where(frame["phone_prefixe"].notna(), "Telephone M-PESA inexploitable")
+
+
+def build_perfect_client_crosscheck(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame]:
+    """Croise la population M-PESA avec Perfect, une seule ligne de synthese par telephone."""
+    population = _build_mpesa_identity_population(prepared)
+    operations = _build_mpesa_operation_detail(prepared)
+    perfect_by_phone = _aggregate_perfect_clients(prepared.perfect_clients)
+    perfect_available = isinstance(prepared.perfect_clients, pd.DataFrame) and not prepared.perfect_clients.empty
+    if population.empty:
+        return {"synthese": pd.DataFrame(), "operations": operations, "perfect_agrege": perfect_by_phone}
+
+    if not operations.empty:
+        operation_summary = (
+            operations.groupby("cle_rapprochement", as_index=False, dropna=False)
+            .agg(
+                types_operations_mpesa=("type_operation", concat_unique),
+                sources_operations=("source_operation", concat_unique),
+                devises_operations=("currency_code", concat_unique),
+                premiere_operation=("date_operation", "min"),
+                derniere_operation=("date_operation", "max"),
+                nombre_operations_observees=("operation_reference", "size"),
+                references_operations=("operation_reference", concat_unique),
+            )
+        )
+        turbo_counts = operations["source_operation"].eq("Turbo").groupby(operations["cle_rapprochement"]).sum()
+        g2_counts = operations["source_operation"].eq("G2").groupby(operations["cle_rapprochement"]).sum()
+        operation_summary["nombre_operations_turbo"] = operation_summary["cle_rapprochement"].map(turbo_counts).fillna(0).astype(int)
+        operation_summary["nombre_operations_g2"] = operation_summary["cle_rapprochement"].map(g2_counts).fillna(0).astype(int)
+        summary = population.merge(operation_summary, on="cle_rapprochement", how="left")
+    else:
+        summary = population.copy()
+        summary["nombre_operations_observees"] = 0
+        summary["nombre_operations_turbo"] = 0
+        summary["nombre_operations_g2"] = 0
+
+    if not perfect_by_phone.empty:
+        summary = summary.merge(perfect_by_phone, on="phone_prefixe", how="left")
+    summary["statut_rapprochement_perfect"] = _perfect_match_status(summary, perfect_available)
+    summary["nb_clients_perfect"] = numeric_column(summary, "nb_clients_perfect").astype(int)
+    summary["trouve_dans_perfect"] = summary["nb_clients_perfect"].gt(0)
+
+    if not operations.empty:
+        identity_columns = [
+            "cle_rapprochement", "customer_ids_turbo", "noms_clients_mpesa",
+            "systemes_mpesa", "sources_mpesa",
+        ]
+        operations = operations.merge(summary[identity_columns], on="cle_rapprochement", how="left")
+        if not perfect_by_phone.empty:
+            operations = operations.merge(perfect_by_phone, on="phone_prefixe", how="left")
+        operations["statut_rapprochement_perfect"] = _perfect_match_status(operations, perfect_available)
+        operations["nb_clients_perfect"] = numeric_column(operations, "nb_clients_perfect").astype(int)
+
+    summary = summary.sort_values(
+        ["statut_rapprochement_perfect", "phone_prefixe"], na_position="last"
+    ).reset_index(drop=True)
+    return {"synthese": summary, "operations": operations, "perfect_agrege": perfect_by_phone}
+
+
 def _parse_money_series(series: pd.Series) -> pd.Series:
     cleaned = (
         series.astype("string")
@@ -525,6 +944,25 @@ def prepare_g2_transactions(dataframe: pd.DataFrame | None) -> pd.DataFrame:
         ["Transaction Amount", "Paid In", "Withdrawn"],
         default="Montant absent",
     )
+    paid_in_non_zero = paid_in.notna() & paid_in.ne(0)
+    withdrawn_non_zero = withdrawn.notna() & withdrawn.ne(0)
+    both_directions = paid_in_non_zero & withdrawn_non_zero
+    fallback_amount = frame["transaction_amount_numeric"]
+    frame["sens_flux"] = np.select(
+        [
+            both_directions,
+            withdrawn_non_zero,
+            paid_in_non_zero,
+            fallback_amount.lt(0).fillna(False),
+            fallback_amount.gt(0).fillna(False),
+        ],
+        ["A verifier", "Sortie", "Entree", "Sortie", "Entree"],
+        default="Indetermine",
+    )
+    absolute_amount = fallback_amount.abs()
+    frame["montant_entree"] = absolute_amount.where(frame["sens_flux"].eq("Entree"), 0.0)
+    frame["montant_sortie"] = absolute_amount.where(frame["sens_flux"].eq("Sortie"), 0.0)
+    frame["type_operation_g2"] = frame.apply(classify_g2_business_operation, axis=1)
     if "transaction_amount" not in frame.columns:
         frame["transaction_amount"] = derived_amount
     else:
@@ -555,6 +993,30 @@ def filter_g2_transactions_by_completion_time(
     if end_date is not None:
         mask &= completion_time.lt(pd.Timestamp(end_date).normalize() + pd.Timedelta(days=1))
     return frame.loc[mask].reset_index(drop=True)
+
+
+def filter_g2_transactions_by_direction(
+    dataframe: pd.DataFrame | None,
+    directions: str | Iterable[str] | None = None,
+) -> pd.DataFrame:
+    """Filtre G2 sur Entree/Sortie; None conserve tous les sens et les anomalies."""
+    if not isinstance(dataframe, pd.DataFrame) or dataframe.empty:
+        return pd.DataFrame() if dataframe is None else dataframe.copy()
+    if directions is None or "sens_flux" not in dataframe.columns:
+        return dataframe.copy()
+
+    requested = [directions] if isinstance(directions, str) else list(directions)
+    canonical = {
+        "entree": "Entree",
+        "entrees": "Entree",
+        "sortie": "Sortie",
+        "sorties": "Sortie",
+    }
+    selected = {canonical.get(normalize_label(value), str(value).strip()) for value in requested}
+    selected.discard("")
+    if not selected:
+        return dataframe.copy()
+    return dataframe.loc[dataframe["sens_flux"].astype("string").isin(selected)].reset_index(drop=True)
 
 
 def enrich_turbo_with_g2_customer_names(
@@ -1013,19 +1475,18 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
 
 
 def classify_g2_entry_report(row: pd.Series) -> str:
-    details = normalize_label(row.get("details", ""))
-    reference_dat = str(row.get("reference_dat_operation", "") or "").strip()
+    reference_value = row.get("reference_dat_operation", "")
+    reference_dat = "" if _is_empty_text(reference_value) else str(reference_value).strip()
     references = normalize_label(row.get("references_transactions", ""))
     account_types = normalize_label(row.get("account_types_transactions", ""))
     descriptions = normalize_label(row.get("descriptions_transactions", ""))
     text = f"{references} {account_types} {descriptions}"
-    if "bisoubisourepayment" in details:
-        return "Remboursement prets"
-    if reference_dat:
-        return "DAT"
+    classified = classify_g2_business_operation(row, dat_matched=bool(reference_dat))
+    if classified not in {"Depot normal", "Autre entree"}:
+        return classified
     if "ln" in references or "loan" in account_types or "principle" in account_types or "remboursement" in text:
         return "Remboursement prets"
-    return "Depot normal"
+    return classified
 
 
 def build_entry_pivot(detail: pd.DataFrame) -> pd.DataFrame:
@@ -1067,7 +1528,7 @@ def build_entry_pivot(detail: pd.DataFrame) -> pd.DataFrame:
     count_pivot = count_pivot.rename(columns={column: f"nombre_{column}" for column in count_categories})
     pivot = amount_pivot.merge(count_pivot, on="currency_code", how="outer").fillna(0)
 
-    preferred_details = ["DAT", "Depot normal", "Remboursement prets"]
+    preferred_details = G2_OPERATION_CATEGORIES
     for detail_name in preferred_details:
         amount_column = f"montant_{detail_name}"
         count_column = f"nombre_{detail_name}"
@@ -1081,23 +1542,58 @@ def build_entry_pivot(detail: pd.DataFrame) -> pd.DataFrame:
     pivot["montant_total"] = pivot[amount_columns].sum(axis=1)
     pivot["nombre_total"] = pivot[count_columns].sum(axis=1)
 
+    if "sens_flux" in work.columns:
+        flow_summary = (
+            work.groupby(["currency_code", "sens_flux"], dropna=False)
+            .agg(montant=("montant", "sum"), nombre=("montant", "size"))
+            .reset_index()
+        )
+        flow_amounts = flow_summary.pivot_table(
+            index="currency_code", columns="sens_flux", values="montant", aggfunc="sum", fill_value=0
+        ).reset_index().rename_axis(None, axis=1)
+        flow_counts = flow_summary.pivot_table(
+            index="currency_code", columns="sens_flux", values="nombre", aggfunc="sum", fill_value=0
+        ).reset_index().rename_axis(None, axis=1)
+        flow_amounts = flow_amounts.rename(
+            columns={"Entree": "montant_total_entrees", "Sortie": "montant_total_sorties", "A verifier": "montant_flux_a_verifier", "Indetermine": "montant_flux_indetermine"}
+        )
+        flow_counts = flow_counts.rename(
+            columns={"Entree": "nombre_entrees", "Sortie": "nombre_sorties", "A verifier": "nombre_flux_a_verifier", "Indetermine": "nombre_flux_indetermine"}
+        )
+        pivot = pivot.merge(flow_amounts, on="currency_code", how="left").merge(flow_counts, on="currency_code", how="left")
+    for column in ["montant_total_entrees", "montant_total_sorties", "nombre_entrees", "nombre_sorties"]:
+        if column not in pivot.columns:
+            pivot[column] = 0
+    pivot["solde_net_flux"] = numeric_column(pivot, "montant_total_entrees") - numeric_column(pivot, "montant_total_sorties")
+
     ordered = ["currency_code"]
     for detail_name in preferred_details:
         ordered.extend([f"montant_{detail_name}", f"nombre_{detail_name}"])
-    ordered.extend(["montant_total", "nombre_total"])
+    ordered.extend(
+        [
+            "nombre_entrees", "montant_total_entrees", "nombre_sorties", "montant_total_sorties",
+            "solde_net_flux", "montant_total", "nombre_total",
+        ]
+    )
     rest = [column for column in pivot.columns if column not in ordered]
     return pivot[ordered + rest].sort_values("currency_code").reset_index(drop=True)
 
 
 def build_entry_count_summary(detail: pd.DataFrame) -> pd.DataFrame:
-    """Compte les DAT, depots normaux et remboursements, separement par devise."""
-    columns = [
-        "currency_code",
-        "Nombre de DAT",
-        "Nombre de depot normal",
-        "Nombre de remboursement de pret",
-        "Nombre total",
-    ]
+    """Compte chaque categorie G2, avec entrees et sorties separees par devise."""
+    rename_map = {category: f"Nombre de {category.lower()}" for category in G2_OPERATION_CATEGORIES}
+    rename_map.update(
+        {
+            "DAT": "Nombre de DAT",
+            "Depot normal": "Nombre de depot normal",
+            "Remboursement prets": "Nombre de remboursement de pret",
+            "Paiement client B2C": "Nombre de paiement client B2C",
+            "Demande de credit": "Nombre de demande de credit",
+            "Operation interne Bisou": "Nombre d'operation interne Bisou",
+        }
+    )
+    category_columns = [rename_map[category] for category in G2_OPERATION_CATEGORIES]
+    columns = ["currency_code", *category_columns, "Nombre d'entrees", "Nombre de sorties", "Nombre total"]
     if detail is None or not isinstance(detail, pd.DataFrame) or detail.empty:
         return pd.DataFrame(columns=columns)
     if not {"currency_code", "details_rapport"}.issubset(detail.columns):
@@ -1111,20 +1607,18 @@ def build_entry_count_summary(detail: pd.DataFrame) -> pd.DataFrame:
         .size()
         .unstack(fill_value=0)
     )
-    for category in ["DAT", "Depot normal", "Remboursement prets"]:
+    for category in G2_OPERATION_CATEGORIES:
         if category not in grouped.columns:
             grouped[category] = 0
-    summary = grouped[["DAT", "Depot normal", "Remboursement prets"]].reset_index()
-    summary = summary.rename(
-        columns={
-            "DAT": "Nombre de DAT",
-            "Depot normal": "Nombre de depot normal",
-            "Remboursement prets": "Nombre de remboursement de pret",
-        }
-    )
-    summary["Nombre total"] = summary[
-        ["Nombre de DAT", "Nombre de depot normal", "Nombre de remboursement de pret"]
-    ].sum(axis=1)
+    summary = grouped[G2_OPERATION_CATEGORIES].reset_index().rename(columns=rename_map)
+    if "sens_flux" in work.columns:
+        direction_counts = work.groupby(["currency_code", "sens_flux"]).size().unstack(fill_value=0)
+        summary["Nombre d'entrees"] = summary["currency_code"].map(direction_counts.get("Entree", pd.Series(dtype="int64"))).fillna(0).astype(int)
+        summary["Nombre de sorties"] = summary["currency_code"].map(direction_counts.get("Sortie", pd.Series(dtype="int64"))).fillna(0).astype(int)
+    else:
+        summary["Nombre d'entrees"] = summary[category_columns].sum(axis=1)
+        summary["Nombre de sorties"] = 0
+    summary["Nombre total"] = summary[category_columns].sum(axis=1)
     return summary[columns].sort_values("currency_code").reset_index(drop=True)
 
 
@@ -1144,7 +1638,10 @@ def build_entry_vertical_summary(detail: pd.DataFrame) -> pd.DataFrame:
         .agg(montant=("montant", "sum"))
     )
     currencies = sorted(value for value in grouped["currency_code"].dropna().astype(str).unique() if value)
-    categories = ["DAT", "Depot normal", "Remboursement prets"]
+    observed_categories = [
+        value for value in grouped["details_rapport"].dropna().astype(str).unique() if value not in G2_OPERATION_CATEGORIES
+    ]
+    categories = [*G2_OPERATION_CATEGORIES, *sorted(observed_categories)]
     rows: list[dict[str, object]] = []
     for currency in currencies:
         currency_group = grouped.loc[grouped["currency_code"].eq(currency)]
@@ -1184,6 +1681,9 @@ def build_g2_entry_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame
     report = detail.copy()
     report["details_rapport"] = report.apply(classify_g2_entry_report, axis=1)
     report["montant"] = numeric_column(report, "transaction_amount_numeric").abs()
+    report["sens_flux"] = clean_text(report.get("sens_flux", pd.Series("Indetermine", index=report.index)))
+    report["montant_entree"] = report["montant"].where(report["sens_flux"].eq("Entree"), 0.0)
+    report["montant_sortie"] = report["montant"].where(report["sens_flux"].eq("Sortie"), 0.0)
     report["date"] = pd.to_datetime(report.get("completion_time"), errors="coerce")
     report["duree"] = np.where(
         report["details_rapport"].eq("DAT"),
@@ -1198,12 +1698,16 @@ def build_g2_entry_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame
     detail_columns = [
         "date",
         "receipt_no",
+        "sens_flux",
         "details_rapport",
+        "reason_type",
         "opposite_party",
         "Nom_client",
         "duree",
         "compte_cree",
         "montant",
+        "montant_entree",
+        "montant_sortie",
         "currency_code",
         "customer_id_ref_no",
         "reference_dat_operation",
@@ -1217,14 +1721,15 @@ def build_g2_entry_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame
     report_detail = report[detail_columns].sort_values(["currency_code", "date"], ascending=[True, False]).reset_index(drop=True)
 
     synthese = (
-        report.groupby(["currency_code", "details_rapport"], as_index=False, dropna=False)
+        report.groupby(["currency_code", "sens_flux", "details_rapport"], as_index=False, dropna=False)
         .agg(nombre=("receipt_no", "count"), montant=("montant", "sum"))
-        .sort_values(["currency_code", "details_rapport"])
+        .sort_values(["currency_code", "sens_flux", "details_rapport"])
     )
     totals = (
         report.groupby("currency_code", as_index=False, dropna=False)
         .agg(nombre=("receipt_no", "count"), montant=("montant", "sum"))
     )
+    totals["sens_flux"] = "Tous flux"
     totals["details_rapport"] = "Total " + totals["currency_code"].astype("string").fillna("")
     synthese = concat_frames_stable([synthese, totals[synthese.columns]]).reset_index(drop=True)
 
@@ -1313,6 +1818,8 @@ def _build_daily_dat_assignments(g2: pd.DataFrame, fixed: pd.DataFrame) -> pd.Da
     tx["montant"] = numeric_column(tx, "transaction_amount_numeric").abs()
     tx["date"] = pd.to_datetime(tx.get("completion_time", pd.Series(pd.NaT, index=tx.index)), errors="coerce")
     tx["jour"] = tx["date"].dt.date
+    if "sens_flux" in tx.columns:
+        tx = tx.loc[tx["sens_flux"].astype("string").eq("Entree")].copy()
 
     assignment_by_receipt: dict[str, dict[str, object]] = {}
     group_columns = ["phone_prefixe", "currency_code", "jour"]
@@ -1393,6 +1900,11 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
     report["receipt_no"] = clean_identifier(report.get("receipt_no", pd.Series("", index=report.index)))
     report["date"] = pd.to_datetime(report.get("completion_time"), errors="coerce")
     report["montant"] = numeric_column(report, "transaction_amount_numeric").abs()
+    report["sens_flux"] = clean_text(
+        report.get("sens_flux", pd.Series("Indetermine", index=report.index))
+    )
+    report["montant_entree"] = report["montant"].where(report["sens_flux"].eq("Entree"), 0.0)
+    report["montant_sortie"] = report["montant"].where(report["sens_flux"].eq("Sortie"), 0.0)
     report["currency_code"] = clean_text(report.get("currency_code", pd.Series("", index=report.index))).str.upper()
     report["phone_prefixe"] = normalize_phone(report.get("phone_prefixe", report.get("phone", pd.Series("", index=report.index))))
 
@@ -1407,14 +1919,13 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         report["dat_balance"] = np.nan
         report["dat_match_rule"] = pd.NA
 
-    is_repayment = report.get("details", pd.Series("", index=report.index)).apply(normalize_label).str.contains(
-        "bisoubisourepayment", regex=False, na=False
+    is_dat = (
+        report["dat_customer_id"].astype("string").fillna("").ne("")
+        & report["sens_flux"].eq("Entree")
     )
-    is_dat = report["dat_customer_id"].astype("string").fillna("").ne("") & ~is_repayment
-    report["details_rapport"] = np.select(
-        [is_repayment, is_dat],
-        ["Remboursement prets", "DAT"],
-        default="Depot normal",
+    report["details_rapport"] = report.apply(
+        lambda row: classify_g2_business_operation(row, dat_matched=bool(is_dat.loc[row.name])),
+        axis=1,
     )
     report["duree"] = report["duree"].where(is_dat, "-")
     report["compte_cree_dat"] = pd.to_datetime(report["compte_cree"], errors="coerce")
@@ -1484,7 +1995,9 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         has_same_day_dat_phone = pd.Series([key in dat_keys for key in tx_keys], index=report.index)
 
     unusual_same_day_dat_amount = (
-        ~is_dat
+        report["sens_flux"].eq("Entree")
+        & report["details_rapport"].eq("Depot normal")
+        & ~is_dat
         & has_same_day_dat_phone
         & ~report.apply(lambda row: _is_round_savings_amount(row.get("montant"), row.get("currency_code")), axis=1)
     )
@@ -1493,13 +2006,18 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
     detail_columns = [
         "date",
         "receipt_no",
+        "sens_flux",
         "details_rapport",
+        "reason_type",
+        "details",
         "opposite_party",
         "Nom_client",
         "phone_prefixe",
         "duree",
         "compte_cree",
         "montant",
+        "montant_entree",
+        "montant_sortie",
         "currency_code",
         "current_customer_id",
         "dat_customer_id",
@@ -1510,21 +2028,33 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         "dat_balance",
         "dat_match_rule",
         "transaction_status",
+        "transaction_amount_source",
+        "paid_in_numeric",
+        "withdrawn_numeric",
+        "balance_numeric",
     ]
     detail_columns = [column for column in detail_columns if column in report.columns]
     detail = report[detail_columns].sort_values(["currency_code", "date"], ascending=[True, False]).reset_index(drop=True)
 
     synthese = (
-        detail.groupby(["currency_code", "details_rapport"], as_index=False, dropna=False)
+        detail.groupby(["currency_code", "sens_flux", "details_rapport"], as_index=False, dropna=False)
         .agg(nombre=("receipt_no", "count"), montant=("montant", "sum"))
-        .sort_values(["currency_code", "details_rapport"])
+        .sort_values(["currency_code", "sens_flux", "details_rapport"])
     )
+    direction_totals = (
+        detail.groupby(["currency_code", "sens_flux"], as_index=False, dropna=False)
+        .agg(nombre=("receipt_no", "count"), montant=("montant", "sum"))
+    )
+    direction_totals["details_rapport"] = "Total " + direction_totals["sens_flux"].astype("string").fillna("")
     totals = (
         detail.groupby("currency_code", as_index=False, dropna=False)
         .agg(nombre=("receipt_no", "count"), montant=("montant", "sum"))
     )
+    totals["sens_flux"] = "Tous flux"
     totals["details_rapport"] = "Total " + totals["currency_code"].astype("string").fillna("")
-    synthese = concat_frames_stable([synthese, totals[synthese.columns]]).reset_index(drop=True)
+    synthese = concat_frames_stable(
+        [synthese, direction_totals[synthese.columns], totals[synthese.columns]]
+    ).reset_index(drop=True)
     return {
         "detail": detail,
         "synthese": synthese,
@@ -1940,6 +2470,8 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         "Rapport_Journalier_Vertical": report.get("rapport_journalier_vertical", pd.DataFrame()),
         "Rapport_Journalier_Synthese": report.get("rapport_journalier_synthese", pd.DataFrame()),
         "Rapport_Journalier_Detail": report.get("rapport_journalier_detail", pd.DataFrame()),
+        "Perfect_Clients": report.get("perfect_clients", pd.DataFrame()),
+        "Perfect_Operations": report.get("perfect_operations", pd.DataFrame()),
         "Diagnostics": report.get("diagnostics", pd.DataFrame()),
     }
     buffer = BytesIO()

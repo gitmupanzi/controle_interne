@@ -138,6 +138,20 @@ G2_TRANSACTIONS_SCHEMA = schema(
         "Currency": ("currency_code",),
     },
 )
+PERFECT_CLIENTS_SCHEMA = schema(
+    "Clients Perfect",
+    {"Phone_Prefixe"},
+    {
+        "id_client", "code_client", "num_manuel", "nom_complet", "sexe",
+        "Phone_Brut", "Phone_243", "Statut_phone", "Is_phone_staff",
+        "Tel_chiffres", "Commentaire_phone", "type_piece_identite",
+        "numero_piece_identite", "type_client", "categorie_client",
+        "gestionnaire", "client_perfect", "collecteur",
+    },
+    {
+        "Phone_Prefixe": ("phone_prefixe", "Phone Prefixe", "Telephone normalise"),
+    },
+)
 CUSTOMERS_SCHEMA = schema("Clients", {"msisdn1", "created_at"})
 LOANS_SCHEMA = schema("Crédits", {"loan_id", "customer_id"})
 
