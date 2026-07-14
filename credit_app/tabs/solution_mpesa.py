@@ -28,7 +28,6 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_statement,
     build_perfect_client_crosscheck,
     create_excel_export,
-    create_g2_dat_pdf,
     create_g2_dat_word,
     enrich_transactions_with_g2_customer_names,
     enrich_turbo_with_g2_customer_names,
@@ -101,16 +100,8 @@ def _uploaded_dataframe(uploaded_file: Any) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def _create_g2_dat_pdf_cached(
-    pdf_report: dict[str, Any],
-    period_text: str,
-    direction_label: str,
-) -> bytes:
-    return create_g2_dat_pdf(
-        pdf_report,
-        period_text=period_text,
-        direction_label=direction_label,
-    )
+def _create_excel_export_cached(export_report: dict[str, Any]) -> bytes:
+    return create_excel_export(export_report)
 
 
 @st.cache_data(show_spinner=False)
@@ -591,9 +582,13 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
     render_panel_title("7. Export")
     st.caption(
         "La feuille `Extrait_MPESA` reprend les filtres appliques a l'etape 4. "
-        "Les feuilles Synthese, DAT, epargne, credits, G2/DAT et diagnostics conservent la situation complete du client."
+        "Le classeur conserve uniquement la synthese, l'extrait, le DAT final, les credits, le controle G2/DAT et les diagnostics."
     )
-    export_bytes = create_excel_export(filtered_report)
+    customer_export = {
+        key: filtered_report.get(key, pd.DataFrame())
+        for key in ["synthese", "extrait", "dat_final", "credits", "g2_dat", "diagnostics"]
+    }
+    export_bytes = _create_excel_export_cached(customer_export)
     st.download_button(
         "Telecharger le rapport complet du client",
         data=export_bytes,
@@ -755,7 +750,9 @@ def _render_large_dat_summary(prepared: MpesaPreparedData) -> None:
     st.caption(f"{len(combined_view)} client(s) affiche(s), toutes devises confondues sans addition des montants.")
     st.dataframe(combined_view[display_columns], width="stretch", hide_index=True)
 
-    export_bytes = create_excel_export({"forts_dat": combined_strong_clients, "portefeuille_dat": portefeuille})
+    export_bytes = _create_excel_export_cached(
+        {"forts_dat": combined_strong_clients, "portefeuille_dat": portefeuille}
+    )
     st.download_button(
         "Telecharger la synthese des forts DAT",
         data=export_bytes,
@@ -814,20 +811,19 @@ def _render_g2_report_export(
 ) -> None:
     render_panel_title("6. Export du rapport")
     export_report = {
-        "rapport_journalier_pivot": daily_pivot,
         "rapport_journalier_comptages": daily_comptages,
         "rapport_journalier_synthese": daily_synthese,
         "rapport_journalier_detail": daily_detail,
         "rapport_journalier_anomalies": daily_anomalies,
         "g2_dat": g2_dat,
         "retention_mensuelle": retention_report.get("mensuelle", pd.DataFrame()),
-        "retention_operations": retention_report.get("operations", pd.DataFrame()),
         "retention_detail": retention_report.get("detail_clients", pd.DataFrame()),
-        "retention_definitions": retention_report.get("definitions", pd.DataFrame()),
     }
-    report_bytes = create_excel_export(export_report)
+    report_bytes = _create_excel_export_cached(export_report)
+    word_report = dict(export_report)
+    word_report["rapport_journalier_pivot"] = daily_pivot
     period_suffix = f"{date_start:%Y%m%d}_{date_end:%Y%m%d}" if date_start is not None and date_end is not None else "complet"
-    excel_column, pdf_column, word_column = st.columns(3)
+    excel_column, word_column = st.columns(2)
     with excel_column:
         st.download_button(
             "Telecharger le rapport Excel",
@@ -836,22 +832,9 @@ def _render_g2_report_export(
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
         )
-    with pdf_column:
-        try:
-            pdf_bytes = _create_g2_dat_pdf_cached(export_report, period_text, direction_label)
-        except RuntimeError as exc:
-            st.warning(str(exc))
-        else:
-            st.download_button(
-                "Telecharger la synthese PDF",
-                data=pdf_bytes,
-                file_name=f"rapport_g2_dat_{period_suffix}_{direction_suffix}.pdf",
-                mime="application/pdf",
-                width="stretch",
-            )
     with word_column:
         try:
-            word_bytes = _create_g2_dat_word_cached(export_report, period_text, direction_label)
+            word_bytes = _create_g2_dat_word_cached(word_report, period_text, direction_label)
         except RuntimeError as exc:
             st.warning(str(exc))
         else:
@@ -863,9 +846,8 @@ def _render_g2_report_export(
                 width="stretch",
             )
     st.caption(
-        "Le PDF reste une synthese courte pour la Direction generale. "
-        "Le Word reprend le tableau Transactions classees dans le meme ordre sur une page paysage; "
-        "l'Excel conserve le detail transactionnel et les controles auditables."
+        "Le Word reprend le tableau Transactions dans le meme ordre sur une page paysage; "
+        "l'Excel conserve uniquement les syntheses, comptages, details et controles indispensables."
     )
 
 
@@ -1175,7 +1157,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
 
     _render_g2_retention_report(retention_report)
 
-    render_panel_title("4. Transactions classees")
+    render_panel_title("4. Transactions")
     with st.expander("Afficher le detail des transactions G2", expanded=False):
         daily_view = _apply_local_multiselect_filters(
             daily_detail,
@@ -1373,14 +1355,21 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
     render_summary_box(
         "Lecture du rapprochement",
         [
-            "La population regroupe les telephones observes dans Turbo et G2; une ligne de synthese correspond a un telephone M-PESA.",
+            "La population regroupe les telephones observes dans le dataset unifie G2/Turbo; une ligne de synthese correspond a un telephone M-PESA.",
             "`Phone_Prefixe` est la cle de rapprochement avec l'export 122 Perfect.",
+            "M_PESA designe ici les clients observes dans les transactions G2.",
+            "Les trois vues montrent Perfect dans M_PESA, Perfect dans Turbo, puis l'intersection Perfect + Turbo + M_PESA.",
             "Les operations proviennent de Turbo/G2 : le fichier Perfect fourni contient l'identite du client, pas ses operations financieres.",
         ],
     )
     report = build_perfect_client_crosscheck(prepared)
     summary = report.get("synthese", pd.DataFrame())
     operations = report.get("operations", pd.DataFrame())
+    clients_perfect_dans_mpesa = report.get("clients_perfect_dans_mpesa", pd.DataFrame())
+    clients_perfect_dans_turbo = report.get("clients_perfect_dans_turbo", pd.DataFrame())
+    clients_perfect_dans_turbo_et_mpesa = report.get(
+        "clients_perfect_dans_turbo_et_mpesa", pd.DataFrame()
+    )
 
     if summary.empty:
         st.info("Chargez au moins un fichier Turbo ou Transactions G2 pour constituer la population M-PESA a rechercher dans Perfect.")
@@ -1397,21 +1386,93 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
             f"{invalid_perfect} ligne(s) sans cle telephone valide."
         )
 
-    found = int(summary["nb_clients_perfect"].gt(0).sum())
     ambiguous = int(summary["nb_clients_perfect"].gt(1).sum())
     invalid_phone = int(summary["phone_prefixe"].isna().sum())
     not_found = int(summary["statut_rapprochement_perfect"].eq("Non trouve dans Perfect").sum())
+
+    def perfect_identity_count(frame: pd.DataFrame) -> int:
+        return int(numeric_column(frame, "nb_clients_perfect").sum()) if not frame.empty else 0
+
     render_kpi_cards(
         [
-            ("Telephones M-PESA", _format_count(summary["phone_prefixe"].notna().sum()), "Cles distinctes Turbo/G2", "blue"),
-            ("Trouves dans Perfect", _format_count(found), "Correspondances par telephone", "green"),
-            ("Non trouves", _format_count(not_found), "A rechercher ou corriger", "orange"),
-            ("Numeros partages", _format_count(ambiguous), "Plusieurs clients Perfect", "navy"),
-            ("Telephones invalides", _format_count(invalid_phone), "Rapprochement impossible", "orange"),
+            (
+                "Perfect dans M_PESA",
+                _format_count(perfect_identity_count(clients_perfect_dans_mpesa)),
+                f"{len(clients_perfect_dans_mpesa)} telephone(s) Perfect/G2",
+                "blue",
+            ),
+            (
+                "Perfect dans Turbo",
+                _format_count(perfect_identity_count(clients_perfect_dans_turbo)),
+                f"{len(clients_perfect_dans_turbo)} telephone(s) Perfect/Turbo",
+                "green",
+            ),
+            (
+                "Perfect dans Turbo et M_PESA",
+                _format_count(perfect_identity_count(clients_perfect_dans_turbo_et_mpesa)),
+                f"{len(clients_perfect_dans_turbo_et_mpesa)} telephone(s) dans les 3 systemes",
+                "navy",
+            ),
         ]
     )
+    st.caption(
+        f"Qualite du rapprochement : {not_found} telephone(s) M-PESA non trouve(s) dans Perfect, "
+        f"{ambiguous} numero(s) partage(s) et {invalid_phone} telephone(s) inexploitable(s)."
+    )
 
-    render_panel_title("1. Clients M-PESA recherches dans Perfect")
+    render_panel_title("1. Clients Perfect retrouves dans les systemes M-PESA")
+    cohort_columns = [
+        "phone_prefixe",
+        "customer_ids_turbo",
+        "noms_clients_mpesa",
+        "noms_clients_perfect",
+        "types_operations_mpesa",
+        "nombre_operations_turbo",
+        "nombre_operations_g2",
+        "ids_clients_perfect",
+        "codes_clients_perfect",
+        "nb_clients_perfect",
+        "types_clients_perfect",
+        "categories_clients_perfect",
+        "gestionnaires_perfect",
+        "collecteurs_perfect",
+        "premiere_operation",
+        "derniere_operation",
+        "statut_presence_systemes",
+    ]
+    cohort_tabs = st.tabs(
+        ["Perfect dans M_PESA", "Perfect dans Turbo", "Perfect dans Turbo et M_PESA"]
+    )
+    cohorts = [
+        (
+            cohort_tabs[0],
+            clients_perfect_dans_mpesa,
+            "Clients Perfect dont le Phone_Prefixe est observe dans les transactions G2.",
+        ),
+        (
+            cohort_tabs[1],
+            clients_perfect_dans_turbo,
+            "Clients Perfect dont le Phone_Prefixe est observe dans au moins une source Turbo.",
+        ),
+        (
+            cohort_tabs[2],
+            clients_perfect_dans_turbo_et_mpesa,
+            "Clients Perfect dont le Phone_Prefixe est observe a la fois dans G2 et Turbo.",
+        ),
+    ]
+    for tab, cohort, description in cohorts:
+        with tab:
+            st.caption(description)
+            if cohort.empty:
+                st.info("Aucun client ne correspond a cette population dans les fichiers charges.")
+            else:
+                visible_columns = [column for column in cohort_columns if column in cohort.columns]
+                st.caption(
+                    f"{perfect_identity_count(cohort)} fiche(s) Perfect sur {len(cohort)} telephone(s) distinct(s)."
+                )
+                st.dataframe(cohort[visible_columns], width="stretch", hide_index=True)
+
+    render_panel_title("2. Tous les clients M-PESA recherches dans Perfect")
     search_value = st.text_input(
         "Rechercher par telephone, Customer ID ou nom",
         key="mpesa_perfect_client_search",
@@ -1419,7 +1480,7 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
     ).strip()
     summary_view = _apply_local_multiselect_filters(
         summary,
-        ["statut_rapprochement_perfect", "systemes_mpesa", "types_operations_mpesa"],
+        ["statut_presence_systemes", "statut_rapprochement_perfect", "systemes_mpesa", "types_operations_mpesa"],
         key_prefix="mpesa_perfect_summary_filter",
     )
     if search_value:
@@ -1440,6 +1501,11 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
         "customer_ids_turbo",
         "noms_clients_mpesa",
         "systemes_mpesa",
+        "present_dans_turbo",
+        "present_dans_g2",
+        "present_dans_perfect",
+        "present_dans_les_3_systemes",
+        "statut_presence_systemes",
         "types_operations_mpesa",
         "nombre_operations_turbo",
         "nombre_operations_g2",
@@ -1464,7 +1530,7 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
         "toutes les identites restent visibles dans la ligne."
     )
 
-    render_panel_title("2. Operations observees dans Turbo et G2")
+    render_panel_title("3. Operations observees dans Turbo et G2")
     if operations.empty:
         st.info("Aucune operation Turbo/G2 exploitable n'est disponible.")
     else:
@@ -1508,20 +1574,13 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
         st.caption(f"{len(operation_view)} operation(s) affichee(s). Les montants restent separes par source et par devise.")
         st.dataframe(operation_display, width="stretch", hide_index=True)
 
-    render_panel_title("3. Export")
-    operations_export = operations.rename(
-        columns={
-            "noms_clients_mpesa": "Nom_client_M-PESA",
-            "noms_clients_perfect": "Nom_client_Perfect",
-            "customer_ids_turbo": "Customer_ID_Turbo",
-            "ids_clients_perfect": "ID_client_Perfect",
-            "codes_clients_perfect": "Code_client_Perfect",
+    render_panel_title("4. Export")
+    export_bytes = _create_excel_export_cached(
+        {
+            "clients_perfect_dans_mpesa": clients_perfect_dans_mpesa,
+            "clients_perfect_dans_turbo": clients_perfect_dans_turbo,
+            "clients_perfect_dans_turbo_et_mpesa": clients_perfect_dans_turbo_et_mpesa,
         }
-    )
-    if "Nom_client_Perfect" not in operations_export.columns:
-        operations_export["Nom_client_Perfect"] = pd.NA
-    export_bytes = create_excel_export(
-        {"perfect_clients": summary_view, "perfect_operations": operations_export}
     )
     st.download_button(
         "Telecharger le rapprochement M-PESA / Perfect",
@@ -1642,7 +1701,7 @@ def render_solution_mpesa_tab() -> None:
         perfect_raw,
     )
     sub_tabs = st.tabs(
-        ["Importation", "Vue d'ensemble", "Extrait client", "DAT", "G2 / DAT", "Perferct_client", "Credits", "Controle des donnees"]
+        ["Importation", "Vue d'ensemble", "Extrait client", "DAT", "G2 / DAT", "Perfect_client", "Credits", "Controle des donnees"]
     )
     report: dict[str, Any] | None = None
     with sub_tabs[0]:

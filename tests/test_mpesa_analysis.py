@@ -594,6 +594,145 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(operations), int(summary.loc[0, "nombre_operations_turbo"]))
         self.assertTrue(operations["nb_clients_perfect"].eq(2).all())
         self.assertTrue(operations["noms_clients_perfect"].eq("NOM PERFECT A | NOM PERFECT B").all())
+        self.assertTrue(report["clients_trois_systemes"].empty)
+
+    def test_perfect_crosscheck_identifies_clients_present_in_g2_turbo_and_perfect(self) -> None:
+        prepared = _sample_prepared_data()
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "Receipt No.": "TX001",
+                        "Completion Time": "2026-07-01 10:00:00",
+                        "Opposite Party": "0812345678 - CLIENT G2",
+                        "Currency": "CDF",
+                        "Transaction Amount": 1000,
+                        "Transaction Status": "Completed",
+                        "Details": "BisouBisouC2B",
+                    }
+                ]
+            )
+        )
+        perfect = prepare_perfect_clients(
+            pd.DataFrame(
+                [
+                    {
+                        "id_client": 10,
+                        "code_client": "P001",
+                        "nom_complet": "CLIENT PERFECT",
+                        "Phone_Prefixe": "243812345678",
+                    }
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=prepared.transactions,
+            current_savings=prepared.current_savings,
+            fixed_savings=prepared.fixed_savings,
+            loans=prepared.loans,
+            load_report=prepared.load_report,
+            g2_transactions=g2,
+            perfect_clients=perfect,
+        )
+
+        report = build_perfect_client_crosscheck(prepared)
+        summary = report["synthese"]
+        clients_trois_systemes = report["clients_trois_systemes"]
+
+        self.assertEqual(len(clients_trois_systemes), 1)
+        self.assertTrue(bool(summary.loc[0, "present_dans_turbo"]))
+        self.assertTrue(bool(summary.loc[0, "present_dans_g2"]))
+        self.assertTrue(bool(summary.loc[0, "present_dans_perfect"]))
+        self.assertTrue(bool(summary.loc[0, "present_dans_les_3_systemes"]))
+        self.assertEqual(
+            summary.loc[0, "statut_presence_systemes"],
+            "Present dans G2, Turbo et Perfect",
+        )
+        self.assertEqual(clients_trois_systemes.loc[0, "noms_clients_perfect"], "CLIENT PERFECT")
+        self.assertEqual(len(report["clients_perfect_dans_mpesa"]), 1)
+        self.assertEqual(len(report["clients_perfect_dans_turbo"]), 1)
+        self.assertEqual(len(report["clients_perfect_dans_turbo_et_mpesa"]), 1)
+        export = create_excel_export({"clients_3_systemes": clients_trois_systemes})
+        exported = pd.read_excel(BytesIO(export), sheet_name="Clients_3_Systemes")
+        self.assertEqual(len(exported), 1)
+        self.assertEqual(exported.loc[0, "phone_prefixe"], 243812345678)
+
+    def test_perfect_crosscheck_builds_the_three_requested_populations(self) -> None:
+        prepared = _sample_prepared_data()
+        turbo_extra = prepared.transactions.iloc[[0]].copy()
+        turbo_extra["id"] = "TURBO-B"
+        turbo_extra["customer_id"] = "2002"
+        turbo_extra["msisdn1"] = "243822222222"
+        turbo_extra["ref_no"] = "TURBO-B"
+        turbo_extra["reference_id"] = "TURBO-B"
+        transactions = pd.concat([prepared.transactions, turbo_extra], ignore_index=True)
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "Receipt No.": "G2-A",
+                        "Completion Time": "2026-07-01 11:00:00",
+                        "Opposite Party": "0833333333 - CLIENT A",
+                        "Currency": "CDF",
+                        "Transaction Amount": 500,
+                        "Details": "BisouBisouC2B",
+                    },
+                    {
+                        "Receipt No.": "TX001",
+                        "Completion Time": "2026-07-01 10:00:00",
+                        "Opposite Party": "0812345678 - CLIENT C",
+                        "Currency": "CDF",
+                        "Transaction Amount": 1000,
+                        "Details": "BisouBisouC2B",
+                    },
+                ]
+            )
+        )
+        perfect = prepare_perfect_clients(
+            pd.DataFrame(
+                [
+                    {"id_client": 1, "nom_complet": "PERFECT A", "Phone_Prefixe": "243833333333"},
+                    {"id_client": 2, "nom_complet": "PERFECT B", "Phone_Prefixe": "243822222222"},
+                    {"id_client": 3, "nom_complet": "PERFECT C", "Phone_Prefixe": "243812345678"},
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=transactions,
+            current_savings=prepared.current_savings,
+            fixed_savings=prepared.fixed_savings,
+            loans=prepared.loans,
+            load_report=prepared.load_report,
+            g2_transactions=g2,
+            perfect_clients=perfect,
+        )
+
+        report = build_perfect_client_crosscheck(prepared)
+
+        self.assertEqual(
+            set(report["clients_perfect_dans_mpesa"]["phone_prefixe"]),
+            {"243833333333", "243812345678"},
+        )
+        self.assertEqual(
+            set(report["clients_perfect_dans_turbo"]["phone_prefixe"]),
+            {"243822222222", "243812345678"},
+        )
+        self.assertEqual(
+            report["clients_perfect_dans_turbo_et_mpesa"]["phone_prefixe"].tolist(),
+            ["243812345678"],
+        )
+        export = create_excel_export(
+            {
+                "clients_perfect_dans_mpesa": report["clients_perfect_dans_mpesa"],
+                "clients_perfect_dans_turbo": report["clients_perfect_dans_turbo"],
+                "clients_perfect_dans_turbo_et_mpesa": report["clients_perfect_dans_turbo_et_mpesa"],
+            }
+        )
+        workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
+        self.assertEqual(
+            workbook.sheet_names,
+            ["Perfect_M_PESA", "Perfect_Turbo", "Perfect_Turbo_M_PESA"],
+        )
 
     def test_perfect_crosscheck_keeps_unmatched_mpesa_client(self) -> None:
         prepared = _sample_prepared_data()
@@ -649,6 +788,18 @@ class MpesaAnalysisTests(unittest.TestCase):
 
         self.assertGreater(len(export), 5000)
 
+    def test_excel_export_writes_only_requested_sheets(self) -> None:
+        export = create_excel_export(
+            {
+                "synthese": pd.DataFrame([{"indicateur": "Clients", "valeur": 1}]),
+                "extrait": pd.DataFrame([{"operation_reference": "REF-001"}]),
+            }
+        )
+
+        workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
+
+        self.assertEqual(workbook.sheet_names, ["Synthese", "Extrait_MPESA"])
+
     def test_customer_excel_export_preserves_filtered_extract_and_required_sheets(self) -> None:
         prepared = _sample_prepared_data()
         report = build_mpesa_statement(prepared, "1001", {"CDF": None})
@@ -665,7 +816,6 @@ class MpesaAnalysisTests(unittest.TestCase):
             "Mouvements_Epargne",
             "Credits",
             "G2_DAT",
-            "Anomalies_G2",
             "Diagnostics",
         }
 
@@ -1322,8 +1472,9 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertTrue(content.startswith(b"PK"))
         self.assertIn("Rapport M-PESA - G2/DAT", text)
         self.assertIn("Synthese executive", text)
+        self.assertIn("Synthese des flux G2 par devise", text)
         self.assertIn("Point de vigilance", text)
-        self.assertIn("Transactions classees", text)
+        self.assertIn("Transactions", text)
         self.assertEqual(len(classified_tables), 1)
         self.assertEqual(
             [cell.text for cell in classified_tables[0].rows[0].cells],
@@ -1339,6 +1490,27 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertGreaterEqual(len(document.tables), 3)
         self.assertGreaterEqual(len(document.sections), 2)
         self.assertEqual(document.sections[-1].orientation, WD_ORIENT.LANDSCAPE)
+
+        report_without_pivot = dict(report)
+        report_without_pivot.pop("rapport_journalier_pivot")
+        fallback_content = create_g2_dat_word(
+            report_without_pivot,
+            period_text="du 01/01/2026 au 31/01/2026",
+            direction_label="Tous",
+            generated_at=pd.Timestamp("2026-07-14 10:00:00"),
+        )
+        fallback_document = Document(BytesIO(fallback_content))
+        fallback_text = "\n".join(paragraph.text for paragraph in fallback_document.paragraphs)
+        flow_tables = [
+            table
+            for table in fallback_document.tables
+            if table.rows and table.rows[0].cells[0].text == "Devise"
+        ]
+        self.assertIn("Synthese des flux G2 par devise", fallback_text)
+        self.assertNotIn("Aucune donnee disponible.", fallback_text)
+        self.assertEqual(len(flow_tables), 2)
+        self.assertEqual(flow_tables[0].rows[1].cells[0].text, "CDF")
+        self.assertEqual(flow_tables[0].rows[2].cells[0].text, "USD")
 
     def test_numeric_column_handles_missing_columns_like_zero_series(self) -> None:
         frame = pd.DataFrame({"customer_id": ["1", "2"]})

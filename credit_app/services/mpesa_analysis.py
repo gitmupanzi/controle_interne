@@ -569,14 +569,20 @@ def _build_mpesa_identity_population(prepared: MpesaPreparedData) -> pd.DataFram
     population = concat_frames_stable(frames)
     if population.empty:
         return pd.DataFrame()
+    population["present_dans_turbo"] = population["systeme_mpesa"].astype("string").eq("Turbo")
+    population["present_dans_g2"] = population["systeme_mpesa"].astype("string").eq("G2")
     output_columns = [
         "cle_rapprochement", "phone_prefixe", "customer_ids_turbo", "noms_clients_mpesa",
-        "systemes_mpesa", "sources_mpesa", "nb_lignes_sources_mpesa",
+        "systemes_mpesa", "sources_mpesa", "present_dans_turbo", "present_dans_g2",
+        "nb_lignes_sources_mpesa",
     ]
     key_counts = population.groupby("cle_rapprochement", dropna=False)["cle_rapprochement"].transform("size")
     unique_rows = population.loc[
         key_counts.eq(1),
-        ["cle_rapprochement", "phone_prefixe", "customer_id_turbo", "nom_client_mpesa", "systeme_mpesa", "source_mpesa"],
+        [
+            "cle_rapprochement", "phone_prefixe", "customer_id_turbo", "nom_client_mpesa",
+            "systeme_mpesa", "source_mpesa", "present_dans_turbo", "present_dans_g2",
+        ],
     ].rename(
         columns={
             "customer_id_turbo": "customer_ids_turbo",
@@ -598,6 +604,8 @@ def _build_mpesa_identity_population(prepared: MpesaPreparedData) -> pd.DataFram
             noms_clients_mpesa=("nom_client_mpesa", concat_unique),
             systemes_mpesa=("systeme_mpesa", concat_unique),
             sources_mpesa=("source_mpesa", concat_unique),
+            present_dans_turbo=("present_dans_turbo", "max"),
+            present_dans_g2=("present_dans_g2", "max"),
             nb_lignes_sources_mpesa=("source_mpesa", "size"),
         )
     )
@@ -801,6 +809,48 @@ def _perfect_match_status(frame: pd.DataFrame, perfect_available: bool) -> pd.Se
     return status.where(frame["phone_prefixe"].notna(), "Telephone M-PESA inexploitable")
 
 
+def _add_system_presence_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Ajoute les indicateurs de présence Turbo, G2 et Perfect sans modifier le grain."""
+    output = frame.copy()
+    turbo = (
+        output["present_dans_turbo"].astype("boolean").fillna(False).astype(bool)
+        if "present_dans_turbo" in output.columns
+        else pd.Series(False, index=output.index)
+    )
+    g2 = (
+        output["present_dans_g2"].astype("boolean").fillna(False).astype(bool)
+        if "present_dans_g2" in output.columns
+        else pd.Series(False, index=output.index)
+    )
+    perfect = numeric_column(output, "nb_clients_perfect").gt(0)
+    output["present_dans_turbo"] = turbo
+    output["present_dans_g2"] = g2
+    output["present_dans_perfect"] = perfect
+    output["present_dans_les_3_systemes"] = turbo & g2 & perfect
+    output["statut_presence_systemes"] = np.select(
+        [
+            turbo & g2 & perfect,
+            turbo & g2,
+            turbo & perfect,
+            g2 & perfect,
+            turbo,
+            g2,
+            perfect,
+        ],
+        [
+            "Present dans G2, Turbo et Perfect",
+            "Present dans G2 et Turbo - absent Perfect",
+            "Present dans Turbo et Perfect - absent G2",
+            "Present dans G2 et Perfect - absent Turbo",
+            "Present dans Turbo uniquement",
+            "Present dans G2 uniquement",
+            "Present dans Perfect uniquement",
+        ],
+        default="Presence systeme indeterminee",
+    )
+    return output
+
+
 def build_perfect_client_crosscheck(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame]:
     """Croise la population M-PESA avec Perfect, une seule ligne de synthese par telephone."""
     population = _build_mpesa_identity_population(prepared)
@@ -808,7 +858,15 @@ def build_perfect_client_crosscheck(prepared: MpesaPreparedData) -> dict[str, pd
     perfect_by_phone = _aggregate_perfect_clients(prepared.perfect_clients)
     perfect_available = isinstance(prepared.perfect_clients, pd.DataFrame) and not prepared.perfect_clients.empty
     if population.empty:
-        return {"synthese": pd.DataFrame(), "operations": operations, "perfect_agrege": perfect_by_phone}
+        return {
+            "synthese": pd.DataFrame(),
+            "operations": operations,
+            "perfect_agrege": perfect_by_phone,
+            "clients_perfect_dans_mpesa": pd.DataFrame(),
+            "clients_perfect_dans_turbo": pd.DataFrame(),
+            "clients_perfect_dans_turbo_et_mpesa": pd.DataFrame(),
+            "clients_trois_systemes": pd.DataFrame(),
+        }
 
     if not operations.empty:
         operation_summary = (
@@ -839,22 +897,41 @@ def build_perfect_client_crosscheck(prepared: MpesaPreparedData) -> dict[str, pd
     summary["statut_rapprochement_perfect"] = _perfect_match_status(summary, perfect_available)
     summary["nb_clients_perfect"] = numeric_column(summary, "nb_clients_perfect").astype(int)
     summary["trouve_dans_perfect"] = summary["nb_clients_perfect"].gt(0)
+    summary = _add_system_presence_columns(summary)
 
     if not operations.empty:
         identity_columns = [
             "cle_rapprochement", "customer_ids_turbo", "noms_clients_mpesa",
-            "systemes_mpesa", "sources_mpesa",
+            "systemes_mpesa", "sources_mpesa", "present_dans_turbo", "present_dans_g2",
         ]
         operations = operations.merge(summary[identity_columns], on="cle_rapprochement", how="left")
         if not perfect_by_phone.empty:
             operations = operations.merge(perfect_by_phone, on="phone_prefixe", how="left")
         operations["statut_rapprochement_perfect"] = _perfect_match_status(operations, perfect_available)
         operations["nb_clients_perfect"] = numeric_column(operations, "nb_clients_perfect").astype(int)
+        operations = _add_system_presence_columns(operations)
 
     summary = summary.sort_values(
         ["statut_rapprochement_perfect", "phone_prefixe"], na_position="last"
     ).reset_index(drop=True)
-    return {"synthese": summary, "operations": operations, "perfect_agrege": perfect_by_phone}
+    clients_perfect_dans_mpesa = summary.loc[
+        summary["present_dans_g2"] & summary["present_dans_perfect"]
+    ].reset_index(drop=True)
+    clients_perfect_dans_turbo = summary.loc[
+        summary["present_dans_turbo"] & summary["present_dans_perfect"]
+    ].reset_index(drop=True)
+    clients_perfect_dans_turbo_et_mpesa = summary.loc[
+        summary["present_dans_les_3_systemes"]
+    ].reset_index(drop=True)
+    return {
+        "synthese": summary,
+        "operations": operations,
+        "perfect_agrege": perfect_by_phone,
+        "clients_perfect_dans_mpesa": clients_perfect_dans_mpesa,
+        "clients_perfect_dans_turbo": clients_perfect_dans_turbo,
+        "clients_perfect_dans_turbo_et_mpesa": clients_perfect_dans_turbo_et_mpesa,
+        "clients_trois_systemes": clients_perfect_dans_turbo_et_mpesa,
+    }
 
 
 def _parse_money_series(series: pd.Series) -> pd.Series:
@@ -1499,13 +1576,16 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
     internal = fallback_category.eq("Operation interne Bisou")
     output["categorie_operation"] = fallback_category
     entry = direction.eq("Entree") & has_reference & ~internal
-    output.loc[entry & output["portal_has_loan"].fillna(False).astype(bool), "categorie_operation"] = "Remboursement prets"
-    output.loc[entry & ~output["portal_has_loan"].fillna(False).astype(bool) & output["portal_has_fixed"].fillna(False).astype(bool), "categorie_operation"] = "DAT"
+    portal_has_loan = output["portal_has_loan"].astype("boolean").fillna(False).astype(bool)
+    portal_has_fixed = output["portal_has_fixed"].astype("boolean").fillna(False).astype(bool)
+    portal_has_normal = output["portal_has_normal"].astype("boolean").fillna(False).astype(bool)
+    output.loc[entry & portal_has_loan, "categorie_operation"] = "Remboursement prets"
+    output.loc[entry & ~portal_has_loan & portal_has_fixed, "categorie_operation"] = "DAT"
     output.loc[
         entry
-        & ~output["portal_has_loan"].fillna(False).astype(bool)
-        & ~output["portal_has_fixed"].fillna(False).astype(bool)
-        & output["portal_has_normal"].fillna(False).astype(bool),
+        & ~portal_has_loan
+        & ~portal_has_fixed
+        & portal_has_normal,
         "categorie_operation",
     ] = "Depot normal"
     output["description_metier"] = output["categorie_operation"]
@@ -3405,8 +3485,12 @@ def create_g2_dat_word(
     daily_pivot = report.get("rapport_journalier_pivot", pd.DataFrame())
     daily_synthese = report.get("rapport_journalier_synthese", pd.DataFrame())
     transaction_detail = report.get("rapport_journalier_detail", pd.DataFrame())
+    if not isinstance(daily_pivot, pd.DataFrame) or daily_pivot.empty:
+        daily_pivot = build_entry_pivot(transaction_detail)
     generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
-    context = _g2_executive_context(report)
+    word_report = dict(report)
+    word_report["rapport_journalier_pivot"] = daily_pivot
+    context = _g2_executive_context(word_report)
 
     classified = daily_synthese.copy()
     if not classified.empty and "details_rapport" in classified.columns:
@@ -3522,7 +3606,7 @@ def create_g2_dat_word(
         document.add_paragraph().paragraph_format.space_after = Pt(0)
         return table
 
-    document.add_heading("Flux par devise", level=1)
+    document.add_heading("Synthese des flux G2 par devise", level=1)
     add_table(
         daily_pivot,
         ["currency_code", "nombre_entrees", "montant_total_entrees", "nombre_sorties", "montant_total_sorties", "solde_net_flux"],
@@ -3619,35 +3703,46 @@ def create_g2_dat_word(
 
 
 def create_excel_export(report: dict[str, Any]) -> bytes:
+    sheet_contract = [
+        ("synthese", "Synthese"),
+        ("extrait", "Extrait_MPESA"),
+        ("dat_final", "DAT_Final"),
+        ("forts_dat", "Forts_DAT"),
+        ("portefeuille_dat", "Portefeuille_DAT"),
+        ("mouvements_dat", "Mouvements_DAT"),
+        ("mouvements_epargne", "Mouvements_Epargne"),
+        ("credits", "Credits"),
+        ("g2_dat", "G2_DAT"),
+        ("rapport_g2_pivot", "Rapport_G2_Pivot"),
+        ("rapport_g2_comptages", "Rapport_G2_Comptages"),
+        ("rapport_g2_vertical", "Rapport_G2_Vertical"),
+        ("rapport_g2_synthese", "Rapport_G2_Synthese"),
+        ("rapport_g2_detail", "Rapport_G2_Detail"),
+        ("rapport_journalier_pivot", "Rapport_Journalier_Pivot"),
+        ("rapport_journalier_comptages", "Rapport_Journalier_Comptages"),
+        ("rapport_journalier_vertical", "Rapport_Journalier_Vertical"),
+        ("rapport_journalier_synthese", "Rapport_Journalier_Synthese"),
+        ("rapport_journalier_detail", "Rapport_Journalier_Detail"),
+        ("rapport_journalier_anomalies", "Anomalies_G2"),
+        ("retention_mensuelle", "Retention_Mensuelle"),
+        ("retention_operations", "Retention_Operations"),
+        ("retention_detail", "Retention_Detail"),
+        ("retention_definitions", "Retention_Definitions"),
+        ("perfect_clients", "Perfect_Clients"),
+        ("perfect_operations", "Perfect_Operations"),
+        ("clients_perfect_dans_mpesa", "Perfect_M_PESA"),
+        ("clients_perfect_dans_turbo", "Perfect_Turbo"),
+        ("clients_perfect_dans_turbo_et_mpesa", "Perfect_Turbo_M_PESA"),
+        ("clients_3_systemes", "Clients_3_Systemes"),
+        ("diagnostics", "Diagnostics"),
+    ]
     sheets = {
-        "Synthese": report.get("synthese", pd.DataFrame()),
-        "Extrait_MPESA": report.get("extrait", pd.DataFrame()),
-        "DAT_Final": report.get("dat_final", pd.DataFrame()),
-        "Forts_DAT": report.get("forts_dat", pd.DataFrame()),
-        "Portefeuille_DAT": report.get("portefeuille_dat", pd.DataFrame()),
-        "Mouvements_DAT": report.get("mouvements_dat", pd.DataFrame()),
-        "Mouvements_Epargne": report.get("mouvements_epargne", pd.DataFrame()),
-        "Credits": report.get("credits", pd.DataFrame()),
-        "G2_DAT": report.get("g2_dat", pd.DataFrame()),
-        "Rapport_G2_Pivot": report.get("rapport_g2_pivot", pd.DataFrame()),
-        "Rapport_G2_Comptages": report.get("rapport_g2_comptages", pd.DataFrame()),
-        "Rapport_G2_Vertical": report.get("rapport_g2_vertical", pd.DataFrame()),
-        "Rapport_G2_Synthese": report.get("rapport_g2_synthese", pd.DataFrame()),
-        "Rapport_G2_Detail": report.get("rapport_g2_detail", pd.DataFrame()),
-        "Rapport_Journalier_Pivot": report.get("rapport_journalier_pivot", pd.DataFrame()),
-        "Rapport_Journalier_Comptages": report.get("rapport_journalier_comptages", pd.DataFrame()),
-        "Rapport_Journalier_Vertical": report.get("rapport_journalier_vertical", pd.DataFrame()),
-        "Rapport_Journalier_Synthese": report.get("rapport_journalier_synthese", pd.DataFrame()),
-        "Rapport_Journalier_Detail": report.get("rapport_journalier_detail", pd.DataFrame()),
-        "Anomalies_G2": report.get("rapport_journalier_anomalies", pd.DataFrame()),
-        "Retention_Mensuelle": report.get("retention_mensuelle", pd.DataFrame()),
-        "Retention_Operations": report.get("retention_operations", pd.DataFrame()),
-        "Retention_Detail": report.get("retention_detail", pd.DataFrame()),
-        "Retention_Definitions": report.get("retention_definitions", pd.DataFrame()),
-        "Perfect_Clients": report.get("perfect_clients", pd.DataFrame()),
-        "Perfect_Operations": report.get("perfect_operations", pd.DataFrame()),
-        "Diagnostics": report.get("diagnostics", pd.DataFrame()),
+        sheet_name: report[report_key]
+        for report_key, sheet_name in sheet_contract
+        if report_key in report
     }
+    if not sheets:
+        sheets = {"Information": pd.DataFrame({"message": ["Aucune donnee a exporter."]})}
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         for sheet_name, frame in sheets.items():

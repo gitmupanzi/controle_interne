@@ -335,7 +335,7 @@ Ce rapport permet notamment :
 
 Si une seule extraction est présente, l’application le signale simplement avec un message en français courant.
 
-## Solution M-PESA / G2 / Turbo
+## Solution M-PESA / G2 / Turbo / Perfect
 
 L’onglet `Solution M-PESA` est un module indépendant qui fonctionne par téléversement de fichiers Excel. Il analyse les entrées et sorties M-PESA G2, les écritures Portal/Turbo, les comptes d’épargne, les DAT, les crédits et les correspondances clients avec G2 et Perfect.
 
@@ -379,31 +379,35 @@ Pour les informations client :
 - `Opposite Party` fournit le téléphone et le nom G2; le numéro est normalisé au format `243...`.
 - `Nom_client` enrichit les rapports Turbo lorsque G2 est disponible.
 - `Compte créer` provient d’abord de `Clients.created_at`, puis de l’épargne courante et enfin du DAT.
-- `Phone_Prefixe` rapproche les clients M-PESA avec Perfect. Un numéro partagé par plusieurs fiches est agrégé avant la jointure afin de ne pas multiplier les opérations.
+- `Phone_Prefixe` rapproche les clients M-PESA avec Perfect. La présence est contrôlée séparément dans G2, Turbo et Perfect afin de produire l'intersection stricte des trois systèmes. Un numéro partagé par plusieurs fiches est agrégé avant la jointure afin de ne pas multiplier les opérations.
 
 ### Restitutions disponibles
 
 Le sous-onglet `G2 / DAT` produit :
 
-- un filtre combiné sur la date et l'heure de `Completion Time`, puis sur le sens : entrées, sorties ou tous les flux
+- un filtre combiné sur la date et l'heure de `Completion Time`, puis sur le sens : entrées, sorties ou tous les flux; les heures par défaut `00:00:00` et `23:59:59` conservent la journée complète
 - une synthèse des entrées, sorties, volumes et soldes nets par devise
 - une ventilation par type d'opération incluant les paiements B2C et demandes de crédit
 - une synthèse verticale par devise : `Devise`, `Synthese sur le Portail BB Digital`, `Montant`
-- un tableau unique `Transactions classees`, trié par devise puis date décroissante, avec les colonnes :
+- un tableau unique `Transactions`, trié par devise puis date décroissante, avec les colonnes :
   `date`, `receipt_no`, `currency_code`, `details_rapport`, `opposite_party`, `duree`, `compte_cree`, `montant`, `montant_entree`, `montant_sortie`, `balance_numeric`
 - un rapprochement G2/Portal et G2/DAT avec les contrôles téléphone, devise, montant et date
 - un tableau d'anomalies conservant les références non rapprochées, doublons et écarts
 - un export Excel du rapport journalier
 - un rapport de fidélisation mensuelle M+1 et à 90 jours, séparé par devise et type d'opération
-- un export PDF court pour la Direction generale, genere localement avec Microsoft Edge, Google Chrome ou Chromium
-- un export Word modifiable avec la synthèse exécutive et, en annexe paysage, le même tableau `Transactions classees` que l'écran
+- un export Word modifiable avec `Synthese des flux G2 par devise`, la synthèse exécutive et, en annexe paysage, le même tableau `Transactions` que l'écran
 
-Le sous-onglet `Perferct_client` produit :
+Le sous-onglet `Perfect_client` produit trois populations inclusives au grain d'un téléphone normalisé :
 
-- une ligne de synthèse par téléphone M-PESA observé dans Turbo ou G2
+- `Perfect dans M_PESA` : clients Perfect dont `Phone_Prefixe` est observé dans G2
+- `Perfect dans Turbo` : clients Perfect dont `Phone_Prefixe` est observé dans au moins une source Turbo
+- `Perfect dans Turbo et M_PESA` : intersection stricte Perfect–Turbo–G2
+- une ligne de synthèse par téléphone, avec toutes les identités Perfect partageant éventuellement ce numéro
+- les indicateurs `présent dans Turbo`, `présent dans G2`, `présent dans Perfect` et `présent dans les 3 systèmes`
+- une présence Turbo confirmée dès que le téléphone est observé dans une source Turbo, une présence G2 confirmée depuis `Opposite Party`, et une présence Perfect confirmée par `Phone_Prefixe`
 - les statuts `correspondance unique`, `plusieurs clients`, `non trouvé` et `téléphone inexploitable`
 - le détail des opérations observées dans Turbo/G2, avec leur source et leur devise
-- un export Excel séparant la synthèse client du détail des opérations
+- un export Excel séparant les clients des trois systèmes, la population générale et le détail des opérations
 
 Exemple de synthèse attendue :
 
@@ -421,29 +425,13 @@ USD    | Total USD                          | 4 777
 
 ### Exports M-PESA
 
-Les exports Excel du module peuvent contenir :
+Les exports Excel sont volontairement limités aux feuilles importantes pour réduire le temps de génération.
 
-Dans `Extrait client`, la feuille `Extrait_MPESA` reprend les filtres appliqués aux mouvements. Les autres feuilles conservent la situation complète du client sélectionné afin de préserver le contexte de contrôle.
+Dans `Extrait client`, le classeur contient `Synthese`, `Extrait_MPESA`, `DAT_Final`, `Credits`, `G2_DAT` et `Diagnostics`.
 
-- `G2_DAT`
-- `Rapport_G2_Pivot`
-- `Rapport_G2_Comptages`
-- `Rapport_G2_Vertical`
-- `Rapport_G2_Synthese`
-- `Rapport_G2_Detail`
-- `Rapport_Journalier_Pivot`
-- `Rapport_Journalier_Comptages`
-- `Rapport_Journalier_Vertical`
-- `Rapport_Journalier_Synthese`
-- `Rapport_Journalier_Detail`
-- `Anomalies_G2`
-- `Retention_Mensuelle`
-- `Retention_Operations`
-- `Retention_Detail`
-- `Retention_Definitions`
-- `Perfect_Clients`
-- `Perfect_Operations`
-- `Diagnostics`
+Dans `G2 / DAT`, le classeur contient `Rapport_Journalier_Comptages`, `Rapport_Journalier_Synthese`, `Rapport_Journalier_Detail`, `Anomalies_G2`, `G2_DAT`, `Retention_Mensuelle` et `Retention_Detail`.
+
+Dans `Perfect_client`, le classeur contient `Perfect_M_PESA`, `Perfect_Turbo` et `Perfect_Turbo_M_PESA`. L'export des forts DAT conserve uniquement `Forts_DAT` et `Portefeuille_DAT`.
 
 ## Cycle Suivi clients CRM
 
@@ -604,8 +592,8 @@ Les tests couvrent notamment :
 - les règles de contrôle renforcées pour l’épargne et le crédit
 - la solution M-PESA, le rapprochement `Receipt No = ref_no`, la priorité de classification Portal et les rapports journaliers
 - les reçus G2 dupliqués, références absentes et écarts de téléphone, devise, montant ou date
-- l'ordre partagé des colonnes de `Transactions classees` dans Streamlit et Word
-- les exports Excel, PDF et Word G2/DAT
+- l'ordre partagé des colonnes de `Transactions` dans Streamlit et Word
+- les exports Excel ciblés et Word G2/DAT
 
 Commande de vérification :
 

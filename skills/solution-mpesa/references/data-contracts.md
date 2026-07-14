@@ -93,6 +93,37 @@ Ne jamais utiliser une sortie comme candidate DAT. Conserver `Autre entree`, `Au
 - Résoudre vers `customer_id` avant de construire l'extrait client.
 - Permettre la recherche de l'extrait par `customer_id`, téléphone et nom G2 lorsque le fichier G2 est chargé.
 - Agréger Perfect par `Phone_Prefixe` avant la jointure et conserver `nb_clients_perfect` ainsi que les noms Perfect concaténés.
+- Matérialiser `present_dans_turbo`, `present_dans_g2`, `present_dans_perfect` et `present_dans_les_3_systemes` au grain d'un téléphone normalisé. Le dataset `clients_trois_systemes` ne conserve que l'intersection stricte G2–Turbo–Perfect.
+
+## Rapprochement Perfect_client
+
+La population de départ contient les téléphones observés dans au moins une source M-PESA. Perfect enrichit cette population mais ne crée pas, à lui seul, une ligne dans la synthèse.
+
+| Indicateur | Condition |
+|---|---|
+| `present_dans_turbo` | Téléphone valide observé dans Transactions, Clients, épargne courante, DAT ou Crédits Turbo |
+| `present_dans_g2` | Téléphone valide extrait de `Opposite Party` dans Transactions G2 |
+| `present_dans_perfect` | Au moins une fiche de l'export 122 retrouvée après normalisation de `Phone_Prefixe` |
+| `present_dans_les_3_systemes` | Les trois indicateurs précédents valent vrai |
+
+Règles de restitution :
+
+- conserver une ligne de synthèse par téléphone normalisé;
+- agréger les fiches Perfect partageant le même téléphone avant la jointure;
+- conserver les noms, identifiants, codes clients, gestionnaires et collecteurs Perfect concaténés;
+- utiliser `clients_trois_systemes` pour la vue prioritaire et la feuille Excel `Clients_3_Systemes`;
+- conserver la population générale dans `Perfect_Clients` et les opérations G2/Turbo dans `Perfect_Operations`;
+- ne pas attribuer d'opérations financières à Perfect, car l'export 122 décrit les clients et la qualité de leurs téléphones.
+
+Populations attendues :
+
+| Dataset | Condition | Feuille Excel |
+|---|---|---|
+| `clients_perfect_dans_mpesa` | `present_dans_g2` et `present_dans_perfect` | `Perfect_M_PESA` |
+| `clients_perfect_dans_turbo` | `present_dans_turbo` et `present_dans_perfect` | `Perfect_Turbo` |
+| `clients_perfect_dans_turbo_et_mpesa` | `present_dans_turbo`, `present_dans_g2` et `present_dans_perfect` | `Perfect_Turbo_M_PESA` |
+
+Les deux premières populations incluent les clients de la troisième. Compter les fiches Perfect avec la somme de `nb_clients_perfect`, mais conserver une seule ligne par téléphone dans les tableaux.
 
 ## Tableau Transactions classées
 
@@ -114,6 +145,8 @@ balance_numeric
 
 Trier par `currency_code` croissant, puis `date` décroissante. Le Word doit reprendre un seul tableau en orientation paysage, avec les mêmes colonnes et le même ordre que l'écran.
 
+Le bloc Word `Synthese des flux G2 par devise` utilise `rapport_journalier_pivot`. Ce pivot appartient au contexte Word même s'il n'est pas écrit comme feuille Excel. S'il manque, le générateur doit le reconstruire avec `build_entry_pivot(rapport_journalier_detail)`.
+
 ## Filtres et fidélisation
 
 - Appliquer d'abord les bornes inclusives de date et d'heure de `Completion Time`, puis le multisélecteur de sens. Sans heure explicite, conserver toute la journée de début et de fin.
@@ -130,7 +163,7 @@ Trier par `currency_code` croissant, puis `date` décroissante. Le Word doit rep
 - G2/DAT : `build_g2_dat_crosscheck`, `build_g2_entry_report`, `build_g2_daily_savings_report`, `build_g2_retention_report`.
 - Perfect : `build_perfect_client_crosscheck`.
 - Recherche : `search_customers`, `resolve_customer_id`.
-- Export : `create_excel_export`, `create_g2_dat_pdf`, `create_g2_dat_word`.
+- Export : `create_excel_export`, `create_g2_dat_word`.
 
 ## Conditions d'interprétation
 
@@ -138,4 +171,5 @@ Trier par `currency_code` croissant, puis `date` décroissante. Le Word doit rep
 - Une absence de correspondance est un résultat de contrôle, pas une ligne à supprimer.
 - Un fichier facultatif absent doit réduire le rapport proprement sans bloquer les analyses encore possibles.
 - Toute synthèse financière doit afficher la devise et éviter un total multidevise.
-- Le PDF est une synthèse Direction générale; le Word est modifiable et contient `Transactions classees`; l'Excel conserve les feuilles détaillées et auditables.
+- Le Word est la restitution modifiable destinée à la Direction générale et contient `Transactions`; aucun export PDF n'est généré dans l'interface.
+- L'Excel écrit uniquement les feuilles explicitement demandées par l'appelant afin de réduire le temps et la taille de génération.
