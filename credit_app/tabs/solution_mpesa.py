@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import time
 from io import BytesIO
 from typing import Any
 
@@ -12,6 +13,7 @@ from credit_app.services.mpesa_analysis import (
     CURRENT_SAVINGS_REQUIRED_COLUMNS,
     CUSTOMERS_REQUIRED_COLUMNS,
     FIXED_SAVINGS_REQUIRED_COLUMNS,
+    G2_CLASSIFIED_TRANSACTION_COLUMNS,
     G2_TRANSACTION_REQUIRED_COLUMNS,
     LOAN_USEFUL_COLUMNS,
     PERFECT_CLIENTS_REQUIRED_COLUMNS,
@@ -21,10 +23,13 @@ from credit_app.services.mpesa_analysis import (
     build_large_dat_summary,
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
+    build_g2_retention_report,
     build_load_report,
     build_mpesa_statement,
     build_perfect_client_crosscheck,
     create_excel_export,
+    create_g2_dat_pdf,
+    create_g2_dat_word,
     enrich_transactions_with_g2_customer_names,
     enrich_turbo_with_g2_customer_names,
     filter_g2_transactions_by_completion_time,
@@ -69,6 +74,16 @@ def _format_count(value: Any) -> str:
         return "-"
 
 
+def _format_percent(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if pd.isna(number):
+        return "-"
+    return f"{number:.1f}%"
+
+
 @st.cache_data(show_spinner=False)
 def _read_excel_bytes(file_bytes: bytes, file_name: str) -> pd.DataFrame:
     if not file_bytes:
@@ -83,6 +98,32 @@ def _uploaded_dataframe(uploaded_file: Any) -> pd.DataFrame:
     if uploaded_file is None:
         return pd.DataFrame()
     return _read_excel_bytes(uploaded_file.getvalue(), uploaded_file.name)
+
+
+@st.cache_data(show_spinner=False)
+def _create_g2_dat_pdf_cached(
+    pdf_report: dict[str, Any],
+    period_text: str,
+    direction_label: str,
+) -> bytes:
+    return create_g2_dat_pdf(
+        pdf_report,
+        period_text=period_text,
+        direction_label=direction_label,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _create_g2_dat_word_cached(
+    word_report: dict[str, Any],
+    period_text: str,
+    direction_label: str,
+) -> bytes:
+    return create_g2_dat_word(
+        word_report,
+        period_text=period_text,
+        direction_label=direction_label,
+    )
 
 
 def _render_expected_columns(title: str, columns: set[str]) -> None:
@@ -762,28 +803,207 @@ def _render_g2_report_export(
     daily_comptages: pd.DataFrame,
     daily_synthese: pd.DataFrame,
     daily_detail: pd.DataFrame,
+    daily_anomalies: pd.DataFrame,
     g2_dat: pd.DataFrame,
+    retention_report: dict[str, pd.DataFrame],
     date_start: Any | None,
     date_end: Any | None,
     direction_suffix: str,
+    period_text: str,
+    direction_label: str,
 ) -> None:
-    render_panel_title("5. Export du rapport")
-    report_bytes = create_excel_export(
-        {
-            "rapport_journalier_pivot": daily_pivot,
-            "rapport_journalier_comptages": daily_comptages,
-            "rapport_journalier_synthese": daily_synthese,
-            "rapport_journalier_detail": daily_detail,
-            "g2_dat": g2_dat,
-        }
-    )
+    render_panel_title("6. Export du rapport")
+    export_report = {
+        "rapport_journalier_pivot": daily_pivot,
+        "rapport_journalier_comptages": daily_comptages,
+        "rapport_journalier_synthese": daily_synthese,
+        "rapport_journalier_detail": daily_detail,
+        "rapport_journalier_anomalies": daily_anomalies,
+        "g2_dat": g2_dat,
+        "retention_mensuelle": retention_report.get("mensuelle", pd.DataFrame()),
+        "retention_operations": retention_report.get("operations", pd.DataFrame()),
+        "retention_detail": retention_report.get("detail_clients", pd.DataFrame()),
+        "retention_definitions": retention_report.get("definitions", pd.DataFrame()),
+    }
+    report_bytes = create_excel_export(export_report)
     period_suffix = f"{date_start:%Y%m%d}_{date_end:%Y%m%d}" if date_start is not None and date_end is not None else "complet"
-    st.download_button(
-        "Telecharger le rapport G2 / DAT complet",
-        data=report_bytes,
-        file_name=f"rapport_g2_dat_{period_suffix}_{direction_suffix}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        width="stretch",
+    excel_column, pdf_column, word_column = st.columns(3)
+    with excel_column:
+        st.download_button(
+            "Telecharger le rapport Excel",
+            data=report_bytes,
+            file_name=f"rapport_g2_dat_{period_suffix}_{direction_suffix}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+        )
+    with pdf_column:
+        try:
+            pdf_bytes = _create_g2_dat_pdf_cached(export_report, period_text, direction_label)
+        except RuntimeError as exc:
+            st.warning(str(exc))
+        else:
+            st.download_button(
+                "Telecharger la synthese PDF",
+                data=pdf_bytes,
+                file_name=f"rapport_g2_dat_{period_suffix}_{direction_suffix}.pdf",
+                mime="application/pdf",
+                width="stretch",
+            )
+    with word_column:
+        try:
+            word_bytes = _create_g2_dat_word_cached(export_report, period_text, direction_label)
+        except RuntimeError as exc:
+            st.warning(str(exc))
+        else:
+            st.download_button(
+                "Telecharger le rapport Word",
+                data=word_bytes,
+                file_name=f"rapport_g2_dat_{period_suffix}_{direction_suffix}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                width="stretch",
+            )
+    st.caption(
+        "Le PDF reste une synthese courte pour la Direction generale. "
+        "Le Word reprend le tableau Transactions classees dans le meme ordre sur une page paysage; "
+        "l'Excel conserve le detail transactionnel et les controles auditables."
+    )
+
+
+def _render_g2_retention_report(retention_report: dict[str, pd.DataFrame]) -> None:
+    render_panel_title("3. Fidelisation des clients M-PESA")
+    render_summary_box(
+        "Definitions du rapport",
+        [
+            "La base mensuelle correspond aux telephones clients distincts ayant une operation G2 eligible, par devise.",
+            "Retention M+1 : part de cette base revenue pendant le mois civil suivant.",
+            "Retention 90 jours : part de cette base revenue dans les 90 jours suivant la fin du mois de base.",
+            "Les operations internes, les telephones invalides et les statuts explicitement en echec ou annules sont exclus.",
+            "Un taux reste vide tant que toute sa fenetre d'observation n'est pas disponible.",
+        ],
+    )
+    monthly = retention_report.get("mensuelle", pd.DataFrame())
+    if monthly.empty:
+        st.info("Aucune activite client eligible ne permet de construire le rapport de fidelisation.")
+        return
+
+    observation_start = pd.to_datetime(monthly["debut_observation"], errors="coerce").min()
+    observation_end = pd.to_datetime(monthly["fin_observation"], errors="coerce").max()
+    if pd.notna(observation_start) and pd.notna(observation_end):
+        st.caption(
+            f"Fenetre d'observation : du {observation_start:%d/%m/%Y} au {observation_end:%d/%m/%Y}. "
+            "Les devises sont calculees et presentees separement."
+        )
+
+    for currency, currency_frame in monthly.groupby("currency_code", dropna=False):
+        latest_base = currency_frame.sort_values("periode").iloc[-1]
+        m1_rows = currency_frame.dropna(subset=["retention_m1_pct"]).sort_values("periode")
+        day90_rows = currency_frame.dropna(subset=["retention_90j_pct"]).sort_values("periode")
+        latest_m1 = m1_rows.iloc[-1] if not m1_rows.empty else None
+        latest_90 = day90_rows.iloc[-1] if not day90_rows.empty else None
+        render_panel_title(f"Devise {currency}")
+        render_kpi_cards(
+            [
+                (
+                    "Clients actifs",
+                    _format_count(latest_base.get("clients_actifs_mois_base")),
+                    f"Mois {latest_base.get('mois', '-')}",
+                    "blue",
+                ),
+                (
+                    "Retention M+1",
+                    _format_percent(latest_m1.get("retention_m1_pct")) if latest_m1 is not None else "-",
+                    f"Mois {latest_m1.get('mois')}" if latest_m1 is not None else "Fenetre incomplete",
+                    "green",
+                ),
+                (
+                    "Retention 90 jours",
+                    _format_percent(latest_90.get("retention_90j_pct")) if latest_90 is not None else "-",
+                    f"Mois {latest_90.get('mois')}" if latest_90 is not None else "Fenetre incomplete",
+                    "navy",
+                ),
+            ]
+        )
+
+    chart_data = monthly.melt(
+        id_vars=["periode", "currency_code"],
+        value_vars=["retention_m1_pct", "retention_90j_pct"],
+        var_name="indicateur",
+        value_name="taux",
+    ).dropna(subset=["taux"])
+    if not chart_data.empty:
+        chart_data["indicateur"] = chart_data["indicateur"].map(
+            {
+                "retention_m1_pct": "Retention M+1",
+                "retention_90j_pct": "Retention 90 jours",
+            }
+        )
+        fig = px.line(
+            chart_data,
+            x="periode",
+            y="taux",
+            color="indicateur",
+            facet_col="currency_code",
+            markers=True,
+            labels={"periode": "Mois de base", "taux": "Taux", "indicateur": "Indicateur"},
+        )
+        fig.update_yaxes(range=[0, 100], ticksuffix="%")
+        style_standard_line(fig, height=380, tickangle=-20)
+        st_plot(fig, key="mpesa_g2_retention_trend", height=380)
+    else:
+        st.warning(
+            "La periode chargee est trop courte pour calculer un taux complet. "
+            "Le rapport sera alimente automatiquement lorsque les mois suivants seront disponibles."
+        )
+
+    trailing_count = int(
+        (~monthly["eligible_retention_m1"].astype(bool) | ~monthly["eligible_retention_90j"].astype(bool)).sum()
+    )
+    if trailing_count:
+        st.caption(
+            f"{trailing_count} ligne(s) mensuelle(s) recente(s) ont au moins une fenetre encore incomplete; "
+            "leurs taux concernes restent vides."
+        )
+
+    monthly_columns = [
+        "mois",
+        "currency_code",
+        "clients_actifs_mois_base",
+        "clients_retenus_m1",
+        "retention_m1_pct",
+        "clients_retenus_90j",
+        "retention_90j_pct",
+        "eligible_retention_m1",
+        "eligible_retention_90j",
+    ]
+    st.dataframe(monthly[monthly_columns], width="stretch", hide_index=True)
+
+    with st.expander("Afficher la fidelisation par type d'operation", expanded=False):
+        st.caption(
+            "Un client ayant plusieurs types d'operation pendant un meme mois figure dans chaque segment concerne; "
+            "les segments ne doivent donc pas etre additionnes."
+        )
+        st.dataframe(retention_report.get("operations", pd.DataFrame()), width="stretch", hide_index=True)
+    with st.expander("Afficher le detail client de la fidelisation", expanded=False):
+        detail = retention_report.get("detail_clients", pd.DataFrame())
+        detail_columns = [
+            "mois",
+            "currency_code",
+            "phone_prefixe",
+            "Nom_client",
+            "types_operations",
+            "nombre_operations_mois_base",
+            "montant_entrees_mois_base",
+            "montant_sorties_mois_base",
+            "premier_retour",
+            "delai_premier_retour_jours",
+            "retenu_m1",
+            "retenu_90j",
+        ]
+        detail_columns = [column for column in detail_columns if column in detail.columns]
+        st.dataframe(detail[detail_columns], width="stretch", hide_index=True)
+    st.caption(
+        "Les dimensions Agence, Groupe produit et Renouvellement de credit du PDF source ne sont pas presentes dans G2; "
+        "elles ne sont pas estimees."
     )
 
 
@@ -800,28 +1020,52 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     filtered_g2 = prepared.g2_transactions.copy()
     date_start = None
     date_end = None
+    time_start = None
+    time_end = None
     render_panel_title("1. Période analysée (Completion Time)")
     if not completion_times.empty:
         completion_key = f"{completion_times.min():%Y%m%d}_{completion_times.max():%Y%m%d}_{len(completion_times)}"
         date_columns = st.columns(2)
-        date_start = date_columns[0].date_input(
-            "Completion Time - date de debut",
-            value=completion_times.min().date(),
-            min_value=completion_times.min().date(),
-            max_value=completion_times.max().date(),
-            key=f"mpesa_g2_completion_start_{completion_key}",
-        )
-        date_end = date_columns[1].date_input(
-            "Completion Time - date de fin",
-            value=completion_times.max().date(),
-            min_value=completion_times.min().date(),
-            max_value=completion_times.max().date(),
-            key=f"mpesa_g2_completion_end_{completion_key}",
-        )
-        if date_start > date_end:
-            st.warning("La date de debut doit etre anterieure ou egale a la date de fin.")
+        with date_columns[0]:
+            date_start = st.date_input(
+                "Completion Time - date de debut",
+                value=completion_times.min().date(),
+                min_value=completion_times.min().date(),
+                max_value=completion_times.max().date(),
+                key=f"mpesa_g2_completion_start_{completion_key}",
+            )
+            time_start = st.time_input(
+                "Heure de debut",
+                value=time(0, 0, 0),
+                step=60,
+                key=f"mpesa_g2_completion_start_time_{completion_key}",
+            )
+        with date_columns[1]:
+            date_end = st.date_input(
+                "Completion Time - date de fin",
+                value=completion_times.max().date(),
+                min_value=completion_times.min().date(),
+                max_value=completion_times.max().date(),
+                key=f"mpesa_g2_completion_end_{completion_key}",
+            )
+            time_end = st.time_input(
+                "Heure de fin",
+                value=time(23, 59, 59),
+                step=60,
+                key=f"mpesa_g2_completion_end_time_{completion_key}",
+            )
+        period_start = pd.Timestamp.combine(date_start, time_start)
+        period_end = pd.Timestamp.combine(date_end, time_end)
+        if period_start > period_end:
+            st.warning("La date et l'heure de debut doivent etre anterieures ou egales a la date et l'heure de fin.")
             return
-        filtered_g2 = filter_g2_transactions_by_completion_time(filtered_g2, date_start, date_end)
+        filtered_g2 = filter_g2_transactions_by_completion_time(
+            filtered_g2,
+            date_start,
+            date_end,
+            time_start,
+            time_end,
+        )
     else:
         st.caption("Completion Time n'est pas disponible; l'ensemble du fichier G2 est analyse.")
 
@@ -848,8 +1092,9 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         direction_label = "Sorties"
     filtered_g2 = filter_g2_transactions_by_direction(filtered_g2, selected_directions)
     period_text = (
-        f"du {date_start:%d/%m/%Y} au {date_end:%d/%m/%Y}"
-        if date_start is not None and date_end is not None
+        f"du {date_start:%d/%m/%Y} à {time_start:%H:%M:%S} "
+        f"au {date_end:%d/%m/%Y} à {time_end:%H:%M:%S}"
+        if date_start is not None and date_end is not None and time_start is not None and time_end is not None
         else "sur toute la periode disponible"
     )
     st.caption(f"{len(filtered_g2)} transaction(s) G2 retenue(s) {period_text} - {direction_label.lower()}.")
@@ -863,14 +1108,17 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     daily_pivot = daily_report.get("pivot", pd.DataFrame())
     daily_synthese = daily_report.get("synthese", pd.DataFrame())
     daily_comptages = daily_report.get("comptages", pd.DataFrame())
+    daily_anomalies = daily_report.get("anomalies", pd.DataFrame())
+    retention_report = build_g2_retention_report(filtered_prepared, daily_detail=daily_detail)
 
     render_summary_box(
         "Lecture unique du sous-onglet",
         [
             "Le sens repose sur les colonnes du releve : `Paid In` = entree et `Withdrawn` = sortie.",
-            "Chaque transaction est classee une seule fois : DAT, depot, remboursement, paiement B2C, demande de credit ou operation interne.",
+            "Une seule ligne analytique est conservee par `Receipt No.` afin de ne pas compter deux fois une operation.",
+            "La classification utilise d'abord `Receipt No. = ref_no`, puis `account_type` et `description` du portail; la regle G2 sert de repli.",
             "Les nombres, montants d'entree, montants de sortie et soldes nets sont presentes separement pour chaque devise.",
-            "Le rapprochement `Receipt No. = ref_no` est affiche ensuite comme controle technique, pas comme une seconde analyse.",
+            "Le telephone, la devise, le montant et la date sont controles sans additionner les ecritures techniques du portail.",
         ],
     )
 
@@ -925,48 +1173,82 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         with st.expander("Afficher la synthese detaillee en colonnes", expanded=False):
             st.dataframe(daily_pivot, width="stretch", hide_index=True)
 
-    render_panel_title("3. Transactions classees")
+    _render_g2_retention_report(retention_report)
+
+    render_panel_title("4. Transactions classees")
     with st.expander("Afficher le detail des transactions G2", expanded=False):
         daily_view = _apply_local_multiselect_filters(
             daily_detail,
-            ["currency_code", "sens_flux", "details_rapport", "reason_type", "duree", "dat_match_rule", "transaction_status"],
+            [
+                "currency_code",
+                "sens_flux",
+                "details_rapport",
+                "reason_type",
+                "duree",
+                "dat_match_rule",
+                "transaction_status",
+                "statut_rapprochement",
+                "controle_telephone",
+                "controle_devise",
+                "controle_montant",
+                "controle_date",
+            ],
             key_prefix="mpesa_daily_g2_report_filter",
         )
         st.caption(f"{len(daily_view)} ligne(s) affichee(s).")
-        detail_columns = [
-            "date",
-            "receipt_no",
-            "currency_code",
-            "sens_flux",
-            "details_rapport",
-            "reason_type",
-            "Nom_client",
-            "opposite_party",
-            "duree",
-            "compte_cree",
-            "montant",
-            "montant_entree",
-            "montant_sortie",
-            "balance_numeric",
-            "transaction_status",
-        ]
+        detail_columns = G2_CLASSIFIED_TRANSACTION_COLUMNS
         detail_columns = [column for column in detail_columns if column in daily_view.columns]
         st.dataframe(daily_view[detail_columns], width="stretch", hide_index=True)
 
-    render_panel_title("4. Controle de rapprochement G2 / DAT")
+    if daily_anomalies.empty:
+        st.success("Aucune anomalie de rapprochement detectee dans le perimetre analyse.")
+    else:
+        st.warning(
+            f"{len(daily_anomalies)} operation(s) necessitent une verification. "
+            "Elles sont conservees dans le detail et dans l'onglet Anomalies_G2 de l'export Excel."
+        )
+        with st.expander("Afficher les anomalies G2 / Portail", expanded=False):
+            anomaly_columns = [
+                "receipt_no",
+                "completion_time",
+                "currency_code",
+                "transaction_amount_numeric",
+                "opposite_party",
+                "nombre_lignes_g2_reference",
+                "devises_g2_reference",
+                "statuts_g2_reference",
+                "montants_g2_reference",
+                "nombre_ecritures_portal",
+                "statut_rapprochement",
+                "controle_telephone",
+                "controle_devise",
+                "controle_montant",
+                "controle_date",
+                "motif_anomalie",
+            ]
+            anomaly_columns = [column for column in anomaly_columns if column in daily_anomalies.columns]
+            st.dataframe(daily_anomalies[anomaly_columns], width="stretch", hide_index=True)
+
+    render_panel_title("5. Controle de rapprochement G2 / DAT")
     render_summary_box(
         "Role du controle",
         [
             "`Receipt No.` est rapproche en priorite avec `ref_no` du fichier Transactions M-PESA.",
-            "Le telephone extrait de `Opposite Party` sert de solution de repli.",
-            "Les lignes non rapprochees restent visibles pour verification.",
+            "Le telephone extrait de `Opposite Party`, la devise, le montant et la date servent de controles independants.",
+            "Les lignes non rapprochees et les ecarts restent visibles pour verification et export.",
         ],
     )
 
     if report is not None:
         g2_dat = report.get("g2_dat", pd.DataFrame())
         if date_start is not None or date_end is not None:
-            g2_dat = filter_g2_transactions_by_completion_time(g2_dat, date_start, date_end)
+            g2_dat = filter_g2_transactions_by_completion_time(
+                g2_dat,
+                date_start,
+                date_end,
+                time_start,
+                time_end,
+            )
         st.caption("Controle limite au client selectionne dans l'onglet Extrait client.")
     else:
         g2_dat = build_g2_dat_crosscheck(filtered_prepared)
@@ -985,14 +1267,27 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             daily_comptages=daily_comptages,
             daily_synthese=daily_synthese,
             daily_detail=daily_detail,
+            daily_anomalies=daily_anomalies,
             g2_dat=g2_dat,
+            retention_report=retention_report,
             date_start=date_start,
             date_end=date_end,
             direction_suffix=direction_suffix,
+            period_text=period_text,
+            direction_label=direction_label,
         )
         return
 
-    matched = int(g2_dat["customer_id_dat"].astype("string").fillna("").ne("").sum()) if "customer_id_dat" in g2_dat.columns else 0
+    if "statut_rapprochement" in g2_dat.columns:
+        reference_status = g2_dat["statut_rapprochement"].astype("string").fillna("")
+        matched = int((reference_status.ne("") & reference_status.ne("Non rapproche")).sum())
+        exact_matches = int(reference_status.eq("Rapproche exact").sum())
+    else:
+        matched = int(g2_dat["customer_id_dat"].astype("string").fillna("").ne("").sum()) if "customer_id_dat" in g2_dat.columns else 0
+        exact_matches = matched
+    anomaly_count = int(
+        g2_dat.get("est_anomalie", pd.Series(False, index=g2_dat.index)).fillna(False).astype(bool).sum()
+    )
     dat_operation_count = (
         int(g2_dat["reference_dat_operation"].astype("string").fillna("").ne("").sum())
         if "reference_dat_operation" in g2_dat.columns
@@ -1002,15 +1297,27 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         [
             ("Transactions G2", _format_count(len(g2_dat)), "Lignes analysees", "blue"),
             ("DAT operation", _format_count(dat_operation_count), "Lignes FIXED SAVINGS via ref_no", "green"),
-            ("Transactions rapprochees", _format_count(matched), "Via ref_no ou telephone", "navy"),
-            ("Non rapproches", _format_count(len(g2_dat) - matched), "A verifier", "orange"),
+            ("Rapprochements exacts", _format_count(exact_matches), "Receipt No = ref_no et controles conformes", "navy"),
+            ("Anomalies", _format_count(anomaly_count), f"Dont {len(g2_dat) - matched} non rapproche(s)", "orange"),
         ]
     )
 
     with st.expander("Afficher le detail du controle de rapprochement", expanded=False):
         filtered = _apply_local_multiselect_filters(
             g2_dat,
-            ["currency_code", "mode_rapprochement", "statut_rapprochement_dat", "transaction_status", "customer_id_dat", "phone_prefixe"],
+            [
+                "currency_code",
+                "statut_rapprochement",
+                "controle_telephone",
+                "controle_devise",
+                "controle_montant",
+                "controle_date",
+                "mode_rapprochement",
+                "statut_rapprochement_dat",
+                "transaction_status",
+                "customer_id_dat",
+                "phone_prefixe",
+            ],
             key_prefix="mpesa_g2_dat_filter",
         )
         control_columns = [
@@ -1019,6 +1326,18 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             "currency_code",
             "transaction_amount",
             "opposite_party",
+            "nombre_lignes_g2_reference",
+            "nombre_ecritures_portal",
+            "account_types_portal",
+            "descriptions_portal",
+            "statut_rapprochement",
+            "controle_telephone",
+            "controle_devise",
+            "montant_portal_controle",
+            "ecart_montant",
+            "controle_montant",
+            "ecart_date_minutes",
+            "controle_date",
             "customer_id_ref_no",
             "dat_operation",
             "solde_dat_operation",
@@ -1027,6 +1346,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             "maturites_dat",
             "mode_rapprochement",
             "statut_rapprochement_dat",
+            "motif_anomalie",
         ]
         control_columns = [column for column in control_columns if column in filtered.columns]
         filtered_display = filtered[control_columns].copy() if control_columns else filtered
@@ -1038,10 +1358,14 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         daily_comptages=daily_comptages,
         daily_synthese=daily_synthese,
         daily_detail=daily_detail,
+        daily_anomalies=daily_anomalies,
         g2_dat=g2_dat,
+        retention_report=retention_report,
         date_start=date_start,
         date_end=date_end,
         direction_suffix=direction_suffix,
+        period_text=period_text,
+        direction_label=direction_label,
     )
 
 

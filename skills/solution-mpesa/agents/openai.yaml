@@ -1,4 +1,4 @@
 interface:
   display_name: "Solution M-PESA"
-  short_description: "Contrôler et rapprocher les données M-PESA"
-  default_prompt: "Utilise $solution-mpesa pour contrôler les fichiers M-PESA et expliquer les rapprochements clients."
+  short_description: "Analyser, rapprocher et exporter les données M-PESA"
+  default_prompt: "Utilise $solution-mpesa pour analyser G2 et Turbo, contrôler les rapprochements et produire les exports M-PESA."

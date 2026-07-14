@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from html import escape
 from io import BytesIO
+from pathlib import Path
 import re
+import shutil
+import subprocess
+import tempfile
 import unicodedata
 from typing import Any, Iterable
 
@@ -104,6 +109,20 @@ G2_OPERATION_CATEGORIES = [
     "Autre entree",
     "Autre sortie",
     "Flux a verifier",
+]
+
+G2_CLASSIFIED_TRANSACTION_COLUMNS = [
+    "date",
+    "receipt_no",
+    "currency_code",
+    "details_rapport",
+    "opposite_party",
+    "duree",
+    "compte_cree",
+    "montant",
+    "montant_entree",
+    "montant_sortie",
+    "balance_numeric",
 ]
 
 
@@ -978,8 +997,10 @@ def filter_g2_transactions_by_completion_time(
     dataframe: pd.DataFrame | None,
     start_date: Any | None = None,
     end_date: Any | None = None,
+    start_time: Any | None = None,
+    end_time: Any | None = None,
 ) -> pd.DataFrame:
-    """Filtre les transactions G2 sur Completion Time, bornes journalieres incluses."""
+    """Filtre G2 sur Completion Time avec des bornes de date et d'heure inclusives."""
     if not isinstance(dataframe, pd.DataFrame) or dataframe.empty:
         return pd.DataFrame() if dataframe is None else dataframe.copy()
     if "completion_time" not in dataframe.columns:
@@ -989,9 +1010,27 @@ def filter_g2_transactions_by_completion_time(
     completion_time = pd.to_datetime(frame["completion_time"], errors="coerce")
     mask = completion_time.notna()
     if start_date is not None:
-        mask &= completion_time.ge(pd.Timestamp(start_date).normalize())
+        start_bound = pd.Timestamp(start_date).normalize()
+        if start_time is not None:
+            start_bound += pd.Timedelta(
+                hours=start_time.hour,
+                minutes=start_time.minute,
+                seconds=start_time.second,
+                microseconds=start_time.microsecond,
+            )
+        mask &= completion_time.ge(start_bound)
     if end_date is not None:
-        mask &= completion_time.lt(pd.Timestamp(end_date).normalize() + pd.Timedelta(days=1))
+        end_bound = pd.Timestamp(end_date).normalize()
+        if end_time is None:
+            mask &= completion_time.lt(end_bound + pd.Timedelta(days=1))
+        else:
+            end_bound += pd.Timedelta(
+                hours=end_time.hour,
+                minutes=end_time.minute,
+                seconds=end_time.second,
+                microseconds=end_time.microsecond,
+            )
+            mask &= completion_time.le(end_bound)
     return frame.loc[mask].reset_index(drop=True)
 
 
@@ -1239,6 +1278,290 @@ def filter_customer_frame(frame: pd.DataFrame, customer_id: str) -> pd.DataFrame
     return frame.loc[frame["customer_id"].astype("string").eq(str(customer_id))].copy()
 
 
+def _deduplicate_g2_transactions(g2: pd.DataFrame) -> pd.DataFrame:
+    """Conserve une ligne canonique par Receipt No. et trace les doublons sources."""
+    if g2.empty:
+        return g2.copy()
+    frame = g2.copy().reset_index(drop=True)
+    frame["receipt_no"] = clean_identifier(frame.get("receipt_no", pd.Series("", index=frame.index)))
+    frame["__row_order"] = np.arange(len(frame))
+    frame["__receipt_key"] = frame["receipt_no"].where(
+        frame["receipt_no"].ne(""),
+        "__sans_receipt_" + frame["__row_order"].astype(str),
+    )
+    status = frame.get("transaction_status", pd.Series("", index=frame.index)).apply(normalize_label)
+    frame["__completed_priority"] = status.isin({"completed", "complete", "successful", "success"}).astype(int)
+    frame["__completion_sort"] = pd.to_datetime(
+        frame.get("completion_time", pd.Series(pd.NaT, index=frame.index)), errors="coerce"
+    )
+
+    grouped = frame.groupby("__receipt_key", dropna=False, sort=False)
+    frame["nombre_lignes_g2_reference"] = grouped["__receipt_key"].transform("size").astype(int)
+    frame["devises_g2_reference"] = grouped["currency_code"].transform(concat_unique) if "currency_code" in frame.columns else ""
+    frame["statuts_g2_reference"] = grouped["transaction_status"].transform(concat_unique) if "transaction_status" in frame.columns else ""
+    amount_text = numeric_column(frame, "transaction_amount_numeric").map(
+        lambda value: "" if pd.isna(value) else f"{float(value):.2f}"
+    )
+    frame["__amount_text"] = amount_text
+    frame["montants_g2_reference"] = grouped["__amount_text"].transform(concat_unique)
+    frame["doublon_receipt_no"] = frame["receipt_no"].ne("") & frame["nombre_lignes_g2_reference"].gt(1)
+
+    canonical = (
+        frame.sort_values(
+            ["__receipt_key", "__completed_priority", "__completion_sort", "__row_order"],
+            ascending=[True, False, False, True],
+            na_position="last",
+        )
+        .drop_duplicates("__receipt_key", keep="first")
+        .sort_values("__row_order")
+        .drop(columns=["__row_order", "__receipt_key", "__completed_priority", "__completion_sort", "__amount_text"])
+        .reset_index(drop=True)
+    )
+    return canonical
+
+
+def _portal_operation_flags(group: pd.DataFrame) -> tuple[bool, bool, bool]:
+    account_types = " ".join(group.get("account_type", pd.Series(dtype="string")).fillna("").astype(str))
+    descriptions = " ".join(group.get("description", pd.Series(dtype="string")).fillna("").astype(str))
+    text = normalize_label(f"{account_types} {descriptions}")
+    has_loan = any(
+        token in text
+        for token in [
+            "loan account",
+            "loan portfolio",
+            "principle",
+            "remboursement",
+            "repayment",
+        ]
+    )
+    has_fixed = "fixed savings" in text or "depot bloque" in text
+    has_normal = "normal savings" in text or "epargne depot" in text
+    return has_loan, has_fixed, has_normal
+
+
+def _build_portal_reference_controls(transactions: pd.DataFrame) -> pd.DataFrame:
+    """Agrège les écritures Portal au grain ref_no sans additionner les miroirs comptables."""
+    if transactions.empty or "ref_no" not in transactions.columns:
+        return pd.DataFrame()
+    tx = transactions.copy()
+    tx["ref_no"] = clean_identifier(tx["ref_no"])
+    tx = tx.loc[tx["ref_no"].ne("")].copy()
+    if tx.empty:
+        return pd.DataFrame()
+    tx["currency_code"] = clean_text(tx.get("currency_code", pd.Series("", index=tx.index))).str.upper()
+    tx["phone_portal_normalise"] = normalize_phone(tx.get("msisdn1", pd.Series("", index=tx.index)))
+    tx["created_at"] = pd.to_datetime(tx.get("created_at", pd.Series(pd.NaT, index=tx.index)), errors="coerce")
+    line_amounts = pd.concat(
+        [
+            numeric_column(tx, "dr").abs(),
+            numeric_column(tx, "cr").abs(),
+            (numeric_column(tx, "bal_after") - numeric_column(tx, "bal_before")).abs(),
+        ],
+        axis=1,
+    )
+    tx["montant_ligne_portal"] = line_amounts.max(axis=1)
+    tx["est_compte_mpesa"] = clean_text(
+        tx.get("account_type", pd.Series("", index=tx.index))
+    ).apply(normalize_label).eq("mpesa account")
+
+    rows: list[dict[str, object]] = []
+    for ref_no, group in tx.groupby("ref_no", dropna=False, sort=False):
+        has_loan, has_fixed, has_normal = _portal_operation_flags(group)
+        mpesa_amounts = group.loc[group["est_compte_mpesa"], "montant_ligne_portal"]
+        control_amounts = mpesa_amounts.loc[mpesa_amounts.gt(0)]
+        if control_amounts.empty:
+            control_amounts = group.loc[group["montant_ligne_portal"].gt(0), "montant_ligne_portal"]
+        portal_amount = float(control_amounts.max()) if not control_amounts.empty else np.nan
+        target_account = (
+            "LOAN ACCOUNT / PRINCIPLE / LOAN PORTFOLIO"
+            if has_loan
+            else "FIXED SAVINGS"
+            if has_fixed
+            else "NORMAL SAVINGS"
+            if has_normal
+            else "MPESA ACCOUNT"
+        )
+        rows.append(
+            {
+                "ref_no_portal": ref_no,
+                "nombre_ecritures_portal": int(len(group)),
+                "customer_id_portal": first_non_empty(group.get("customer_id", pd.Series(dtype="string"))),
+                "customer_ids_portal": concat_unique(group.get("customer_id", pd.Series(dtype="string"))),
+                "telephones_portal": concat_unique(group["phone_portal_normalise"]),
+                "devises_portal": concat_unique(group["currency_code"]),
+                "account_types_portal": concat_unique(group.get("account_type", pd.Series(dtype="string"))),
+                "descriptions_portal": concat_unique(group.get("description", pd.Series(dtype="string"))),
+                "references_internes_portal": concat_unique(group.get("reference_id", pd.Series(dtype="string"))),
+                "date_portal_min": group["created_at"].min(),
+                "date_portal_max": group["created_at"].max(),
+                "montant_portal_controle": portal_amount,
+                "portal_has_loan": bool(has_loan),
+                "portal_has_fixed": bool(has_fixed),
+                "portal_has_normal": bool(has_normal),
+                "account_type_cible": target_account,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _contains_pipe_value(values: object, expected: object) -> bool:
+    if _is_empty_text(values) or _is_empty_text(expected):
+        return False
+    expected_text = str(expected).strip()
+    return any(part.strip() == expected_text for part in str(values).split("|") if part.strip())
+
+
+def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame) -> pd.DataFrame:
+    output = _deduplicate_g2_transactions(g2)
+    if output.empty:
+        return output
+    portal = _build_portal_reference_controls(transactions)
+    if not portal.empty:
+        output = output.merge(portal, left_on="receipt_no", right_on="ref_no_portal", how="left")
+    else:
+        for column, default in {
+            "ref_no_portal": pd.NA,
+            "nombre_ecritures_portal": 0,
+            "customer_id_portal": pd.NA,
+            "customer_ids_portal": "",
+            "telephones_portal": "",
+            "devises_portal": "",
+            "account_types_portal": "",
+            "descriptions_portal": "",
+            "references_internes_portal": "",
+            "date_portal_min": pd.NaT,
+            "date_portal_max": pd.NaT,
+            "montant_portal_controle": np.nan,
+            "portal_has_loan": False,
+            "portal_has_fixed": False,
+            "portal_has_normal": False,
+            "account_type_cible": "",
+        }.items():
+            output[column] = default
+
+    output["nombre_ecritures_portal"] = pd.to_numeric(
+        output["nombre_ecritures_portal"], errors="coerce"
+    ).fillna(0).astype(int)
+    has_reference = output["ref_no_portal"].astype("string").fillna("").ne("")
+    g2_currency = clean_text(output.get("currency_code", pd.Series("", index=output.index))).str.upper()
+    g2_phone = normalize_phone(output.get("phone_prefixe", output.get("phone", pd.Series("", index=output.index))))
+    output["controle_devise"] = np.select(
+        [
+            ~has_reference,
+            [
+                _contains_pipe_value(values, expected)
+                for values, expected in zip(output["devises_portal"], g2_currency)
+            ],
+        ],
+        ["Non controlable", "Conforme"],
+        default="Ecart",
+    )
+    output["controle_telephone"] = np.select(
+        [
+            ~has_reference,
+            [
+                _contains_pipe_value(values, expected)
+                for values, expected in zip(output["telephones_portal"], g2_phone)
+            ],
+        ],
+        ["Non controlable", "Conforme"],
+        default="Ecart",
+    )
+    g2_amount = numeric_column(output, "transaction_amount_numeric").abs()
+    portal_amount = pd.to_numeric(output["montant_portal_controle"], errors="coerce").abs()
+    output["ecart_montant"] = g2_amount - portal_amount
+    amount_comparable = has_reference & g2_amount.notna() & portal_amount.notna()
+    output["controle_montant"] = np.select(
+        [
+            (~has_reference | ~amount_comparable).fillna(True).astype(bool),
+            output["ecart_montant"].abs().le(0.01).fillna(False).astype(bool),
+        ],
+        ["Non controlable", "Conforme"],
+        default="Ecart",
+    )
+    g2_date = pd.to_datetime(output.get("completion_time", pd.Series(pd.NaT, index=output.index)), errors="coerce")
+    portal_date = pd.to_datetime(output["date_portal_min"], errors="coerce")
+    output["ecart_date_minutes"] = (g2_date - portal_date).dt.total_seconds() / 60
+    date_comparable = has_reference & g2_date.notna() & portal_date.notna()
+    output["controle_date"] = np.select(
+        [
+            (~date_comparable).fillna(True).astype(bool),
+            g2_date.dt.date.eq(portal_date.dt.date).fillna(False).astype(bool),
+        ],
+        ["Non controlable", "Conforme"],
+        default="Ecart de date",
+    )
+
+    fallback_category = output.apply(
+        lambda row: classify_g2_business_operation(row, dat_matched=False), axis=1
+    )
+    direction = clean_text(output.get("sens_flux", pd.Series("", index=output.index)))
+    internal = fallback_category.eq("Operation interne Bisou")
+    output["categorie_operation"] = fallback_category
+    entry = direction.eq("Entree") & has_reference & ~internal
+    output.loc[entry & output["portal_has_loan"].fillna(False).astype(bool), "categorie_operation"] = "Remboursement prets"
+    output.loc[entry & ~output["portal_has_loan"].fillna(False).astype(bool) & output["portal_has_fixed"].fillna(False).astype(bool), "categorie_operation"] = "DAT"
+    output.loc[
+        entry
+        & ~output["portal_has_loan"].fillna(False).astype(bool)
+        & ~output["portal_has_fixed"].fillna(False).astype(bool)
+        & output["portal_has_normal"].fillna(False).astype(bool),
+        "categorie_operation",
+    ] = "Depot normal"
+    output["description_metier"] = output["categorie_operation"]
+
+    status = output.get("transaction_status", pd.Series("", index=output.index)).apply(normalize_label)
+    explicit_status = status.ne("")
+    output["est_transaction_terminee"] = ~explicit_status | status.isin(
+        {"completed", "complete", "successful", "success"}
+    )
+    output["incluse_synthese"] = output["est_transaction_terminee"]
+    has_control_gap = (
+        output[["controle_devise", "controle_telephone", "controle_montant", "controle_date"]]
+        .eq("Ecart")
+        .any(axis=1)
+        | output["controle_date"].eq("Ecart de date")
+    )
+    output["statut_rapprochement"] = np.select(
+        [~has_reference, has_control_gap],
+        ["Non rapproche", "Rapproche avec ecart"],
+        default="Rapproche exact",
+    )
+
+    def anomaly_reason(row: pd.Series) -> str:
+        reasons: list[str] = []
+        if _is_empty_text(row.get("receipt_no")):
+            reasons.append("Receipt No manquant")
+        if bool(row.get("doublon_receipt_no", False)):
+            reasons.append(f"Receipt No duplique ({int(row.get('nombre_lignes_g2_reference', 0))} lignes G2)")
+        if not bool(row.get("est_transaction_terminee", True)):
+            reasons.append(f"Statut G2 non termine : {row.get('transaction_status', '')}")
+        if row.get("statut_rapprochement") == "Non rapproche":
+            reasons.append("Receipt No non trouve dans ref_no")
+        for column, label in [
+            ("controle_devise", "Ecart de devise"),
+            ("controle_telephone", "Ecart de telephone"),
+            ("controle_montant", "Ecart de montant"),
+        ]:
+            if row.get(column) == "Ecart":
+                reasons.append(label)
+        if row.get("controle_date") == "Ecart de date":
+            reasons.append("Ecart de date")
+        if row.get("categorie_operation") in {"Flux a verifier", "Autre entree", "Autre sortie"}:
+            reasons.append("Operation non classee")
+        return " | ".join(reasons)
+
+    output["motif_anomalie"] = output.apply(anomaly_reason, axis=1)
+    output["est_anomalie"] = output["motif_anomalie"].ne("")
+    start = pd.to_datetime(output.get("completion_time", pd.Series(pd.NaT, index=output.index)), errors="coerce").min()
+    end = pd.to_datetime(output.get("completion_time", pd.Series(pd.NaT, index=output.index)), errors="coerce").max()
+    output["source_analytique"] = np.where(has_reference, "G2 + Portal", "G2")
+    output["identifiant_lot"] = (
+        f"G2_{start:%Y%m%d}_{end:%Y%m%d}" if pd.notna(start) and pd.notna(end) else "G2_sans_periode"
+    )
+    return output
+
+
 def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None = None) -> pd.DataFrame:
     g2 = prepared.g2_transactions
     fixed = prepared.fixed_savings
@@ -1246,7 +1569,7 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
     if g2.empty:
         return pd.DataFrame()
 
-    output = g2.copy()
+    output = _enrich_g2_with_portal_controls(g2, transactions)
     if not transactions.empty and "ref_no" in transactions.columns:
         tx = transactions.copy()
         tx["ref_no"] = clean_identifier(tx["ref_no"])
@@ -1435,6 +1758,28 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
         "currency_code",
         "transaction_amount",
         "transaction_amount_numeric",
+        "categorie_operation",
+        "description_metier",
+        "ref_no_portal",
+        "nombre_ecritures_portal",
+        "account_types_portal",
+        "descriptions_portal",
+        "statut_rapprochement",
+        "controle_telephone",
+        "controle_devise",
+        "montant_portal_controle",
+        "ecart_montant",
+        "controle_montant",
+        "ecart_date_minutes",
+        "controle_date",
+        "nombre_lignes_g2_reference",
+        "devises_g2_reference",
+        "statuts_g2_reference",
+        "montants_g2_reference",
+        "doublon_receipt_no",
+        "incluse_synthese",
+        "motif_anomalie",
+        "est_anomalie",
         "balance",
         "balance_numeric",
         "opposite_party",
@@ -1890,13 +2235,16 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
     if g2.empty:
         return {
             "detail": pd.DataFrame(),
+            "anomalies": pd.DataFrame(),
             "synthese": pd.DataFrame(),
             "pivot": pd.DataFrame(),
             "vertical_summary": pd.DataFrame(),
             "comptages": build_entry_count_summary(pd.DataFrame()),
         }
 
-    report = g2.copy()
+    report = build_g2_dat_crosscheck(prepared)
+    if report.empty:
+        report = _enrich_g2_with_portal_controls(g2, prepared.transactions)
     report["receipt_no"] = clean_identifier(report.get("receipt_no", pd.Series("", index=report.index)))
     report["date"] = pd.to_datetime(report.get("completion_time"), errors="coerce")
     report["montant"] = numeric_column(report, "transaction_amount_numeric").abs()
@@ -1919,14 +2267,24 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         report["dat_balance"] = np.nan
         report["dat_match_rule"] = pd.NA
 
-    is_dat = (
-        report["dat_customer_id"].astype("string").fillna("").ne("")
+    has_portal_reference = report.get(
+        "ref_no_portal", pd.Series(pd.NA, index=report.index)
+    ).astype("string").fillna("").ne("")
+    heuristic_dat = (
+        ~has_portal_reference
+        & report["dat_customer_id"].astype("string").fillna("").ne("")
         & report["sens_flux"].eq("Entree")
     )
-    report["details_rapport"] = report.apply(
-        lambda row: classify_g2_business_operation(row, dat_matched=bool(is_dat.loc[row.name])),
-        axis=1,
+    report["details_rapport"] = clean_text(
+        report.get("categorie_operation", pd.Series("", index=report.index))
     )
+    missing_category = report["details_rapport"].eq("")
+    if missing_category.any():
+        report.loc[missing_category, "details_rapport"] = report.loc[missing_category].apply(
+            lambda row: classify_g2_business_operation(row, dat_matched=False), axis=1
+        )
+    report.loc[heuristic_dat, "details_rapport"] = "DAT"
+    is_dat = report["details_rapport"].eq("DAT") & report["sens_flux"].eq("Entree")
     report["duree"] = report["duree"].where(is_dat, "-")
     report["compte_cree_dat"] = pd.to_datetime(report["compte_cree"], errors="coerce")
 
@@ -1995,7 +2353,8 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         has_same_day_dat_phone = pd.Series([key in dat_keys for key in tx_keys], index=report.index)
 
     unusual_same_day_dat_amount = (
-        report["sens_flux"].eq("Entree")
+        ~has_portal_reference
+        & report["sens_flux"].eq("Entree")
         & report["details_rapport"].eq("Depot normal")
         & ~is_dat
         & has_same_day_dat_phone
@@ -2032,22 +2391,49 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         "paid_in_numeric",
         "withdrawn_numeric",
         "balance_numeric",
+        "ref_no_portal",
+        "customer_id_portal",
+        "nombre_ecritures_portal",
+        "account_types_portal",
+        "descriptions_portal",
+        "account_type_cible",
+        "statut_rapprochement",
+        "controle_telephone",
+        "controle_devise",
+        "montant_portal_controle",
+        "ecart_montant",
+        "controle_montant",
+        "ecart_date_minutes",
+        "controle_date",
+        "nombre_lignes_g2_reference",
+        "devises_g2_reference",
+        "statuts_g2_reference",
+        "montants_g2_reference",
+        "doublon_receipt_no",
+        "incluse_synthese",
+        "motif_anomalie",
+        "est_anomalie",
+        "source_analytique",
+        "identifiant_lot",
     ]
     detail_columns = [column for column in detail_columns if column in report.columns]
     detail = report[detail_columns].sort_values(["currency_code", "date"], ascending=[True, False]).reset_index(drop=True)
 
+    summary_detail = detail.loc[
+        detail.get("incluse_synthese", pd.Series(True, index=detail.index)).fillna(False).astype(bool)
+    ].copy()
     synthese = (
-        detail.groupby(["currency_code", "sens_flux", "details_rapport"], as_index=False, dropna=False)
+        summary_detail.groupby(["currency_code", "sens_flux", "details_rapport"], as_index=False, dropna=False)
         .agg(nombre=("receipt_no", "count"), montant=("montant", "sum"))
         .sort_values(["currency_code", "sens_flux", "details_rapport"])
     )
     direction_totals = (
-        detail.groupby(["currency_code", "sens_flux"], as_index=False, dropna=False)
+        summary_detail.groupby(["currency_code", "sens_flux"], as_index=False, dropna=False)
         .agg(nombre=("receipt_no", "count"), montant=("montant", "sum"))
     )
     direction_totals["details_rapport"] = "Total " + direction_totals["sens_flux"].astype("string").fillna("")
     totals = (
-        detail.groupby("currency_code", as_index=False, dropna=False)
+        summary_detail.groupby("currency_code", as_index=False, dropna=False)
         .agg(nombre=("receipt_no", "count"), montant=("montant", "sum"))
     )
     totals["sens_flux"] = "Tous flux"
@@ -2057,10 +2443,216 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
     ).reset_index(drop=True)
     return {
         "detail": detail,
+        "anomalies": detail.loc[
+            detail.get("est_anomalie", pd.Series(False, index=detail.index)).fillna(False).astype(bool)
+        ].reset_index(drop=True),
         "synthese": synthese,
-        "pivot": build_entry_pivot(detail),
-        "vertical_summary": build_entry_vertical_summary(detail),
-        "comptages": build_entry_count_summary(detail),
+        "pivot": build_entry_pivot(summary_detail),
+        "vertical_summary": build_entry_vertical_summary(summary_detail),
+        "comptages": build_entry_count_summary(summary_detail),
+    }
+
+
+def build_g2_retention_report(
+    prepared: MpesaPreparedData,
+    daily_detail: pd.DataFrame | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Mesure le retour des clients G2 actifs par mois, devise et operation.
+
+    La retention M+1 exige une activite pendant le mois civil suivant. La
+    retention a 90 jours exige au moins une activite dans les 90 jours suivant
+    la fin du mois de base. Les taux restent vides tant que la fenetre complete
+    n'est pas observable dans le perimetre analyse.
+    """
+    empty_result = {
+        "mensuelle": pd.DataFrame(),
+        "operations": pd.DataFrame(),
+        "detail_clients": pd.DataFrame(),
+        "definitions": pd.DataFrame(
+            [
+                {
+                    "indicateur": "Retention M+1",
+                    "definition": "Clients actifs pendant le mois de base et actifs de nouveau pendant le mois civil suivant.",
+                    "denominateur": "Telephones clients distincts actifs pendant le mois de base, par devise.",
+                    "numerateur": "Clients du denominateur avec au moins une operation eligible le mois suivant.",
+                },
+                {
+                    "indicateur": "Retention 90 jours",
+                    "definition": "Clients actifs pendant le mois de base et actifs de nouveau dans les 90 jours suivant la fin de ce mois.",
+                    "denominateur": "Telephones clients distincts actifs pendant le mois de base, par devise.",
+                    "numerateur": "Clients du denominateur avec au moins une operation eligible avant l'echeance des 90 jours.",
+                },
+                {
+                    "indicateur": "Population eligible",
+                    "definition": "Operations G2 avec Completion Time et telephone valides, hors operations internes et statuts explicitement en echec/annules/inverses.",
+                    "denominateur": "Toutes les operations du perimetre filtre.",
+                    "numerateur": "Operations respectant les criteres d'eligibilite.",
+                },
+            ]
+        ),
+    }
+    if prepared.g2_transactions.empty:
+        return empty_result
+
+    activity = (
+        daily_detail.copy()
+        if isinstance(daily_detail, pd.DataFrame)
+        else build_g2_daily_savings_report(prepared).get("detail", pd.DataFrame()).copy()
+    )
+    if activity.empty:
+        return empty_result
+
+    activity["date"] = pd.to_datetime(activity.get("date"), errors="coerce")
+    activity["phone_prefixe"] = normalize_phone(
+        activity.get("phone_prefixe", pd.Series("", index=activity.index))
+    )
+    activity["currency_code"] = clean_text(
+        activity.get("currency_code", pd.Series("", index=activity.index))
+    ).str.upper()
+    activity["details_rapport"] = clean_text(
+        activity.get("details_rapport", pd.Series("Non classe", index=activity.index))
+    ).replace("", "Non classe")
+    activity["transaction_status"] = clean_text(
+        activity.get("transaction_status", pd.Series("", index=activity.index))
+    )
+    rejected_status = activity["transaction_status"].apply(normalize_label).str.contains(
+        r"fail|echec|cancel|annul|reverse|revers|reject|rejet",
+        regex=True,
+        na=False,
+    )
+    internal_operation = activity["details_rapport"].apply(normalize_label).str.contains(
+        "operation interne",
+        regex=False,
+        na=False,
+    )
+    activity = activity.loc[
+        activity["date"].notna()
+        & activity["phone_prefixe"].notna()
+        & activity["currency_code"].ne("")
+        & ~rejected_status
+        & ~internal_operation
+    ].copy()
+    if activity.empty:
+        return empty_result
+
+    activity["receipt_no"] = clean_identifier(
+        activity.get("receipt_no", pd.Series("", index=activity.index))
+    )
+    activity["__transaction_key"] = activity["receipt_no"].where(
+        activity["receipt_no"].ne(""),
+        "ligne_" + activity.index.astype(str),
+    )
+    activity = activity.drop_duplicates(
+        subset=["currency_code", "__transaction_key", "phone_prefixe", "date"]
+    )
+    activity["periode"] = activity["date"].dt.to_period("M").dt.to_timestamp()
+    observation_start = activity["date"].min()
+    observation_end = activity["date"].max()
+
+    rows: list[dict[str, object]] = []
+    client_activity = {
+        (currency, phone): group.sort_values("date")
+        for (currency, phone), group in activity.groupby(
+            ["currency_code", "phone_prefixe"], dropna=False, sort=False
+        )
+    }
+    base_groups = activity.groupby(["periode", "currency_code", "phone_prefixe"], dropna=False)
+    for (period, currency, phone), base in base_groups:
+        period = pd.Timestamp(period)
+        month_end = period + pd.offsets.MonthEnd(1)
+        next_month_start = period + pd.offsets.MonthBegin(1)
+        next_month_end = next_month_start + pd.offsets.MonthEnd(1)
+        deadline_90 = month_end + pd.Timedelta(days=90)
+        eligible_m1 = observation_end >= next_month_end
+        eligible_90 = observation_end >= deadline_90
+        client_history = client_activity[(currency, phone)]
+        future = client_history.loc[client_history["date"].gt(month_end)]
+        first_return = future["date"].min() if not future.empty else pd.NaT
+        returned_m1 = bool(
+            not future.empty
+            and future["date"].between(next_month_start, next_month_end, inclusive="both").any()
+        )
+        returned_90 = bool(
+            not future.empty
+            and future["date"].le(deadline_90).any()
+        )
+        rows.append(
+            {
+                "periode": period,
+                "annee": int(period.year),
+                "mois": period.strftime("%Y-%m"),
+                "currency_code": currency,
+                "phone_prefixe": phone,
+                "Nom_client": concat_unique(base.get("Nom_client", pd.Series(dtype="string"))),
+                "types_operations": concat_unique(base["details_rapport"]),
+                "nombre_operations_mois_base": int(len(base)),
+                "montant_entrees_mois_base": float(numeric_column(base, "montant_entree").sum()),
+                "montant_sorties_mois_base": float(numeric_column(base, "montant_sortie").sum()),
+                "premier_retour": first_return,
+                "delai_premier_retour_jours": (
+                    int((first_return.normalize() - month_end.normalize()).days)
+                    if pd.notna(first_return)
+                    else pd.NA
+                ),
+                "eligible_retention_m1": bool(eligible_m1),
+                "retenu_m1": returned_m1 if eligible_m1 else pd.NA,
+                "eligible_retention_90j": bool(eligible_90),
+                "retenu_90j": returned_90 if eligible_90 else pd.NA,
+                "debut_observation": observation_start,
+                "fin_observation": observation_end,
+            }
+        )
+
+    detail = pd.DataFrame(rows).sort_values(
+        ["periode", "currency_code", "phone_prefixe"], ascending=[False, True, True]
+    ).reset_index(drop=True)
+
+    def _summarize(frame: pd.DataFrame, group_columns: list[str]) -> pd.DataFrame:
+        summary_rows: list[dict[str, object]] = []
+        for keys, group in frame.groupby(group_columns, dropna=False, sort=True):
+            key_values = keys if isinstance(keys, tuple) else (keys,)
+            result = dict(zip(group_columns, key_values))
+            clients_base = int(group["phone_prefixe"].nunique())
+            eligible_m1 = bool(group["eligible_retention_m1"].all())
+            eligible_90 = bool(group["eligible_retention_90j"].all())
+            retained_m1 = int(group["retenu_m1"].eq(True).sum()) if eligible_m1 else pd.NA
+            retained_90 = int(group["retenu_90j"].eq(True).sum()) if eligible_90 else pd.NA
+            result.update(
+                {
+                    "clients_actifs_mois_base": clients_base,
+                    "clients_retenus_m1": retained_m1,
+                    "retention_m1_pct": round(100 * retained_m1 / clients_base, 2) if eligible_m1 and clients_base else np.nan,
+                    "clients_retenus_90j": retained_90,
+                    "retention_90j_pct": round(100 * retained_90 / clients_base, 2) if eligible_90 and clients_base else np.nan,
+                    "eligible_retention_m1": eligible_m1,
+                    "eligible_retention_90j": eligible_90,
+                    "debut_observation": observation_start,
+                    "fin_observation": observation_end,
+                }
+            )
+            summary_rows.append(result)
+        return pd.DataFrame(summary_rows)
+
+    monthly = _summarize(detail, ["periode", "annee", "mois", "currency_code"])
+    monthly = monthly.sort_values(["currency_code", "periode"]).reset_index(drop=True)
+
+    operation_detail = detail.assign(
+        details_rapport=detail["types_operations"].str.split(r"\s*\|\s*", regex=True)
+    ).explode("details_rapport")
+    operation_detail["details_rapport"] = clean_text(operation_detail["details_rapport"]).replace("", "Non classe")
+    operations = _summarize(
+        operation_detail,
+        ["periode", "annee", "mois", "currency_code", "details_rapport"],
+    )
+    operations = operations.sort_values(
+        ["currency_code", "details_rapport", "periode"]
+    ).reset_index(drop=True)
+
+    return {
+        "mensuelle": monthly,
+        "operations": operations,
+        "detail_clients": detail,
+        "definitions": empty_result["definitions"],
     }
 
 
@@ -2453,6 +3045,579 @@ def format_statement_columns(statement: pd.DataFrame) -> pd.DataFrame:
     return statement[present + rest].copy()
 
 
+def _pdf_number(value: Any, *, decimals: int = 0) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if pd.isna(number):
+        return "-"
+    return f"{number:,.{decimals}f}".replace(",", " ")
+
+
+def _retention_svg(monthly: pd.DataFrame) -> str:
+    if monthly.empty:
+        return ""
+    charts: list[str] = []
+    colors = {"retention_m1_pct": "#17805c", "retention_90j_pct": "#173f73"}
+    labels = {"retention_m1_pct": "Retention M+1", "retention_90j_pct": "Retention 90 jours"}
+    for currency, frame in monthly.groupby("currency_code", dropna=False):
+        frame = frame.sort_values("periode").reset_index(drop=True)
+        if frame[["retention_m1_pct", "retention_90j_pct"]].notna().sum().sum() == 0:
+            continue
+        width, height = 760, 270
+        left, right, top, bottom = 55, 22, 35, 48
+        plot_width = width - left - right
+        plot_height = height - top - bottom
+        count = max(len(frame), 1)
+
+        def x_position(index: int) -> float:
+            return left + (plot_width / max(count - 1, 1)) * index
+
+        def y_position(value: float) -> float:
+            return top + plot_height * (1 - max(0.0, min(100.0, value)) / 100)
+
+        svg_parts = [
+            f'<svg class="retention-chart" viewBox="0 0 {width} {height}" role="img" '
+            f'aria-label="Evolution de la retention {escape(str(currency))}">',
+            f'<text x="{left}" y="20" class="chart-title">Devise {escape(str(currency))}</text>',
+        ]
+        for tick in [0, 25, 50, 75, 100]:
+            y = y_position(float(tick))
+            svg_parts.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width-right}" y2="{y:.1f}" class="grid"/>')
+            svg_parts.append(f'<text x="{left-10}" y="{y+4:.1f}" text-anchor="end" class="axis-label">{tick}%</text>')
+        label_step = max(1, int(np.ceil(count / 6)))
+        for index, month in enumerate(frame["mois"].astype(str)):
+            if index % label_step == 0 or index == count - 1:
+                x = x_position(index)
+                svg_parts.append(f'<text x="{x:.1f}" y="{height-18}" text-anchor="middle" class="axis-label">{escape(month)}</text>')
+        for column in ["retention_m1_pct", "retention_90j_pct"]:
+            points: list[tuple[float, float, float]] = []
+            for index, value in enumerate(pd.to_numeric(frame[column], errors="coerce")):
+                if pd.notna(value):
+                    points.append((x_position(index), y_position(float(value)), float(value)))
+            if points:
+                polyline = " ".join(f"{x:.1f},{y:.1f}" for x, y, _ in points)
+                svg_parts.append(
+                    f'<polyline points="{polyline}" fill="none" stroke="{colors[column]}" stroke-width="3"/>'
+                )
+                for x, y, value in points:
+                    svg_parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{colors[column]}"/>')
+                    svg_parts.append(
+                        f'<text x="{x:.1f}" y="{y-8:.1f}" text-anchor="middle" class="point-label">{value:.0f}%</text>'
+                    )
+        legend_x = width - 300
+        for offset, column in enumerate(["retention_m1_pct", "retention_90j_pct"]):
+            x = legend_x + offset * 150
+            svg_parts.append(f'<line x1="{x}" y1="18" x2="{x+24}" y2="18" stroke="{colors[column]}" stroke-width="3"/>')
+            svg_parts.append(f'<text x="{x+30}" y="22" class="legend">{labels[column]}</text>')
+        svg_parts.append("</svg>")
+        charts.append("".join(svg_parts))
+    return "".join(charts)
+
+
+def _html_table(frame: pd.DataFrame, columns: list[str], labels: dict[str, str], *, limit: int = 80) -> str:
+    present = [column for column in columns if column in frame.columns]
+    if frame.empty or not present:
+        return '<p class="empty">Aucune donnee disponible.</p>'
+    display = frame[present].head(limit).rename(columns=labels).copy()
+    for column in display.columns:
+        source_name = next((key for key, label in labels.items() if label == column), column)
+        if source_name.endswith("_pct"):
+            display[column] = pd.to_numeric(display[column], errors="coerce").map(
+                lambda value: f"{value:.1f}%" if pd.notna(value) else "-"
+            )
+        elif any(token in source_name for token in ["montant", "solde", "volume"]):
+            display[column] = pd.to_numeric(display[column], errors="coerce").map(
+                lambda value: _pdf_number(value, decimals=2)
+            )
+        else:
+            display[column] = display[column].where(display[column].notna(), "-")
+    return display.to_html(index=False, escape=True, border=0, classes="report-table")
+
+
+def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
+    daily_pivot = report.get("rapport_journalier_pivot", pd.DataFrame())
+    g2_dat = report.get("g2_dat", pd.DataFrame())
+    monthly = report.get("retention_mensuelle", pd.DataFrame())
+
+    active_items: list[str] = []
+    retention_items: list[str] = []
+    latest_retention_rows: list[dict[str, object]] = []
+    chart_blocks: list[pd.DataFrame] = []
+    if not monthly.empty:
+        for currency, frame in monthly.groupby("currency_code", dropna=False):
+            frame = frame.sort_values("periode")
+            latest = frame.iloc[-1]
+            active_items.append(
+                f"{currency} : {_pdf_number(latest.get('clients_actifs_mois_base'))} client(s) actif(s)"
+            )
+            eligible_m1 = frame.dropna(subset=["retention_m1_pct"])
+            eligible_90 = frame.dropna(subset=["retention_90j_pct"])
+            m1_text = f"{eligible_m1.iloc[-1]['retention_m1_pct']:.1f}%" if not eligible_m1.empty else "non calculable"
+            day90_text = f"{eligible_90.iloc[-1]['retention_90j_pct']:.1f}%" if not eligible_90.empty else "non calculable"
+            retention_items.append(f"{currency} : M+1 {m1_text}, 90 jours {day90_text}")
+            latest_retention_rows.append(
+                {
+                    "Devise": currency,
+                    "Retention M+1": m1_text,
+                    "Retention 90 jours": day90_text,
+                }
+            )
+            eligible_periods = int(frame[["retention_m1_pct", "retention_90j_pct"]].notna().any(axis=1).sum())
+            if eligible_periods >= 6:
+                chart_blocks.append(frame)
+
+    flow_items: list[str] = []
+    if not daily_pivot.empty:
+        for _, row in daily_pivot.iterrows():
+            currency = row.get("currency_code", "-")
+            flow_items.append(
+                f"{currency} : entrees {_pdf_number(row.get('montant_total_entrees'), decimals=2)}, "
+                f"sorties {_pdf_number(row.get('montant_total_sorties'), decimals=2)}, "
+                f"net {_pdf_number(row.get('solde_net_flux'), decimals=2)}"
+            )
+
+    control_text = ""
+    if not g2_dat.empty:
+        if "statut_rapprochement" in g2_dat.columns:
+            reference_status = g2_dat["statut_rapprochement"].astype("string").fillna("")
+            exact = int(reference_status.eq("Rapproche exact").sum())
+            with_gap = int(reference_status.eq("Rapproche avec ecart").sum())
+            unmatched = int(reference_status.eq("Non rapproche").sum())
+            anomalies = int(
+                g2_dat.get("est_anomalie", pd.Series(False, index=g2_dat.index))
+                .fillna(False)
+                .astype(bool)
+                .sum()
+            )
+            total = int(len(g2_dat))
+            rate = 100 * exact / total if total else 0
+            control_text = (
+                f"Rapprochement Receipt No/ref_no : {exact}/{total} exact(s), soit {rate:.1f}%; "
+                f"{with_gap} avec ecart, {unmatched} non rapproche(s), {anomalies} anomalie(s) au total."
+            )
+        else:
+            status = g2_dat.get("statut_rapprochement_dat", pd.Series("", index=g2_dat.index)).astype("string")
+            dat_absent = bool(status.str.contains("Fichier DAT absent", case=False, na=False).all())
+            if dat_absent:
+                control_text = "Rapprochement G2/DAT non evalue : fichier DAT non charge."
+            else:
+                matched = int(
+                    g2_dat.get("customer_id_dat", pd.Series(dtype="string"))
+                    .astype("string").fillna("").ne("").sum()
+                )
+                total = int(len(g2_dat))
+                rate = 100 * matched / total if total else 0
+                control_text = f"Rapprochement G2/DAT : {matched}/{total} entree(s), soit {rate:.1f}%."
+
+    has_retention = bool(
+        not monthly.empty
+        and monthly[["retention_m1_pct", "retention_90j_pct"]].notna().any().any()
+    )
+    attention_text = (
+        "Les mois les plus recents restent provisoires tant que leur fenetre de suivi n'est pas terminee."
+        if has_retention
+        else "La fidelisation M+1 et a 90 jours exige un historique couvrant les mois suivants."
+    )
+    return {
+        "active_text": "; ".join(active_items) or "Aucune activite client eligible.",
+        "flow_text": "; ".join(flow_items) or "Aucun flux disponible.",
+        "retention_text": "; ".join(retention_items) or "Non calculable sur la periode chargee.",
+        "control_text": control_text,
+        "attention_text": attention_text,
+        "has_retention": has_retention,
+        "latest_retention": pd.DataFrame(latest_retention_rows),
+        "chart_monthly": concat_frames_stable(chart_blocks) if chart_blocks else pd.DataFrame(),
+    }
+
+
+def build_g2_dat_pdf_html(
+    report: dict[str, Any],
+    *,
+    period_text: str,
+    direction_label: str,
+    generated_at: pd.Timestamp | None = None,
+) -> str:
+    """Construit la version courte destinee a la Direction generale."""
+    daily_pivot = report.get("rapport_journalier_pivot", pd.DataFrame())
+    daily_synthese = report.get("rapport_journalier_synthese", pd.DataFrame())
+    generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
+    context = _g2_executive_context(report)
+
+    flow_table = _html_table(
+        daily_pivot,
+        ["currency_code", "nombre_entrees", "montant_total_entrees", "nombre_sorties", "montant_total_sorties", "solde_net_flux"],
+        {
+            "currency_code": "Devise", "nombre_entrees": "Nb entrees", "montant_total_entrees": "Montant entrees",
+            "nombre_sorties": "Nb sorties", "montant_total_sorties": "Montant sorties", "solde_net_flux": "Solde net",
+        },
+    )
+    classified = daily_synthese.copy()
+    if not classified.empty and "details_rapport" in classified.columns:
+        classified = classified.loc[~classified["details_rapport"].astype("string").str.startswith("Total ", na=False)]
+    operation_table = _html_table(
+        classified,
+        ["currency_code", "sens_flux", "details_rapport", "nombre", "montant"],
+        {"currency_code": "Devise", "sens_flux": "Sens", "details_rapport": "Operation", "nombre": "Nombre", "montant": "Montant"},
+    )
+    retention_table = _html_table(
+        context["latest_retention"],
+        ["Devise", "Retention M+1", "Retention 90 jours"],
+        {},
+    )
+    chart_html = _retention_svg(context["chart_monthly"])
+    control_bullet = (
+        f'<li><strong>Controle.</strong> {escape(context["control_text"])}</li>'
+        if context["control_text"] else ""
+    )
+    retention_section = (
+        f'<h2>Fidelisation</h2><p>{escape(context["retention_text"])}</p>{chart_html}{retention_table}'
+        if context["has_retention"]
+        else f'<div class="note"><strong>Point de vigilance.</strong> {escape(context["attention_text"])}</div>'
+    )
+
+    return f"""<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title>Rapport M-PESA - G2/DAT</title>
+<style>
+@page {{ size: A4; margin: 12mm; }}
+* {{ box-sizing: border-box; }}
+body {{ font-family: Arial, Helvetica, sans-serif; color: #18314f; margin: 0; font-size: 9.5pt; line-height: 1.3; }}
+h1 {{ font-size: 22pt; color: #12385f; margin: 0 0 3px; }}
+h2 {{ font-size: 13.5pt; color: #12385f; margin: 14px 0 6px; border-bottom: 2px solid #dbe6f1; padding-bottom: 3px; page-break-after: avoid; }}
+h3 {{ font-size: 11pt; color: #173f73; margin: 10px 0 5px; page-break-after: avoid; }}
+p {{ margin: 4px 0 7px; }}
+.meta {{ color: #5d7187; margin-bottom: 10px; }}
+.summary {{ background: #edf5fb; border-left: 5px solid #2b6ea6; padding: 8px 12px; border-radius: 4px; }}
+.summary h2 {{ border: 0; margin: 0 0 5px; font-size: 12.5pt; }}
+.summary ul {{ margin: 2px 0; padding-left: 18px; }}
+.report-table {{ width: 100%; border-collapse: collapse; margin: 4px 0 9px; font-size: 8.2pt; }}
+.report-table th {{ background: #1f4e78; color: white; padding: 5px; text-align: left; }}
+.report-table td {{ border-bottom: 1px solid #dce4eb; padding: 4px 5px; }}
+.report-table tr {{ page-break-inside: avoid; }}
+.retention-chart {{ width: 100%; height: auto; display: block; margin: 3px 0 8px; page-break-inside: avoid; }}
+.chart-title {{ font-size: 13px; font-weight: bold; fill: #173f73; }}
+.grid {{ stroke: #dfe7ee; stroke-width: 1; }}
+.axis-label, .legend {{ font-size: 10px; fill: #5d7187; }}
+.point-label {{ font-size: 9px; font-weight: bold; fill: #20364d; }}
+.note {{ background: #fff7e8; border-left: 4px solid #d69a25; padding: 7px 9px; margin: 9px 0; }}
+.empty {{ color: #6c7d8c; font-style: italic; }}
+.footer-note {{ color: #60758a; font-size: 8pt; margin-top: 10px; }}
+</style></head><body>
+<h1>Rapport M-PESA - G2/DAT</h1>
+<p class="meta">{escape(period_text)} | Sens : {escape(direction_label)} | {generated_at:%d/%m/%Y}</p>
+<section class="summary"><h2>Synthese executive</h2><ul>
+<li><strong>Activite.</strong> {escape(context["active_text"])}</li>
+<li><strong>Flux financiers.</strong> {escape(context["flow_text"])}</li>
+{control_bullet}
+</ul></section>
+<h2>Flux par devise</h2>{flow_table}
+<h3>Principales operations</h3>{operation_table}
+{retention_section}
+</body></html>"""
+
+
+def _find_pdf_browser() -> Path | None:
+    candidates = [
+        shutil.which("msedge"),
+        shutil.which("chrome"),
+        shutil.which("chromium"),
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/usr/bin/google-chrome",
+        "/usr/bin/chromium",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return Path(candidate)
+    return None
+
+
+def create_g2_dat_pdf(
+    report: dict[str, Any],
+    *,
+    period_text: str,
+    direction_label: str,
+) -> bytes:
+    """Convertit le rapport G2/DAT statique en PDF via Edge/Chrome headless."""
+    browser = _find_pdf_browser()
+    if browser is None:
+        raise RuntimeError("Microsoft Edge, Google Chrome ou Chromium est requis pour generer le PDF.")
+    html_content = build_g2_dat_pdf_html(
+        report,
+        period_text=period_text,
+        direction_label=direction_label,
+    )
+    with tempfile.TemporaryDirectory(prefix="mpesa_g2_pdf_") as temp_dir:
+        temp_path = Path(temp_dir)
+        html_path = temp_path / "rapport_g2_dat.html"
+        pdf_path = temp_path / "rapport_g2_dat.pdf"
+        html_path.write_text(html_content, encoding="utf-8")
+        command = [
+            str(browser),
+            "--headless=new",
+            "--disable-gpu",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--no-pdf-header-footer",
+            "--run-all-compositor-stages-before-draw",
+            f"--user-data-dir={temp_path / 'browser_profile'}",
+            f"--print-to-pdf={pdf_path}",
+            html_path.as_uri(),
+        ]
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            creationflags=creation_flags,
+            check=False,
+        )
+        if completed.returncode != 0 or not pdf_path.exists() or pdf_path.stat().st_size == 0:
+            message = completed.stderr.strip() or completed.stdout.strip() or "conversion sans fichier de sortie"
+            raise RuntimeError(f"Impossible de generer le PDF G2/DAT : {message[:300]}")
+        return pdf_path.read_bytes()
+
+
+def create_g2_dat_word(
+    report: dict[str, Any],
+    *,
+    period_text: str,
+    direction_label: str,
+    generated_at: pd.Timestamp | None = None,
+) -> bytes:
+    """Genere la version Word courte et editable destinee a la Direction generale."""
+    try:
+        from docx import Document
+        from docx.enum.section import WD_ORIENT, WD_SECTION
+        from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.shared import Cm, Pt, RGBColor
+    except ImportError as exc:
+        raise RuntimeError("La dependance python-docx est requise pour generer le rapport Word.") from exc
+
+    daily_pivot = report.get("rapport_journalier_pivot", pd.DataFrame())
+    daily_synthese = report.get("rapport_journalier_synthese", pd.DataFrame())
+    transaction_detail = report.get("rapport_journalier_detail", pd.DataFrame())
+    generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
+    context = _g2_executive_context(report)
+
+    classified = daily_synthese.copy()
+    if not classified.empty and "details_rapport" in classified.columns:
+        classified = classified.loc[
+            ~classified["details_rapport"].astype("string").str.startswith("Total ", na=False)
+        ]
+
+    document = Document()
+    section = document.sections[0]
+    section.top_margin = Cm(1.2)
+    section.bottom_margin = Cm(1.2)
+    section.left_margin = Cm(1.25)
+    section.right_margin = Cm(1.25)
+    section.start_type = WD_SECTION.NEW_PAGE
+
+    styles = document.styles
+    styles["Normal"].font.name = "Aptos"
+    styles["Normal"].font.size = Pt(9)
+    for style_name in ["Title", "Heading 1", "Heading 2"]:
+        styles[style_name].font.name = "Aptos Display"
+        styles[style_name].font.color.rgb = RGBColor(18, 56, 95)
+    styles["Title"].font.size = Pt(22)
+    styles["Heading 1"].font.size = Pt(14)
+    styles["Heading 2"].font.size = Pt(11)
+
+    title = document.add_paragraph(style="Title")
+    title.paragraph_format.space_after = Pt(2)
+    title.add_run("Rapport M-PESA - G2/DAT")
+    meta = document.add_paragraph()
+    meta.paragraph_format.space_after = Pt(7)
+    meta_run = meta.add_run(f"{period_text} | Sens : {direction_label} | {generated_at:%d/%m/%Y}")
+    meta_run.font.size = Pt(8.5)
+    meta_run.font.color.rgb = RGBColor(93, 113, 135)
+
+    document.add_heading("Synthese executive", level=1)
+
+    def add_summary_bullet(label: str, text: str) -> None:
+        paragraph = document.add_paragraph(style="List Bullet")
+        paragraph.paragraph_format.space_after = Pt(2)
+        bold_run = paragraph.add_run(f"{label}. ")
+        bold_run.bold = True
+        paragraph.add_run(text)
+
+    add_summary_bullet("Activite", context["active_text"])
+    add_summary_bullet("Flux financiers", context["flow_text"])
+    if context["control_text"]:
+        add_summary_bullet("Controle", context["control_text"])
+
+    def set_cell_shading(cell: Any, fill: str) -> None:
+        cell_properties = cell._tc.get_or_add_tcPr()
+        shading = OxmlElement("w:shd")
+        shading.set(qn("w:fill"), fill)
+        cell_properties.append(shading)
+
+    def add_table(
+        frame: pd.DataFrame,
+        columns: list[str],
+        labels: dict[str, str],
+        *,
+        font_size: float = 8,
+        amount_decimals: int = 2,
+        column_widths_cm: dict[str, float] | None = None,
+    ) -> Any | None:
+        present = [column for column in columns if column in frame.columns]
+        if frame.empty or not present:
+            document.add_paragraph("Aucune donnee disponible.")
+            return None
+        table = document.add_table(rows=1, cols=len(present))
+        table.style = "Table Grid"
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        table.autofit = column_widths_cm is None
+        header_properties = table.rows[0]._tr.get_or_add_trPr()
+        repeat_header = OxmlElement("w:tblHeader")
+        repeat_header.set(qn("w:val"), "true")
+        header_properties.append(repeat_header)
+        for index, column in enumerate(present):
+            cell = table.rows[0].cells[index]
+            cell.text = labels.get(column, column)
+            if column_widths_cm and column in column_widths_cm:
+                cell.width = Cm(column_widths_cm[column])
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            set_cell_shading(cell, "1F4E78")
+            for run in cell.paragraphs[0].runs:
+                run.bold = True
+                run.font.color.rgb = RGBColor(255, 255, 255)
+                run.font.size = Pt(font_size)
+        for _, row in frame[present].iterrows():
+            cells = table.add_row().cells
+            for index, column in enumerate(present):
+                value = row.get(column)
+                if any(token in column for token in ["montant", "solde", "volume"]):
+                    text = _pdf_number(value, decimals=amount_decimals)
+                elif str(column).endswith("_pct"):
+                    text = f"{float(value):.1f}%" if pd.notna(value) else "-"
+                elif column in {"retenu_m1", "retenu_90j"}:
+                    text = "-" if pd.isna(value) else "Oui" if bool(value) else "Non"
+                elif column in {"date", "compte_cree"}:
+                    date_value = pd.to_datetime(value, errors="coerce")
+                    text = f"{date_value:%d/%m/%Y %H:%M:%S}" if pd.notna(date_value) else "-"
+                elif column == "premier_retour":
+                    date_value = pd.to_datetime(value, errors="coerce")
+                    text = f"{date_value:%d/%m/%Y}" if pd.notna(date_value) else "-"
+                else:
+                    text = "-" if pd.isna(value) else str(value)
+                cells[index].text = text
+                if column_widths_cm and column in column_widths_cm:
+                    cells[index].width = Cm(column_widths_cm[column])
+                cells[index].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                for paragraph in cells[index].paragraphs:
+                    paragraph.paragraph_format.space_after = Pt(0)
+                    for run in paragraph.runs:
+                        run.font.size = Pt(font_size)
+        document.add_paragraph().paragraph_format.space_after = Pt(0)
+        return table
+
+    document.add_heading("Flux par devise", level=1)
+    add_table(
+        daily_pivot,
+        ["currency_code", "nombre_entrees", "montant_total_entrees", "nombre_sorties", "montant_total_sorties", "solde_net_flux"],
+        {
+            "currency_code": "Devise", "nombre_entrees": "Nb entrees", "montant_total_entrees": "Montant entrees",
+            "nombre_sorties": "Nb sorties", "montant_total_sorties": "Montant sorties", "solde_net_flux": "Solde net",
+        },
+    )
+    document.add_heading("Principales operations", level=2)
+    add_table(
+        classified,
+        ["currency_code", "sens_flux", "details_rapport", "nombre", "montant"],
+        {"currency_code": "Devise", "sens_flux": "Sens", "details_rapport": "Operation", "nombre": "Nombre", "montant": "Montant"},
+    )
+
+    if context["has_retention"]:
+        document.add_heading("Fidelisation", level=1)
+        paragraph = document.add_paragraph(context["retention_text"])
+        paragraph.paragraph_format.space_after = Pt(4)
+        add_table(
+            context["latest_retention"],
+            ["Devise", "Retention M+1", "Retention 90 jours"],
+            {},
+        )
+    else:
+        document.add_heading("Point de vigilance", level=1)
+        warning = document.add_paragraph(context["attention_text"])
+        warning.paragraph_format.space_after = Pt(5)
+        warning.runs[0].font.color.rgb = RGBColor(156, 103, 10)
+
+    if isinstance(transaction_detail, pd.DataFrame) and not transaction_detail.empty:
+        detail = transaction_detail.copy()
+        detail["currency_code"] = clean_text(
+            detail.get("currency_code", pd.Series("", index=detail.index))
+        ).str.upper().replace("", "SANS DEVISE")
+        detail["date"] = pd.to_datetime(
+            detail.get("date", pd.Series(pd.NaT, index=detail.index)), errors="coerce"
+        )
+        detail = detail.sort_values(
+            ["currency_code", "date"], ascending=[True, False], na_position="last"
+        ).reset_index(drop=True)
+        detail_section = document.add_section(WD_SECTION.NEW_PAGE)
+        detail_section.orientation = WD_ORIENT.LANDSCAPE
+        detail_section.page_width, detail_section.page_height = (
+            detail_section.page_height,
+            detail_section.page_width,
+        )
+        detail_section.top_margin = Cm(1.0)
+        detail_section.bottom_margin = Cm(1.0)
+        detail_section.left_margin = Cm(0.5)
+        detail_section.right_margin = Cm(0.5)
+        document.add_heading("Transactions", level=1)
+        # detail_caption.paragraph_format.space_after = Pt(4)
+        add_table(
+            detail,
+            G2_CLASSIFIED_TRANSACTION_COLUMNS,
+            {column: column for column in G2_CLASSIFIED_TRANSACTION_COLUMNS},
+            font_size=5.5,
+            amount_decimals=2,
+            column_widths_cm={
+                "date": 2.7,
+                "receipt_no": 2.1,
+                "currency_code": 1.4,
+                "details_rapport": 2.3,
+                "opposite_party": 6.2,
+                "duree": 1.6,
+                "compte_cree": 2.7,
+                "montant": 1.7,
+                "montant_entree": 1.7,
+                "montant_sortie": 1.7,
+                "balance_numeric": 1.9,
+            },
+        )
+
+    source = document.add_paragraph()
+    source.paragraph_format.space_before = Pt(4)
+    # source_run.italic = True
+    # source_run.font.size = Pt(8)
+    # source_run.font.color.rgb = RGBColor(96, 117, 138)
+
+    footer = section.footer.paragraphs[0]
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer_run = footer.add_run("Rapport de synthese")
+    footer_run.font.size = Pt(8)
+    footer_run.font.color.rgb = RGBColor(110, 125, 140)
+
+    document.core_properties.title = "Rapport M-PESA - G2/DAT"
+    document.core_properties.subject = "Synthese destinee a la Direction generale"
+    document.core_properties.author = "Solution Controle Interne"
+    buffer = BytesIO()
+    document.save(buffer)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 def create_excel_export(report: dict[str, Any]) -> bytes:
     sheets = {
         "Synthese": report.get("synthese", pd.DataFrame()),
@@ -2474,6 +3639,11 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         "Rapport_Journalier_Vertical": report.get("rapport_journalier_vertical", pd.DataFrame()),
         "Rapport_Journalier_Synthese": report.get("rapport_journalier_synthese", pd.DataFrame()),
         "Rapport_Journalier_Detail": report.get("rapport_journalier_detail", pd.DataFrame()),
+        "Anomalies_G2": report.get("rapport_journalier_anomalies", pd.DataFrame()),
+        "Retention_Mensuelle": report.get("retention_mensuelle", pd.DataFrame()),
+        "Retention_Operations": report.get("retention_operations", pd.DataFrame()),
+        "Retention_Detail": report.get("retention_detail", pd.DataFrame()),
+        "Retention_Definitions": report.get("retention_definitions", pd.DataFrame()),
         "Perfect_Clients": report.get("perfect_clients", pd.DataFrame()),
         "Perfect_Operations": report.get("perfect_operations", pd.DataFrame()),
         "Diagnostics": report.get("diagnostics", pd.DataFrame()),

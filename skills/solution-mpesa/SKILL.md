@@ -1,49 +1,70 @@
 ---
 name: solution-mpesa
-description: Importer, normaliser, contrôler et rapprocher les fichiers Excel de la Solution M-PESA avec l'épargne courante, les DAT, les crédits, les transactions G2 et les clients; construire des extraits clients, soldes, rapports journaliers et diagnostics sans mélanger les devises. Utiliser pour toute question ou modification liée à M-PESA, Bisou Bisou Digital, G2, Receipt No., DAT, épargne, rapprochements clients ou rapports M-PESA du projet Streamlit.
+description: Importer, normaliser, contrôler et rapprocher les fichiers Excel M-PESA de G2, Turbo et Perfect; construire les sous-onglets G2/DAT, Extrait client, Crédits et Perfect_client, enrichir les noms clients, classifier les entrées et sorties, détecter les anomalies et produire les exports Excel, PDF et Word sans mélanger les devises. Utiliser pour toute question ou modification liée à Solution M-PESA, Bisou Bisou Digital, Portal/Turbo, G2, Receipt No/ref_no, DAT, épargne, crédit, fidélisation, rapprochement client ou rapport M-PESA du projet Streamlit.
 ---
 
 # Solution M-PESA
 
-Réutiliser les contrats de données et fonctions métier existants. Préserver la traçabilité de chaque source et séparer strictement CDF et USD.
+Réutiliser les contrats et fonctions métier existants. Préserver la traçabilité des sources, le grain des opérations et la séparation stricte des devises.
 
 ## Procédure de travail
 
-1. Identifier les fichiers disponibles et le livrable demandé.
-2. Lire [references/data-contracts.md](references/data-contracts.md) pour les colonnes, clés et règles de rapprochement.
-3. Vérifier les contrats courants avec `scripts/inspect_mpesa_contracts.py` avant de modifier un import.
-4. Normaliser avec les fonctions `prepare_*` de `credit_app/services/mpesa_analysis.py`; ne pas dupliquer cette logique dans l'interface.
-5. Valider les colonnes obligatoires et afficher les colonnes manquantes et disponibles.
-6. Effectuer les rapprochements par clés documentées, en conservant indicateurs de correspondance et motifs d'écart.
-7. Calculer chaque solde et agrégat par devise. Ne jamais sommer CDF et USD.
-8. Tester les cas nominal, source facultative absente, doublon, référence non trouvée et solde d'ouverture manquant.
+1. Identifier les fichiers disponibles, la période, le sens des flux et le livrable demandé.
+2. Lire [references/data-contracts.md](references/data-contracts.md) pour sélectionner les colonnes, clés, classifications et règles de dégradation.
+3. Exécuter `scripts/inspect_mpesa_contracts.py` avant de modifier un import ou un alias.
+4. Normaliser avec les fonctions `prepare_*` de `credit_app/services/mpesa_analysis.py`; ne pas reproduire cette logique dans Streamlit.
+5. Valider les colonnes obligatoires et afficher les colonnes manquantes ainsi que les colonnes réellement disponibles.
+6. Construire les rapprochements et classifications dans le service, puis limiter l'interface au filtrage et au rendu.
+7. Conserver les indicateurs de correspondance, motifs d'écart, lignes non rapprochées et sources facultatives absentes.
+8. Calculer chaque solde, total et taux par devise. Ne jamais sommer CDF et USD.
+9. Tester les cas nominal, source absente, format G2 alternatif, doublon, référence inconnue, contrôle en écart et solde d'ouverture manquant.
 
-## Règles métier essentielles
+## Invariants G2/DAT
 
-- Considérer Transactions M-PESA comme la source minimale pour un extrait client.
-- Traiter épargne courante, DAT, crédits, G2 et clients comme sources complémentaires selon le rapport.
-- Rapprocher `Receipt No.` de G2 avec `ref_no` M-PESA en priorité lorsque le rapport le prévoit.
-- Utiliser `customer_id` comme identifiant canonique après résolution; utiliser MSISDN ou référence seulement selon les règles existantes.
+- Conserver une ligne analytique canonique par `Receipt No.`; signaler tout reçu dupliqué et ne pas le compter deux fois.
+- Rapprocher d'abord `Receipt No.` avec `ref_no` du Portal/Turbo. Agréger les écritures techniques du même `ref_no` sans additionner les miroirs comptables comme plusieurs opérations G2.
+- Classifier les entrées rapprochées avec `account_type` et `description` du Portal : `FIXED SAVINGS`/`Depot Bloque` = `DAT`, `NORMAL SAVINGS`/`Epargne depot` = `Depot normal`, compte prêt/principal/portefeuille = `Remboursement prets`.
+- Utiliser les règles G2 comme repli lorsque le Portal ne contient pas la référence; classifier les sorties B2C, demandes de crédit et opérations internes selon `Details`, `Reason Type`, `Paid In` et `Withdrawn`.
+- Contrôler séparément téléphone, devise, montant et date. Distinguer `Rapproche exact`, `Rapproche avec ecart` et `Non rapproche`.
+- Retenir uniquement les statuts G2 terminés dans les synthèses financières, tout en conservant les autres lignes dans le détail et les anomalies.
+- Utiliser `G2_CLASSIFIED_TRANSACTION_COLUMNS` comme ordre commun du tableau `Transactions classees` à l'écran et dans le Word : `date`, `receipt_no`, `currency_code`, `details_rapport`, `opposite_party`, `duree`, `compte_cree`, `montant`, `montant_entree`, `montant_sortie`, `balance_numeric`.
+- Appliquer les bornes inclusives de date et d'heure de `Completion Time`, puis le filtre de sens, avant les synthèses, contrôles et exports; une sélection vide du multisélecteur de sens signifie tous les flux.
+
+## Règles client et sources facultatives
+
+- Considérer Transactions M-PESA Turbo comme la source minimale de l'extrait client.
+- Enrichir Turbo avec le nom G2 par téléphone normalisé et, quand disponible, par `Receipt No = ref_no`.
+- Résoudre vers `customer_id` après rapprochement; utiliser MSISDN ou référence uniquement selon les règles documentées.
+- Rechercher `compte_cree` dans Clients Turbo, puis l'épargne courante, puis le DAT.
+- Agréger Perfect par `Phone_Prefixe` avant la jointure et conserver le nombre d'identités associées au numéro.
+- Réduire proprement le rapport lorsqu'une source facultative manque; ne jamais provoquer un `KeyError` en indexant une source absente.
 - Présenter un cumul relatif, et non un solde réel, si le solde d'ouverture M-PESA n'est pas fourni.
-- Conserver les lignes non rapprochées dans les diagnostics; ne pas les supprimer silencieusement.
-- Ne pas modifier les fichiers Excel sources pendant l'analyse.
+- Ne jamais modifier les fichiers Excel sources pendant l'analyse.
+
+## Exports
+
+- Alimenter Excel avec les détails auditables, les contrôles et la feuille `Anomalies_G2`.
+- Garder le PDF G2/DAT court et orienté Direction générale.
+- Garder le Word modifiable et ajouter en annexe le tableau unique `Transactions classees`, dans le même ordre que l'écran et en orientation paysage.
+- Répéter les en-têtes Word sur plusieurs pages et conserver toutes les lignes du périmètre filtré.
+- Vérifier qu'un export client reprend les filtres de l'extrait sans perdre les feuilles contextuelles du client.
 
 ## Architecture à respecter
 
 - Contrats : `credit_app/data_schema.py`
-- Calculs et rapprochements : `credit_app/services/mpesa_analysis.py`
+- Calculs, rapprochements et exports : `credit_app/services/mpesa_analysis.py`
 - Interface : `credit_app/tabs/solution_mpesa.py`
 - Tests : `tests/test_mpesa_analysis.py`
 
-Placer les règles déterministes dans le service, le rendu dans l'onglet Streamlit et les nouveaux cas métier dans les tests.
+Placer les règles déterministes dans le service, le rendu dans l'onglet Streamlit et chaque nouveau cas métier dans les tests.
 
 ## Validation
 
-Exécuter au minimum :
+Exécuter au minimum avec l'environnement Python du projet :
 
 ```powershell
-python skills/solution-mpesa/scripts/inspect_mpesa_contracts.py
-python -m pytest tests/test_mpesa_analysis.py -q
+& $PYTHON skills/solution-mpesa/scripts/inspect_mpesa_contracts.py
+& $PYTHON -m pytest tests/test_mpesa_analysis.py -q
 ```
 
-Pour une nouvelle extraction, documenter les sources, clés, granularité, devise, période, écarts non rapprochés et hypothèses de solde.
+Pour un changement G2/DAT ou Word, tester aussi un fichier réel sans l'écrire dans le dépôt et vérifier le nombre de reçus, l'ordre des colonnes, les devises, les totaux et les anomalies.

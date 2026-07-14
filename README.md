@@ -17,8 +17,8 @@ L’application permet de :
 - produire des analyses par onglet : vue d’ensemble, audit et contrôle, surveillance, portefeuille, risque, qualité, export et méthode
 - générer des watchlists, des lectures métier et des actions prioritaires selon le cycle actif
 - analyser la solution M-PESA / Bisou Bisou Digital par chargement de fichiers Excel
-- rapprocher les transactions G2 avec les comptes d’épargne courante, les comptes DAT et le fichier clients Turbo
-- produire un rapport journalier des encaissements G2 par devise, avec détail, synthèse verticale et exports Excel
+- rapprocher chaque `Receipt No` G2 avec `ref_no` du Portal/Turbo, puis contrôler téléphone, devise, montant et date
+- produire un rapport G2/DAT des entrées et sorties par devise, avec transactions classées, anomalies et exports Excel, PDF et Word
 
 L’objectif est de fournir à la direction, au contrôle interne, à la conformité et aux responsables opérationnels une lecture exploitable des risques, anomalies, volumes, écarts de procédure et points de contrôle.
 
@@ -337,16 +337,16 @@ Si une seule extraction est présente, l’application le signale simplement ave
 
 ## Solution M-PESA / G2 / Turbo
 
-L’onglet `Solution M-PESA` est un module indépendant qui fonctionne par téléversement de fichiers Excel. Il sert à analyser les encaissements M-PESA_G2, les comptes d’épargne courante et les dépôts à terme issus de la solution Bisou Bisou Digital / Turbo.
+L’onglet `Solution M-PESA` est un module indépendant qui fonctionne par téléversement de fichiers Excel. Il analyse les entrées et sorties M-PESA G2, les écritures Portal/Turbo, les comptes d’épargne, les DAT, les crédits et les correspondances clients avec G2 et Perfect.
 
 ### Fichiers acceptés
 
 Les fichiers sont chargés directement dans l’onglet :
 
-- `Transactions M-PESA`
-  Fichier interne des mouvements M-PESA, utile quand il contient notamment `customer_id`, `msisdn1`, `account_type`, `ref_no`, `dr`, `cr`, `bal_before`, `bal_after`, `created_at`.
+- `Transactions M-PESA Portal/Turbo`
+  Fichier interne des écritures M-PESA, utile quand il contient notamment `customer_id`, `msisdn1`, `account_type`, `ref_no`, `description`, `dr`, `cr`, `bal_before`, `bal_after`, `currency_code` et `created_at`. Plusieurs lignes comptables peuvent appartenir à une seule opération G2.
 - `Transactions G2`
-  Fichier des transactions G2 du jour, avec `Receipt No`, `Completion Time`, `Opposite Party`, `Transaction Status`, `Currency`, `Details`, `Reason Type` et `Balance`. Le montant peut être fourni dans `Transaction Amount` ou éclaté dans `Paid In` et `Withdrawn`.
+  Fichier des transactions G2, avec au minimum `Receipt No`, `Currency` et `Opposite Party`. `Completion Time`, `Transaction Status`, `Details`, `Reason Type` et `Balance` enrichissent l’analyse. Le montant peut être fourni dans `Transaction Amount` ou éclaté dans `Paid In` et `Withdrawn`.
 - `Comptes d’épargne courante`
   Fichier Turbo des comptes courants, avec `customer_id`, `msisdn`, `currency_code`, `created_at`, `updated_at`.
 - `Comptes DAT / épargne bloquée`
@@ -360,33 +360,43 @@ Les fichiers sont chargés directement dans l’onglet :
 
 ### Règles de rapprochement
 
-L’application normalise les numéros de téléphone au format `243...`, puis croise les données selon les règles suivantes :
+L’application construit une seule ligne analytique par `Receipt No`. Un reçu dupliqué est signalé et n’est jamais compté deux fois.
 
-- `Transactions G2.Opposite Party` sert à extraire le téléphone du client.
-- `Transactions G2.Currency` est comparé à `currency_code` quand la source contient une devise.
-- Le fichier `Clients` est prioritaire pour retrouver `Compte créer` via `msisdn1`.
-- Si la date client n’est pas trouvée, l’application utilise `created_at` du compte d’épargne courante.
-- Si aucune date d’épargne courante n’est disponible, l’application utilise la date DAT (`created_at` ou `date_approved`) comme repli.
-- Les lignes DAT sont identifiées à partir du téléphone, de la devise, du jour et du montant DAT.
-- Les autres lignes restent en `Depot normal`, sauf signal particulier classé en `Remboursement prets`.
-- `Paid In` non nul classe le flux en `Entree`; `Withdrawn` non nul le classe en `Sortie`.
-- Les sorties `BisouBisouB2C` sont classées en `Paiement client B2C` et `BisouBisouLoanRequest` en `Demande de credit`.
-- `Super Transaction` est classé en `Operation interne Bisou`; son sens reste déterminé par `Paid In` ou `Withdrawn`.
-- Une sortie n'est jamais utilisée comme candidate au rapprochement DAT.
-- `Phone_Prefixe` rapproche les clients M-PESA avec Perfect. Un numéro partagé par plusieurs fiches est signalé et agrégé avant la jointure afin de ne pas multiplier les opérations.
+Le rapprochement principal suit ces règles :
+
+- `Receipt No = ref_no` est la clé prioritaire entre G2 et le Portal/Turbo.
+- Les différentes écritures comptables d’un même `ref_no` sont regroupées sans être comptées comme plusieurs opérations clients.
+- Pour les entrées rapprochées, `FIXED SAVINGS` ou `Depot Bloque` classe l’opération en `DAT`; `NORMAL SAVINGS` ou `Epargne depot` en `Depot normal`; les comptes ou descriptions de prêt en `Remboursement prets`.
+- Sans référence Portal retrouvée, `Details`, `Reason Type`, le sens et les règles G2 servent de repli.
+- `Paid In` non nul classe le flux en `Entree`; `Withdrawn` non nul le classe en `Sortie`. Le signe de `Transaction Amount` est utilisé comme repli dans l’ancien format.
+- Les sorties `BisouBisouB2C` sont classées en `Paiement client B2C` et les demandes de prêt en `Demande de credit`.
+- `Super Transaction` est classé en `Operation interne Bisou`; une sortie n’est jamais utilisée comme candidate DAT.
+
+Chaque référence Portal retrouvée fait ensuite l’objet de quatre contrôles indépendants : téléphone, devise, montant et date. Le résultat devient `Rapproche exact`, `Rapproche avec ecart` ou `Non rapproche`. Les reçus dupliqués, statuts non terminés, références absentes, écarts et opérations non classées restent visibles dans les anomalies.
+
+Pour les informations client :
+
+- `Opposite Party` fournit le téléphone et le nom G2; le numéro est normalisé au format `243...`.
+- `Nom_client` enrichit les rapports Turbo lorsque G2 est disponible.
+- `Compte créer` provient d’abord de `Clients.created_at`, puis de l’épargne courante et enfin du DAT.
+- `Phone_Prefixe` rapproche les clients M-PESA avec Perfect. Un numéro partagé par plusieurs fiches est agrégé avant la jointure afin de ne pas multiplier les opérations.
 
 ### Restitutions disponibles
 
 Le sous-onglet `G2 / DAT` produit :
 
-- un filtre combiné sur `Completion Time` et le sens : entrées, sorties ou tous les flux
+- un filtre combiné sur la date et l'heure de `Completion Time`, puis sur le sens : entrées, sorties ou tous les flux
 - une synthèse des entrées, sorties, volumes et soldes nets par devise
 - une ventilation par type d'opération incluant les paiements B2C et demandes de crédit
-- une synthèse verticale des encaissements G2 dans un seul tableau :
-  `Devise`, `Synthese sur le Portail BB Digital`, `Montant`
-- un détail unique des encaissements G2 avec `currency_code`, au lieu de tableaux séparés CDF et USD
-- un rapprochement global G2 / DAT
+- une synthèse verticale par devise : `Devise`, `Synthese sur le Portail BB Digital`, `Montant`
+- un tableau unique `Transactions classees`, trié par devise puis date décroissante, avec les colonnes :
+  `date`, `receipt_no`, `currency_code`, `details_rapport`, `opposite_party`, `duree`, `compte_cree`, `montant`, `montant_entree`, `montant_sortie`, `balance_numeric`
+- un rapprochement G2/Portal et G2/DAT avec les contrôles téléphone, devise, montant et date
+- un tableau d'anomalies conservant les références non rapprochées, doublons et écarts
 - un export Excel du rapport journalier
+- un rapport de fidélisation mensuelle M+1 et à 90 jours, séparé par devise et type d'opération
+- un export PDF court pour la Direction generale, genere localement avec Microsoft Edge, Google Chrome ou Chromium
+- un export Word modifiable avec la synthèse exécutive et, en annexe paysage, le même tableau `Transactions classees` que l'écran
 
 Le sous-onglet `Perferct_client` produit :
 
@@ -399,14 +409,14 @@ Exemple de synthèse attendue :
 
 ```text
 Devise | Synthese sur le Portail BB Digital | Montant
-CDF    | DAT                                | 363 000
-CDF    | Depot normal                       | 1 735 000
-CDF    | Remboursement prets                | 1 285
-CDF    | Total CDF                          | 2 099 285
-USD    | DAT                                | 1 550
-USD    | Depot normal                       | 408
-USD    | Remboursement prets                | 0
-USD    | Total USD                          | 1 958
+CDF    | DAT                                | 1 995 950
+CDF    | Depot normal                       | 1 089 302
+CDF    | Remboursement prets                | 104 000
+CDF    | Total CDF                          | 3 189 252
+USD    | DAT                                | 3 610
+USD    | Depot normal                       | 1 166
+USD    | Remboursement prets                | 1
+USD    | Total USD                          | 4 777
 ```
 
 ### Exports M-PESA
@@ -417,13 +427,20 @@ Dans `Extrait client`, la feuille `Extrait_MPESA` reprend les filtres appliqués
 
 - `G2_DAT`
 - `Rapport_G2_Pivot`
+- `Rapport_G2_Comptages`
 - `Rapport_G2_Vertical`
 - `Rapport_G2_Synthese`
 - `Rapport_G2_Detail`
 - `Rapport_Journalier_Pivot`
+- `Rapport_Journalier_Comptages`
 - `Rapport_Journalier_Vertical`
 - `Rapport_Journalier_Synthese`
 - `Rapport_Journalier_Detail`
+- `Anomalies_G2`
+- `Retention_Mensuelle`
+- `Retention_Operations`
+- `Retention_Detail`
+- `Retention_Definitions`
 - `Perfect_Clients`
 - `Perfect_Operations`
 - `Diagnostics`
@@ -564,6 +581,7 @@ controle_interne/
 - méthode : [credit_app/tabs/methodology.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/tabs/methodology.py>)
 - solution M-PESA : [credit_app/tabs/solution_mpesa.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/tabs/solution_mpesa.py>)
 - analyses M-PESA : [credit_app/services/mpesa_analysis.py](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/credit_app/services/mpesa_analysis.py>)
+- skill Solution M-PESA : [skills/solution-mpesa/SKILL.md](</c:/Users/Benjamin-mupanzi/Documents/GitHub/controle_interne/skills/solution-mpesa/SKILL.md>)
 
 ## Vérification
 
@@ -584,12 +602,22 @@ Les tests couvrent notamment :
 - le cycle épargne
 - le cycle CRM
 - les règles de contrôle renforcées pour l’épargne et le crédit
-- la solution M-PESA, le rapprochement G2/DAT et les rapports journaliers
+- la solution M-PESA, le rapprochement `Receipt No = ref_no`, la priorité de classification Portal et les rapports journaliers
+- les reçus G2 dupliqués, références absentes et écarts de téléphone, devise, montant ou date
+- l'ordre partagé des colonnes de `Transactions classees` dans Streamlit et Word
+- les exports Excel, PDF et Word G2/DAT
 
 Commande de vérification :
 
 ```powershell
 & $PYTHON -m unittest discover -s tests -v
+```
+
+Vérification ciblée Solution M-PESA :
+
+```powershell
+& $PYTHON skills/solution-mpesa/scripts/inspect_mpesa_contracts.py
+& $PYTHON -m pytest tests/test_mpesa_analysis.py -q
 ```
 
 ## Confidentialité
