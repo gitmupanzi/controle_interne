@@ -11,8 +11,8 @@ La source de vérité exécutable reste `credit_app/data_schema.py`. Les règles
 | DAT | `customer_id`, `msisdn`, `product_name`, `account_type`, `balance`, `currency_code`, `date_approved`, `maturity_date`; `created_at` facultatif | Dépôts à terme, durée, création et échéance |
 | Crédits | `loan_id`, `customer_id` | Crédits rattachés au client et enrichissement du nom G2 |
 | Transactions G2 | `Receipt No`, `Currency`, `Opposite Party` | Entrées, sorties, client, référence et rapport journalier |
-| Clients Turbo | `msisdn1`, `created_at` | Date de création du compte et recherche client |
-| Clients Perfect | `Phone_Prefixe` | Identité Perfect et contrôle de présence des clients M-PESA |
+| `Clients_Turbo` | `msisdn1`, `created_at` | Date de création du compte et recherche client |
+| `Clients_Perfect` | `Phone_Prefixe` | Identité Perfect et contrôle de présence des clients transactionnels Turbo/G2 |
 
 Les colonnes facultatives et alias acceptés sont définis dans `credit_app/data_schema.py`.
 
@@ -26,8 +26,8 @@ Chaque source peut recevoir plusieurs exports. Ajouter le nom du fichier source 
 | Épargne courante | client × devise × compte × produit × création | `updated_at` le plus récent |
 | DAT | client × devise × compte × approbation × échéance | dernier fichier chargé en cas de même compte |
 | Crédits | `loan_id`, puis `id` | `updated_at` le plus récent |
-| Clients Turbo | `customer_id`, puis téléphone × création | version la plus récente |
-| Clients Perfect | `id_client`, `code_client`, puis identifiant manuel × nom | dernier fichier chargé |
+| `Clients_Turbo` | `customer_id`, puis téléphone × création | version la plus récente |
+| `Clients_Perfect` | `id_client`, `code_client`, puis identifiant manuel × nom | dernier fichier chargé |
 | Transactions G2 | `Receipt No` | statut terminé prioritaire, puis date la plus récente |
 
 Conserver la liste des fichiers ayant fourni un enregistrement canonique. Le nombre de fichiers chargés doit rester visible dans le contrôle d'importation.
@@ -66,14 +66,33 @@ Pour un `Receipt No.` dupliqué, sélectionner comme ligne canonique une ligne t
 1. Normaliser `Receipt No.` et `ref_no`.
 2. Regrouper les écritures Portal par `ref_no` sans sommer plusieurs fois les mouvements miroir.
 3. Joindre G2 sur `receipt_no = ref_no_portal`, même si la devise diffère, afin de pouvoir détecter l'écart de devise.
-4. Contrôler ensuite :
+4. Pour une sortie `BisouBisouB2C` non retrouvée par la clé principale, rechercher uniquement les groupes Turbo `Retrait Vers M-Pesa` au grain `reference_id + created_at`. Exiger téléphone, devise et montant identiques, ainsi qu'un écart absolu maximal de 120 minutes. `reference_id` seul ne constitue pas une clé de transaction, car il peut être réutilisé pour plusieurs retraits du même compte.
+5. Contrôler ensuite :
    - téléphone G2 extrait de `Opposite Party` contre `msisdn1`;
    - devise G2 contre les devises du groupe Portal;
    - montant absolu G2 contre le mouvement du compte M-PESA Portal;
-   - date G2 contre la journée de l'écriture Portal.
-5. Produire `Rapproche exact`, `Rapproche avec ecart` ou `Non rapproche`.
+   - création G2 `Initiation Time` contre `created_at` Turbo; si `Initiation Time` manque, utiliser `Completion Time` comme repli tracé;
+   - finalisation `Completion Time` et délai `Completion Time - Initiation Time` séparément.
+6. Produire `Rapproche exact`, `Rapproche avec ecart`, `Non rapproche` ou `Non applicable - operation interne`.
+
+Un changement de date civile reste `Conforme - passage de date` si l'écart absolu ne dépasse pas 120 minutes; conserver alors les dates G2/Turbo dans `Observation`. Au-delà, produire `Ecart de date`. Un délai de traitement G2 négatif est toujours une anomalie.
+
+Colonnes de traçabilité du repli sortie : `reference_sortie_turbo`, `cle_sortie_turbo`, `cle_rapprochement_turbo`, `methode_rapprochement_turbo`, `nombre_candidats_sortie_turbo` et `operation_turbo_confirmee`. Plus d'un candidat déclenche une revue et ne doit pas être présenté comme un rapprochement exact.
 
 Ne pas considérer le nombre d'écritures Portal comme le nombre d'opérations clients. Une opération peut produire plusieurs lignes `MPESA ACCOUNT`, `NORMAL SAVINGS`, `FIXED SAVINGS` ou comptes de prêt.
+
+### Mode G2/DAT sans fichier G2
+
+Lorsque `Transactions M-PESA_G2` est absent, limiter le rapport aux opérations prouvées par Turbo :
+
+1. regrouper les lignes portant un `ref_no` et retenir les groupes classables en `Depot normal`, `DAT` ou `Remboursement prets`;
+2. regrouper les lignes `Retrait Vers M-Pesa` au grain `reference_id + created_at` et les classer en `Paiement client B2C`;
+3. prendre le montant absolu d'une ligne comptable représentative du groupe, sans sommer les miroirs;
+4. utiliser `created_at` pour la date et l'heure, `Comptabilisee Turbo` pour le libellé de périmètre et `Turbo seul` pour la source analytique;
+5. renseigner `Non applicable - Turbo seul` pour les contrôles téléphone, devise, montant et dates G2/Turbo, ainsi que pour le statut de rapprochement;
+6. ne pas déduire les sorties G2 `Demande de credit`, les opérations internes, le nom client G2, le statut G2, le solde G2 ou les dates G2 si ces informations ne sont pas présentes dans Turbo.
+
+Si un fichier G2 est chargé, ne pas concaténer ce proxy aux transactions G2 : le pipeline canonique G2 et ses contrôles redeviennent prioritaires.
 
 ## Classification des opérations
 
@@ -93,7 +112,7 @@ Sans référence Portal, utiliser les règles G2 :
 | `BisouBisouLoanRequest` ou `Loan payement` | Sortie | `Demande de credit` |
 | `Super Transaction` | Selon `Paid In`/`Withdrawn` | `Operation interne Bisou` |
 
-Ne jamais utiliser une sortie comme candidate DAT. Conserver `Autre entree`, `Autre sortie` ou `Flux a verifier` lorsque la nature reste indéterminée.
+Une sortie B2C confirmée par Turbo conserve `Paiement client B2C` comme classification G2 et reçoit `Retrait epargne vers M-PESA` dans `operation_turbo_confirmee`. Ne jamais utiliser une sortie comme candidate DAT. Conserver `Autre entree`, `Autre sortie` ou `Flux a verifier` lorsque la nature reste indéterminée.
 
 ## Inclusion et anomalies
 
@@ -117,7 +136,7 @@ Ne jamais utiliser une sortie comme candidate DAT. Conserver `Autre entree`, `Au
 
 ## Rapprochement Perfect_client
 
-La population de départ contient les téléphones observés dans au moins une source M-PESA. Perfect enrichit cette population mais ne crée pas, à lui seul, une ligne dans la synthèse.
+La population de départ contient les téléphones observés dans au moins une source Turbo ou G2. Perfect enrichit cette population mais ne crée pas, à lui seul, une ligne dans la synthèse.
 
 | Indicateur | Condition |
 |---|---|
@@ -131,17 +150,17 @@ Règles de restitution :
 - conserver une ligne de synthèse par téléphone normalisé;
 - agréger les fiches Perfect partageant le même téléphone avant la jointure;
 - conserver les noms, identifiants, codes clients, gestionnaires et collecteurs Perfect concaténés;
-- utiliser `clients_trois_systemes` pour la vue prioritaire et la feuille Excel `Clients_3_Systemes`;
-- conserver la population générale dans `Perfect_Clients` et les opérations G2/Turbo dans `Perfect_Operations`;
+- utiliser `clients_trois_systemes` pour la vue prioritaire et la feuille Excel `Clients_Perfect_3_Systemes`;
+- conserver la population générale dans `Clients_Perfect` et les opérations G2/Turbo dans `Operations_Turbo_G2`;
 - ne pas attribuer d'opérations financières à Perfect, car l'export 122 décrit les clients et la qualité de leurs téléphones.
 
 Populations attendues :
 
 | Dataset | Condition | Feuille Excel |
 |---|---|---|
-| `clients_perfect_dans_mpesa` | `present_dans_g2` et `present_dans_perfect` | `Perfect_M_PESA` |
-| `clients_perfect_dans_turbo` | `present_dans_turbo` et `present_dans_perfect` | `Perfect_Turbo` |
-| `clients_perfect_dans_turbo_et_mpesa` | `present_dans_turbo`, `present_dans_g2` et `present_dans_perfect` | `Perfect_Turbo_M_PESA` |
+| `clients_perfect_dans_mpesa` | `present_dans_g2` et `present_dans_perfect` | `Clients_Perfect_G2` |
+| `clients_perfect_dans_turbo` | `present_dans_turbo` et `present_dans_perfect` | `Clients_Perfect_Turbo` |
+| `clients_perfect_dans_turbo_et_mpesa` | `present_dans_turbo`, `present_dans_g2` et `present_dans_perfect` | `Clients_Perfect_Turbo_G2` |
 
 Les deux premières populations incluent les clients de la troisième. Compter les fiches Perfect avec la somme de `nb_clients_perfect`, mais conserver une seule ligne par téléphone dans les tableaux.
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from html import escape
 from io import BytesIO
 from pathlib import Path
@@ -133,6 +133,7 @@ G2_OPERATION_CATEGORIES = [
 ]
 
 G2_COMPLETED_STATUS_LABELS = frozenset({"completed", "complete", "successful", "success"})
+G2_TURBO_DATE_TOLERANCE_MINUTES = 120.0
 
 G2_CLASSIFIED_TRANSACTION_COLUMNS = [
     "date",
@@ -849,7 +850,7 @@ def _build_mpesa_operation_detail(
         turbo_detail["montant_operation"] = turbo_detail["mouvement_net_mpesa"].abs()
         turbo_detail["sens_operation"] = np.select(
             [turbo_detail["mouvement_net_mpesa"].gt(0), turbo_detail["mouvement_net_mpesa"].lt(0)],
-            ["Entree M-PESA", "Sortie M-PESA"],
+            ["Entree M-PESA_Turbo", "Sortie M-PESA_Turbo"],
             default="Mouvement nul",
         )
         turbo_detail["type_operation"] = turbo_detail.apply(
@@ -992,7 +993,7 @@ def _perfect_match_status(frame: pd.DataFrame, perfect_available: bool) -> pd.Se
             index=frame.index,
             dtype="string",
         )
-    return status.where(frame["phone_prefixe"].notna(), "Telephone M-PESA inexploitable")
+    return status.where(frame["phone_prefixe"].notna(), "Telephone Turbo/G2 inexploitable")
 
 
 def _add_system_presence_columns(frame: pd.DataFrame) -> pd.DataFrame:
@@ -1038,7 +1039,7 @@ def _add_system_presence_columns(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_perfect_client_crosscheck(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame]:
-    """Croise la population M-PESA avec Perfect, une seule ligne de synthese par telephone."""
+    """Croise la population unifiee Turbo + G2 avec Perfect, une ligne par telephone."""
     population = _build_mpesa_identity_population(prepared)
     operations = _build_mpesa_operation_detail(prepared)
     perfect_by_phone = _aggregate_perfect_clients(prepared.perfect_clients)
@@ -1157,6 +1158,7 @@ def _extract_customer_name_from_opposite_party(series: pd.Series) -> pd.Series:
         .fillna("")
         .str.split("-", n=1)
         .str[1]
+        .astype("string")
         .str.replace(r"[\r\n\t]+", " ", regex=True)
         .str.replace(r"\s+", " ", regex=True)
         .str.strip()
@@ -1445,16 +1447,16 @@ def classify_mpesa_operation(descriptions: object, account_types: object = "", m
     if "remboursement" in text or "repayment" in text:
         return "Remboursement de credit"
     if "retrait vers m-pesa" in text or "retrait vers mpesa" in text:
-        return "Entree M-PESA depuis epargne"
+        return "Entree M-PESA_Turbo depuis epargne"
     if "m-pesa depot" in text or "mpesa depot" in text:
-        return "Sortie M-PESA vers epargne"
+        return "Sortie M-PESA_Turbo vers epargne"
     if "depot bloque" in text or "depot bloque" in text or "fixed savings" in text or "m-pesa compte" in text:
-        return "Sortie M-PESA vers DAT" if movement_net < 0 else "Entree M-PESA depuis DAT"
+        return "Sortie M-PESA_Turbo vers DAT" if movement_net < 0 else "Entree M-PESA_Turbo depuis DAT"
     if movement_net > 0:
-        return "Autre entree M-PESA"
+        return "Autre entree M-PESA_Turbo"
     if movement_net < 0:
-        return "Autre sortie M-PESA"
-    return "Autre mouvement M-PESA"
+        return "Autre sortie M-PESA_Turbo"
+    return "Autre mouvement M-PESA_Turbo"
 
 
 def build_account_events(transactions_client: pd.DataFrame, account_type: str) -> pd.DataFrame:
@@ -1646,6 +1648,15 @@ def _build_portal_reference_controls(transactions: pd.DataFrame) -> pd.DataFrame
     rows: list[dict[str, object]] = []
     for ref_no, group in tx.groupby("ref_no", dropna=False, sort=False):
         has_loan, has_fixed, has_normal = _portal_operation_flags(group)
+        source_files = concat_unique(
+            group.get(
+                "fichiers_sources_transactions_turbo",
+                group.get(
+                    "fichier_source_transactions_turbo",
+                    pd.Series(dtype="string"),
+                ),
+            )
+        )
         mpesa_amounts = group.loc[group["est_compte_mpesa"], "montant_ligne_portal"]
         control_amounts = mpesa_amounts.loc[mpesa_amounts.gt(0)]
         if control_amounts.empty:
@@ -1678,9 +1689,236 @@ def _build_portal_reference_controls(transactions: pd.DataFrame) -> pd.DataFrame
                 "portal_has_fixed": bool(has_fixed),
                 "portal_has_normal": bool(has_normal),
                 "account_type_cible": target_account,
+                "fichiers_sources_turbo": source_files,
             }
         )
     return pd.DataFrame(rows)
+
+
+def _build_turbo_output_controls(transactions: pd.DataFrame) -> pd.DataFrame:
+    """Agrège les retraits Turbo sans ``ref_no`` par compte et horodatage.
+
+    Les sorties G2 ``BisouBisouB2C`` observées dans les exports réels ne
+    transmettent pas leur ``Receipt No`` dans Turbo. Elles apparaissent comme
+    deux écritures miroir ``Retrait Vers M-Pesa`` partageant un ``reference_id``
+    de type SA. Comme ce compte peut être réutilisé, ``created_at`` distingue
+    les opérations. Cette table fournit une clé secondaire réservée aux sorties.
+    """
+    if transactions.empty or "reference_id" not in transactions.columns:
+        return pd.DataFrame()
+
+    tx = transactions.copy()
+    tx["reference_id"] = clean_identifier(tx["reference_id"])
+    tx["description_normalisee"] = clean_text(
+        tx.get("description", pd.Series("", index=tx.index))
+    ).apply(normalize_label)
+    tx = tx.loc[
+        tx["reference_id"].ne("")
+        & tx["description_normalisee"].eq("retrait vers m-pesa")
+    ].copy()
+    if tx.empty:
+        return pd.DataFrame()
+
+    tx["currency_code"] = clean_text(
+        tx.get("currency_code", pd.Series("", index=tx.index))
+    ).str.upper()
+    tx["phone_portal_normalise"] = normalize_phone(
+        tx.get("msisdn1", pd.Series("", index=tx.index))
+    )
+    tx["created_at"] = pd.to_datetime(
+        tx.get("created_at", pd.Series(pd.NaT, index=tx.index)), errors="coerce"
+    )
+    line_amounts = pd.concat(
+        [
+            numeric_column(tx, "dr").abs(),
+            numeric_column(tx, "cr").abs(),
+            (numeric_column(tx, "bal_after") - numeric_column(tx, "bal_before")).abs(),
+        ],
+        axis=1,
+    )
+    tx["montant_ligne_portal"] = line_amounts.max(axis=1)
+
+    rows: list[dict[str, object]] = []
+    group_columns = [
+        "reference_id",
+        "created_at",
+        "phone_portal_normalise",
+        "currency_code",
+    ]
+    for group_key, group in tx.groupby(group_columns, dropna=False, sort=False):
+        reference_id, created_at, _, _ = group_key
+        has_loan, has_fixed, has_normal = _portal_operation_flags(group)
+        source_files = concat_unique(
+            group.get(
+                "fichiers_sources_transactions_turbo",
+                group.get(
+                    "fichier_source_transactions_turbo",
+                    pd.Series(dtype="string"),
+                ),
+            )
+        )
+        positive_amounts = group.loc[
+            group["montant_ligne_portal"].gt(0), "montant_ligne_portal"
+        ]
+        portal_amount = (
+            float(positive_amounts.max()) if not positive_amounts.empty else np.nan
+        )
+        target_account = (
+            "LOAN ACCOUNT / PRINCIPLE / LOAN PORTFOLIO"
+            if has_loan
+            else "FIXED SAVINGS"
+            if has_fixed
+            else "NORMAL SAVINGS"
+            if has_normal
+            else "MPESA ACCOUNT"
+        )
+        rows.append(
+            {
+                "reference_sortie_turbo": reference_id,
+                "cle_sortie_turbo": (
+                    f"{reference_id} @ {created_at:%Y-%m-%d %H:%M:%S}"
+                    if pd.notna(created_at)
+                    else str(reference_id)
+                ),
+                "nombre_ecritures_portal": int(len(group)),
+                "customer_id_portal": first_non_empty(
+                    group.get("customer_id", pd.Series(dtype="string"))
+                ),
+                "customer_ids_portal": concat_unique(
+                    group.get("customer_id", pd.Series(dtype="string"))
+                ),
+                "telephones_portal": concat_unique(group["phone_portal_normalise"]),
+                "devises_portal": concat_unique(group["currency_code"]),
+                "account_types_portal": concat_unique(
+                    group.get("account_type", pd.Series(dtype="string"))
+                ),
+                "descriptions_portal": concat_unique(
+                    group.get("description", pd.Series(dtype="string"))
+                ),
+                "references_internes_portal": reference_id,
+                "date_portal_min": group["created_at"].min(),
+                "date_portal_max": group["created_at"].max(),
+                "montant_portal_controle": portal_amount,
+                "portal_has_loan": bool(has_loan),
+                "portal_has_fixed": bool(has_fixed),
+                "portal_has_normal": bool(has_normal),
+                "account_type_cible": target_account,
+                "operation_turbo_confirmee": "Retrait epargne vers M-PESA",
+                "fichiers_sources_turbo": source_files,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_turbo_only_g2_transactions(transactions: pd.DataFrame | None) -> pd.DataFrame:
+    """Construit le périmètre G2/DAT depuis Turbo lorsque le relevé G2 manque.
+
+    Le dataset synthétique reste limité aux opérations M-PESA démontrables :
+    entrées portant un ``ref_no`` et classables en épargne/DAT/remboursement,
+    puis sorties ``Retrait Vers M-Pesa``. Il ne simule ni statut, ni solde, ni
+    horodatage G2 et conserve ``source_mode_analyse = Turbo seul``.
+    """
+    if not isinstance(transactions, pd.DataFrame) or transactions.empty:
+        return pd.DataFrame()
+
+    direct_controls = _build_portal_reference_controls(transactions)
+    output_controls = _build_turbo_output_controls(transactions)
+    rows: list[dict[str, object]] = []
+
+    def first_pipe_value(value: object) -> str:
+        if _is_empty_text(value):
+            return ""
+        return next(
+            (part.strip() for part in str(value).split("|") if part.strip()),
+            "",
+        )
+
+    if not direct_controls.empty:
+        for _, control in direct_controls.iterrows():
+            has_loan = bool(control.get("portal_has_loan", False))
+            has_fixed = bool(control.get("portal_has_fixed", False))
+            has_normal = bool(control.get("portal_has_normal", False))
+            if not (has_loan or has_fixed or has_normal):
+                continue
+            reason_type = (
+                "BisouBisouC2BRepayment" if has_loan else "BisouBisouC2B"
+            )
+            details = (
+                "Remboursement prets Turbo"
+                if has_loan
+                else "Depot Bloque Turbo"
+                if has_fixed
+                else "Epargne depot Turbo"
+            )
+            source_files = control.get("fichiers_sources_turbo")
+            if _is_empty_text(source_files):
+                source_files = "Transactions M-PESA_Turbo"
+            rows.append(
+                {
+                    "Receipt No.": control.get("ref_no_portal"),
+                    "Initiation Time": control.get("date_portal_min"),
+                    "Completion Time": control.get("date_portal_max"),
+                    "Details": details,
+                    "Reason Type": reason_type,
+                    "Transaction Status": "Comptabilisee Turbo",
+                    "Currency": first_pipe_value(control.get("devises_portal")),
+                    "Paid In": control.get("montant_portal_controle"),
+                    "Withdrawn": 0.0,
+                    "Opposite Party": first_pipe_value(
+                        control.get("telephones_portal")
+                    ),
+                    "Linked Transaction ID": control.get("ref_no_portal"),
+                    "fichier_source_g2": source_files,
+                    "fichier_source_analyse": source_files,
+                    "source_mode_analyse": "Turbo seul",
+                }
+            )
+
+    if not output_controls.empty:
+        for _, control in output_controls.iterrows():
+            reference_id = str(control.get("reference_sortie_turbo", "")).strip()
+            created_at = pd.to_datetime(control.get("date_portal_min"), errors="coerce")
+            timestamp_key = (
+                f"{created_at:%Y%m%d%H%M%S}" if pd.notna(created_at) else "sansdate"
+            )
+            source_files = control.get("fichiers_sources_turbo")
+            if _is_empty_text(source_files):
+                source_files = "Transactions M-PESA_Turbo"
+            rows.append(
+                {
+                    "Receipt No.": f"TURBO-{reference_id}-{timestamp_key}",
+                    "Initiation Time": created_at,
+                    "Completion Time": pd.to_datetime(
+                        control.get("date_portal_max"), errors="coerce"
+                    ),
+                    "Details": "Retrait Vers M-Pesa",
+                    "Reason Type": "BisouBisouB2C",
+                    "Transaction Status": "Comptabilisee Turbo",
+                    "Currency": first_pipe_value(control.get("devises_portal")),
+                    "Paid In": 0.0,
+                    "Withdrawn": -abs(
+                        float(control.get("montant_portal_controle", 0) or 0)
+                    ),
+                    "Opposite Party": first_pipe_value(
+                        control.get("telephones_portal")
+                    ),
+                    "Linked Transaction ID": control.get("cle_sortie_turbo"),
+                    "fichier_source_g2": source_files,
+                    "fichier_source_analyse": source_files,
+                    "source_mode_analyse": "Turbo seul",
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame()
+    proxy = prepare_g2_transactions(pd.DataFrame(rows))
+    proxy["source_mode_analyse"] = "Turbo seul"
+    proxy["source_g2"] = "Turbo"
+    proxy["fichier_source_analyse"] = proxy.get(
+        "fichier_source_g2",
+        pd.Series("Transactions M-PESA_Turbo", index=proxy.index),
+    )
+    return proxy
 
 
 def _contains_pipe_value(values: object, expected: object) -> bool:
@@ -1718,10 +1956,154 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
         }.items():
             output[column] = default
 
+    output["reference_sortie_turbo"] = pd.NA
+    output["cle_sortie_turbo"] = pd.NA
+    output["nombre_candidats_sortie_turbo"] = 0
+    output["operation_turbo_confirmee"] = ""
+    direct_reference = output["ref_no_portal"].astype("string").fillna("").ne("")
+    output["methode_rapprochement_turbo"] = np.where(
+        direct_reference,
+        "Receipt No = ref_no",
+        "Non rapproche",
+    )
+
+    # Les sorties B2C ne portent pas le Receipt No dans ref_no côté Turbo.
+    # Utiliser une clé secondaire stricte, uniquement quand la clé principale
+    # est absente : téléphone + devise + montant + proximité horaire, sur une
+    # opération Turbo explicitement libellée Retrait Vers M-Pesa.
+    output_candidates = _build_turbo_output_controls(transactions)
+    if not output_candidates.empty:
+        g2_direction = clean_text(
+            output.get("sens_flux", pd.Series("", index=output.index))
+        )
+        g2_reason = clean_text(
+            output.get("reason_type", pd.Series("", index=output.index))
+        ).apply(normalize_label)
+        g2_details = clean_text(
+            output.get("details", pd.Series("", index=output.index))
+        ).apply(normalize_label)
+        g2_phone_for_match = normalize_phone(
+            output.get(
+                "phone_prefixe",
+                output.get("phone", pd.Series("", index=output.index)),
+            )
+        )
+        g2_currency_for_match = clean_text(
+            output.get("currency_code", pd.Series("", index=output.index))
+        ).str.upper()
+        g2_amount_for_match = numeric_column(
+            output, "transaction_amount_numeric"
+        ).abs()
+        initiation_for_match = pd.to_datetime(
+            output.get("initiation_time", pd.Series(pd.NaT, index=output.index)),
+            errors="coerce",
+        )
+        completion_for_match = pd.to_datetime(
+            output.get("completion_time", pd.Series(pd.NaT, index=output.index)),
+            errors="coerce",
+        )
+        g2_date_for_match = initiation_for_match.combine_first(completion_for_match)
+        source_mode_for_match = clean_text(
+            output.get("source_mode_analyse", pd.Series("", index=output.index))
+        ).apply(normalize_label)
+        linked_key_for_match = clean_text(
+            output.get("linked_transaction_id", pd.Series("", index=output.index))
+        )
+
+        portal_columns = [
+            "cle_sortie_turbo",
+            "nombre_ecritures_portal",
+            "customer_id_portal",
+            "customer_ids_portal",
+            "telephones_portal",
+            "devises_portal",
+            "account_types_portal",
+            "descriptions_portal",
+            "references_internes_portal",
+            "date_portal_min",
+            "date_portal_max",
+            "montant_portal_controle",
+            "portal_has_loan",
+            "portal_has_fixed",
+            "portal_has_normal",
+            "account_type_cible",
+            "operation_turbo_confirmee",
+        ]
+        for index in output.index:
+            if direct_reference.loc[index] or g2_direction.loc[index] != "Sortie":
+                continue
+            business_text = f"{g2_reason.loc[index]} {g2_details.loc[index]}"
+            if "bisoubisoub2c" not in business_text and "b2c payment" not in business_text:
+                continue
+            g2_date = g2_date_for_match.loc[index]
+            g2_amount = g2_amount_for_match.loc[index]
+            if pd.isna(g2_date) or pd.isna(g2_amount):
+                continue
+            is_turbo_proxy = source_mode_for_match.loc[index] == "turbo seul"
+            if is_turbo_proxy and linked_key_for_match.loc[index]:
+                candidates = output_candidates.loc[
+                    output_candidates["cle_sortie_turbo"]
+                    .astype("string")
+                    .eq(linked_key_for_match.loc[index])
+                ].copy()
+            else:
+                candidates = output_candidates.loc[
+                    output_candidates["telephones_portal"].apply(
+                        lambda values: _contains_pipe_value(
+                            values, g2_phone_for_match.loc[index]
+                        )
+                    )
+                    & output_candidates["devises_portal"].apply(
+                        lambda values: _contains_pipe_value(
+                            values, g2_currency_for_match.loc[index]
+                        )
+                    )
+                    & pd.to_numeric(
+                        output_candidates["montant_portal_controle"], errors="coerce"
+                    )
+                    .sub(float(g2_amount))
+                    .abs()
+                    .le(0.01)
+                ].copy()
+            candidates["__ecart_minutes"] = (
+                pd.to_datetime(candidates["date_portal_min"], errors="coerce")
+                - g2_date
+            ).dt.total_seconds() / 60
+            if not is_turbo_proxy:
+                candidates = candidates.loc[
+                    candidates["__ecart_minutes"]
+                    .abs()
+                    .le(G2_TURBO_DATE_TOLERANCE_MINUTES)
+                ].copy()
+            if candidates.empty:
+                continue
+            candidates = candidates.sort_values(
+                "__ecart_minutes", key=lambda values: values.abs()
+            )
+            best = candidates.iloc[0]
+            output.at[index, "reference_sortie_turbo"] = best[
+                "reference_sortie_turbo"
+            ]
+            output.at[index, "nombre_candidats_sortie_turbo"] = int(
+                len(candidates)
+            )
+            output.at[index, "methode_rapprochement_turbo"] = (
+                "Telephone + devise + montant + heure (sortie)"
+            )
+            for column in portal_columns:
+                output.at[index, column] = best[column]
+
     output["nombre_ecritures_portal"] = pd.to_numeric(
         output["nombre_ecritures_portal"], errors="coerce"
     ).fillna(0).astype(int)
-    has_reference = output["ref_no_portal"].astype("string").fillna("").ne("")
+    has_reference = (
+        output["ref_no_portal"].astype("string").fillna("").ne("")
+        | output["reference_sortie_turbo"].astype("string").fillna("").ne("")
+    )
+    output["cle_rapprochement_turbo"] = output["ref_no_portal"].where(
+        output["ref_no_portal"].astype("string").fillna("").ne(""),
+        output["cle_sortie_turbo"],
+    )
     g2_currency = clean_text(output.get("currency_code", pd.Series("", index=output.index))).str.upper()
     g2_phone = normalize_phone(output.get("phone_prefixe", output.get("phone", pd.Series("", index=output.index))))
     output["controle_devise"] = np.select(
@@ -1758,32 +2140,163 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
         ["Non controlable", "Conforme"],
         default="Ecart",
     )
-    g2_date = pd.to_datetime(output.get("completion_time", pd.Series(pd.NaT, index=output.index)), errors="coerce")
+    initiation_date = pd.to_datetime(
+        output.get("initiation_time", pd.Series(pd.NaT, index=output.index)),
+        errors="coerce",
+    )
+    completion_date = pd.to_datetime(
+        output.get("completion_time", pd.Series(pd.NaT, index=output.index)),
+        errors="coerce",
+    )
     portal_date = pd.to_datetime(output["date_portal_min"], errors="coerce")
-    output["ecart_date_minutes"] = (g2_date - portal_date).dt.total_seconds() / 60
-    date_comparable = has_reference & g2_date.notna() & portal_date.notna()
-    output["controle_date"] = np.select(
+    output["date_creation_g2"] = initiation_date.combine_first(completion_date)
+    output["source_date_creation_g2"] = np.select(
+        [initiation_date.notna(), completion_date.notna()],
+        ["Initiation Time", "Completion Time (repli)"],
+        default="Date G2 absente",
+    )
+    output["date_creation_turbo"] = portal_date
+    output["date_finalisation_g2"] = completion_date
+    output["ecart_creation_minutes"] = (
+        output["date_creation_g2"] - output["date_creation_turbo"]
+    ).dt.total_seconds() / 60
+    output["ecart_finalisation_minutes"] = (
+        output["date_finalisation_g2"] - output["date_creation_turbo"]
+    ).dt.total_seconds() / 60
+    output["delai_traitement_g2_minutes"] = (
+        output["date_finalisation_g2"] - initiation_date
+    ).dt.total_seconds() / 60
+    creation_comparable = (
+        has_reference
+        & output["date_creation_g2"].notna()
+        & output["date_creation_turbo"].notna()
+    )
+    creation_same_date = (
+        output["date_creation_g2"]
+        .dt.date.eq(output["date_creation_turbo"].dt.date)
+        .fillna(False)
+        .astype(bool)
+    )
+    creation_cross_date_tolerated = (
+        creation_comparable
+        & ~creation_same_date
+        & output["ecart_creation_minutes"]
+        .abs().le(G2_TURBO_DATE_TOLERANCE_MINUTES)
+        .fillna(False)
+    )
+    output["controle_date_creation"] = np.select(
         [
-            (~date_comparable).fillna(True).astype(bool),
-            g2_date.dt.date.eq(portal_date.dt.date).fillna(False).astype(bool),
+            (~creation_comparable).fillna(True).astype(bool),
+            creation_same_date,
+            creation_cross_date_tolerated,
         ],
-        ["Non controlable", "Conforme"],
+        ["Non controlable", "Conforme", "Conforme - passage de date"],
         default="Ecart de date",
     )
+    finalisation_comparable = (
+        has_reference
+        & output["date_finalisation_g2"].notna()
+        & output["date_creation_turbo"].notna()
+    )
+    finalisation_same_date = (
+        output["date_finalisation_g2"]
+        .dt.date.eq(output["date_creation_turbo"].dt.date)
+        .fillna(False)
+        .astype(bool)
+    )
+    finalisation_cross_date_tolerated = (
+        finalisation_comparable
+        & ~finalisation_same_date
+        & output["ecart_finalisation_minutes"]
+        .abs().le(G2_TURBO_DATE_TOLERANCE_MINUTES)
+        .fillna(False)
+    )
+    output["controle_date_finalisation"] = np.select(
+        [
+            (~finalisation_comparable).fillna(True).astype(bool),
+            finalisation_same_date,
+            finalisation_cross_date_tolerated,
+        ],
+        ["Non controlable", "Conforme", "Conforme - passage de date"],
+        default="Ecart de date",
+    )
+    # Colonnes historiques conservees pour les filtres et exports existants.
+    output["ecart_date_minutes"] = output["ecart_creation_minutes"]
+    output["controle_date"] = output["controle_date_creation"]
 
     def date_gap_observation(row: pd.Series) -> str:
-        if row.get("controle_date") != "Ecart de date":
-            return ""
-        g2_value = pd.to_datetime(row.get("completion_time"), errors="coerce")
-        portal_min = pd.to_datetime(row.get("date_portal_min"), errors="coerce")
+        creation_g2 = pd.to_datetime(row.get("date_creation_g2"), errors="coerce")
+        creation_turbo = pd.to_datetime(row.get("date_creation_turbo"), errors="coerce")
+        finalisation_g2 = pd.to_datetime(row.get("date_finalisation_g2"), errors="coerce")
         portal_max = pd.to_datetime(row.get("date_portal_max"), errors="coerce")
-        g2_text = g2_value.strftime("%d/%m/%Y %H:%M:%S") if pd.notna(g2_value) else "date indisponible"
-        portal_text = portal_min.strftime("%d/%m/%Y %H:%M:%S") if pd.notna(portal_min) else "date indisponible"
-        if pd.notna(portal_max) and portal_max != portal_min:
-            portal_text += f" au {portal_max:%d/%m/%Y %H:%M:%S}"
-        gap = pd.to_numeric(pd.Series([row.get("ecart_date_minutes")]), errors="coerce").iloc[0]
-        gap_text = f" | Decalage : {abs(float(gap)):.0f} minute(s)" if pd.notna(gap) else ""
-        return f"Date G2 : {g2_text} | Date Turbo : {portal_text}{gap_text}"
+        creation_g2_text = (
+            creation_g2.strftime("%d/%m/%Y %H:%M:%S")
+            if pd.notna(creation_g2)
+            else "date indisponible"
+        )
+        creation_turbo_text = (
+            creation_turbo.strftime("%d/%m/%Y %H:%M:%S")
+            if pd.notna(creation_turbo)
+            else "date indisponible"
+        )
+        if pd.notna(portal_max) and portal_max != creation_turbo:
+            creation_turbo_text += f" au {portal_max:%d/%m/%Y %H:%M:%S}"
+        creation_gap = pd.to_numeric(
+            pd.Series([row.get("ecart_creation_minutes")]), errors="coerce"
+        ).iloc[0]
+        creation_gap_text = (
+            f" | Decalage creation : {abs(float(creation_gap)):.0f} minute(s)"
+            if pd.notna(creation_gap)
+            else ""
+        )
+        if row.get("controle_date_creation") == "Ecart de date":
+            return (
+                f"Creation G2 : {creation_g2_text} | "
+                f"Creation Turbo : {creation_turbo_text}{creation_gap_text}"
+            )
+
+        delay = pd.to_numeric(
+            pd.Series([row.get("delai_traitement_g2_minutes")]), errors="coerce"
+        ).iloc[0]
+        delay_text = (
+            f" | Delai traitement G2 : {float(delay):.0f} minute(s)"
+            if pd.notna(delay)
+            else ""
+        )
+        if row.get("controle_date_creation") == "Conforme - passage de date":
+            finalisation_text = (
+                finalisation_g2.strftime("%d/%m/%Y %H:%M:%S")
+                if pd.notna(finalisation_g2)
+                else "date indisponible"
+            )
+            return (
+                f"Creation G2 : {creation_g2_text} | "
+                f"Creation Turbo : {creation_turbo_text}{creation_gap_text} | "
+                f"Finalisation G2 : {finalisation_text}{delay_text} | "
+                f"Passage de date tolere (seuil {G2_TURBO_DATE_TOLERANCE_MINUTES:.0f} minutes)"
+            )
+        if row.get("controle_date_finalisation") in {
+            "Ecart de date",
+            "Conforme - passage de date",
+        }:
+            finalisation_text = (
+                finalisation_g2.strftime("%d/%m/%Y %H:%M:%S")
+                if pd.notna(finalisation_g2)
+                else "date indisponible"
+            )
+            return (
+                f"Creation G2 : {creation_g2_text} | "
+                f"Creation Turbo : {creation_turbo_text} | "
+                f"Finalisation G2 : {finalisation_text}{delay_text} | "
+                "Creation conforme; finalisation sur une autre date"
+            )
+        if pd.notna(delay) and float(delay) < 0:
+            return (
+                f"Creation G2 : {creation_g2_text} | "
+                f"Creation Turbo : {creation_turbo_text}{delay_text} | "
+                "Delai de traitement G2 negatif"
+            )
+        return ""
 
     output["Observation"] = output.apply(date_gap_observation, axis=1)
 
@@ -1808,27 +2321,72 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
     ] = "Depot normal"
     output["description_metier"] = output["categorie_operation"]
 
+    turbo_only = clean_text(
+        output.get("source_mode_analyse", pd.Series("", index=output.index))
+    ).apply(normalize_label).eq("turbo seul")
+
     raw_status = clean_text(
         output.get("transaction_status", pd.Series("", index=output.index))
     )
     output["transaction_status"] = raw_status
     output["statut_transaction_g2"] = raw_status.apply(normalize_g2_transaction_status)
     output["est_transaction_terminee"] = g2_completed_transaction_mask(output)
+    output.loc[turbo_only, "statut_transaction_g2"] = "Comptabilisee Turbo"
+    output.loc[turbo_only, "est_transaction_terminee"] = True
     output["incluse_synthese"] = output["est_transaction_terminee"]
     output["traitement_statut_g2"] = np.where(
         output["incluse_synthese"],
         "Incluse dans les analyses",
         "Controle uniquement",
     )
+    output.loc[turbo_only, "traitement_statut_g2"] = (
+        "Incluse - operation comptabilisee dans Turbo"
+    )
+    output.loc[turbo_only, "date_creation_g2"] = pd.NaT
+    output.loc[turbo_only, "source_date_creation_g2"] = "G2 absent"
+    output.loc[turbo_only, "date_finalisation_g2"] = pd.NaT
+    output.loc[turbo_only, "ecart_creation_minutes"] = np.nan
+    output.loc[turbo_only, "ecart_finalisation_minutes"] = np.nan
+    output.loc[turbo_only, "delai_traitement_g2_minutes"] = np.nan
+    output.loc[turbo_only, "ecart_date_minutes"] = np.nan
+    for column in [
+        "controle_telephone",
+        "controle_devise",
+        "controle_montant",
+        "controle_date_creation",
+        "controle_date_finalisation",
+        "controle_date",
+    ]:
+        output.loc[turbo_only, column] = "Non applicable - Turbo seul"
+    output.loc[turbo_only, "ecart_montant"] = np.nan
+    output.loc[turbo_only, "Observation"] = (
+        "Analyse Turbo seule : controles independants G2/Turbo non applicables."
+    )
+    turbo_direct = turbo_only & output["ref_no_portal"].astype("string").fillna("").ne("")
+    turbo_output = turbo_only & output["reference_sortie_turbo"].astype("string").fillna("").ne("")
+    output.loc[turbo_direct, "methode_rapprochement_turbo"] = (
+        "Agregation Turbo par ref_no"
+    )
+    output.loc[turbo_output, "methode_rapprochement_turbo"] = (
+        "Agregation Turbo par reference_id + created_at"
+    )
     has_control_gap = (
         output[["controle_devise", "controle_telephone", "controle_montant", "controle_date"]]
         .eq("Ecart")
         .any(axis=1)
         | output["controle_date"].eq("Ecart de date")
+        | pd.to_numeric(
+            output["nombre_candidats_sortie_turbo"], errors="coerce"
+        ).fillna(0).gt(1)
     )
     output["statut_rapprochement"] = np.select(
-        [~has_reference, has_control_gap],
-        ["Non rapproche", "Rapproche avec ecart"],
+        [turbo_only, internal & ~has_reference, ~has_reference, has_control_gap],
+        [
+            "Non applicable - Turbo seul",
+            "Non applicable - operation interne",
+            "Non rapproche",
+            "Rapproche avec ecart",
+        ],
         default="Rapproche exact",
     )
 
@@ -1851,7 +2409,19 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
             if row.get(column) == "Ecart":
                 reasons.append(label)
         if row.get("controle_date") == "Ecart de date":
-            reasons.append("Ecart de date")
+            reasons.append("Ecart de date de creation")
+        candidates = pd.to_numeric(
+            pd.Series([row.get("nombre_candidats_sortie_turbo")]), errors="coerce"
+        ).iloc[0]
+        if pd.notna(candidates) and int(candidates) > 1:
+            reasons.append(
+                f"Plusieurs candidats Turbo pour la sortie ({int(candidates)})"
+            )
+        delay = pd.to_numeric(
+            pd.Series([row.get("delai_traitement_g2_minutes")]), errors="coerce"
+        ).iloc[0]
+        if pd.notna(delay) and float(delay) < 0:
+            reasons.append("Delai de traitement G2 negatif")
         if row.get("categorie_operation") in {"Flux a verifier", "Autre entree", "Autre sortie"}:
             reasons.append("Operation non classee")
         return " | ".join(reasons)
@@ -1860,7 +2430,11 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
     output["est_anomalie"] = output["motif_anomalie"].ne("")
     start = pd.to_datetime(output.get("completion_time", pd.Series(pd.NaT, index=output.index)), errors="coerce").min()
     end = pd.to_datetime(output.get("completion_time", pd.Series(pd.NaT, index=output.index)), errors="coerce").max()
-    output["source_analytique"] = np.where(has_reference, "G2 + Portal", "G2")
+    output["source_analytique"] = np.select(
+        [turbo_only, has_reference],
+        ["Turbo seul", "G2 + Turbo"],
+        default="G2",
+    )
     output["identifiant_lot"] = (
         f"G2_{start:%Y%m%d}_{end:%Y%m%d}" if pd.notna(start) and pd.notna(end) else "G2_sans_periode"
     )
@@ -1949,16 +2523,54 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
         output["nb_lignes_fixed_savings"] = 0
         output["descriptions_dat_operation"] = ""
 
+    # Propager le rapprochement secondaire des sorties dans les colonnes déjà
+    # utilisées par les rapports clients. La provenance reste explicite grâce
+    # à methode_rapprochement_turbo et reference_sortie_turbo.
+    output_match = output.get(
+        "reference_sortie_turbo", pd.Series(pd.NA, index=output.index)
+    ).astype("string").fillna("").ne("")
+    fallback_values = {
+        "customer_id_ref_no": "customer_id_portal",
+        "customer_ids_ref_no": "customer_ids_portal",
+        "telephone_ref_no": "telephones_portal",
+        "telephones_ref_no": "telephones_portal",
+        "references_transactions": "reference_sortie_turbo",
+        "account_types_transactions": "account_types_portal",
+        "descriptions_transactions": "descriptions_portal",
+        "date_transaction_ref_no": "date_creation_turbo",
+        "nb_lignes_transactions": "nombre_ecritures_portal",
+    }
+    for target, source in fallback_values.items():
+        if target not in output.columns:
+            output[target] = pd.NA
+        if source not in output.columns:
+            continue
+        current = output[target]
+        if pd.api.types.is_datetime64_any_dtype(current):
+            current_missing = pd.to_datetime(current, errors="coerce").isna()
+        elif pd.api.types.is_numeric_dtype(current):
+            current_missing = pd.to_numeric(current, errors="coerce").isna()
+        else:
+            current_missing = current.astype("string").fillna("").eq("")
+        replace_mask = output_match & current_missing
+        output.loc[replace_mask, target] = output.loc[replace_mask, source]
+
     if fixed.empty or "msisdn" not in fixed.columns:
         output["customer_id_dat"] = pd.NA
         output["dat_final_client_devise"] = np.nan
         output["nombre_dat_client_devise"] = 0
         output["produits_dat"] = ""
         output["maturites_dat"] = ""
-        output["mode_rapprochement"] = np.where(
-            output["customer_id_ref_no"].astype("string").fillna("").ne(""),
-            "Receipt No = ref_no",
-            "Non rapproche",
+        output["mode_rapprochement"] = np.select(
+            [
+                output_match,
+                output["customer_id_ref_no"].astype("string").fillna("").ne(""),
+            ],
+            [
+                "Sortie Turbo: telephone + devise + montant + heure",
+                "Receipt No = ref_no",
+            ],
+            default="Non rapproche",
         )
         output["statut_rapprochement_dat"] = "Fichier DAT absent"
         return output.reset_index(drop=True)
@@ -2012,8 +2624,15 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
     has_dat_by_ref = pd.to_numeric(output["nombre_dat_par_ref_no"], errors="coerce").fillna(0).gt(0)
     has_phone_match = output["customer_id_dat_phone"].astype("string").fillna("").ne("")
     output["mode_rapprochement"] = np.select(
-        [has_ref_match & has_dat_operation, has_ref_match & has_dat_by_ref, has_ref_match, has_phone_match],
         [
+            output_match,
+            has_ref_match & has_dat_operation,
+            has_ref_match & has_dat_by_ref,
+            has_ref_match,
+            has_phone_match,
+        ],
+        [
+            "Sortie Turbo: telephone + devise + montant + heure",
             "Receipt No = ref_no + DAT operation",
             "Receipt No = ref_no + DAT final client",
             "Receipt No = ref_no sans DAT",
@@ -2066,6 +2685,12 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
         "categorie_operation",
         "description_metier",
         "ref_no_portal",
+        "reference_sortie_turbo",
+        "cle_sortie_turbo",
+        "cle_rapprochement_turbo",
+        "methode_rapprochement_turbo",
+        "nombre_candidats_sortie_turbo",
+        "operation_turbo_confirmee",
         "nombre_ecritures_portal",
         "account_types_portal",
         "descriptions_portal",
@@ -2075,6 +2700,15 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
         "montant_portal_controle",
         "ecart_montant",
         "controle_montant",
+        "date_creation_g2",
+        "source_date_creation_g2",
+        "date_creation_turbo",
+        "ecart_creation_minutes",
+        "controle_date_creation",
+        "date_finalisation_g2",
+        "delai_traitement_g2_minutes",
+        "ecart_finalisation_minutes",
+        "controle_date_finalisation",
         "ecart_date_minutes",
         "controle_date",
         "Observation",
@@ -2366,6 +3000,10 @@ def build_g2_entry_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame
         "solde_dat_operation_apres",
         "variation_dat_operation",
         "mode_rapprochement",
+        "methode_rapprochement_turbo",
+        "reference_sortie_turbo",
+        "cle_sortie_turbo",
+        "operation_turbo_confirmee",
         "statut_rapprochement_dat",
     ]
     detail_columns = [column for column in detail_columns if column in report.columns]
@@ -2601,15 +3239,18 @@ def build_g2_transaction_status_summary(detail: pd.DataFrame | None) -> pd.DataF
 def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame]:
     g2 = prepared.g2_transactions
     if g2.empty:
-        return {
-            "detail": pd.DataFrame(),
-            "anomalies": pd.DataFrame(),
-            "synthese": pd.DataFrame(),
-            "pivot": pd.DataFrame(),
-            "vertical_summary": pd.DataFrame(),
-            "comptages": build_entry_count_summary(pd.DataFrame()),
-            "statuts": build_g2_transaction_status_summary(pd.DataFrame()),
-        }
+        g2 = build_turbo_only_g2_transactions(prepared.transactions)
+        if g2.empty:
+            return {
+                "detail": pd.DataFrame(),
+                "anomalies": pd.DataFrame(),
+                "synthese": pd.DataFrame(),
+                "pivot": pd.DataFrame(),
+                "vertical_summary": pd.DataFrame(),
+                "comptages": build_entry_count_summary(pd.DataFrame()),
+                "statuts": build_g2_transaction_status_summary(pd.DataFrame()),
+            }
+        prepared = replace(prepared, g2_transactions=g2)
 
     report = build_g2_dat_crosscheck(prepared)
     if report.empty:
@@ -2637,7 +3278,8 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         report["dat_match_rule"] = pd.NA
 
     has_portal_reference = report.get(
-        "ref_no_portal", pd.Series(pd.NA, index=report.index)
+        "cle_rapprochement_turbo",
+        report.get("ref_no_portal", pd.Series(pd.NA, index=report.index)),
     ).astype("string").fillna("").ne("")
     heuristic_dat = (
         ~has_portal_reference
@@ -2734,6 +3376,7 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
     detail_columns = [
         "date",
         "receipt_no",
+        "fichier_source_analyse",
         "fichier_source_g2",
         "sens_flux",
         "details_rapport",
@@ -2764,6 +3407,12 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         "withdrawn_numeric",
         "balance_numeric",
         "ref_no_portal",
+        "reference_sortie_turbo",
+        "cle_sortie_turbo",
+        "cle_rapprochement_turbo",
+        "methode_rapprochement_turbo",
+        "nombre_candidats_sortie_turbo",
+        "operation_turbo_confirmee",
         "customer_id_portal",
         "nombre_ecritures_portal",
         "account_types_portal",
@@ -2775,6 +3424,15 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         "montant_portal_controle",
         "ecart_montant",
         "controle_montant",
+        "date_creation_g2",
+        "source_date_creation_g2",
+        "date_creation_turbo",
+        "ecart_creation_minutes",
+        "controle_date_creation",
+        "date_finalisation_g2",
+        "delai_traitement_g2_minutes",
+        "ecart_finalisation_minutes",
+        "controle_date_finalisation",
         "ecart_date_minutes",
         "controle_date",
         "Observation",
@@ -3024,7 +3682,9 @@ def build_g2_retention_report(
             ]
         ),
     }
-    if prepared.g2_transactions.empty:
+    if prepared.g2_transactions.empty and not (
+        isinstance(daily_detail, pd.DataFrame) and not daily_detail.empty
+    ):
         return empty_result
 
     activity = (
@@ -3034,6 +3694,16 @@ def build_g2_retention_report(
     )
     if activity.empty:
         return empty_result
+    if "incluse_synthese" in activity.columns:
+        eligible_activity = (
+            activity["incluse_synthese"]
+            .astype("boolean")
+            .fillna(False)
+            .astype(bool)
+        )
+        activity = activity.loc[eligible_activity].copy()
+        if activity.empty:
+            return empty_result
 
     activity["date"] = pd.to_datetime(activity.get("date"), errors="coerce")
     activity["phone_prefixe"] = normalize_phone(
@@ -3972,20 +4642,27 @@ def build_mpesa_perfect_adoption_analysis(
             detail["jours_depuis_derniere_operation"].le(30),
             detail["jours_depuis_derniere_operation"].le(90),
         ],
-        ["Jamais observe dans M-PESA", "Present sans operation datee", "Actif M-PESA 30 jours", "Actif M-PESA 31 a 90 jours"],
-        default="Inactif M-PESA plus de 90 jours",
+        [
+            "Jamais observe dans Turbo + G2",
+            "Present Turbo/G2 sans operation datee",
+            "Actif Turbo + G2 30 jours",
+            "Actif Turbo + G2 31 a 90 jours",
+        ],
+        default="Inactif Turbo + G2 plus de 90 jours",
     )
     detail["date_analyse"] = analysis_date
     total = int(len(detail))
     present = int(detail["present_dans_mpesa"].sum())
-    active30 = int(detail["statut_adoption"].eq("Actif M-PESA 30 jours").sum())
+    active30 = int(detail["statut_adoption"].eq("Actif Turbo + G2 30 jours").sum())
     summary = pd.DataFrame(
         [
             {
                 "telephones_perfect_valides": total,
                 "clients_perfect_dans_mpesa": present,
                 "clients_perfect_actifs_30j": active30,
-                "clients_perfect_jamais_observes": int(detail["statut_adoption"].eq("Jamais observe dans M-PESA").sum()),
+                "clients_perfect_jamais_observes": int(
+                    detail["statut_adoption"].eq("Jamais observe dans Turbo + G2").sum()
+                ),
                 "taux_adoption_mpesa_pct": 100 * present / total if total else np.nan,
                 "taux_activite_30j_pct": 100 * active30 / present if present else np.nan,
                 "date_analyse": analysis_date,
@@ -4030,12 +4707,13 @@ def build_mpesa_management_dashboard(
 
     source_rows: list[dict[str, Any]] = []
     sources = [
-        ("Transactions Turbo", prepared.transactions, "created_at"),
-        ("Transactions G2", prepared.g2_transactions, "completion_time"),
-        ("Credits Turbo", prepared.loans, "updated_at"),
-        ("DAT Turbo", prepared.fixed_savings, "maturity_date"),
-        ("Epargne courante Turbo", prepared.current_savings, "updated_at"),
-        ("Clients Perfect", prepared.perfect_clients, None),
+        ("Transactions M-PESA_Turbo", prepared.transactions, "created_at"),
+        ("Transactions M-PESA_G2", prepared.g2_transactions, "completion_time"),
+        ("Credits_Turbo", prepared.loans, "updated_at"),
+        ("DAT_Turbo", prepared.fixed_savings, "maturity_date"),
+        ("Epargne courante_Turbo", prepared.current_savings, "updated_at"),
+        ("Clients_Turbo", prepared.customers, "created_at"),
+        ("Clients_Perfect", prepared.perfect_clients, None),
     ]
     for source, frame, date_column in sources:
         available = isinstance(frame, pd.DataFrame) and not frame.empty
@@ -4084,10 +4762,11 @@ def search_customers(query: object, prepared: MpesaPreparedData) -> pd.DataFrame
     normalized_phone = normalize_phone(pd.Series([text])).iloc[0]
     frames: list[pd.DataFrame] = []
     source_map = [
-        ("Transactions", prepared.transactions, "msisdn1"),
-        ("Epargne courante", prepared.current_savings, "msisdn"),
-        ("DAT", prepared.fixed_savings, "msisdn"),
-        ("Credits", prepared.loans, "msisdn1"),
+        ("Transactions M-PESA_Turbo", prepared.transactions, "msisdn1"),
+        ("Epargne courante_Turbo", prepared.current_savings, "msisdn"),
+        ("DAT_Turbo", prepared.fixed_savings, "msisdn"),
+        ("Credits_Turbo", prepared.loans, "msisdn1"),
+        ("Clients_Turbo", prepared.customers, "msisdn1"),
     ]
     for label, frame, phone_col in source_map:
         if frame.empty or "customer_id" not in frame.columns:
@@ -4770,6 +5449,8 @@ def _html_table(frame: pd.DataFrame, columns: list[str], labels: dict[str, str],
 
 
 def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
+    source_label = str(report.get("analysis_source_label", "G2") or "G2")
+    turbo_only = source_label.casefold() == "turbo"
     daily_pivot = report.get("rapport_journalier_pivot", pd.DataFrame())
     g2_dat = report.get("g2_dat", pd.DataFrame())
     monthly = report.get("retention_mensuelle", pd.DataFrame())
@@ -4781,6 +5462,18 @@ def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
 
     if not isinstance(transaction_detail, pd.DataFrame):
         transaction_detail = pd.DataFrame()
+    eligible_transaction_detail = transaction_detail.copy()
+    if (
+        not eligible_transaction_detail.empty
+        and "incluse_synthese" in eligible_transaction_detail.columns
+    ):
+        eligible_mask = (
+            eligible_transaction_detail["incluse_synthese"]
+            .astype("boolean")
+            .fillna(False)
+            .astype(bool)
+        )
+        eligible_transaction_detail = eligible_transaction_detail.loc[eligible_mask].copy()
     if not isinstance(transactions_by_day, pd.DataFrame):
         transactions_by_day = pd.DataFrame()
     if not isinstance(transactions_by_weekday, pd.DataFrame):
@@ -4805,13 +5498,30 @@ def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
     retention_items: list[str] = []
     latest_retention_rows: list[dict[str, object]] = []
     chart_blocks: list[pd.DataFrame] = []
+    if not eligible_transaction_detail.empty:
+        activity = eligible_transaction_detail.copy()
+        activity["currency_code"] = clean_text(
+            activity.get("currency_code", pd.Series("", index=activity.index))
+        ).str.upper().replace("", "SANS DEVISE")
+        phone_values = normalize_phone(
+            activity.get("phone_prefixe", pd.Series(pd.NA, index=activity.index, dtype="string"))
+        )
+        if phone_values.notna().sum() == 0 and "opposite_party" in activity.columns:
+            phone_values = normalize_phone(
+                _extract_phone_from_opposite_party(activity["opposite_party"])
+            )
+        activity["__client_phone"] = phone_values
+        for currency, frame in activity.groupby("currency_code", dropna=False, sort=True):
+            transaction_count = int(len(frame))
+            client_count = int(frame["__client_phone"].dropna().nunique())
+            operation_status = "operation(s) comptabilisee(s) dans Turbo" if turbo_only else "transaction(s) Completed"
+            active_items.append(
+                f"{currency} : {transaction_count} {operation_status}, "
+                f"{client_count} client(s) distinct(s)"
+            )
     if not monthly.empty:
         for currency, frame in monthly.groupby("currency_code", dropna=False):
             frame = frame.sort_values("periode")
-            latest = frame.iloc[-1]
-            active_items.append(
-                f"{currency} : {_pdf_number(latest.get('clients_actifs_mois_base'))} client(s) actif(s)"
-            )
             eligible_m1 = frame.dropna(subset=["retention_m1_pct"])
             eligible_90 = frame.dropna(subset=["retention_90j_pct"])
             m1_text = f"{eligible_m1.iloc[-1]['retention_m1_pct']:.1f}%" if not eligible_m1.empty else "non calculable"
@@ -4846,10 +5556,17 @@ def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
         ).eq("Oui")
         completed_count = int(status_counts.loc[included].sum())
         control_only_count = int(status_counts.loc[~included].sum())
-        status_text = (
-            f"{completed_count} transaction(s) Completed incluse(s) dans les analyses; "
-            f"{control_only_count} transaction(s) d'autres statuts conservee(s) pour controle uniquement."
-        )
+        if turbo_only:
+            status_text = (
+                f"{completed_count} operation(s) comptabilisee(s) dans Turbo incluse(s) dans les analyses; "
+                f"{control_only_count} operation(s) exclue(s) du perimetre analytique. "
+                "Le statut de transaction G2 n'est pas disponible."
+            )
+        else:
+            status_text = (
+                f"{completed_count} transaction(s) Completed incluse(s) dans les analyses; "
+                f"{control_only_count} transaction(s) d'autres statuts conservee(s) pour controle uniquement."
+            )
 
     time_items: list[str] = []
     total_transactions = 0
@@ -4879,7 +5596,7 @@ def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
         spans_multiple_days = analysis_end.normalize() > analysis_start.normalize()
     else:
         detail_dates = pd.to_datetime(
-            transaction_detail.get("date", pd.Series(dtype="datetime64[ns]")), errors="coerce"
+            eligible_transaction_detail.get("date", pd.Series(dtype="datetime64[ns]")), errors="coerce"
         ).dropna()
         spans_multiple_days = detail_dates.dt.normalize().nunique() > 1
         if not spans_multiple_days and not transactions_by_day.empty:
@@ -4918,7 +5635,12 @@ def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
             )
 
     control_text = ""
-    if not g2_dat.empty:
+    if turbo_only:
+        control_text = (
+            "Mode Turbo seul : les controles croises G2/Turbo sont non applicables. "
+            "Les depots sont regroupes par ref_no et les retraits M-PESA par reference_id + created_at."
+        )
+    elif not g2_dat.empty:
         if "statut_rapprochement" in g2_dat.columns:
             reference_status = g2_dat["statut_rapprochement"].astype("string").fillna("")
             exact = int(reference_status.eq("Rapproche exact").sum())
@@ -4960,7 +5682,7 @@ def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
         else "La fidelisation M+1 et a 90 jours exige un historique couvrant les mois suivants."
     )
     return {
-        "active_text": "; ".join(active_items) or "Aucune activite client eligible.",
+        "active_text": "; ".join(active_items) or "Aucune transaction Completed dans le perimetre filtre.",
         "flow_text": "; ".join(flow_items) or "Aucun flux disponible.",
         "status_text": status_text,
         "time_text": "; ".join(time_items),
@@ -5267,7 +5989,7 @@ def create_customer_statement_word(
     title.paragraph_format.space_before = Pt(5)
     title.paragraph_format.space_after = Pt(6)
     title.add_run(
-        f"Extrait de compte - {telephone_text} - {customer_name_text.upper()} - {currency_text or view['currency']}"
+        f"Extrait de compte [Turbo] - {telephone_text} - {customer_name_text.upper()} - {currency_text or view['currency']}"
     )
 
     balance_prefix = "Solde" if view["balance_is_real"] else "Cumul"
@@ -5276,8 +5998,8 @@ def create_customer_statement_word(
     summary.autofit = False
     summary_labels = [
         f"{balance_prefix} initial",
-        "Total entrees",
-        "Total sorties",
+        "Total entrees [Turbo]",
+        "Total sorties [Turbo]",
         f"{balance_prefix} final",
     ]
     summary_values = [
@@ -5384,8 +6106,8 @@ def create_customer_statement_word(
     footer_run.font.size = Pt(7.5)
     footer_run.font.color.rgb = RGBColor(110, 125, 140)
 
-    document.core_properties.title = f"Extrait de compte {customer_id_text} - {currency_text}"
-    document.core_properties.subject = "Extrait client M-PESA"
+    document.core_properties.title = f"Extrait de compte Turbo {customer_id_text} - {currency_text}"
+    document.core_properties.subject = "Extrait client M-PESA_Turbo"
     document.core_properties.author = "Solution Controle Interne"
     buffer = BytesIO()
     document.save(buffer)
@@ -5412,27 +6134,32 @@ def create_g2_dat_word(
     except ImportError as exc:
         raise RuntimeError("La dependance python-docx est requise pour generer le rapport Word.") from exc
 
+    source_label = str(report.get("analysis_source_label", "G2") or "G2")
+    report_scope = "Turbo/DAT" if source_label.casefold() == "turbo" else "G2/DAT"
     daily_pivot = report.get("rapport_journalier_pivot", pd.DataFrame())
     daily_synthese = report.get("rapport_journalier_synthese", pd.DataFrame())
     transaction_detail = report.get("rapport_journalier_detail", pd.DataFrame())
+    eligible_transaction_detail = transaction_detail
+    if isinstance(transaction_detail, pd.DataFrame):
+        eligible_transaction_detail = transaction_detail.copy()
+        if (
+            not eligible_transaction_detail.empty
+            and "incluse_synthese" in eligible_transaction_detail.columns
+        ):
+            eligible_word_detail = (
+                eligible_transaction_detail["incluse_synthese"]
+                .astype("boolean")
+                .fillna(False)
+                .astype(bool)
+            )
+            eligible_transaction_detail = eligible_transaction_detail.loc[eligible_word_detail].copy()
     if not isinstance(daily_pivot, pd.DataFrame) or daily_pivot.empty:
-        daily_pivot = build_entry_pivot(transaction_detail)
+        daily_pivot = build_entry_pivot(eligible_transaction_detail)
     generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
     word_report = dict(report)
     word_report["rapport_journalier_pivot"] = daily_pivot
     context = _g2_executive_context(word_report)
-    if (
-        isinstance(transaction_detail, pd.DataFrame)
-        and not transaction_detail.empty
-        and "incluse_synthese" in transaction_detail.columns
-    ):
-        eligible_word_detail = (
-            transaction_detail["incluse_synthese"]
-            .astype("boolean")
-            .fillna(False)
-            .astype(bool)
-        )
-        transaction_detail = transaction_detail.loc[eligible_word_detail].copy()
+    transaction_detail = eligible_transaction_detail
 
     classified = daily_synthese.copy()
     if not classified.empty and "details_rapport" in classified.columns:
@@ -5460,7 +6187,7 @@ def create_g2_dat_word(
 
     title = document.add_paragraph(style="Title")
     title.paragraph_format.space_after = Pt(2)
-    title.add_run("Rapport M-PESA - G2/DAT")
+    title.add_run(f"Rapport M-PESA - {report_scope}")
     meta = document.add_paragraph()
     meta.paragraph_format.space_after = Pt(7)
     meta_run = meta.add_run(f"{period_text} | Sens : {direction_label} | {generated_at:%d/%m/%Y}")
@@ -5552,7 +6279,7 @@ def create_g2_dat_word(
         document.add_paragraph().paragraph_format.space_after = Pt(0)
         return table
 
-    document.add_heading("Synthese des flux G2 par devise", level=1)
+    document.add_heading(f"Synthese des flux {source_label} par devise", level=1)
     add_table(
         daily_pivot,
         ["currency_code", "nombre_entrees", "montant_total_entrees", "nombre_sorties", "montant_total_sorties", "solde_net_flux"],
@@ -5639,7 +6366,7 @@ def create_g2_dat_word(
     footer_run.font.size = Pt(8)
     footer_run.font.color.rgb = RGBColor(110, 125, 140)
 
-    document.core_properties.title = "Rapport M-PESA - G2/DAT"
+    document.core_properties.title = f"Rapport M-PESA - {report_scope}"
     document.core_properties.subject = "Synthese destinee a la Direction generale"
     document.core_properties.author = "Solution Controle Interne"
     buffer = BytesIO()
@@ -5651,7 +6378,7 @@ def create_g2_dat_word(
 def create_excel_export(report: dict[str, Any]) -> bytes:
     sheet_contract = [
         ("synthese", "Synthese"),
-        ("extrait", "Extrait_MPESA"),
+        ("extrait", "Extrait_Turbo"),
         ("dat_final", "DAT_Final"),
         ("forts_dat", "Forts_DAT"),
         ("portefeuille_dat", "Portefeuille_DAT"),
@@ -5659,6 +6386,7 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         ("mouvements_epargne", "Mouvements_Epargne"),
         ("credits", "Credits"),
         ("g2_dat", "G2_DAT"),
+        ("turbo_dat", "Turbo_DAT"),
         ("rapport_g2_pivot", "Rapport_G2_Pivot"),
         ("rapport_g2_comptages", "Rapport_G2_Comptages"),
         ("rapport_g2_vertical", "Rapport_G2_Vertical"),
@@ -5669,8 +6397,10 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         ("rapport_journalier_vertical", "Rapport_Journalier_Vertical"),
         ("rapport_journalier_synthese", "Rapport_Journalier_Synthese"),
         ("statuts_g2", "Statuts_G2"),
+        ("statuts_turbo", "Statuts_Turbo"),
         ("rapport_journalier_detail", "Rapport_Journalier_Detail"),
         ("rapport_journalier_anomalies", "Anomalies_G2"),
+        ("rapport_turbo_anomalies", "Anomalies_Turbo"),
         ("transactions_par_jour", "Transactions_Jour"),
         ("transactions_par_jour_semaine", "Transactions_Jour_Semaine"),
         ("transactions_par_heure", "Transactions_Heure"),
@@ -5679,23 +6409,23 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         ("retention_operations", "Retention_Operations"),
         ("retention_detail", "Retention_Detail"),
         ("retention_definitions", "Retention_Definitions"),
-        ("perfect_clients", "Perfect_Clients"),
-        ("perfect_operations", "Perfect_Operations"),
-        ("clients_perfect_dans_mpesa", "Perfect_M_PESA"),
-        ("clients_perfect_dans_turbo", "Perfect_Turbo"),
-        ("clients_perfect_dans_turbo_et_mpesa", "Perfect_Turbo_M_PESA"),
-        ("clients_3_systemes", "Clients_3_Systemes"),
-        ("credit_synthese", "Pilotage_Credit"),
-        ("credit_detail", "Credits_A_Risque"),
-        ("liquidite_synthese", "Pilotage_Liquidite"),
-        ("liquidite_journaliere", "Liquidite_Journaliere"),
-        ("activite_clients", "Activite_Clients"),
-        ("conversion_clients", "Conversion_Epargne_DAT"),
-        ("concentration_clients", "Concentration_Clients"),
-        ("qualite_synthese", "Qualite_Transactions"),
-        ("alertes_transactions", "Alertes_Transactions"),
-        ("dat_echeances_detail", "Echeances_DAT"),
-        ("perfect_adoption_detail", "Adoption_Perfect"),
+        ("perfect_clients", "Clients_Perfect"),
+        ("perfect_operations", "Operations_Turbo_G2"),
+        ("clients_perfect_dans_mpesa", "Clients_Perfect_G2"),
+        ("clients_perfect_dans_turbo", "Clients_Perfect_Turbo"),
+        ("clients_perfect_dans_turbo_et_mpesa", "Clients_Perfect_Turbo_G2"),
+        ("clients_3_systemes", "Clients_Perfect_3_Systemes"),
+        ("credit_synthese", "Pilotage_Credit_Turbo"),
+        ("credit_detail", "Credits_Risque_Turbo"),
+        ("liquidite_synthese", "Liquidite_G2"),
+        ("liquidite_journaliere", "Liquidite_Jour_G2"),
+        ("activite_clients", "Activite_Turbo_G2"),
+        ("conversion_clients", "Conversion_DAT_G2"),
+        ("concentration_clients", "Concentration_G2"),
+        ("qualite_synthese", "Qualite_G2"),
+        ("alertes_transactions", "Alertes_G2"),
+        ("dat_echeances_detail", "Echeances_DAT_Turbo"),
+        ("perfect_adoption_detail", "Adoption_Turbo_G2"),
         ("diagnostics", "Diagnostics"),
     ]
     sheets = {

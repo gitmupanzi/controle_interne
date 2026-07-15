@@ -341,6 +341,8 @@ Si une seule extraction est présente, l’application le signale simplement ave
 
 L’onglet `Solution M-PESA` est un module indépendant qui fonctionne par téléversement de fichiers Excel. Il analyse les entrées et sorties M-PESA G2, les écritures Portal/Turbo, les comptes d’épargne, les DAT, les crédits et les correspondances clients avec G2 et Perfect.
 
+Convention des libellés visibles : `[Turbo]` désigne une analyse issue de `Transactions M-PESA_Turbo`, `[G2]` une analyse issue de `Transactions M-PESA_G2`, et `[Turbo + G2]` une analyse consolidée utilisant réellement les deux sources. Pour les référentiels clients, l'application emploie les noms exacts `Clients_Turbo` et `Clients_Perfect`; un client déduit des opérations est présenté comme client transactionnel et n'est pas attribué à `Clients_Turbo`. Le nom global `Solution M-PESA` reste celui du module, mais il n'est pas utilisé seul comme source d'un indicateur.
+
 ### Fichiers acceptés
 
 Les fichiers sont chargés directement dans l’onglet :
@@ -353,11 +355,11 @@ Les fichiers sont chargés directement dans l’onglet :
   Fichier Turbo des comptes courants, avec `customer_id`, `msisdn`, `currency_code`, `created_at`, `updated_at`.
 - `Comptes DAT / épargne bloquée`
   Fichier Turbo des comptes DAT, avec `customer_id`, `msisdn`, `product_name`, `account_type`, `balance`, `currency_code`, `date_approved`, `maturity_date`.
-- `Clients`
+- `Clients_Turbo`
   Fichier client Turbo, avec `msisdn1` et `created_at`. Il sert à retrouver la date de création du compte à partir du numéro de téléphone.
 - `Crédits`
   Fichier facultatif pour enrichir l’extrait client et les diagnostics.
-- `Clients Perfect (export 122)`
+- `Clients_Perfect (export 122)`
   Fichier facultatif de contrôle téléphonique avec `Phone_Prefixe`, les identifiants et le nom du client Perfect.
 
 Tous les emplacements de téléversement M-PESA acceptent plusieurs fichiers. Le contrôle de chargement affiche le nombre et le nom des fichiers sources, puis les chevauchements sont éliminés selon la nature de la source :
@@ -366,10 +368,12 @@ Tous les emplacements de téléversement M-PESA acceptent plusieurs fichiers. Le
 - épargne courante : client, devise, type de compte, produit et date de création, en conservant le `updated_at` le plus récent;
 - DAT : client, devise, type de compte, date d'approbation et échéance;
 - crédits : `loan_id`, avec priorité à la version la plus récente;
-- clients Turbo : `customer_id`, ou téléphone et date de création lorsque l'identifiant n'est pas fourni;
-- clients Perfect : `id_client`, puis les identifiants de repli documentés.
+- `Clients_Turbo` : `customer_id`, ou téléphone et date de création lorsque l'identifiant n'est pas fourni;
+- `Clients_Perfect` : `id_client`, puis les identifiants de repli documentés.
 
 La logique des transactions Turbo reste comptable et distincte de G2 : sur la ligne `MPESA ACCOUNT`, `dr` représente une sortie M-PESA et `cr` une entrée M-PESA. Les lignes techniques partageant le même `ref_no` sont regroupées pour le rapprochement G2/DAT; elles ne sont pas interprétées avec les règles G2 `Paid In`/`Withdrawn`.
+
+Le fichier `Transactions M-PESA_G2` est facultatif pour ouvrir le sous-onglet `G2 / DAT`. En son absence, le mode `[Turbo]` reconstruit uniquement les opérations démontrables dans `Transactions M-PESA_Turbo` : dépôt normal, DAT et remboursement regroupés par `ref_no`, puis retraits `Retrait Vers M-Pesa` regroupés par `reference_id + created_at`. `created_at` fournit alors la date et l'heure. Le mode ne fabrique ni nom G2, ni statut G2, ni solde G2, ni date d'initiation/finalisation G2; les contrôles croisés G2/Turbo sont affichés comme `Non applicable - Turbo seul`. Dès qu'un fichier G2 est chargé, G2 redevient automatiquement la source principale.
 
 ### Règles de rapprochement
 
@@ -379,13 +383,15 @@ Le rapprochement principal suit ces règles :
 
 - `Receipt No = ref_no` est la clé prioritaire entre G2 et le Portal/Turbo.
 - Les différentes écritures comptables d’un même `ref_no` sont regroupées sans être comptées comme plusieurs opérations clients.
+- Pour une sortie G2 `BisouBisouB2C` dont le reçu est absent de `ref_no`, le rapprochement secondaire est autorisé uniquement avec une opération Turbo `Retrait Vers M-Pesa` ayant le même téléphone, la même devise, le même montant et un écart horaire maximal de 120 minutes. L'opération Turbo est distinguée par `reference_id + created_at`, car `reference_id` seul identifie le compte d'épargne et peut être réutilisé.
 - Pour les entrées rapprochées, `FIXED SAVINGS` ou `Depot Bloque` classe l’opération en `DAT`; `NORMAL SAVINGS` ou `Epargne depot` en `Depot normal`; les comptes ou descriptions de prêt en `Remboursement prets`.
 - Sans référence Portal retrouvée, `Details`, `Reason Type`, le sens et les règles G2 servent de repli.
 - `Paid In` non nul classe le flux en `Entree`; `Withdrawn` non nul le classe en `Sortie`. Le signe de `Transaction Amount` est utilisé comme repli dans l’ancien format.
 - Les sorties `BisouBisouB2C` sont classées en `Paiement client B2C` et les demandes de prêt en `Demande de credit`.
-- `Super Transaction` est classé en `Operation interne Bisou`; une sortie n’est jamais utilisée comme candidate DAT.
+- Une sortie B2C rapprochée à `Retrait Vers M-Pesa` reçoit aussi le libellé de contrôle `Retrait epargne vers M-PESA` sans modifier sa classification G2.
+- `Super Transaction` est classé en `Operation interne Bisou`; son rapprochement client est `Non applicable - operation interne`, et une sortie n’est jamais utilisée comme candidate DAT.
 
-Chaque référence Portal retrouvée fait ensuite l’objet de quatre contrôles indépendants : téléphone, devise, montant et date. Le résultat devient `Rapproche exact`, `Rapproche avec ecart` ou `Non rapproche`. Les reçus dupliqués, statuts non terminés, références absentes, écarts et opérations non classées restent visibles dans les anomalies.
+Chaque opération Turbo retrouvée fait ensuite l’objet de quatre contrôles indépendants : téléphone, devise, montant et date. La date de création compare d'abord `Initiation Time` G2 à `created_at` Turbo; `Completion Time` représente la finalisation G2 et permet de calculer le délai de traitement. Si `Initiation Time` manque, `Completion Time` sert de repli explicite. Un passage de date avec un écart inférieur ou égal à 120 minutes reste conforme et les deux dates sont conservées dans `Observation`; au-delà, il devient un écart de date. Le résultat devient `Rapproche exact`, `Rapproche avec ecart`, `Non rapproche` ou `Non applicable - operation interne`. Les reçus dupliqués, statuts non terminés, références absentes, écarts et opérations non classées restent visibles dans les anomalies.
 
 Les statuts G2 sont normalisés en `Completed`, `Declined`, `Cancelled`, `Expired`, `Pending`, `Non renseigne` ou `Autre`. Seules les transactions explicitement `Completed` alimentent les montants, tendances, fidélisation, contrôles DAT et analyses Perfect. Les autres statuts restent visibles dans la répartition des statuts, le détail et les anomalies. Un ancien export entièrement dépourvu de statut reste compatible; dans un fichier moderne où au moins un statut est renseigné, une ligne sans statut est réservée au contrôle.
 
@@ -394,11 +400,11 @@ Pour les informations client :
 - `Opposite Party` fournit le téléphone et le nom G2; le numéro est normalisé au format `243...`.
 - `Nom_client` enrichit les rapports Turbo lorsque G2 est disponible.
 - `Compte créer` provient d’abord de `Clients.created_at`, puis de l’épargne courante et enfin du DAT.
-- `Phone_Prefixe` rapproche les clients M-PESA avec Perfect. La présence est contrôlée séparément dans G2, Turbo et Perfect afin de produire l'intersection stricte des trois systèmes. Un numéro partagé par plusieurs fiches est agrégé avant la jointure afin de ne pas multiplier les opérations.
+- `Phone_Prefixe` rapproche les clients transactionnels Turbo/G2 avec `Clients_Perfect`. La présence est contrôlée séparément dans G2, Turbo et `Clients_Perfect` afin de produire l'intersection stricte des trois systèmes. Un numéro partagé par plusieurs fiches est agrégé avant la jointure afin de ne pas multiplier les opérations.
 
 ### Restitutions disponibles
 
-Le sous-onglet `Pilotage M-PESA` centralise les analyses operationnelles de la microfinance :
+Le sous-onglet `Pilotage Turbo + G2` centralise les analyses operationnelles de la microfinance et indique la source de chaque bloc :
 
 - risque credit par devise : encours, retards, PAR 1/7/30 jours et taux de remboursement lorsque les colonnes Credits sont disponibles
 - pression de liquidite : entrees, sorties, flux net, solde observe, couverture des sorties et projection mecanique a sept jours avec historique suffisant
@@ -407,32 +413,33 @@ Le sous-onglet `Pilotage M-PESA` centralise les analyses operationnelles de la m
 - concentration des volumes sur les 5 et 10 premiers clients, sans additionner CDF et USD
 - qualite des transactions et alertes de revue : statut non termine, anomalie de rapprochement, montant eleve, horaire rare et rafale d'operations
 - echeancier DAT : echus, 0-7, 8-30, 31-60, 61-90 et plus de 90 jours
-- adoption M-PESA des clients Perfect : presents, actifs a 30/90 jours et jamais observes
+- adoption `Turbo + G2` des fiches `Clients_Perfect` : presentes, actives a 30/90 jours et jamais observees
 
 La date d'analyse correspond a la derniere date operationnelle chargee. Le PAR reste vide si l'encours ou les echeances necessaires ne sont pas fiables. Une alerte comportementale indique une transaction a revoir et ne constitue pas une preuve de fraude.
 
-Le sous-onglet `G2 / DAT` produit :
+Le sous-onglet `G2 / DAT` produit, depuis G2 lorsqu'il est chargé ou depuis le mode de repli Turbo documenté ci-dessus :
 
 - une analyse des transactions terminees par date et sur les 24 heures, avec separation par devise et par sens; les jours et heures sans activite sont affiches a zero
 - les indicateurs de volume total, moyenne quotidienne, date la plus active, jour de semaine le plus actif (`Lundi` a `Dimanche`) et heure la plus active sur le perimetre filtre
-- un filtre combiné sur la date et l'heure de `Completion Time`, puis sur le sens : entrées, sorties ou tous les flux; les heures par défaut `00:00:00` et `23:59:59` conservent la journée complète
+- un filtre combiné sur la date et l'heure de `Completion Time` en mode G2 ou `created_at` en mode Turbo seul, puis sur le sens : entrées, sorties ou tous les flux; les heures par défaut `00:00:00` et `23:59:59` conservent la journée complète
 - une synthèse des entrées, sorties, volumes et soldes nets par devise
-- une répartition des statuts G2 par devise et fichier source, distinguant les lignes analysées des lignes conservées uniquement pour contrôle
+- une répartition des statuts G2 par devise et fichier source lorsque G2 est disponible; en mode Turbo seul, les opérations sont explicitement libellées `Comptabilisee Turbo` sans inférer un statut G2
 - une ventilation par type d'opération incluant les paiements B2C et demandes de crédit
 - une synthèse verticale par devise : `Devise`, `Synthese sur le Portail BB Digital`, `Montant`
 - un tableau unique `Transactions`, trié par devise puis date décroissante, avec les colonnes :
   `date`, `receipt_no`, `currency_code`, `details_rapport`, `opposite_party`, `duree`, `compte_cree`, `montant`, `montant_entree`, `montant_sortie`, `balance_numeric`
-- un rapprochement G2/Portal et G2/DAT avec les contrôles téléphone, devise, montant et date
+- un rapprochement G2/Portal et G2/DAT avec les contrôles téléphone, devise, montant et date lorsque G2 est chargé; en mode Turbo seul, un contrôle interne Turbo/DAT sans faux rapprochement G2
 - un tableau d'anomalies conservant les références non rapprochées, doublons et écarts
 - un export Excel du rapport journalier
 - un rapport de fidélisation mensuelle M+1 et à 90 jours, séparé par devise et type d'opération
-- un export Word modifiable avec `Synthese des flux G2 par devise`, la synthèse exécutive et, en annexe paysage, le même tableau `Transactions` que l'écran
+- un export Word modifiable avec `Synthese des flux G2 par devise` ou `Synthese des flux Turbo par devise` selon la source effective, la synthèse exécutive et, en annexe paysage, le même tableau `Transactions` que l'écran
+- dans ce Word, `Activite`, les flux, les principales opérations, la fréquence temporelle, la fidélisation et l'annexe sont recalculés sur le filtre actif de date, heure et sens; seules les transactions `Completed` alimentent ces analyses, tandis que les autres statuts restent comptés comme lignes de contrôle
 
 Le sous-onglet `Perfect_client` produit trois populations inclusives au grain d'un téléphone normalisé :
 
-- `Perfect dans M_PESA` : clients Perfect dont `Phone_Prefixe` est observé dans G2
-- `Perfect dans Turbo` : clients Perfect dont `Phone_Prefixe` est observé dans au moins une source Turbo
-- `Perfect dans Turbo et M_PESA` : intersection stricte Perfect–Turbo–G2
+- `Clients_Perfect x G2` : fiches `Clients_Perfect` dont `Phone_Prefixe` est observé dans G2
+- `Clients_Perfect x Turbo` : fiches `Clients_Perfect` dont `Phone_Prefixe` est observé dans au moins une source Turbo
+- `Clients_Perfect x Turbo x G2` : intersection stricte `Clients_Perfect`–Turbo–G2
 - une ligne de synthèse par téléphone, avec toutes les identités Perfect partageant éventuellement ce numéro
 - les indicateurs `présent dans Turbo`, `présent dans G2`, `présent dans Perfect` et `présent dans les 3 systèmes`
 - une présence Turbo confirmée dès que le téléphone est observé dans une source Turbo, une présence G2 confirmée depuis `Opposite Party`, et une présence Perfect confirmée par `Phone_Prefixe`
@@ -458,15 +465,15 @@ USD    | Total USD                          | 4 777
 
 Les exports Excel sont volontairement limités aux feuilles importantes pour réduire le temps de génération.
 
-Dans `Extrait client`, le classeur contient `Synthese`, `Extrait_MPESA`, `DAT_Final`, `Credits`, `G2_DAT` et `Diagnostics`.
+Dans `Extrait client`, le classeur contient `Synthese`, `Extrait_Turbo`, `DAT_Final`, `Credits`, `G2_DAT` et `Diagnostics`.
 
 Dans `G2 / DAT`, le classeur contient `Rapport_Journalier_Comptages`, `Rapport_Journalier_Synthese`, `Statuts_G2`, `Rapport_Journalier_Detail`, `Anomalies_G2`, `G2_DAT`, `Retention_Mensuelle` et `Retention_Detail`.
 
 Le classeur G2/DAT ajoute `Transactions_Jour`, `Transactions_Jour_Semaine`, `Transactions_Heure` et `Transactions_Jour_Heure` pour reutiliser les volumes temporels hors de l'application.
 
-Dans `Perfect_client`, le classeur contient `Perfect_M_PESA`, `Perfect_Turbo` et `Perfect_Turbo_M_PESA`. L'export des forts DAT conserve uniquement `Forts_DAT` et `Portefeuille_DAT`.
+Dans `Perfect_client`, le classeur contient `Clients_Perfect_G2`, `Clients_Perfect_Turbo` et `Clients_Perfect_Turbo_G2`. L'export des forts DAT conserve uniquement `Forts_DAT` et `Portefeuille_DAT`.
 
-Dans `Pilotage M-PESA`, l'Excel est genere seulement sur demande. Il conserve les feuilles utiles au suivi : credit et dossiers a risque, liquidite journaliere, activite clients, conversion epargne-DAT, concentration, qualite, alertes, echeances DAT et adoption Perfect.
+Dans `Pilotage Turbo + G2`, l'Excel est genere seulement sur demande. Il conserve les feuilles utiles au suivi et leur nom indique aussi la source : credit et dossiers a risque `_Turbo`, liquidite `_G2`, activite clients `_Turbo_G2`, conversion epargne-DAT `_G2`, concentration et qualite `_G2`, echeances DAT `_Turbo` et adoption Perfect `_Turbo_G2`.
 
 ## Cycle Suivi clients CRM
 
