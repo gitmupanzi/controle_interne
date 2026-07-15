@@ -8,12 +8,18 @@ import pandas as pd
 
 from credit_app.services.mpesa_analysis import (
     MpesaPreparedData,
+    CUSTOMER_STATEMENT_COLUMNS,
     G2_CLASSIFIED_TRANSACTION_COLUMNS,
+    build_customer_statement_view,
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
     build_g2_retention_report,
+    build_g2_transaction_time_analysis,
+    build_mpesa_dat_maturity_analysis,
+    build_mpesa_management_dashboard,
     build_g2_dat_pdf_html,
     create_g2_dat_word,
+    create_customer_statement_word,
     build_g2_entry_report,
     build_entry_count_summary,
     build_large_dat_summary,
@@ -151,6 +157,179 @@ def _sample_prepared_data() -> MpesaPreparedData:
 
 
 class MpesaAnalysisTests(unittest.TestCase):
+    def test_multi_file_turbo_and_perfect_snapshots_are_deduplicated_by_business_key(self) -> None:
+        transaction_rows = pd.DataFrame(
+            [
+                {
+                    "id": 1,
+                    "customer_id": 10,
+                    "msisdn1": "0811111111",
+                    "account_type": "MPESA ACCOUNT",
+                    "reference_id": "REF-1",
+                    "currency_code": "CDF",
+                    "dr": 100,
+                    "cr": 0,
+                    "bal_before": 500,
+                    "bal_after": 400,
+                    "ref_no": "TX-1",
+                    "description": "M-Pesa Depot",
+                    "created_at": "2026-07-15 08:00:00",
+                    "fichier_source_transactions_turbo": "transactions_a.xlsx",
+                    "ordre_fichier_import": 0,
+                },
+                {
+                    "id": 1,
+                    "customer_id": 10,
+                    "msisdn1": "0811111111",
+                    "account_type": "MPESA ACCOUNT",
+                    "reference_id": "REF-1",
+                    "currency_code": "CDF",
+                    "dr": 100,
+                    "cr": 0,
+                    "bal_before": 500,
+                    "bal_after": 400,
+                    "ref_no": "TX-1",
+                    "description": "M-Pesa Depot",
+                    "created_at": "2026-07-15 08:00:00",
+                    "fichier_source_transactions_turbo": "transactions_b.xlsx",
+                    "ordre_fichier_import": 1,
+                },
+                {
+                    "id": 2,
+                    "customer_id": 10,
+                    "msisdn1": "0811111111",
+                    "account_type": "MPESA ACCOUNT",
+                    "reference_id": "REF-2",
+                    "currency_code": "CDF",
+                    "dr": 0,
+                    "cr": 50,
+                    "bal_before": 400,
+                    "bal_after": 450,
+                    "ref_no": "TX-2",
+                    "description": "Retrait vers M-Pesa",
+                    "created_at": "2026-07-15 09:00:00",
+                    "fichier_source_transactions_turbo": "transactions_b.xlsx",
+                    "ordre_fichier_import": 1,
+                },
+            ]
+        )
+        transactions = prepare_transactions(transaction_rows).set_index("id")
+
+        self.assertEqual(len(transactions), 2)
+        self.assertEqual(float(transactions.loc["1", "dr"]), 100.0)
+        self.assertEqual(float(transactions.loc["2", "cr"]), 50.0)
+        self.assertEqual(
+            transactions.loc["1", "fichiers_sources_transactions_turbo"],
+            "transactions_a.xlsx | transactions_b.xlsx",
+        )
+        self.assertNotIn("ordre_fichier_import", transactions.columns)
+
+        current_rows = pd.DataFrame(
+            [
+                {
+                    "customer_id": 10,
+                    "msisdn": "0811111111",
+                    "product_name": "Open Savings",
+                    "account_type": "Current account",
+                    "balance": balance,
+                    "currency_code": "CDF",
+                    "created_at": "2026-07-01 08:00:00",
+                    "updated_at": updated_at,
+                    "fichier_source_epargne_turbo": source,
+                    "ordre_fichier_import": order,
+                }
+                for balance, updated_at, source, order in [
+                    (100, "2026-07-14 08:00:00", "epargne_a.xlsx", 0),
+                    (150, "2026-07-15 08:00:00", "epargne_b.xlsx", 1),
+                ]
+            ]
+        )
+        current = prepare_current_savings(current_rows)
+        self.assertEqual(len(current), 1)
+        self.assertEqual(float(current.iloc[0]["balance"]), 150.0)
+        self.assertEqual(current.iloc[0]["fichiers_sources_epargne_turbo"], "epargne_a.xlsx | epargne_b.xlsx")
+
+        fixed_rows = pd.DataFrame(
+            [
+                {
+                    "customer_id": 10,
+                    "msisdn": "0811111111",
+                    "product_name": "1 Month",
+                    "account_type": "1 Month Fixed Account",
+                    "balance": balance,
+                    "currency_code": "CDF",
+                    "date_approved": "2026-07-01 08:00:00",
+                    "maturity_date": "2026-08-01 08:00:00",
+                    "fichier_source_dat_turbo": source,
+                    "ordre_fichier_import": order,
+                }
+                for balance, source, order in [
+                    (1000, "dat_a.xlsx", 0),
+                    (1100, "dat_b.xlsx", 1),
+                ]
+            ]
+        )
+        fixed = prepare_fixed_savings(fixed_rows)
+        self.assertEqual(len(fixed), 1)
+        self.assertEqual(float(fixed.iloc[0]["balance"]), 1100.0)
+
+        loan_rows = pd.DataFrame(
+            [
+                {
+                    "id": 1,
+                    "loan_id": "LN-1",
+                    "customer_id": 10,
+                    "loan_balance": balance,
+                    "updated_at": updated_at,
+                    "fichier_source_credits_turbo": source,
+                    "ordre_fichier_import": order,
+                }
+                for balance, updated_at, source, order in [
+                    (500, "2026-07-14", "credits_a.xlsx", 0),
+                    (400, "2026-07-15", "credits_b.xlsx", 1),
+                ]
+            ]
+        )
+        loans = prepare_loans(loan_rows)
+        self.assertEqual(len(loans), 1)
+        self.assertEqual(float(loans.iloc[0]["loan_balance"]), 400.0)
+
+        customer_rows = pd.DataFrame(
+            [
+                {
+                    "msisdn1": "0811111111",
+                    "created_at": "2026-07-01",
+                    "fichier_source_clients_turbo": source,
+                    "ordre_fichier_import": order,
+                }
+                for source, order in [("clients_a.xlsx", 0), ("clients_b.xlsx", 1)]
+            ]
+        )
+        customers = prepare_customers(customer_rows)
+        self.assertEqual(len(customers), 1)
+        self.assertEqual(customers.iloc[0]["fichier_source_clients_turbo"], "clients_b.xlsx")
+
+        perfect_rows = pd.DataFrame(
+            [
+                {
+                    "id_client": "P-1",
+                    "code_client": "C-1",
+                    "nom_complet": name,
+                    "Phone_Prefixe": "243811111111",
+                    "fichier_source_clients_perfect": source,
+                    "ordre_fichier_import": order,
+                }
+                for name, source, order in [
+                    ("ANCIEN NOM", "perfect_a.xlsx", 0),
+                    ("NOUVEAU NOM", "perfect_b.xlsx", 1),
+                ]
+            ]
+        )
+        perfect = prepare_perfect_clients(perfect_rows)
+        self.assertEqual(len(perfect), 1)
+        self.assertEqual(perfect.iloc[0]["nom_complet"], "NOUVEAU NOM")
+        self.assertEqual(perfect.iloc[0]["fichiers_sources_clients_perfect"], "perfect_a.xlsx | perfect_b.xlsx")
+
     def test_g2_count_summary_keeps_currencies_separate_and_fills_missing_categories(self) -> None:
         detail = pd.DataFrame(
             [
@@ -780,6 +959,90 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("loan_balance", statement.columns)
         self.assertEqual(float(statement["dat_final_client"].iloc[0]), 5000.0)
 
+    def test_customer_statement_view_matches_the_short_statement_contract(self) -> None:
+        prepared = _sample_prepared_data()
+        report = build_mpesa_statement(prepared, "1001", {"CDF": 10000})
+        statement = report["extrait"].copy()
+        statement["Nom_client"] = "CLIENT TEST"
+
+        view = build_customer_statement_view(statement, account_number="1441")
+
+        self.assertEqual(list(view["transactions"].columns), CUSTOMER_STATEMENT_COLUMNS)
+        self.assertEqual(view["currency"], "CDF")
+        self.assertTrue(view["balance_is_real"])
+        self.assertEqual(view["balance_label"], "Solde")
+        self.assertEqual(float(view["opening_amount"]), 10000.0)
+        self.assertEqual(float(view["total_entries"]), 2000.0)
+        self.assertEqual(float(view["total_outputs"]), 1000.0)
+        self.assertEqual(float(view["closing_amount"]), 11000.0)
+        self.assertTrue(view["transactions"]["compte"].eq("1441").all())
+        self.assertIn("CLIENT TEST", view["transactions"].iloc[0]["description"])
+
+        relative_report = build_mpesa_statement(prepared, "1001", {"CDF": None})
+        relative_view = build_customer_statement_view(relative_report["extrait"], account_number="1441")
+        self.assertFalse(relative_view["balance_is_real"])
+        self.assertEqual(relative_view["balance_label"], "Cumul net")
+        self.assertEqual(float(relative_view["opening_amount"]), 0.0)
+        self.assertEqual(float(relative_view["closing_amount"]), 1000.0)
+
+    def test_customer_statement_word_is_editable_filtered_and_single_currency(self) -> None:
+        from docx import Document
+        from docx.enum.section import WD_ORIENT
+
+        prepared = _sample_prepared_data()
+        report = build_mpesa_statement(prepared, "1001", {"CDF": 10000})
+        statement = report["extrait"].copy()
+        statement["Nom_client"] = "CLIENT TEST"
+
+        content = create_customer_statement_word(
+            statement,
+            customer_id="1001",
+            customer_name="CLIENT TEST",
+            telephone="243812345678",
+            currency="CDF",
+            account_number="1441",
+            period_start=pd.Timestamp("2026-07-01"),
+            period_end=pd.Timestamp("2026-07-02"),
+            generated_at=pd.Timestamp("2026-07-15 10:30:00"),
+        )
+
+        document = Document(BytesIO(content))
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        statement_tables = [
+            table
+            for table in document.tables
+            if table.rows and table.rows[0].cells[0].text == "Date"
+        ]
+        self.assertTrue(content.startswith(b"PK"))
+        self.assertIn("Extrait de compte - 243812345678 - CLIENT TEST - CDF", text)
+        self.assertEqual(len(statement_tables), 1)
+        self.assertEqual(
+            [cell.text for cell in statement_tables[0].rows[0].cells],
+            ["Date", "Compte", "Receipt No", "Description", "Entrée", "Sortie", "Solde"],
+        )
+        self.assertEqual(statement_tables[0].rows[1].cells[1].text, "1441")
+        self.assertEqual(statement_tables[0].rows[1].cells[2].text, "TX001")
+        self.assertEqual(document.sections[0].orientation, WD_ORIENT.LANDSCAPE)
+
+        relative_statement = build_mpesa_statement(prepared, "1001", {"CDF": None})["extrait"]
+        relative_content = create_customer_statement_word(
+            relative_statement,
+            customer_id="1001",
+            customer_name="CLIENT TEST",
+            telephone="243812345678",
+            currency="CDF",
+            account_number="1441",
+        )
+        relative_document = Document(BytesIO(relative_content))
+        relative_tables = [
+            table
+            for table in relative_document.tables
+            if table.rows and table.rows[0].cells[0].text == "Date"
+        ]
+        relative_text = "\n".join(paragraph.text for paragraph in relative_document.paragraphs)
+        self.assertEqual(relative_tables[0].rows[0].cells[-1].text, "Cumul net")
+        self.assertIn("le solde d'ouverture n'a pas ete fourni", relative_text)
+
     def test_excel_export_contains_content(self) -> None:
         prepared = _sample_prepared_data()
         report = build_mpesa_statement(prepared, "1001", {"CDF": None})
@@ -1215,6 +1478,89 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(report["anomalies"]), 1)
         self.assertIn("Receipt No duplique", report["anomalies"].iloc[0]["motif_anomalie"])
 
+    def test_g2_statuses_are_traced_but_only_completed_transactions_feed_analyses(self) -> None:
+        statuses = ["Completed", "Declined", "Cancelled", "Expired", "Pending", ""]
+        raw = pd.DataFrame(
+            [
+                {
+                    "Receipt No.": f"STATUS-{index}",
+                    "Completion Time": f"2026-07-15 {8 + index:02d}:00:00",
+                    "Details": "BisouBisouC2B",
+                    "Transaction Status": status,
+                    "Currency": "CDF",
+                    "Paid In": 1000,
+                    "Withdrawn": 0,
+                    "Opposite Party": f"08111111{index:02d} - CLIENT {index}",
+                    "Fichier source G2": "statuts_entrees.xlsx",
+                }
+                for index, status in enumerate(statuses)
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+            g2_transactions=prepare_g2_transactions(raw),
+        )
+
+        report = build_g2_daily_savings_report(prepared)
+        detail = report["detail"].set_index("transaction_status")
+
+        self.assertEqual(len(detail), 6)
+        self.assertTrue(bool(detail.loc["Completed", "incluse_synthese"]))
+        for status in ["Declined", "Cancelled", "Expired", "Pending", ""]:
+            self.assertFalse(bool(detail.loc[status, "incluse_synthese"]))
+        self.assertEqual(float(report["pivot"].iloc[0]["montant_total_entrees"]), 1000.0)
+        self.assertEqual(int(report["pivot"].iloc[0]["nombre_entrees"]), 1)
+        self.assertEqual(
+            int(build_g2_transaction_time_analysis(report["detail"])["par_heure"]["nombre_transactions"].sum()),
+            1,
+        )
+        status_summary = report["statuts"].set_index("statut_transaction_g2")
+        self.assertEqual(int(status_summary.loc["Completed", "nombre_transactions"]), 1)
+        self.assertEqual(status_summary.loc["Completed", "prise_en_compte_analyse"], "Oui")
+        self.assertEqual(status_summary.loc["Declined", "prise_en_compte_analyse"], "Non - controle uniquement")
+        self.assertIn("Non renseigne", status_summary.index)
+        self.assertEqual(set(report["detail"]["fichier_source_g2"]), {"statuts_entrees.xlsx"})
+
+    def test_g2_completed_b2c_withdrawals_are_integrated_as_outputs(self) -> None:
+        raw = pd.DataFrame(
+            [
+                {
+                    "Receipt No.": "B2C-OUT-001",
+                    "Completion Time": "2026-07-15 14:17:59",
+                    "Details": "Bisou Bisou B2C payment from 15558 to 243811495678 - CLIENT SORTIE",
+                    "Transaction Status": "Completed",
+                    "Currency": "USD",
+                    "Paid In": pd.NA,
+                    "Withdrawn": -200,
+                    "Balance": 81859.97,
+                    "Opposite Party": "243811495678 - CLIENT SORTIE",
+                    "Fichier source G2": "sorties_g2.xlsx",
+                }
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+            g2_transactions=prepare_g2_transactions(raw),
+        )
+
+        report = build_g2_daily_savings_report(prepared)
+        row = report["detail"].iloc[0]
+
+        self.assertEqual(row["sens_flux"], "Sortie")
+        self.assertEqual(row["details_rapport"], "Paiement client B2C")
+        self.assertEqual(float(row["montant_sortie"]), 200.0)
+        self.assertEqual(int(report["pivot"].iloc[0]["nombre_sorties"]), 1)
+        self.assertEqual(float(report["pivot"].iloc[0]["montant_total_sorties"]), 200.0)
+        self.assertEqual(row["fichier_source_g2"], "sorties_g2.xlsx")
+
     def test_daily_g2_report_retains_phone_currency_amount_and_date_gaps(self) -> None:
         g2 = prepare_g2_transactions(
             pd.DataFrame(
@@ -1268,8 +1614,379 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(row["controle_devise"], "Ecart")
         self.assertEqual(row["controle_montant"], "Ecart")
         self.assertEqual(row["controle_date"], "Ecart de date")
+        self.assertIn("Date G2 : 13/07/2026 10:00:00", row["Observation"])
+        self.assertIn("Date Turbo : 14/07/2026 10:00:00", row["Observation"])
+        self.assertIn("Decalage : 1440 minute(s)", row["Observation"])
         self.assertEqual(len(report["anomalies"]), 1)
+        self.assertIn("Observation", report["anomalies"].columns)
         self.assertIn("Ecart de montant", row["motif_anomalie"])
+
+    def test_g2_transaction_time_analysis_counts_days_hours_and_fills_inactive_hours(self) -> None:
+        detail = pd.DataFrame(
+            [
+                {
+                    "date": "2026-07-14 09:05:00",
+                    "receipt_no": "DAY-001",
+                    "currency_code": "CDF",
+                    "sens_flux": "Entree",
+                    "incluse_synthese": True,
+                },
+                {
+                    "date": "2026-07-14 09:45:00",
+                    "receipt_no": "DAY-002",
+                    "currency_code": "CDF",
+                    "sens_flux": "Sortie",
+                    "incluse_synthese": True,
+                },
+                {
+                    "date": "2026-07-14 11:00:00",
+                    "receipt_no": "DAY-003",
+                    "currency_code": "USD",
+                    "sens_flux": "Entree",
+                    "incluse_synthese": True,
+                },
+                {
+                    "date": "2026-07-16 09:00:00",
+                    "receipt_no": "DAY-004",
+                    "currency_code": "CDF",
+                    "sens_flux": "Entree",
+                    "incluse_synthese": True,
+                },
+                {
+                    "date": "2026-07-16 10:00:00",
+                    "receipt_no": "EXCLUDED",
+                    "currency_code": "CDF",
+                    "sens_flux": "Entree",
+                    "incluse_synthese": False,
+                },
+            ]
+        )
+
+        report = build_g2_transaction_time_analysis(detail)
+        par_jour = report["par_jour"]
+        par_jour_semaine = report["par_jour_semaine"]
+        par_heure = report["par_heure"]
+        jour_heure = report["jour_heure"]
+
+        self.assertEqual(int(par_jour["nombre_transactions"].sum()), 4)
+        self.assertEqual(par_jour["date_transaction"].nunique(), 3)
+        july_15 = par_jour["date_transaction"].eq(pd.Timestamp("2026-07-15"))
+        self.assertEqual(int(par_jour.loc[july_15, "nombre_transactions"].sum()), 0)
+
+        cdf_entries_at_9 = par_heure.loc[
+            par_heure["heure_num"].eq(9)
+            & par_heure["currency_code"].eq("CDF")
+            & par_heure["sens_flux"].eq("Entree"),
+            "nombre_transactions",
+        ]
+        self.assertEqual(int(cdf_entries_at_9.iloc[0]), 2)
+        self.assertEqual(int(par_heure.loc[par_heure["heure_num"].eq(0), "nombre_transactions"].sum()), 0)
+        self.assertEqual(set(par_heure["heure_num"]), set(range(24)))
+        self.assertEqual(int(jour_heure["nombre_transactions"].sum()), 4)
+        self.assertEqual(int(par_jour_semaine["nombre_transactions"].sum()), 4)
+        self.assertEqual(set(par_jour_semaine["jour_semaine_num"]), set(range(7)))
+        weekday_totals = par_jour_semaine.groupby("jour_semaine", as_index=True)["nombre_transactions"].sum()
+        self.assertEqual(int(weekday_totals["Mardi"]), 3)
+        self.assertEqual(int(weekday_totals["Mercredi"]), 0)
+
+        export = create_excel_export(
+            {
+                "transactions_par_jour": par_jour,
+                "transactions_par_jour_semaine": par_jour_semaine,
+                "transactions_par_heure": par_heure,
+                "transactions_jour_heure": jour_heure,
+            }
+        )
+        workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
+        self.assertEqual(
+            workbook.sheet_names,
+            [
+                "Transactions_Jour",
+                "Transactions_Jour_Semaine",
+                "Transactions_Heure",
+                "Transactions_Jour_Heure",
+            ],
+        )
+
+    def test_g2_transaction_time_analysis_returns_empty_frames_without_valid_dates(self) -> None:
+        report = build_g2_transaction_time_analysis(pd.DataFrame({"date": ["invalide"]}))
+
+        self.assertTrue(report["par_jour"].empty)
+        self.assertTrue(report["par_jour_semaine"].empty)
+        self.assertTrue(report["par_heure"].empty)
+        self.assertTrue(report["jour_heure"].empty)
+
+    def test_mpesa_management_dashboard_builds_actionable_microfinance_views(self) -> None:
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "Receipt No.": "PILOT-001",
+                        "Completion Time": "2026-01-01 09:00:00",
+                        "Opposite Party": "0811111111 - CLIENT A",
+                        "Currency": "CDF",
+                        "Paid In": 100,
+                        "Withdrawn": 0,
+                        "Balance": 1000,
+                        "Transaction Status": "Completed",
+                        "Details": "BisouBisouC2B",
+                    },
+                    {
+                        "Receipt No.": "PILOT-002",
+                        "Completion Time": "2026-07-10 10:00:00",
+                        "Opposite Party": "0811111111 - CLIENT A",
+                        "Currency": "CDF",
+                        "Paid In": 200,
+                        "Withdrawn": 0,
+                        "Balance": 1200,
+                        "Transaction Status": "Completed",
+                        "Details": "BisouBisouC2B",
+                    },
+                    {
+                        "Receipt No.": "PILOT-003",
+                        "Completion Time": "2026-07-14 11:00:00",
+                        "Opposite Party": "0822222222 - CLIENT B",
+                        "Currency": "CDF",
+                        "Paid In": 0,
+                        "Withdrawn": 50,
+                        "Balance": 1150,
+                        "Transaction Status": "Completed",
+                        "Details": "BisouBisouB2C",
+                    },
+                    {
+                        "Receipt No.": "PILOT-004",
+                        "Completion Time": "2026-03-01 12:00:00",
+                        "Opposite Party": "0833333333 - CLIENT C",
+                        "Currency": "USD",
+                        "Paid In": 10,
+                        "Withdrawn": 0,
+                        "Balance": 100,
+                        "Transaction Status": "Completed",
+                        "Details": "BisouBisouC2B",
+                    },
+                ]
+            )
+        )
+        loans = prepare_loans(
+            pd.DataFrame(
+                [
+                    {
+                        "loan_id": "LN-001",
+                        "customer_id": "A",
+                        "msisdn1": "0811111111",
+                        "currency_code": "CDF",
+                        "loan_amount": 1000,
+                        "loan_balance": 500,
+                        "amount_paid": 500,
+                        "due_date": "2026-06-01",
+                        "updated_at": "2026-07-15",
+                    },
+                    {
+                        "loan_id": "LN-002",
+                        "customer_id": "B",
+                        "msisdn1": "0822222222",
+                        "currency_code": "CDF",
+                        "loan_amount": 500,
+                        "loan_balance": 0,
+                        "amount_paid": 500,
+                        "due_date": "2026-07-01",
+                        "updated_at": "2026-07-15",
+                    },
+                    {
+                        "loan_id": "LN-003",
+                        "customer_id": "C",
+                        "msisdn1": "0833333333",
+                        "currency_code": "USD",
+                        "loan_amount": 100,
+                        "loan_balance": 100,
+                        "amount_paid": 0,
+                        "due_date": "2026-07-14",
+                        "updated_at": "2026-07-15",
+                    },
+                ]
+            )
+        )
+        fixed = prepare_fixed_savings(
+            pd.DataFrame(
+                [
+                    {
+                        "customer_id": "A",
+                        "msisdn": "0811111111",
+                        "product_name": "1 Month",
+                        "account_type": "FIXED SAVINGS",
+                        "balance": 200,
+                        "currency_code": "CDF",
+                        "date_approved": "2026-07-10",
+                        "maturity_date": "2026-07-20",
+                    },
+                    {
+                        "customer_id": "B",
+                        "msisdn": "0822222222",
+                        "product_name": "1 Month",
+                        "account_type": "FIXED SAVINGS",
+                        "balance": 500,
+                        "currency_code": "CDF",
+                        "date_approved": "2026-05-30",
+                        "maturity_date": "2026-06-30",
+                    },
+                    {
+                        "customer_id": "C",
+                        "msisdn": "0833333333",
+                        "product_name": "3 Months",
+                        "account_type": "FIXED SAVINGS",
+                        "balance": 50,
+                        "currency_code": "USD",
+                        "date_approved": "2026-06-01",
+                        "maturity_date": "2026-09-01",
+                    },
+                ]
+            )
+        )
+        perfect = prepare_perfect_clients(
+            pd.DataFrame(
+                [
+                    {"id_client": "PA", "Phone_Prefixe": "243811111111", "nom_complet": "CLIENT A"},
+                    {"id_client": "PB", "Phone_Prefixe": "243822222222", "nom_complet": "CLIENT B"},
+                    {"id_client": "PD", "Phone_Prefixe": "243844444444", "nom_complet": "CLIENT D"},
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(),
+            fixed_savings=fixed,
+            loans=loans,
+            load_report=build_load_report({}, {}),
+            g2_transactions=g2,
+            perfect_clients=perfect,
+        )
+
+        report = build_mpesa_management_dashboard(
+            prepared,
+            as_of_date="2026-07-15",
+            dat_annual_interest_rate_pct=12.0,
+        )
+
+        credit_cdf = report["credit_synthese"].loc[
+            report["credit_synthese"]["currency_code"].eq("CDF")
+        ].iloc[0]
+        self.assertEqual(float(credit_cdf["encours_total"]), 500.0)
+        self.assertEqual(float(credit_cdf["par_30j_pct"]), 100.0)
+        self.assertEqual(int(credit_cdf["credits_retard_30j"]), 1)
+
+        client_a = report["activite_clients"].loc[
+            report["activite_clients"]["phone_prefixe"].astype("string").eq("243811111111")
+        ].iloc[0]
+        self.assertTrue(bool(client_a["est_reactive_30j"]))
+        self.assertEqual(client_a["statut_activite"], "Actif 30 jours")
+
+        conversion_a = report["conversion_clients"].loc[
+            report["conversion_clients"]["phone_prefixe"].astype("string").eq("243811111111")
+        ].iloc[0]
+        self.assertTrue(bool(conversion_a["conversion_observee"]))
+
+        maturity_buckets = set(report["dat_echeances_synthese"]["tranche_echeance"])
+        self.assertIn("Echu", maturity_buckets)
+        self.assertIn("0 a 7 jours", maturity_buckets)
+        self.assertTrue(report["dat_echeances_detail"]["taux_interet_annuel_pct"].eq(12.0).all())
+        self.assertTrue(report["dat_echeances_detail"]["interet_estime_echeance"].notna().all())
+
+        perfect_summary = report["perfect_adoption_synthese"].iloc[0]
+        self.assertEqual(int(perfect_summary["telephones_perfect_valides"]), 3)
+        self.assertEqual(int(perfect_summary["clients_perfect_dans_mpesa"]), 2)
+        self.assertEqual(int(perfect_summary["clients_perfect_jamais_observes"]), 1)
+        self.assertEqual(set(report["liquidite_synthese"]["currency_code"]), {"CDF", "USD"})
+        self.assertFalse(report["concentration_clients"].empty)
+        self.assertFalse(report["qualite_synthese"].empty)
+
+        export_keys = [
+            "credit_synthese",
+            "credit_detail",
+            "liquidite_synthese",
+            "liquidite_journaliere",
+            "activite_clients",
+            "conversion_clients",
+            "concentration_clients",
+            "qualite_synthese",
+            "alertes_transactions",
+            "dat_echeances_detail",
+            "perfect_adoption_detail",
+        ]
+        export = create_excel_export({key: report[key] for key in export_keys if not report[key].empty})
+        workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
+        self.assertEqual(
+            workbook.sheet_names,
+            [
+                "Pilotage_Credit",
+                "Credits_A_Risque",
+                "Pilotage_Liquidite",
+                "Liquidite_Journaliere",
+                "Activite_Clients",
+                "Conversion_Epargne_DAT",
+                "Concentration_Clients",
+                "Qualite_Transactions",
+                "Alertes_Transactions",
+                "Echeances_DAT",
+                "Adoption_Perfect",
+            ],
+        )
+
+    def test_mpesa_management_dashboard_degrades_cleanly_without_optional_sources(self) -> None:
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+        )
+
+        report = build_mpesa_management_dashboard(prepared, as_of_date="2026-07-15")
+
+        self.assertTrue(report["credit_synthese"].empty)
+        self.assertTrue(report["liquidite_synthese"].empty)
+        self.assertTrue(report["activite_clients"].empty)
+        self.assertTrue(report["perfect_adoption_detail"].empty)
+        self.assertEqual(len(report["sources"]), 6)
+
+    def test_dat_maturity_interest_is_estimated_only_with_a_positive_rate(self) -> None:
+        fixed = prepare_fixed_savings(
+            pd.DataFrame(
+                [
+                    {
+                        "customer_id": "DAT-1",
+                        "msisdn": "0811111111",
+                        "product_name": "3 Months",
+                        "account_type": "FIXED SAVINGS",
+                        "balance": 1000,
+                        "currency_code": "CDF",
+                        "date_approved": "2026-01-01",
+                        "maturity_date": "2026-04-01",
+                    }
+                ]
+            )
+        )
+
+        with_rate = build_mpesa_dat_maturity_analysis(
+            fixed,
+            as_of_date="2026-07-15",
+            annual_interest_rate_pct=12.0,
+        )
+        without_rate = build_mpesa_dat_maturity_analysis(
+            fixed,
+            as_of_date="2026-07-15",
+            annual_interest_rate_pct=0.0,
+        )
+
+        row = with_rate["detail"].iloc[0]
+        self.assertEqual(int(row["duree_contractuelle_jours"]), 90)
+        self.assertAlmostEqual(float(row["interet_estime_echeance"]), 1000 * 0.12 * 90 / 365, places=6)
+        self.assertAlmostEqual(
+            float(row["capital_plus_interet_estime"]),
+            1000 + 1000 * 0.12 * 90 / 365,
+            places=6,
+        )
+        self.assertTrue(without_rate["detail"]["interet_estime_echeance"].isna().all())
+        self.assertTrue(without_rate["synthese"]["interet_estime_echeance"].isna().all())
 
     def test_g2_retention_report_calculates_m1_and_90_days_without_mixing_currencies(self) -> None:
         rows = [
@@ -1445,6 +2162,20 @@ class MpesaAnalysisTests(unittest.TestCase):
                         "balance_numeric": 900,
                         "incluse_synthese": True,
                     },
+                    {
+                        "currency_code": "CDF",
+                        "date": pd.Timestamp("2026-07-13 12:00:00"),
+                        "receipt_no": "DECLINED-001",
+                        "sens_flux": "Entree",
+                        "details_rapport": "Depot normal",
+                        "opposite_party": "243899999999 - CLIENT REFUSE",
+                        "montant": 5000,
+                        "montant_entree": 5000,
+                        "montant_sortie": 0,
+                        "transaction_status": "Declined",
+                        "statut_transaction_g2": "Declined",
+                        "incluse_synthese": False,
+                    },
                 ]
             ),
         }
@@ -1472,8 +2203,13 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertTrue(content.startswith(b"PK"))
         self.assertIn("Rapport M-PESA - G2/DAT", text)
         self.assertIn("Synthese executive", text)
+        self.assertIn("Fréquence temporelle", text)
+        self.assertIn("Heure la plus fréquente : 10h", text)
+        self.assertNotIn("Jour de semaine le plus actif", text)
         self.assertIn("Synthese des flux G2 par devise", text)
         self.assertIn("Point de vigilance", text)
+        self.assertIn("2 transaction(s) Completed", text)
+        self.assertIn("1 transaction(s) d'autres statuts", text)
         self.assertIn("Transactions", text)
         self.assertEqual(len(classified_tables), 1)
         self.assertEqual(
@@ -1486,10 +2222,77 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("CLIENT TEST", table_text)
         self.assertIn("13/07/2026 10:15:00", table_text)
         self.assertIn("10/07/2026 08:30:00", table_text)
+        self.assertNotIn("DECLINED-001", table_text)
+        self.assertNotIn("CLIENT REFUSE", table_text)
         self.assertNotIn("Questions ouvertes", text)
         self.assertGreaterEqual(len(document.tables), 3)
         self.assertGreaterEqual(len(document.sections), 2)
         self.assertEqual(document.sections[-1].orientation, WD_ORIENT.LANDSCAPE)
+
+        multi_day_report = dict(report)
+        multi_day_detail = pd.concat(
+            [
+                report["rapport_journalier_detail"],
+                pd.DataFrame(
+                    [
+                        {
+                            "currency_code": "CDF",
+                            "date": pd.Timestamp("2026-07-14 09:00:00"),
+                            "receipt_no": "CDF-002",
+                            "sens_flux": "Entree",
+                            "details_rapport": "Depot normal",
+                            "opposite_party": "243833333333 - CLIENT MULTI",
+                            "montant": 1000,
+                            "montant_entree": 1000,
+                            "montant_sortie": 0,
+                            "incluse_synthese": True,
+                        },
+                        {
+                            "currency_code": "CDF",
+                            "date": pd.Timestamp("2026-07-14 09:15:00"),
+                            "receipt_no": "CDF-003",
+                            "sens_flux": "Entree",
+                            "details_rapport": "DAT",
+                            "opposite_party": "243844444444 - CLIENT MULTI 2",
+                            "montant": 2000,
+                            "montant_entree": 2000,
+                            "montant_sortie": 0,
+                            "incluse_synthese": True,
+                        },
+                        {
+                            "currency_code": "USD",
+                            "date": pd.Timestamp("2026-07-14 09:45:00"),
+                            "receipt_no": "USD-002",
+                            "sens_flux": "Sortie",
+                            "details_rapport": "Demande de credit",
+                            "opposite_party": "243855555555 - CLIENT MULTI 3",
+                            "montant": 50,
+                            "montant_entree": 0,
+                            "montant_sortie": 50,
+                            "incluse_synthese": True,
+                        },
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+        time_report = build_g2_transaction_time_analysis(multi_day_detail)
+        multi_day_report["rapport_journalier_detail"] = multi_day_detail
+        multi_day_report["transactions_par_jour"] = time_report["par_jour"]
+        multi_day_report["transactions_par_jour_semaine"] = time_report["par_jour_semaine"]
+        multi_day_report["transactions_par_heure"] = time_report["par_heure"]
+        multi_day_report["analysis_date_start"] = pd.Timestamp("2026-07-13")
+        multi_day_report["analysis_date_end"] = pd.Timestamp("2026-07-14")
+        multi_day_content = create_g2_dat_word(
+            multi_day_report,
+            period_text="du 13/07/2026 au 14/07/2026",
+            direction_label="Tous",
+            generated_at=pd.Timestamp("2026-07-15 10:00:00"),
+        )
+        multi_day_document = Document(BytesIO(multi_day_content))
+        multi_day_text = "\n".join(paragraph.text for paragraph in multi_day_document.paragraphs)
+        self.assertIn("Heure la plus fréquente : 09h, avec 3 transaction(s), soit 60.0%", multi_day_text)
+        self.assertIn("Jour de semaine le plus actif : Mardi, avec 3 transaction(s), soit 60.0%", multi_day_text)
 
         report_without_pivot = dict(report)
         report_without_pivot.pop("rapport_journalier_pivot")
@@ -1562,6 +2365,74 @@ class MpesaAnalysisTests(unittest.TestCase):
 
         self.assertFalse(diagnostics.empty)
         self.assertIn("Mouvements dr = 0 et cr = 0", diagnostics["controle"].tolist())
+
+    def test_diagnostics_separates_linked_entries_and_monitors_dat_dates(self) -> None:
+        transactions = pd.DataFrame(
+            [
+                {
+                    "id": "TX-1",
+                    "customer_id": "1",
+                    "reference_id": "REF001",
+                    "ref_no": "G2REF",
+                    "created_at": "2026-07-15 10:00:00",
+                    "currency_code": "CDF",
+                    "account_type": "MPESA ACCOUNT",
+                    "dr": 0,
+                    "cr": 100,
+                    "bal_before": 0,
+                    "bal_after": 100,
+                },
+                {
+                    "id": "TX-2",
+                    "customer_id": "1",
+                    "reference_id": "REF001",
+                    "ref_no": "G2REF",
+                    "created_at": "2026-07-15 10:00:00",
+                    "currency_code": "CDF",
+                    "account_type": "LOAN ACCOUNT",
+                    "dr": 0,
+                    "cr": 100,
+                    "bal_before": 0,
+                    "bal_after": 100,
+                },
+            ]
+        )
+        fixed = pd.DataFrame(
+            [
+                {
+                    "customer_id": "1",
+                    "balance": 100,
+                    "date_approved": "2026-06-07",
+                    "maturity_date": "2026-04-22",
+                },
+                {
+                    "customer_id": "2",
+                    "balance": 200,
+                    "date_approved": "2026-07-01",
+                    "maturity_date": "2026-08-01",
+                },
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=transactions,
+            current_savings=pd.DataFrame(),
+            fixed_savings=fixed,
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+        )
+
+        diagnostics = build_diagnostics(prepared).set_index("controle")
+
+        self.assertEqual(diagnostics.loc["Lignes sans customer_id", "statut"], "OK")
+        self.assertEqual(int(diagnostics.loc["Types de comptes a classifier", "valeur"]), 0)
+        self.assertEqual(int(diagnostics.loc["Doublons exacts", "valeur"]), 0)
+        self.assertEqual(int(diagnostics.loc["Ecritures comptables liees", "valeur"]), 1)
+        self.assertEqual(diagnostics.loc["Ecritures comptables liees", "statut"], "Information")
+        self.assertEqual(int(diagnostics.loc["Groupes d'ecritures repetees a verifier", "valeur"]), 0)
+        self.assertEqual(int(diagnostics.loc["DAT - echeance anterieure a l'approbation", "valeur"]), 1)
+        self.assertEqual(diagnostics.loc["DAT - echeance anterieure a l'approbation", "statut"], "A surveiller")
+        self.assertEqual(int(diagnostics.loc["DAT echus avec solde positif", "valeur"]), 1)
+        self.assertEqual(diagnostics.loc["DAT echus avec solde positif", "statut"], "Controle metier")
 
 
 if __name__ == "__main__":

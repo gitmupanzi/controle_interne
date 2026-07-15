@@ -157,8 +157,10 @@ Le panneau latéral permet de :
 - filtrer sur la période principale du cycle
 - consulter le résumé des filtres actifs
 - visualiser la couverture du référentiel du cycle
-- activer l’option `Afficher annotations (valeurs)`
-- définir le taux `CDF/USD` pour le cycle épargne
+- régler avant le chargement, dans `Référence et stockage`, la standardisation des colonnes, les taux de référence et les options communes d’affichage
+- définir le taux d’intérêt annuel DAT utilisé par Solution M-PESA pour les intérêts estimés
+- activer l’option `Afficher annotations (valeurs)` et son seuil d’affichage
+- définir le taux `CDF/USD` lorsque le cycle actif l’exige
 
 Pour le cycle épargne, le taux `2300` signifie :
 
@@ -346,7 +348,7 @@ Les fichiers sont chargés directement dans l’onglet :
 - `Transactions M-PESA Portal/Turbo`
   Fichier interne des écritures M-PESA, utile quand il contient notamment `customer_id`, `msisdn1`, `account_type`, `ref_no`, `description`, `dr`, `cr`, `bal_before`, `bal_after`, `currency_code` et `created_at`. Plusieurs lignes comptables peuvent appartenir à une seule opération G2.
 - `Transactions G2`
-  Fichier des transactions G2, avec au minimum `Receipt No`, `Currency` et `Opposite Party`. `Completion Time`, `Transaction Status`, `Details`, `Reason Type` et `Balance` enrichissent l’analyse. Le montant peut être fourni dans `Transaction Amount` ou éclaté dans `Paid In` et `Withdrawn`.
+  Un ou plusieurs fichiers de transactions G2, avec au minimum `Receipt No`, `Currency` et `Opposite Party`. Les relevés d’entrées et de sorties peuvent être téléversés ensemble; ils sont unifiés en conservant le nom du fichier source, puis dédupliqués par `Receipt No`. `Completion Time`, `Transaction Status`, `Details`, `Reason Type` et `Balance` enrichissent l’analyse. Le montant peut être fourni dans `Transaction Amount` ou éclaté dans `Paid In` et `Withdrawn`.
 - `Comptes d’épargne courante`
   Fichier Turbo des comptes courants, avec `customer_id`, `msisdn`, `currency_code`, `created_at`, `updated_at`.
 - `Comptes DAT / épargne bloquée`
@@ -357,6 +359,17 @@ Les fichiers sont chargés directement dans l’onglet :
   Fichier facultatif pour enrichir l’extrait client et les diagnostics.
 - `Clients Perfect (export 122)`
   Fichier facultatif de contrôle téléphonique avec `Phone_Prefixe`, les identifiants et le nom du client Perfect.
+
+Tous les emplacements de téléversement M-PESA acceptent plusieurs fichiers. Le contrôle de chargement affiche le nombre et le nom des fichiers sources, puis les chevauchements sont éliminés selon la nature de la source :
+
+- Transactions Turbo : `id`, ou à défaut la combinaison référence, compte, client, devise, `dr`, `cr` et date;
+- épargne courante : client, devise, type de compte, produit et date de création, en conservant le `updated_at` le plus récent;
+- DAT : client, devise, type de compte, date d'approbation et échéance;
+- crédits : `loan_id`, avec priorité à la version la plus récente;
+- clients Turbo : `customer_id`, ou téléphone et date de création lorsque l'identifiant n'est pas fourni;
+- clients Perfect : `id_client`, puis les identifiants de repli documentés.
+
+La logique des transactions Turbo reste comptable et distincte de G2 : sur la ligne `MPESA ACCOUNT`, `dr` représente une sortie M-PESA et `cr` une entrée M-PESA. Les lignes techniques partageant le même `ref_no` sont regroupées pour le rapprochement G2/DAT; elles ne sont pas interprétées avec les règles G2 `Paid In`/`Withdrawn`.
 
 ### Règles de rapprochement
 
@@ -374,6 +387,8 @@ Le rapprochement principal suit ces règles :
 
 Chaque référence Portal retrouvée fait ensuite l’objet de quatre contrôles indépendants : téléphone, devise, montant et date. Le résultat devient `Rapproche exact`, `Rapproche avec ecart` ou `Non rapproche`. Les reçus dupliqués, statuts non terminés, références absentes, écarts et opérations non classées restent visibles dans les anomalies.
 
+Les statuts G2 sont normalisés en `Completed`, `Declined`, `Cancelled`, `Expired`, `Pending`, `Non renseigne` ou `Autre`. Seules les transactions explicitement `Completed` alimentent les montants, tendances, fidélisation, contrôles DAT et analyses Perfect. Les autres statuts restent visibles dans la répartition des statuts, le détail et les anomalies. Un ancien export entièrement dépourvu de statut reste compatible; dans un fichier moderne où au moins un statut est renseigné, une ligne sans statut est réservée au contrôle.
+
 Pour les informations client :
 
 - `Opposite Party` fournit le téléphone et le nom G2; le numéro est normalisé au format `243...`.
@@ -383,10 +398,26 @@ Pour les informations client :
 
 ### Restitutions disponibles
 
+Le sous-onglet `Pilotage M-PESA` centralise les analyses operationnelles de la microfinance :
+
+- risque credit par devise : encours, retards, PAR 1/7/30 jours et taux de remboursement lorsque les colonnes Credits sont disponibles
+- pression de liquidite : entrees, sorties, flux net, solde observe, couverture des sorties et projection mecanique a sept jours avec historique suffisant
+- activite client : clients actifs a 30 jours, dormants a 31-60 et 61-90 jours, inactifs a plus de 90 jours, nouveaux et reactives
+- conversion observee d'un depot normal vers un DAT, avec delai median; cette mesure n'est pas une affectation comptable exacte des fonds
+- concentration des volumes sur les 5 et 10 premiers clients, sans additionner CDF et USD
+- qualite des transactions et alertes de revue : statut non termine, anomalie de rapprochement, montant eleve, horaire rare et rafale d'operations
+- echeancier DAT : echus, 0-7, 8-30, 31-60, 61-90 et plus de 90 jours
+- adoption M-PESA des clients Perfect : presents, actifs a 30/90 jours et jamais observes
+
+La date d'analyse correspond a la derniere date operationnelle chargee. Le PAR reste vide si l'encours ou les echeances necessaires ne sont pas fiables. Une alerte comportementale indique une transaction a revoir et ne constitue pas une preuve de fraude.
+
 Le sous-onglet `G2 / DAT` produit :
 
+- une analyse des transactions terminees par date et sur les 24 heures, avec separation par devise et par sens; les jours et heures sans activite sont affiches a zero
+- les indicateurs de volume total, moyenne quotidienne, date la plus active, jour de semaine le plus actif (`Lundi` a `Dimanche`) et heure la plus active sur le perimetre filtre
 - un filtre combiné sur la date et l'heure de `Completion Time`, puis sur le sens : entrées, sorties ou tous les flux; les heures par défaut `00:00:00` et `23:59:59` conservent la journée complète
 - une synthèse des entrées, sorties, volumes et soldes nets par devise
+- une répartition des statuts G2 par devise et fichier source, distinguant les lignes analysées des lignes conservées uniquement pour contrôle
 - une ventilation par type d'opération incluant les paiements B2C et demandes de crédit
 - une synthèse verticale par devise : `Devise`, `Synthese sur le Portail BB Digital`, `Montant`
 - un tableau unique `Transactions`, trié par devise puis date décroissante, avec les colonnes :
@@ -429,9 +460,13 @@ Les exports Excel sont volontairement limités aux feuilles importantes pour ré
 
 Dans `Extrait client`, le classeur contient `Synthese`, `Extrait_MPESA`, `DAT_Final`, `Credits`, `G2_DAT` et `Diagnostics`.
 
-Dans `G2 / DAT`, le classeur contient `Rapport_Journalier_Comptages`, `Rapport_Journalier_Synthese`, `Rapport_Journalier_Detail`, `Anomalies_G2`, `G2_DAT`, `Retention_Mensuelle` et `Retention_Detail`.
+Dans `G2 / DAT`, le classeur contient `Rapport_Journalier_Comptages`, `Rapport_Journalier_Synthese`, `Statuts_G2`, `Rapport_Journalier_Detail`, `Anomalies_G2`, `G2_DAT`, `Retention_Mensuelle` et `Retention_Detail`.
+
+Le classeur G2/DAT ajoute `Transactions_Jour`, `Transactions_Jour_Semaine`, `Transactions_Heure` et `Transactions_Jour_Heure` pour reutiliser les volumes temporels hors de l'application.
 
 Dans `Perfect_client`, le classeur contient `Perfect_M_PESA`, `Perfect_Turbo` et `Perfect_Turbo_M_PESA`. L'export des forts DAT conserve uniquement `Forts_DAT` et `Portefeuille_DAT`.
+
+Dans `Pilotage M-PESA`, l'Excel est genere seulement sur demande. Il conserve les feuilles utiles au suivi : credit et dossiers a risque, liquidite journaliere, activite clients, conversion epargne-DAT, concentration, qualite, alertes, echeances DAT et adoption Perfect.
 
 ## Cycle Suivi clients CRM
 

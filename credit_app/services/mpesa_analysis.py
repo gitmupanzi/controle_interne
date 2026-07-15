@@ -35,6 +35,16 @@ G2_TRANSACTION_REQUIRED_COLUMNS = set(G2_TRANSACTIONS_SCHEMA.required)
 CUSTOMERS_REQUIRED_COLUMNS = set(CUSTOMERS_SCHEMA.required)
 PERFECT_CLIENTS_REQUIRED_COLUMNS = set(PERFECT_CLIENTS_SCHEMA.required)
 
+CUSTOMER_STATEMENT_COLUMNS = [
+    "date",
+    "compte",
+    "receipt_no",
+    "description",
+    "entree",
+    "sortie",
+    "solde",
+]
+
 LOAN_USEFUL_COLUMNS = {
     "loan_id",
     "customer_id",
@@ -46,6 +56,7 @@ LOAN_USEFUL_COLUMNS = {
     "loan_balance",
     "amount_paid",
     "outstanding_principle",
+    "outstanding_setup_fees",
     "outstanding_interest",
     "outstanding_penalty_fees",
     "status_name",
@@ -89,6 +100,7 @@ NUMERIC_COLUMNS = [
     "loan_balance",
     "amount_paid",
     "outstanding_principle",
+    "outstanding_setup_fees",
     "outstanding_interest",
     "outstanding_penalty_fees",
 ]
@@ -97,6 +109,15 @@ KNOWN_ACCOUNT_TYPES = {
     "MPESA ACCOUNT",
     "NORMAL SAVINGS",
     "FIXED SAVINGS",
+    "LOAN ACCOUNT",
+    "PRINCIPLE",
+    "LOAN PORTFOLIO",
+    "BISOU COLLECTION",
+    "VODA COLLECTION A/C",
+    "INTEREST EARNED",
+    "LOAN AMOUNT A/C",
+    "LOAN PENALTY FEES",
+    "CUSTOMER USD WALLET PENALTY",
 }
 
 G2_OPERATION_CATEGORIES = [
@@ -110,6 +131,8 @@ G2_OPERATION_CATEGORIES = [
     "Autre sortie",
     "Flux a verifier",
 ]
+
+G2_COMPLETED_STATUS_LABELS = frozenset({"completed", "complete", "successful", "success"})
 
 G2_CLASSIFIED_TRANSACTION_COLUMNS = [
     "date",
@@ -150,6 +173,43 @@ def normalize_label(value: Any) -> str:
     text = "".join(char for char in text if not unicodedata.combining(char))
     text = re.sub(r"\s+", " ", text).strip().lower()
     return text
+
+
+def normalize_g2_transaction_status(value: Any) -> str:
+    """Regroupe les statuts du portail G2 sans perdre leur valeur source."""
+    status = normalize_label(value)
+    if not status:
+        return "Non renseigne"
+    if status in G2_COMPLETED_STATUS_LABELS or "complete" in status or "success" in status:
+        return "Completed"
+    if any(token in status for token in ["declin", "reject", "refus", "failed", "failure", "echec"]):
+        return "Declined"
+    if any(token in status for token in ["cancel", "annul"]):
+        return "Cancelled"
+    if any(token in status for token in ["expir", "echeance depassee"]):
+        return "Expired"
+    if any(token in status for token in ["pending", "en attente", "processing", "en cours"]):
+        return "Pending"
+    return "Autre"
+
+
+def g2_completed_transaction_mask(dataframe: pd.DataFrame | None) -> pd.Series:
+    """Selectionne les transactions G2 terminees, avec compatibilite des anciens exports.
+
+    Les anciens fichiers qui ne possedent aucun statut restent entierement
+    exploitables. Des qu'au moins un statut est renseigne dans un fichier, seules
+    les lignes explicitement terminees sont eligibles aux analyses metier.
+    """
+    if not isinstance(dataframe, pd.DataFrame):
+        return pd.Series(dtype="bool")
+    if dataframe.empty:
+        return pd.Series(False, index=dataframe.index, dtype="bool")
+    if "transaction_status" not in dataframe.columns:
+        return pd.Series(True, index=dataframe.index, dtype="bool")
+    normalized = dataframe["transaction_status"].apply(normalize_label)
+    if not normalized.ne("").any():
+        return pd.Series(True, index=dataframe.index, dtype="bool")
+    return normalized.isin(G2_COMPLETED_STATUS_LABELS).astype(bool)
 
 
 def classify_g2_business_operation(row: pd.Series, *, dat_matched: bool = False) -> str:
@@ -321,11 +381,86 @@ def _normalize_common_columns(dataframe: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _deduplicate_multi_file_snapshot(
+    dataframe: pd.DataFrame,
+    *,
+    source_column: str,
+    source_trace_column: str,
+    key_candidates: list[list[str]],
+    recency_columns: list[str],
+) -> pd.DataFrame:
+    """Evite de recompter les chevauchements entre plusieurs exports d'une source."""
+    if dataframe.empty:
+        return dataframe.copy()
+    frame = dataframe.copy().reset_index(drop=True)
+    if source_column not in frame.columns or clean_text(frame[source_column]).nunique() <= 1:
+        return frame.drop(columns=["ordre_fichier_import"], errors="ignore")
+
+    frame["__import_row_order"] = np.arange(len(frame))
+    selected_keys: list[str] = []
+    valid_key = pd.Series(False, index=frame.index)
+    for candidate in key_candidates:
+        if not candidate or not set(candidate).issubset(frame.columns):
+            continue
+        candidate_valid = pd.Series(True, index=frame.index)
+        for column in candidate:
+            values = frame[column]
+            if pd.api.types.is_datetime64_any_dtype(values) or pd.api.types.is_numeric_dtype(values):
+                candidate_valid &= values.notna()
+            else:
+                candidate_valid &= clean_text(values).ne("")
+        if candidate_valid.any():
+            selected_keys = candidate
+            valid_key = candidate_valid
+            break
+
+    provenance_exclusions = {
+        source_column,
+        source_trace_column,
+        "ordre_fichier_import",
+        "__import_row_order",
+    }
+    if not selected_keys:
+        comparison_columns = [column for column in frame.columns if column not in provenance_exclusions]
+        result = frame.drop_duplicates(subset=comparison_columns, keep="last")
+        return result.drop(columns=["ordre_fichier_import", "__import_row_order"], errors="ignore").reset_index(drop=True)
+
+    keyed = frame.loc[valid_key].copy()
+    unkeyed = frame.loc[~valid_key].copy()
+    keyed[source_trace_column] = keyed.groupby(selected_keys, dropna=False)[source_column].transform(concat_unique)
+    sort_columns = [column for column in recency_columns if column in keyed.columns]
+    if "ordre_fichier_import" in keyed.columns:
+        sort_columns.append("ordre_fichier_import")
+    sort_columns.append("__import_row_order")
+    keyed = (
+        keyed.sort_values(sort_columns, na_position="first")
+        .drop_duplicates(selected_keys, keep="last")
+    )
+
+    if not unkeyed.empty:
+        comparison_columns = [column for column in unkeyed.columns if column not in provenance_exclusions]
+        unkeyed = unkeyed.drop_duplicates(subset=comparison_columns, keep="last")
+        unkeyed[source_trace_column] = clean_text(unkeyed[source_column])
+
+    result = concat_frames_stable([keyed, unkeyed]).sort_values("__import_row_order")
+    return result.drop(columns=["ordre_fichier_import", "__import_row_order"], errors="ignore").reset_index(drop=True)
+
+
 def prepare_transactions(dataframe: pd.DataFrame) -> pd.DataFrame:
     frame = _normalize_common_columns(dataframe)
     for column in ["dr", "cr", "bal_before", "bal_after"]:
         if column in frame.columns:
             frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+    frame = _deduplicate_multi_file_snapshot(
+        frame,
+        source_column="fichier_source_transactions_turbo",
+        source_trace_column="fichiers_sources_transactions_turbo",
+        key_candidates=[
+            ["id"],
+            ["ref_no", "account_type", "customer_id", "currency_code", "dr", "cr", "created_at"],
+        ],
+        recency_columns=["created_at"],
+    )
     if "created_at" in frame.columns:
         frame = frame.sort_values(["created_at", "id"], na_position="last").reset_index(drop=True)
     return frame
@@ -335,7 +470,15 @@ def prepare_current_savings(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     frame = _normalize_common_columns(dataframe if dataframe is not None else pd.DataFrame())
     if "balance" in frame.columns:
         frame["balance"] = pd.to_numeric(frame["balance"], errors="coerce").fillna(0.0)
-    return frame
+    return _deduplicate_multi_file_snapshot(
+        frame,
+        source_column="fichier_source_epargne_turbo",
+        source_trace_column="fichiers_sources_epargne_turbo",
+        key_candidates=[
+            ["customer_id", "currency_code", "account_type", "product_name", "created_at"],
+        ],
+        recency_columns=["updated_at", "created_at"],
+    )
 
 
 def prepare_fixed_savings(dataframe: pd.DataFrame | None) -> pd.DataFrame:
@@ -344,7 +487,15 @@ def prepare_fixed_savings(dataframe: pd.DataFrame | None) -> pd.DataFrame:
         frame["balance"] = pd.to_numeric(frame["balance"], errors="coerce").fillna(0.0)
     if "created_at" not in frame.columns and "date_approved" in frame.columns:
         frame["created_at"] = frame["date_approved"]
-    return frame
+    return _deduplicate_multi_file_snapshot(
+        frame,
+        source_column="fichier_source_dat_turbo",
+        source_trace_column="fichiers_sources_dat_turbo",
+        key_candidates=[
+            ["customer_id", "currency_code", "account_type", "date_approved", "maturity_date"],
+        ],
+        recency_columns=["date_approved"],
+    )
 
 
 def build_large_dat_summary(
@@ -471,13 +622,25 @@ def prepare_loans(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     for column in NUMERIC_COLUMNS:
         if column in frame.columns:
             frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
-    return frame
+    return _deduplicate_multi_file_snapshot(
+        frame,
+        source_column="fichier_source_credits_turbo",
+        source_trace_column="fichiers_sources_credits_turbo",
+        key_candidates=[["loan_id"], ["id"]],
+        recency_columns=["updated_at", "created_at"],
+    )
 
 
 def prepare_customers(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     frame = remove_export_index_columns(dataframe if dataframe is not None else pd.DataFrame())
     frame = _normalize_common_columns(frame)
-    return frame
+    return _deduplicate_multi_file_snapshot(
+        frame,
+        source_column="fichier_source_clients_turbo",
+        source_trace_column="fichiers_sources_clients_turbo",
+        key_candidates=[["customer_id"], ["msisdn1", "created_at"]],
+        recency_columns=["updated_at", "created_at"],
+    )
 
 
 def prepare_perfect_clients(dataframe: pd.DataFrame | None) -> pd.DataFrame:
@@ -510,7 +673,13 @@ def prepare_perfect_clients(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     valid_phone = normalized_phone.astype("string").str.fullmatch(r"243[89]\d{8}", na=False)
     frame["phone_prefixe"] = normalized_phone.where(valid_phone, pd.NA)
     frame["source_perfect"] = "Perfect"
-    return frame.reset_index(drop=True)
+    return _deduplicate_multi_file_snapshot(
+        frame,
+        source_column="fichier_source_clients_perfect",
+        source_trace_column="fichiers_sources_clients_perfect",
+        key_candidates=[["id_client"], ["code_client"], ["num_manuel", "nom_complet"]],
+        recency_columns=[],
+    )
 
 
 def _mpesa_identity_source(
@@ -552,6 +721,9 @@ def _mpesa_identity_source(
 
 
 def _build_mpesa_identity_population(prepared: MpesaPreparedData) -> pd.DataFrame:
+    completed_g2 = prepared.g2_transactions
+    if isinstance(completed_g2, pd.DataFrame) and not completed_g2.empty:
+        completed_g2 = completed_g2.loc[g2_completed_transaction_mask(completed_g2)].copy()
     frames = [
         _mpesa_identity_source(prepared.transactions, source="Turbo - Transactions", system="Turbo", phone_column="msisdn1"),
         _mpesa_identity_source(prepared.customers, source="Turbo - Clients", system="Turbo", phone_column="msisdn1"),
@@ -559,7 +731,7 @@ def _build_mpesa_identity_population(prepared: MpesaPreparedData) -> pd.DataFram
         _mpesa_identity_source(prepared.fixed_savings, source="Turbo - DAT", system="Turbo", phone_column="msisdn"),
         _mpesa_identity_source(prepared.loans, source="Turbo - Credits", system="Turbo", phone_column="msisdn1"),
         _mpesa_identity_source(
-            prepared.g2_transactions,
+            completed_g2,
             source="G2 - Transactions",
             system="G2",
             phone_column="phone_prefixe",
@@ -612,7 +784,10 @@ def _build_mpesa_identity_population(prepared: MpesaPreparedData) -> pd.DataFram
     return concat_frames_stable([unique_rows[output_columns], duplicate_summary[output_columns]]).reset_index(drop=True)
 
 
-def _build_mpesa_operation_detail(prepared: MpesaPreparedData) -> pd.DataFrame:
+def _build_mpesa_operation_detail(
+    prepared: MpesaPreparedData,
+    daily_detail: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     blocks: list[pd.DataFrame] = []
     transactions = prepared.transactions
     if isinstance(transactions, pd.DataFrame) and not transactions.empty:
@@ -686,9 +861,20 @@ def _build_mpesa_operation_detail(prepared: MpesaPreparedData) -> pd.DataFrame:
         blocks.append(turbo_detail)
 
     if isinstance(prepared.g2_transactions, pd.DataFrame) and not prepared.g2_transactions.empty:
-        g2_report = build_g2_daily_savings_report(prepared).get("detail", pd.DataFrame())
+        g2_report = (
+            daily_detail.copy()
+            if isinstance(daily_detail, pd.DataFrame)
+            else build_g2_daily_savings_report(prepared).get("detail", pd.DataFrame())
+        )
+        g2 = pd.DataFrame()
         if not g2_report.empty:
             g2 = g2_report.copy()
+            if "incluse_synthese" in g2.columns:
+                eligible = g2["incluse_synthese"].astype("boolean").fillna(False).astype(bool)
+                g2 = g2.loc[eligible].copy()
+            else:
+                g2 = g2.loc[g2_completed_transaction_mask(g2)].copy()
+        if not g2.empty:
             g2["phone_prefixe"] = normalize_phone(g2.get("phone_prefixe", pd.Series(pd.NA, index=g2.index)))
             valid_phone = g2["phone_prefixe"].astype("string").str.fullmatch(r"243[89]\d{8}", na=False)
             g2["phone_prefixe"] = g2["phone_prefixe"].where(valid_phone, pd.NA)
@@ -1064,6 +1250,7 @@ def prepare_g2_transactions(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     else:
         frame["transaction_amount"] = frame["transaction_amount"].where(original_amount.notna(), derived_amount)
     frame["source_g2"] = "G2"
+    frame = frame.drop(columns=["ordre_fichier_import"], errors="ignore")
     sort_columns = [column for column in ["completion_time", "receipt_no"] if column in frame.columns]
     if sort_columns:
         frame = frame.sort_values(sort_columns, na_position="last").reset_index(drop=True)
@@ -1222,9 +1409,24 @@ def enrich_transactions_with_g2_customer_names(
 def build_load_report(files: dict[str, pd.DataFrame], missing: dict[str, list[str]]) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for label, frame in files.items():
+        source_names: list[str] = []
+        if isinstance(frame, pd.DataFrame) and not frame.empty:
+            source_columns = [
+                column
+                for column in frame.columns
+                if str(column).startswith(("fichier_source_", "fichiers_sources_"))
+            ]
+            for column in source_columns:
+                for value in clean_text(frame[column]):
+                    for part in str(value).split("|"):
+                        name = part.strip()
+                        if name and name not in source_names:
+                            source_names.append(name)
         rows.append(
             {
                 "fichier": label,
+                "nombre_fichiers": len(source_names),
+                "fichiers_sources": " | ".join(source_names),
                 "lignes": int(len(frame)) if isinstance(frame, pd.DataFrame) else 0,
                 "colonnes": int(frame.shape[1]) if isinstance(frame, pd.DataFrame) else 0,
                 "colonnes_manquantes": ", ".join(missing.get(label, [])),
@@ -1569,6 +1771,22 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
         default="Ecart de date",
     )
 
+    def date_gap_observation(row: pd.Series) -> str:
+        if row.get("controle_date") != "Ecart de date":
+            return ""
+        g2_value = pd.to_datetime(row.get("completion_time"), errors="coerce")
+        portal_min = pd.to_datetime(row.get("date_portal_min"), errors="coerce")
+        portal_max = pd.to_datetime(row.get("date_portal_max"), errors="coerce")
+        g2_text = g2_value.strftime("%d/%m/%Y %H:%M:%S") if pd.notna(g2_value) else "date indisponible"
+        portal_text = portal_min.strftime("%d/%m/%Y %H:%M:%S") if pd.notna(portal_min) else "date indisponible"
+        if pd.notna(portal_max) and portal_max != portal_min:
+            portal_text += f" au {portal_max:%d/%m/%Y %H:%M:%S}"
+        gap = pd.to_numeric(pd.Series([row.get("ecart_date_minutes")]), errors="coerce").iloc[0]
+        gap_text = f" | Decalage : {abs(float(gap)):.0f} minute(s)" if pd.notna(gap) else ""
+        return f"Date G2 : {g2_text} | Date Turbo : {portal_text}{gap_text}"
+
+    output["Observation"] = output.apply(date_gap_observation, axis=1)
+
     fallback_category = output.apply(
         lambda row: classify_g2_business_operation(row, dat_matched=False), axis=1
     )
@@ -1590,12 +1808,18 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
     ] = "Depot normal"
     output["description_metier"] = output["categorie_operation"]
 
-    status = output.get("transaction_status", pd.Series("", index=output.index)).apply(normalize_label)
-    explicit_status = status.ne("")
-    output["est_transaction_terminee"] = ~explicit_status | status.isin(
-        {"completed", "complete", "successful", "success"}
+    raw_status = clean_text(
+        output.get("transaction_status", pd.Series("", index=output.index))
     )
+    output["transaction_status"] = raw_status
+    output["statut_transaction_g2"] = raw_status.apply(normalize_g2_transaction_status)
+    output["est_transaction_terminee"] = g2_completed_transaction_mask(output)
     output["incluse_synthese"] = output["est_transaction_terminee"]
+    output["traitement_statut_g2"] = np.where(
+        output["incluse_synthese"],
+        "Incluse dans les analyses",
+        "Controle uniquement",
+    )
     has_control_gap = (
         output[["controle_devise", "controle_telephone", "controle_montant", "controle_date"]]
         .eq("Ecart")
@@ -1615,7 +1839,8 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
         if bool(row.get("doublon_receipt_no", False)):
             reasons.append(f"Receipt No duplique ({int(row.get('nombre_lignes_g2_reference', 0))} lignes G2)")
         if not bool(row.get("est_transaction_terminee", True)):
-            reasons.append(f"Statut G2 non termine : {row.get('transaction_status', '')}")
+            status_label = row.get("transaction_status", "") or row.get("statut_transaction_g2", "")
+            reasons.append(f"Statut G2 non termine : {status_label}")
         if row.get("statut_rapprochement") == "Non rapproche":
             reasons.append("Receipt No non trouve dans ref_no")
         for column, label in [
@@ -1852,6 +2077,7 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
         "controle_montant",
         "ecart_date_minutes",
         "controle_date",
+        "Observation",
         "nombre_lignes_g2_reference",
         "devises_g2_reference",
         "statuts_g2_reference",
@@ -2310,6 +2536,68 @@ def _build_daily_dat_assignments(g2: pd.DataFrame, fixed: pd.DataFrame) -> pd.Da
     return assignments[columns]
 
 
+def build_g2_transaction_status_summary(detail: pd.DataFrame | None) -> pd.DataFrame:
+    """Compte tous les statuts G2 et indique lesquels alimentent les analyses."""
+    columns = [
+        "currency_code",
+        "fichier_source_g2",
+        "statut_transaction_g2",
+        "transaction_status_source",
+        "nombre_transactions",
+        "part_transactions_pct",
+        "prise_en_compte_analyse",
+    ]
+    if not isinstance(detail, pd.DataFrame) or detail.empty:
+        return pd.DataFrame(columns=columns)
+    frame = detail.copy()
+    frame["currency_code"] = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    frame["fichier_source_g2"] = clean_text(
+        frame.get("fichier_source_g2", pd.Series("", index=frame.index))
+    ).replace("", "Source non renseignee")
+    source_status = clean_text(
+        frame.get("transaction_status", pd.Series("", index=frame.index))
+    ).replace("", "Non renseigne")
+    frame["transaction_status_source"] = source_status
+    frame["statut_transaction_g2"] = frame.get(
+        "statut_transaction_g2", source_status.apply(normalize_g2_transaction_status)
+    )
+    frame["incluse_synthese"] = frame.get(
+        "incluse_synthese", g2_completed_transaction_mask(frame)
+    ).astype("boolean").fillna(False).astype(bool)
+    summary = (
+        frame.groupby(
+            [
+                "currency_code",
+                "fichier_source_g2",
+                "statut_transaction_g2",
+                "transaction_status_source",
+                "incluse_synthese",
+            ],
+            as_index=False,
+            dropna=False,
+        )
+        .size()
+        .rename(columns={"size": "nombre_transactions"})
+    )
+    currency_totals = summary.groupby("currency_code")["nombre_transactions"].transform("sum")
+    summary["part_transactions_pct"] = (
+        summary["nombre_transactions"].div(currency_totals.replace(0, pd.NA)).mul(100)
+    )
+    summary["prise_en_compte_analyse"] = np.where(
+        summary["incluse_synthese"], "Oui", "Non - controle uniquement"
+    )
+    return (
+        summary[columns]
+        .sort_values(
+            ["currency_code", "fichier_source_g2", "prise_en_compte_analyse", "nombre_transactions"],
+            ascending=[True, True, False, False],
+        )
+        .reset_index(drop=True)
+    )
+
+
 def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.DataFrame]:
     g2 = prepared.g2_transactions
     if g2.empty:
@@ -2320,6 +2608,7 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
             "pivot": pd.DataFrame(),
             "vertical_summary": pd.DataFrame(),
             "comptages": build_entry_count_summary(pd.DataFrame()),
+            "statuts": build_g2_transaction_status_summary(pd.DataFrame()),
         }
 
     report = build_g2_dat_crosscheck(prepared)
@@ -2445,6 +2734,7 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
     detail_columns = [
         "date",
         "receipt_no",
+        "fichier_source_g2",
         "sens_flux",
         "details_rapport",
         "reason_type",
@@ -2467,6 +2757,8 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         "dat_balance",
         "dat_match_rule",
         "transaction_status",
+        "statut_transaction_g2",
+        "traitement_statut_g2",
         "transaction_amount_source",
         "paid_in_numeric",
         "withdrawn_numeric",
@@ -2485,6 +2777,7 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         "controle_montant",
         "ecart_date_minutes",
         "controle_date",
+        "Observation",
         "nombre_lignes_g2_reference",
         "devises_g2_reference",
         "statuts_g2_reference",
@@ -2530,6 +2823,166 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         "pivot": build_entry_pivot(summary_detail),
         "vertical_summary": build_entry_vertical_summary(summary_detail),
         "comptages": build_entry_count_summary(summary_detail),
+        "statuts": build_g2_transaction_status_summary(detail),
+    }
+
+
+def build_g2_transaction_time_analysis(daily_detail: pd.DataFrame | None) -> dict[str, pd.DataFrame]:
+    """Compte les transactions G2 terminees par date et par heure.
+
+    ``daily_detail`` est le detail canonique produit par
+    :func:`build_g2_daily_savings_report`. Les lignes non terminees sont
+    exclues lorsque ``incluse_synthese`` est disponible, afin que les volumes
+    affiches restent coherents avec la synthese G2/DAT.
+    """
+    daily_columns = ["date_transaction", "currency_code", "sens_flux", "nombre_transactions"]
+    weekday_columns = [
+        "jour_semaine_num",
+        "jour_semaine",
+        "currency_code",
+        "sens_flux",
+        "nombre_transactions",
+    ]
+    hourly_columns = ["heure_num", "heure", "currency_code", "sens_flux", "nombre_transactions"]
+    day_hour_columns = [
+        "date_transaction",
+        "heure_num",
+        "heure",
+        "currency_code",
+        "sens_flux",
+        "nombre_transactions",
+    ]
+    empty_result = {
+        "par_jour": pd.DataFrame(columns=daily_columns),
+        "par_jour_semaine": pd.DataFrame(columns=weekday_columns),
+        "par_heure": pd.DataFrame(columns=hourly_columns),
+        "jour_heure": pd.DataFrame(columns=day_hour_columns),
+    }
+    if not isinstance(daily_detail, pd.DataFrame) or daily_detail.empty or "date" not in daily_detail.columns:
+        return empty_result
+
+    work = daily_detail.copy()
+    if "incluse_synthese" in work.columns:
+        eligible = work["incluse_synthese"].astype("boolean").fillna(False).astype(bool)
+        work = work.loc[eligible].copy()
+    work["date_transaction_complete"] = pd.to_datetime(work["date"], errors="coerce")
+    work = work.dropna(subset=["date_transaction_complete"])
+    if work.empty:
+        return empty_result
+
+    # Le detail journalier est deja canonique. Cette protection evite toutefois
+    # de recompter un meme Receipt No. si la fonction est reutilisee ailleurs.
+    if "receipt_no" in work.columns:
+        receipt = clean_identifier(work["receipt_no"])
+        with_receipt = work.loc[receipt.ne("")].copy()
+        without_receipt = work.loc[receipt.eq("")].copy()
+        work = concat_frames_stable(
+            [with_receipt.drop_duplicates(subset=["receipt_no"], keep="first"), without_receipt]
+        ).reset_index(drop=True)
+
+    work["date_transaction"] = work["date_transaction_complete"].dt.normalize()
+    work["jour_semaine_num"] = work["date_transaction_complete"].dt.dayofweek.astype(int)
+    work["heure_num"] = work["date_transaction_complete"].dt.hour.astype(int)
+    work["heure"] = work["heure_num"].map(lambda value: f"{int(value):02d}h")
+    work["currency_code"] = clean_text(
+        work.get("currency_code", pd.Series("", index=work.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    work["sens_flux"] = clean_text(
+        work.get("sens_flux", pd.Series("", index=work.index))
+    ).replace("", "Indetermine")
+
+    observed_combinations = work[["currency_code", "sens_flux"]].drop_duplicates().reset_index(drop=True)
+
+    daily_counts = (
+        work.groupby(["date_transaction", "currency_code", "sens_flux"], as_index=False, dropna=False)
+        .size()
+        .rename(columns={"size": "nombre_transactions"})
+    )
+    dates = pd.DataFrame(
+        {"date_transaction": pd.date_range(work["date_transaction"].min(), work["date_transaction"].max(), freq="D")}
+    )
+    daily_grid = observed_combinations.merge(dates, how="cross")
+    par_jour = (
+        daily_grid.merge(
+            daily_counts,
+            on=["date_transaction", "currency_code", "sens_flux"],
+            how="left",
+        )
+        .fillna({"nombre_transactions": 0})
+        .sort_values(["date_transaction", "currency_code", "sens_flux"])
+        .reset_index(drop=True)
+    )
+    par_jour["nombre_transactions"] = par_jour["nombre_transactions"].astype(int)
+    par_jour = par_jour[daily_columns]
+
+    weekday_names = {
+        0: "Lundi",
+        1: "Mardi",
+        2: "Mercredi",
+        3: "Jeudi",
+        4: "Vendredi",
+        5: "Samedi",
+        6: "Dimanche",
+    }
+    weekday_counts = (
+        work.groupby(["jour_semaine_num", "currency_code", "sens_flux"], as_index=False, dropna=False)
+        .size()
+        .rename(columns={"size": "nombre_transactions"})
+    )
+    weekdays = pd.DataFrame({"jour_semaine_num": range(7)})
+    weekday_grid = observed_combinations.merge(weekdays, how="cross")
+    par_jour_semaine = (
+        weekday_grid.merge(
+            weekday_counts,
+            on=["jour_semaine_num", "currency_code", "sens_flux"],
+            how="left",
+        )
+        .fillna({"nombre_transactions": 0})
+        .sort_values(["jour_semaine_num", "currency_code", "sens_flux"])
+        .reset_index(drop=True)
+    )
+    par_jour_semaine["nombre_transactions"] = par_jour_semaine["nombre_transactions"].astype(int)
+    par_jour_semaine["jour_semaine"] = par_jour_semaine["jour_semaine_num"].map(weekday_names)
+    par_jour_semaine = par_jour_semaine[weekday_columns]
+
+    hourly_counts = (
+        work.groupby(["heure_num", "currency_code", "sens_flux"], as_index=False, dropna=False)
+        .size()
+        .rename(columns={"size": "nombre_transactions"})
+    )
+    hours = pd.DataFrame({"heure_num": range(24)})
+    hourly_grid = observed_combinations.merge(hours, how="cross")
+    par_heure = (
+        hourly_grid.merge(
+            hourly_counts,
+            on=["heure_num", "currency_code", "sens_flux"],
+            how="left",
+        )
+        .fillna({"nombre_transactions": 0})
+        .sort_values(["heure_num", "currency_code", "sens_flux"])
+        .reset_index(drop=True)
+    )
+    par_heure["nombre_transactions"] = par_heure["nombre_transactions"].astype(int)
+    par_heure["heure"] = par_heure["heure_num"].map(lambda value: f"{int(value):02d}h")
+    par_heure = par_heure[hourly_columns]
+
+    jour_heure = (
+        work.groupby(
+            ["date_transaction", "heure_num", "heure", "currency_code", "sens_flux"],
+            as_index=False,
+            dropna=False,
+        )
+        .size()
+        .rename(columns={"size": "nombre_transactions"})
+        .sort_values(["date_transaction", "heure_num", "currency_code", "sens_flux"])
+        .reset_index(drop=True)
+    )
+    jour_heure["nombre_transactions"] = jour_heure["nombre_transactions"].astype(int)
+    return {
+        "par_jour": par_jour,
+        "par_jour_semaine": par_jour_semaine,
+        "par_heure": par_heure,
+        "jour_heure": jour_heure[day_hour_columns],
     }
 
 
@@ -2733,6 +3186,894 @@ def build_g2_retention_report(
         "operations": operations,
         "detail_clients": detail,
         "definitions": empty_result["definitions"],
+    }
+
+
+def _mpesa_analysis_date(prepared: MpesaPreparedData, as_of_date: Any | None = None) -> pd.Timestamp:
+    if as_of_date is not None:
+        parsed = pd.to_datetime(as_of_date, errors="coerce")
+        if pd.notna(parsed):
+            return pd.Timestamp(parsed).normalize()
+
+    candidates: list[pd.Series] = []
+    source_columns = [
+        (prepared.g2_transactions, "completion_time"),
+        (prepared.transactions, "created_at"),
+        (prepared.loans, "updated_at"),
+        (prepared.loans, "created_at"),
+        (prepared.fixed_savings, "updated_at"),
+        (prepared.fixed_savings, "date_approved"),
+        (prepared.current_savings, "updated_at"),
+        (prepared.current_savings, "created_at"),
+    ]
+    for frame, column in source_columns:
+        if isinstance(frame, pd.DataFrame) and not frame.empty and column in frame.columns:
+            values = pd.to_datetime(frame[column], errors="coerce").dropna()
+            if not values.empty:
+                candidates.append(values)
+    if candidates:
+        return pd.Timestamp(pd.concat(candidates, ignore_index=True).max()).normalize()
+    return pd.Timestamp.now().normalize()
+
+
+def build_mpesa_credit_risk_analysis(
+    loans: pd.DataFrame | None,
+    *,
+    as_of_date: Any | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Construit les indicateurs de remboursement et de retard par devise."""
+    empty = {"synthese": pd.DataFrame(), "detail": pd.DataFrame()}
+    if not isinstance(loans, pd.DataFrame) or loans.empty or "loan_id" not in loans.columns:
+        return empty
+
+    analysis_date = pd.Timestamp(
+        pd.to_datetime(as_of_date, errors="coerce") if as_of_date is not None else pd.Timestamp.now()
+    ).normalize()
+    frame = loans.copy()
+    frame["loan_id"] = clean_identifier(frame["loan_id"])
+    frame["customer_id"] = clean_identifier(frame.get("customer_id", pd.Series("", index=frame.index)))
+    frame["currency_code"] = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    for column in ["created_at", "updated_at", "due_date", "last_repayment_date"]:
+        frame[column] = pd.to_datetime(frame.get(column, pd.Series(pd.NaT, index=frame.index)), errors="coerce")
+    sort_columns = [column for column in ["updated_at", "created_at"] if column in frame.columns]
+    if sort_columns:
+        frame = frame.sort_values(sort_columns, ascending=False, na_position="last")
+    frame = frame.loc[frame["loan_id"].ne("")].drop_duplicates("loan_id", keep="first").copy()
+    if frame.empty:
+        return empty
+
+    numeric_sources = [
+        "loan_amount",
+        "loan_balance",
+        "amount_paid",
+        "outstanding_principle",
+        "outstanding_setup_fees",
+        "outstanding_interest",
+        "outstanding_penalty_fees",
+    ]
+    source_presence = {column: column in loans.columns for column in numeric_sources}
+    for column in numeric_sources:
+        frame[column] = numeric_column(frame, column).clip(lower=0)
+    computed_outstanding = (
+        frame["outstanding_principle"]
+        + frame["outstanding_setup_fees"]
+        + frame["outstanding_interest"]
+        + frame["outstanding_penalty_fees"]
+    )
+    frame["encours_total"] = frame["loan_balance"] if source_presence["loan_balance"] else computed_outstanding
+    encours_reference = computed_outstanding
+    frame["ecart_encours_sources"] = encours_reference - frame["loan_balance"]
+    frame["encours_sources_incoherents"] = (
+        source_presence["loan_balance"]
+        and any(
+            source_presence[column]
+            for column in [
+                "outstanding_principle",
+                "outstanding_setup_fees",
+                "outstanding_interest",
+                "outstanding_penalty_fees",
+            ]
+        )
+    ) & frame["ecart_encours_sources"].abs().gt(
+        np.maximum(1.0, frame[["loan_balance"]].abs().max(axis=1) * 0.50)
+    )
+    has_outstanding_source = source_presence["loan_balance"] or any(
+        source_presence[column]
+        for column in ["outstanding_principle", "outstanding_interest", "outstanding_penalty_fees"]
+    )
+    frame["donnee_encours_disponible"] = has_outstanding_source
+    frame["donnee_echeance_disponible"] = frame["due_date"].notna()
+    overdue_days = (analysis_date - frame["due_date"].dt.normalize()).dt.days
+    frame["jours_retard"] = overdue_days.where(
+        frame["encours_total"].gt(0) & overdue_days.gt(0), 0
+    ).fillna(0).astype(int)
+    frame["encours_retard_1j"] = frame["encours_total"].where(frame["jours_retard"].ge(1), 0.0)
+    frame["encours_retard_7j"] = frame["encours_total"].where(frame["jours_retard"].ge(7), 0.0)
+    frame["encours_retard_30j"] = frame["encours_total"].where(frame["jours_retard"].ge(30), 0.0)
+    frame["encours_sans_echeance"] = frame["encours_total"].where(frame["due_date"].isna(), 0.0)
+    frame["statut_risque"] = np.select(
+        [
+            ~frame["donnee_encours_disponible"],
+            frame["encours_total"].le(0),
+            ~frame["donnee_echeance_disponible"],
+            frame["jours_retard"].ge(30),
+            frame["jours_retard"].ge(7),
+            frame["jours_retard"].ge(1),
+            frame["due_date"].dt.normalize().eq(analysis_date),
+        ],
+        [
+            "Encours non renseigne",
+            "Solde nul / rembourse",
+            "Echeance non renseignee",
+            "En retard 30 jours et plus",
+            "En retard 7 a 29 jours",
+            "En retard 1 a 6 jours",
+            "Echu aujourd'hui",
+        ],
+        default="A jour",
+    )
+    frame["date_analyse"] = analysis_date
+    for column in ["Nom_client", "customer", "msisdn1", "status_name"]:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+
+    summary = (
+        frame.groupby("currency_code", as_index=False, dropna=False)
+        .agg(
+            nombre_credits=("loan_id", "nunique"),
+            nombre_clients=("customer_id", lambda values: clean_identifier(values).replace("", pd.NA).nunique()),
+            montant_credits=("loan_amount", "sum"),
+            montant_rembourse=("amount_paid", "sum"),
+            encours_total=("encours_total", "sum"),
+            encours_retard_1j=("encours_retard_1j", "sum"),
+            encours_retard_7j=("encours_retard_7j", "sum"),
+            encours_retard_30j=("encours_retard_30j", "sum"),
+            encours_sans_echeance=("encours_sans_echeance", "sum"),
+            credits_retard_1j=("jours_retard", lambda values: int(pd.Series(values).ge(1).sum())),
+            credits_retard_30j=("jours_retard", lambda values: int(pd.Series(values).ge(30).sum())),
+            echeances_renseignees=("donnee_echeance_disponible", "sum"),
+            incoherences_encours=("encours_sources_incoherents", "sum"),
+        )
+    )
+    denominator = summary["encours_total"].replace(0, pd.NA)
+    summary["par_1j_pct"] = summary["encours_retard_1j"].div(denominator).mul(100)
+    summary["par_7j_pct"] = summary["encours_retard_7j"].div(denominator).mul(100)
+    summary["par_30j_pct"] = summary["encours_retard_30j"].div(denominator).mul(100)
+    if source_presence["amount_paid"] and source_presence["loan_amount"]:
+        summary["taux_remboursement_pct"] = summary["montant_rembourse"].div(
+            summary["montant_credits"].replace(0, pd.NA)
+        ).mul(100)
+    else:
+        summary["taux_remboursement_pct"] = np.nan
+    if not has_outstanding_source:
+        summary[["par_1j_pct", "par_7j_pct", "par_30j_pct"]] = np.nan
+    summary.loc[
+        summary["encours_sans_echeance"].gt(0),
+        ["par_1j_pct", "par_7j_pct", "par_30j_pct"],
+    ] = np.nan
+    summary["date_analyse"] = analysis_date
+
+    detail_columns = [
+        "loan_id", "customer_id", "Nom_client", "customer", "msisdn1", "currency_code",
+        "loan_amount", "amount_paid", "encours_total", "outstanding_principle", "outstanding_setup_fees",
+        "outstanding_interest", "outstanding_penalty_fees", "status_name", "created_at",
+        "due_date", "last_repayment_date", "jours_retard", "statut_risque", "date_analyse",
+        "ecart_encours_sources", "encours_sources_incoherents",
+    ]
+    detail = frame[detail_columns].sort_values(
+        ["currency_code", "jours_retard", "encours_total"], ascending=[True, False, False]
+    ).reset_index(drop=True)
+    return {"synthese": summary, "detail": detail}
+
+
+def build_mpesa_liquidity_analysis(
+    daily_detail: pd.DataFrame | None,
+    *,
+    as_of_date: Any | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Mesure la pression de liquidite et produit une projection mecanique a sept jours."""
+    empty = {"synthese": pd.DataFrame(), "journalier": pd.DataFrame()}
+    if not isinstance(daily_detail, pd.DataFrame) or daily_detail.empty or "date" not in daily_detail.columns:
+        return empty
+    frame = daily_detail.copy()
+    if "incluse_synthese" in frame.columns:
+        frame = frame.loc[frame["incluse_synthese"].astype("boolean").fillna(False)].copy()
+    frame["date_complete"] = pd.to_datetime(frame["date"], errors="coerce")
+    frame = frame.dropna(subset=["date_complete"])
+    if frame.empty:
+        return empty
+    frame["date_transaction"] = frame["date_complete"].dt.normalize()
+    frame["currency_code"] = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    frame["montant_entree"] = numeric_column(frame, "montant_entree").clip(lower=0)
+    frame["montant_sortie"] = numeric_column(frame, "montant_sortie").clip(lower=0)
+    frame["balance_numeric"] = pd.to_numeric(
+        frame.get("balance_numeric", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
+
+    observed_daily = (
+        frame.groupby(["currency_code", "date_transaction"], as_index=False, dropna=False)
+        .agg(
+            nombre_transactions=("date_complete", "size"),
+            montant_entrees=("montant_entree", "sum"),
+            montant_sorties=("montant_sortie", "sum"),
+        )
+    )
+    dates = pd.DataFrame(
+        {"date_transaction": pd.date_range(frame["date_transaction"].min(), frame["date_transaction"].max(), freq="D")}
+    )
+    currencies = frame[["currency_code"]].drop_duplicates()
+    daily = currencies.merge(dates, how="cross").merge(
+        observed_daily, on=["currency_code", "date_transaction"], how="left"
+    )
+    daily[["nombre_transactions", "montant_entrees", "montant_sorties"]] = daily[
+        ["nombre_transactions", "montant_entrees", "montant_sorties"]
+    ].fillna(0)
+    daily["nombre_transactions"] = daily["nombre_transactions"].astype(int)
+    daily["flux_net"] = daily["montant_entrees"] - daily["montant_sorties"]
+
+    balance_daily = (
+        frame.dropna(subset=["balance_numeric"])
+        .sort_values("date_complete")
+        .groupby(["currency_code", "date_transaction"], as_index=False, dropna=False)
+        .agg(solde_cloture_observe=("balance_numeric", "last"), solde_min_observe=("balance_numeric", "min"))
+    )
+    daily = daily.merge(balance_daily, on=["currency_code", "date_transaction"], how="left")
+
+    hourly_outputs = (
+        frame.assign(heure=frame["date_complete"].dt.floor("h"))
+        .groupby(["currency_code", "heure"], as_index=False)["montant_sortie"]
+        .sum()
+    )
+    peak_hourly = hourly_outputs.groupby("currency_code")["montant_sortie"].max()
+    rows: list[dict[str, Any]] = []
+    for currency, group in daily.groupby("currency_code", sort=True):
+        group = group.sort_values("date_transaction")
+        valid_balances = group.dropna(subset=["solde_cloture_observe"])
+        latest_balance = valid_balances.iloc[-1]["solde_cloture_observe"] if not valid_balances.empty else np.nan
+        min_balance = valid_balances["solde_min_observe"].min() if not valid_balances.empty else np.nan
+        average_out = float(group["montant_sorties"].mean())
+        average_net = float(group["flux_net"].mean())
+        enough_history = len(group) >= 7
+        rows.append(
+            {
+                "currency_code": currency,
+                "jours_observes": int(len(group)),
+                "nombre_transactions": int(group["nombre_transactions"].sum()),
+                "montant_entrees": float(group["montant_entrees"].sum()),
+                "montant_sorties": float(group["montant_sorties"].sum()),
+                "flux_net": float(group["flux_net"].sum()),
+                "sortie_journaliere_moyenne": average_out,
+                "sortie_journaliere_max": float(group["montant_sorties"].max()),
+                "sortie_horaire_max": float(peak_hourly.get(currency, 0.0)),
+                "solde_plus_recent": latest_balance,
+                "solde_min_observe": min_balance,
+                "couverture_sorties_jours": latest_balance / average_out if pd.notna(latest_balance) and average_out > 0 else np.nan,
+                "projection_solde_7j": latest_balance + (7 * average_net) if pd.notna(latest_balance) and enough_history else np.nan,
+                "projection_7j_calculable": bool(pd.notna(latest_balance) and enough_history),
+                "date_analyse": pd.Timestamp(as_of_date).normalize() if as_of_date is not None else frame["date_transaction"].max(),
+            }
+        )
+    return {
+        "synthese": pd.DataFrame(rows),
+        "journalier": daily.sort_values(["currency_code", "date_transaction"]).reset_index(drop=True),
+    }
+
+
+def _build_unified_mpesa_operations(
+    prepared: MpesaPreparedData,
+    daily_detail: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    operations = _build_mpesa_operation_detail(prepared, daily_detail=daily_detail)
+    if operations.empty:
+        return operations
+    operations = operations.copy()
+    operations["date_operation"] = pd.to_datetime(operations["date_operation"], errors="coerce")
+    operations["phone_prefixe"] = normalize_phone(operations["phone_prefixe"])
+    operations["operation_reference"] = clean_identifier(operations["operation_reference"])
+    operations["currency_code"] = clean_text(operations["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
+    operations["montant_operation"] = numeric_column(operations, "montant_operation").abs()
+    rejected = operations["statut_operation"].apply(normalize_label).str.contains(
+        r"failed|failure|cancel|annul|reject|revers|inverse|expire", regex=True, na=False
+    )
+    operations = operations.loc[~(operations["source_operation"].eq("G2") & rejected)].copy()
+    operations["priorite_source"] = operations["source_operation"].map({"G2": 0, "Turbo": 1}).fillna(2)
+    reference_key = operations["operation_reference"].where(
+        operations["operation_reference"].ne(""),
+        operations["source_operation"].astype("string") + "-LIGNE-" + operations.index.astype("string"),
+    )
+    operations["cle_operation_unique"] = operations["currency_code"].astype("string") + "::" + reference_key
+    operations = (
+        operations.sort_values(["priorite_source", "date_operation"], na_position="last")
+        .drop_duplicates("cle_operation_unique", keep="first")
+        .drop(columns=["priorite_source"])
+    )
+    return operations.sort_values("date_operation", na_position="last").reset_index(drop=True)
+
+
+def build_mpesa_client_activity_analysis(
+    operations: pd.DataFrame | None,
+    *,
+    as_of_date: Any | None = None,
+) -> dict[str, pd.DataFrame]:
+    empty = {"synthese": pd.DataFrame(), "clients": pd.DataFrame()}
+    if not isinstance(operations, pd.DataFrame) or operations.empty:
+        return empty
+    analysis_date = pd.Timestamp(
+        pd.to_datetime(as_of_date, errors="coerce") if as_of_date is not None else pd.Timestamp.now()
+    ).normalize()
+    frame = operations.copy()
+    frame["date_operation"] = pd.to_datetime(frame.get("date_operation"), errors="coerce")
+    frame["phone_prefixe"] = normalize_phone(frame.get("phone_prefixe", pd.Series(pd.NA, index=frame.index)))
+    frame = frame.dropna(subset=["date_operation", "phone_prefixe"])
+    if frame.empty:
+        return empty
+    frame["currency_code"] = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    frame["montant_operation"] = numeric_column(frame, "montant_operation").abs()
+
+    group_keys = ["phone_prefixe", "currency_code"]
+    clients = (
+        frame.groupby(group_keys, as_index=False, dropna=False)
+        .agg(
+            customer_ids_turbo=("customer_id_turbo", concat_unique),
+            Nom_client=("nom_client_mpesa", concat_unique),
+            premiere_operation=("date_operation", "min"),
+            derniere_operation=("date_operation", "max"),
+            nombre_operations=("cle_operation_unique", "nunique"),
+            jours_actifs=("date_operation", lambda values: pd.to_datetime(values).dt.normalize().nunique()),
+            montant_total=("montant_operation", "sum"),
+            montant_median=("montant_operation", "median"),
+            sources=("source_operation", concat_unique),
+            types_operations=("type_operation", concat_unique),
+        )
+    )
+    max_gaps = (
+        frame.sort_values("date_operation")
+        .groupby(group_keys, dropna=False)["date_operation"]
+        .apply(lambda values: pd.to_datetime(values).sort_values().diff().dt.days.max())
+        .rename("ecart_max_jours")
+        .reset_index()
+    )
+    clients = clients.merge(max_gaps, on=group_keys, how="left")
+    clients["jours_depuis_derniere_operation"] = (
+        analysis_date - clients["derniere_operation"].dt.normalize()
+    ).dt.days.clip(lower=0)
+    clients["anciennete_jours"] = (
+        analysis_date - clients["premiere_operation"].dt.normalize()
+    ).dt.days.clip(lower=0)
+    clients["est_nouveau_30j"] = clients["anciennete_jours"].le(30)
+    clients["est_reactive_30j"] = (
+        clients["jours_depuis_derniere_operation"].le(30)
+        & clients["ecart_max_jours"].fillna(0).gt(90)
+    )
+    clients["statut_activite"] = np.select(
+        [
+            clients["jours_depuis_derniere_operation"].le(30),
+            clients["jours_depuis_derniere_operation"].le(60),
+            clients["jours_depuis_derniere_operation"].le(90),
+        ],
+        ["Actif 30 jours", "Dormant 31 a 60 jours", "Dormant 61 a 90 jours"],
+        default="Inactif plus de 90 jours",
+    )
+    clients["date_analyse"] = analysis_date
+    summary = (
+        clients.groupby(["currency_code", "statut_activite"], as_index=False, dropna=False)
+        .agg(
+            nombre_clients=("phone_prefixe", "nunique"),
+            nombre_operations=("nombre_operations", "sum"),
+            montant_total=("montant_total", "sum"),
+            nouveaux_30j=("est_nouveau_30j", "sum"),
+            reactives_30j=("est_reactive_30j", "sum"),
+        )
+    )
+    summary["date_analyse"] = analysis_date
+    return {
+        "synthese": summary,
+        "clients": clients.sort_values(
+            ["statut_activite", "jours_depuis_derniere_operation", "montant_total"],
+            ascending=[True, False, False],
+        ).reset_index(drop=True),
+    }
+
+
+def build_mpesa_savings_conversion_analysis(
+    daily_detail: pd.DataFrame | None,
+) -> dict[str, pd.DataFrame]:
+    """Suit la conversion observee d'un depot normal vers un DAT."""
+    empty = {"synthese": pd.DataFrame(), "clients": pd.DataFrame()}
+    if not isinstance(daily_detail, pd.DataFrame) or daily_detail.empty:
+        return empty
+    frame = daily_detail.copy()
+    if "incluse_synthese" in frame.columns:
+        frame = frame.loc[frame["incluse_synthese"].astype("boolean").fillna(False)].copy()
+    frame["date"] = pd.to_datetime(frame.get("date"), errors="coerce")
+    frame["phone_prefixe"] = normalize_phone(frame.get("phone_prefixe", pd.Series(pd.NA, index=frame.index)))
+    frame["currency_code"] = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    frame["details_rapport"] = clean_text(
+        frame.get("details_rapport", pd.Series("", index=frame.index))
+    )
+    frame["montant"] = numeric_column(frame, "montant").abs()
+    frame = frame.loc[
+        frame["date"].notna()
+        & frame["phone_prefixe"].notna()
+        & frame["details_rapport"].isin(["Depot normal", "DAT"])
+    ].copy()
+    if frame.empty:
+        return empty
+
+    rows: list[dict[str, Any]] = []
+    for (phone, currency), group in frame.groupby(["phone_prefixe", "currency_code"], dropna=False):
+        deposits = group.loc[group["details_rapport"].eq("Depot normal")].sort_values("date")
+        dat_rows = group.loc[group["details_rapport"].eq("DAT")].sort_values("date")
+        first_deposit = deposits["date"].min() if not deposits.empty else pd.NaT
+        eligible_dat = dat_rows.loc[dat_rows["date"].ge(first_deposit)] if pd.notna(first_deposit) else dat_rows.iloc[0:0]
+        conversion_date = eligible_dat["date"].min() if not eligible_dat.empty else pd.NaT
+        converted = pd.notna(first_deposit) and pd.notna(conversion_date)
+        rows.append(
+            {
+                "phone_prefixe": phone,
+                "currency_code": currency,
+                "Nom_client": concat_unique(group.get("Nom_client", pd.Series("", index=group.index))),
+                "nombre_depots_normaux": int(len(deposits)),
+                "montant_depots_normaux": float(deposits["montant"].sum()),
+                "nombre_dat": int(len(dat_rows)),
+                "montant_dat": float(dat_rows["montant"].sum()),
+                "premier_depot_normal": first_deposit,
+                "premier_dat_apres_depot": conversion_date,
+                "conversion_observee": bool(converted),
+                "delai_conversion_jours": int((conversion_date - first_deposit).days) if converted else np.nan,
+                "montant_dat_apres_depot": float(eligible_dat["montant"].sum()) if converted else 0.0,
+            }
+        )
+    clients = pd.DataFrame(rows)
+    summary_rows: list[dict[str, Any]] = []
+    for currency, group in clients.groupby("currency_code", sort=True):
+        deposit_clients = group.loc[group["nombre_depots_normaux"].gt(0)]
+        converted_clients = deposit_clients.loc[deposit_clients["conversion_observee"]]
+        summary_rows.append(
+            {
+                "currency_code": currency,
+                "clients_avec_depot_normal": int(deposit_clients["phone_prefixe"].nunique()),
+                "clients_avec_dat": int(group.loc[group["nombre_dat"].gt(0), "phone_prefixe"].nunique()),
+                "clients_convertis_vers_dat": int(converted_clients["phone_prefixe"].nunique()),
+                "taux_conversion_pct": (
+                    100 * converted_clients["phone_prefixe"].nunique() / deposit_clients["phone_prefixe"].nunique()
+                    if deposit_clients["phone_prefixe"].nunique()
+                    else np.nan
+                ),
+                "delai_median_conversion_jours": converted_clients["delai_conversion_jours"].median(),
+                "montant_depots_normaux": float(deposit_clients["montant_depots_normaux"].sum()),
+                "montant_dat_apres_depot": float(converted_clients["montant_dat_apres_depot"].sum()),
+            }
+        )
+    return {
+        "synthese": pd.DataFrame(summary_rows),
+        "clients": clients.sort_values(
+            ["currency_code", "conversion_observee", "montant_depots_normaux"],
+            ascending=[True, False, False],
+        ).reset_index(drop=True),
+    }
+
+
+def build_mpesa_transaction_concentration_analysis(
+    daily_detail: pd.DataFrame | None,
+) -> dict[str, pd.DataFrame]:
+    empty = {"synthese": pd.DataFrame(), "clients": pd.DataFrame()}
+    if not isinstance(daily_detail, pd.DataFrame) or daily_detail.empty:
+        return empty
+    frame = daily_detail.copy()
+    if "incluse_synthese" in frame.columns:
+        frame = frame.loc[frame["incluse_synthese"].astype("boolean").fillna(False)].copy()
+    frame["phone_prefixe"] = normalize_phone(frame.get("phone_prefixe", pd.Series(pd.NA, index=frame.index)))
+    frame["currency_code"] = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    frame["montant_entree"] = numeric_column(frame, "montant_entree").clip(lower=0)
+    frame["montant_sortie"] = numeric_column(frame, "montant_sortie").clip(lower=0)
+    frame = frame.dropna(subset=["phone_prefixe"])
+    if frame.empty:
+        return empty
+    clients = (
+        frame.groupby(["phone_prefixe", "currency_code"], as_index=False, dropna=False)
+        .agg(
+            Nom_client=("Nom_client", concat_unique),
+            nombre_transactions=("receipt_no", "size"),
+            montant_entrees=("montant_entree", "sum"),
+            montant_sorties=("montant_sortie", "sum"),
+        )
+    )
+    clients["volume_total"] = clients["montant_entrees"] + clients["montant_sorties"]
+    clients["rang_volume"] = clients.groupby("currency_code")["volume_total"].rank(
+        method="first", ascending=False
+    ).astype(int)
+    total_by_currency = clients.groupby("currency_code")["volume_total"].transform("sum")
+    clients["part_volume_pct"] = clients["volume_total"].div(total_by_currency.replace(0, pd.NA)).mul(100)
+    clients = clients.sort_values(["currency_code", "volume_total"], ascending=[True, False]).reset_index(drop=True)
+
+    summary_rows: list[dict[str, Any]] = []
+    for currency, group in clients.groupby("currency_code", sort=True):
+        total_volume = float(group["volume_total"].sum())
+        total_entries = float(group["montant_entrees"].sum())
+        total_outputs = float(group["montant_sorties"].sum())
+        summary_rows.append(
+            {
+                "currency_code": currency,
+                "nombre_clients": int(group["phone_prefixe"].nunique()),
+                "volume_total": total_volume,
+                "part_top_5_volume_pct": 100 * group.head(5)["volume_total"].sum() / total_volume if total_volume else np.nan,
+                "part_top_10_volume_pct": 100 * group.head(10)["volume_total"].sum() / total_volume if total_volume else np.nan,
+                "part_top_5_entrees_pct": 100 * group.nlargest(5, "montant_entrees")["montant_entrees"].sum() / total_entries if total_entries else np.nan,
+                "part_top_5_sorties_pct": 100 * group.nlargest(5, "montant_sorties")["montant_sorties"].sum() / total_outputs if total_outputs else np.nan,
+            }
+        )
+    return {"synthese": pd.DataFrame(summary_rows), "clients": clients}
+
+
+def build_mpesa_transaction_quality_analysis(
+    daily_detail: pd.DataFrame | None,
+) -> dict[str, pd.DataFrame]:
+    empty = {"synthese": pd.DataFrame(), "alertes": pd.DataFrame()}
+    if not isinstance(daily_detail, pd.DataFrame) or daily_detail.empty:
+        return empty
+    frame = daily_detail.copy()
+    frame["date"] = pd.to_datetime(frame.get("date"), errors="coerce")
+    frame["receipt_no"] = clean_identifier(frame.get("receipt_no", pd.Series("", index=frame.index)))
+    frame["currency_code"] = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    frame["phone_prefixe"] = normalize_phone(frame.get("phone_prefixe", pd.Series(pd.NA, index=frame.index)))
+    frame["montant"] = numeric_column(frame, "montant").abs()
+    frame["incluse_synthese"] = frame.get(
+        "incluse_synthese", pd.Series(True, index=frame.index)
+    ).astype("boolean").fillna(False)
+    frame["est_anomalie"] = frame.get(
+        "est_anomalie", pd.Series(False, index=frame.index)
+    ).astype("boolean").fillna(False)
+    frame["doublon_receipt_no"] = frame.get(
+        "doublon_receipt_no", pd.Series(False, index=frame.index)
+    ).astype("boolean").fillna(False)
+    frame["non_rapproche"] = clean_text(
+        frame.get("statut_rapprochement", pd.Series("", index=frame.index))
+    ).eq("Non rapproche")
+    frame["qualite_conforme"] = frame["incluse_synthese"] & ~frame["est_anomalie"]
+
+    summary = (
+        frame.groupby("currency_code", as_index=False, dropna=False)
+        .agg(
+            transactions=("receipt_no", "size"),
+            transactions_terminees=("incluse_synthese", "sum"),
+            transactions_non_terminees=("incluse_synthese", lambda values: int((~pd.Series(values).astype(bool)).sum())),
+            anomalies=("est_anomalie", "sum"),
+            doublons=("doublon_receipt_no", "sum"),
+            non_rapprochees=("non_rapproche", "sum"),
+            conformes=("qualite_conforme", "sum"),
+        )
+    )
+    summary["taux_succes_pct"] = summary["transactions_terminees"].div(
+        summary["transactions"].replace(0, pd.NA)
+    ).mul(100)
+    summary["taux_anomalie_pct"] = summary["anomalies"].div(
+        summary["transactions"].replace(0, pd.NA)
+    ).mul(100)
+    summary["taux_qualite_pct"] = summary["conformes"].div(
+        summary["transactions"].replace(0, pd.NA)
+    ).mul(100)
+
+    eligible = frame.loc[frame["incluse_synthese"] & frame["date"].notna()].copy()
+    if eligible.empty:
+        return {"synthese": summary, "alertes": frame.loc[frame["est_anomalie"]].reset_index(drop=True)}
+    thresholds = eligible.groupby("currency_code")["montant"].quantile(0.95)
+    medians = eligible.groupby("currency_code")["montant"].median()
+    eligible["alerte_montant_eleve"] = (
+        eligible["montant"].ge(eligible["currency_code"].map(thresholds))
+        & eligible["montant"].gt(eligible["currency_code"].map(medians))
+        & eligible["montant"].gt(0)
+    )
+    eligible["heure_num"] = eligible["date"].dt.hour
+    hour_frequency = eligible.groupby(["currency_code", "heure_num"])["receipt_no"].transform("size")
+    currency_frequency = eligible.groupby("currency_code")["receipt_no"].transform("size").replace(0, pd.NA)
+    eligible["alerte_horaire_atypique"] = (
+        (eligible["heure_num"].lt(6) | eligible["heure_num"].ge(22))
+        & hour_frequency.div(currency_frequency).le(0.10)
+    )
+    eligible["tranche_10_minutes"] = eligible["date"].dt.floor("10min")
+    velocity = eligible.groupby(["phone_prefixe", "tranche_10_minutes"], dropna=False)["receipt_no"].transform("size")
+    eligible["alerte_rafale_transactions"] = eligible["phone_prefixe"].notna() & velocity.ge(3)
+    eligible["motif_alerte_comportement"] = ""
+    eligible.loc[eligible["alerte_montant_eleve"], "motif_alerte_comportement"] += "Montant dans les 5% les plus eleves | "
+    eligible.loc[eligible["alerte_horaire_atypique"], "motif_alerte_comportement"] += "Operation entre 22h et 06h | "
+    eligible.loc[eligible["alerte_rafale_transactions"], "motif_alerte_comportement"] += "Au moins 3 operations en 10 minutes | "
+    eligible["motif_alerte_comportement"] = eligible["motif_alerte_comportement"].str.rstrip(" |")
+    behavioral = eligible.loc[eligible["motif_alerte_comportement"].ne("")].copy()
+    operational = frame.loc[frame["est_anomalie"]].copy()
+    operational["motif_alerte_comportement"] = "Anomalie de controle : " + clean_text(
+        operational.get("motif_anomalie", pd.Series("", index=operational.index))
+    )
+    alerts = concat_frames_stable([behavioral, operational])
+    if not alerts.empty:
+        alerts["cle_alerte"] = clean_identifier(alerts["receipt_no"]).where(
+            clean_identifier(alerts["receipt_no"]).ne(""),
+            "ALERTE-LIGNE-" + alerts.index.astype("string"),
+        )
+        alerts = alerts.drop_duplicates("cle_alerte", keep="first").sort_values("date", ascending=False, na_position="last")
+        alert_columns = [
+            "date", "receipt_no", "currency_code", "sens_flux", "details_rapport", "phone_prefixe",
+            "Nom_client", "montant", "transaction_status", "statut_rapprochement",
+            "motif_alerte_comportement", "motif_anomalie", "Observation",
+        ]
+        alerts = alerts[[column for column in alert_columns if column in alerts.columns]].reset_index(drop=True)
+    return {"synthese": summary, "alertes": alerts}
+
+
+def build_mpesa_dat_maturity_analysis(
+    fixed_savings: pd.DataFrame | None,
+    *,
+    as_of_date: Any | None = None,
+    annual_interest_rate_pct: float | None = None,
+) -> dict[str, pd.DataFrame]:
+    empty = {"synthese": pd.DataFrame(), "detail": pd.DataFrame()}
+    if not isinstance(fixed_savings, pd.DataFrame) or fixed_savings.empty:
+        return empty
+    analysis_date = pd.Timestamp(
+        pd.to_datetime(as_of_date, errors="coerce") if as_of_date is not None else pd.Timestamp.now()
+    ).normalize()
+    frame = fixed_savings.copy()
+    frame["currency_code"] = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    frame["balance"] = numeric_column(frame, "balance").clip(lower=0)
+    frame["maturity_date"] = pd.to_datetime(frame.get("maturity_date"), errors="coerce")
+    frame["date_approved"] = pd.to_datetime(frame.get("date_approved"), errors="coerce")
+    frame = frame.loc[frame["balance"].gt(0)].copy()
+    if frame.empty:
+        return empty
+    invalid_date_order = (
+        frame["date_approved"].notna()
+        & frame["maturity_date"].notna()
+        & frame["maturity_date"].lt(frame["date_approved"])
+    )
+    frame["controle_date_dat"] = np.select(
+        [
+            frame["date_approved"].isna() | frame["maturity_date"].isna(),
+            invalid_date_order,
+        ],
+        ["Date manquante", "Echeance anterieure a l'approbation"],
+        default="Dates coherentes",
+    )
+    frame["Observation"] = ""
+    frame.loc[invalid_date_order, "Observation"] = frame.loc[invalid_date_order].apply(
+        lambda row: (
+            f"Date d'approbation : {row['date_approved']:%d/%m/%Y} | "
+            f"Date d'echeance : {row['maturity_date']:%d/%m/%Y}"
+        ),
+        axis=1,
+    )
+    interest_rate = pd.to_numeric(
+        pd.Series([annual_interest_rate_pct]), errors="coerce"
+    ).iloc[0]
+    interest_enabled = pd.notna(interest_rate) and float(interest_rate) > 0
+    frame["duree_contractuelle_jours"] = (
+        frame["maturity_date"].dt.normalize() - frame["date_approved"].dt.normalize()
+    ).dt.days
+    valid_interest_period = frame["duree_contractuelle_jours"].ge(0)
+    frame["taux_interet_annuel_pct"] = float(interest_rate) if interest_enabled else np.nan
+    frame["interet_estime_echeance"] = np.nan
+    if interest_enabled:
+        frame.loc[valid_interest_period, "interet_estime_echeance"] = (
+            frame.loc[valid_interest_period, "balance"]
+            * float(interest_rate)
+            / 100
+            * frame.loc[valid_interest_period, "duree_contractuelle_jours"]
+            / 365
+        )
+    frame["capital_plus_interet_estime"] = frame["balance"] + frame["interet_estime_echeance"]
+    frame["jours_avant_echeance"] = (frame["maturity_date"].dt.normalize() - analysis_date).dt.days
+    frame["tranche_echeance"] = np.select(
+        [
+            frame["maturity_date"].isna(),
+            frame["jours_avant_echeance"].lt(0),
+            frame["jours_avant_echeance"].le(7),
+            frame["jours_avant_echeance"].le(30),
+            frame["jours_avant_echeance"].le(60),
+            frame["jours_avant_echeance"].le(90),
+        ],
+        ["Date manquante", "Echu", "0 a 7 jours", "8 a 30 jours", "31 a 60 jours", "61 a 90 jours"],
+        default="Plus de 90 jours",
+    )
+    frame["date_analyse"] = analysis_date
+    for column in ["customer_id", "Nom_client", "msisdn", "product_name", "account_type"]:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+    bucket_order = ["Echu", "0 a 7 jours", "8 a 30 jours", "31 a 60 jours", "61 a 90 jours", "Plus de 90 jours", "Date manquante"]
+    frame["ordre_tranche"] = frame["tranche_echeance"].map({value: index for index, value in enumerate(bucket_order)})
+    summary = (
+        frame.groupby(["currency_code", "tranche_echeance", "ordre_tranche"], as_index=False, dropna=False)
+        .agg(
+            nombre_dat=("balance", "size"),
+            nombre_clients=("customer_id", "nunique"),
+            montant_dat=("balance", "sum"),
+            interet_estime_echeance=("interet_estime_echeance", lambda values: values.sum(min_count=1)),
+            capital_plus_interet_estime=("capital_plus_interet_estime", lambda values: values.sum(min_count=1)),
+        )
+        .sort_values(["currency_code", "ordre_tranche"])
+        .drop(columns="ordre_tranche")
+        .reset_index(drop=True)
+    )
+    detail_columns = [
+        "customer_id", "Nom_client", "msisdn", "currency_code", "product_name", "account_type",
+        "balance", "date_approved", "maturity_date", "controle_date_dat", "Observation",
+        "duree_contractuelle_jours", "taux_interet_annuel_pct", "interet_estime_echeance",
+        "capital_plus_interet_estime", "jours_avant_echeance", "tranche_echeance", "date_analyse",
+    ]
+    detail = frame.sort_values(["currency_code", "ordre_tranche", "maturity_date"])[detail_columns].reset_index(drop=True)
+    return {"synthese": summary, "detail": detail}
+
+
+def build_mpesa_perfect_adoption_analysis(
+    prepared: MpesaPreparedData,
+    operations: pd.DataFrame | None,
+    *,
+    as_of_date: Any | None = None,
+) -> dict[str, pd.DataFrame]:
+    empty = {"synthese": pd.DataFrame(), "statuts": pd.DataFrame(), "detail": pd.DataFrame()}
+    perfect = _aggregate_perfect_clients(prepared.perfect_clients)
+    if perfect.empty:
+        return empty
+    analysis_date = pd.Timestamp(
+        pd.to_datetime(as_of_date, errors="coerce") if as_of_date is not None else pd.Timestamp.now()
+    ).normalize()
+    crosscheck = _build_mpesa_identity_population(prepared)
+    presence_columns = [
+        column for column in ["phone_prefixe", "present_dans_turbo", "present_dans_g2", "present_dans_perfect"]
+        if column in crosscheck.columns
+    ]
+    if presence_columns:
+        presence = crosscheck[presence_columns].drop_duplicates("phone_prefixe")
+        detail = perfect.merge(presence, on="phone_prefixe", how="left")
+    else:
+        detail = perfect.copy()
+    for column in ["present_dans_turbo", "present_dans_g2"]:
+        detail[column] = detail.get(column, pd.Series(False, index=detail.index)).astype("boolean").fillna(False)
+
+    if isinstance(operations, pd.DataFrame) and not operations.empty:
+        activity = operations.dropna(subset=["phone_prefixe"]).copy()
+        activity["date_operation"] = pd.to_datetime(activity["date_operation"], errors="coerce")
+        activity_summary = (
+            activity.groupby("phone_prefixe", as_index=False, dropna=False)
+            .agg(
+                premiere_operation=("date_operation", "min"),
+                derniere_operation=("date_operation", "max"),
+                nombre_operations=("cle_operation_unique", "nunique"),
+                devises_mpesa=("currency_code", concat_unique),
+                types_operations_mpesa=("type_operation", concat_unique),
+            )
+        )
+        detail = detail.merge(activity_summary, on="phone_prefixe", how="left")
+    else:
+        detail["premiere_operation"] = pd.NaT
+        detail["derniere_operation"] = pd.NaT
+        detail["nombre_operations"] = 0
+    detail["nombre_operations"] = numeric_column(detail, "nombre_operations").astype(int)
+    detail["present_dans_mpesa"] = detail["present_dans_turbo"] | detail["present_dans_g2"] | detail["nombre_operations"].gt(0)
+    detail["jours_depuis_derniere_operation"] = (
+        analysis_date - pd.to_datetime(detail["derniere_operation"], errors="coerce").dt.normalize()
+    ).dt.days
+    detail["statut_adoption"] = np.select(
+        [
+            ~detail["present_dans_mpesa"],
+            detail["derniere_operation"].isna(),
+            detail["jours_depuis_derniere_operation"].le(30),
+            detail["jours_depuis_derniere_operation"].le(90),
+        ],
+        ["Jamais observe dans M-PESA", "Present sans operation datee", "Actif M-PESA 30 jours", "Actif M-PESA 31 a 90 jours"],
+        default="Inactif M-PESA plus de 90 jours",
+    )
+    detail["date_analyse"] = analysis_date
+    total = int(len(detail))
+    present = int(detail["present_dans_mpesa"].sum())
+    active30 = int(detail["statut_adoption"].eq("Actif M-PESA 30 jours").sum())
+    summary = pd.DataFrame(
+        [
+            {
+                "telephones_perfect_valides": total,
+                "clients_perfect_dans_mpesa": present,
+                "clients_perfect_actifs_30j": active30,
+                "clients_perfect_jamais_observes": int(detail["statut_adoption"].eq("Jamais observe dans M-PESA").sum()),
+                "taux_adoption_mpesa_pct": 100 * present / total if total else np.nan,
+                "taux_activite_30j_pct": 100 * active30 / present if present else np.nan,
+                "date_analyse": analysis_date,
+            }
+        ]
+    )
+    statuses = (
+        detail.groupby("statut_adoption", as_index=False, dropna=False)
+        .agg(nombre_clients=("phone_prefixe", "nunique"), nombre_fiches_perfect=("nb_clients_perfect", "sum"))
+        .sort_values("nombre_clients", ascending=False)
+        .reset_index(drop=True)
+    )
+    return {"synthese": summary, "statuts": statuses, "detail": detail.sort_values(["statut_adoption", "phone_prefixe"]).reset_index(drop=True)}
+
+
+def build_mpesa_management_dashboard(
+    prepared: MpesaPreparedData,
+    *,
+    as_of_date: Any | None = None,
+    dat_annual_interest_rate_pct: float | None = None,
+) -> dict[str, Any]:
+    """Assemble le cockpit de pilotage sans melanger les devises ni les grains."""
+    analysis_date = _mpesa_analysis_date(prepared, as_of_date)
+    daily_report = build_g2_daily_savings_report(prepared)
+    daily_detail = daily_report.get("detail", pd.DataFrame())
+    operations = _build_unified_mpesa_operations(prepared, daily_detail=daily_detail)
+
+    credit = build_mpesa_credit_risk_analysis(prepared.loans, as_of_date=analysis_date)
+    liquidity = build_mpesa_liquidity_analysis(daily_detail, as_of_date=analysis_date)
+    activity = build_mpesa_client_activity_analysis(operations, as_of_date=analysis_date)
+    conversion = build_mpesa_savings_conversion_analysis(daily_detail)
+    concentration = build_mpesa_transaction_concentration_analysis(daily_detail)
+    quality = build_mpesa_transaction_quality_analysis(daily_detail)
+    dat_maturity = build_mpesa_dat_maturity_analysis(
+        prepared.fixed_savings,
+        as_of_date=analysis_date,
+        annual_interest_rate_pct=dat_annual_interest_rate_pct,
+    )
+    perfect_adoption = build_mpesa_perfect_adoption_analysis(
+        prepared, operations, as_of_date=analysis_date
+    )
+
+    source_rows: list[dict[str, Any]] = []
+    sources = [
+        ("Transactions Turbo", prepared.transactions, "created_at"),
+        ("Transactions G2", prepared.g2_transactions, "completion_time"),
+        ("Credits Turbo", prepared.loans, "updated_at"),
+        ("DAT Turbo", prepared.fixed_savings, "maturity_date"),
+        ("Epargne courante Turbo", prepared.current_savings, "updated_at"),
+        ("Clients Perfect", prepared.perfect_clients, None),
+    ]
+    for source, frame, date_column in sources:
+        available = isinstance(frame, pd.DataFrame) and not frame.empty
+        dates = (
+            pd.to_datetime(frame[date_column], errors="coerce").dropna()
+            if available and date_column and date_column in frame.columns
+            else pd.Series(dtype="datetime64[ns]")
+        )
+        source_rows.append(
+            {
+                "source": source,
+                "disponible": available,
+                "nombre_lignes": int(len(frame)) if available else 0,
+                "date_min": dates.min() if not dates.empty else pd.NaT,
+                "date_max": dates.max() if not dates.empty else pd.NaT,
+            }
+        )
+
+    return {
+        "date_analyse": analysis_date,
+        "sources": pd.DataFrame(source_rows),
+        "credit_synthese": credit["synthese"],
+        "credit_detail": credit["detail"],
+        "liquidite_synthese": liquidity["synthese"],
+        "liquidite_journaliere": liquidity["journalier"],
+        "activite_synthese": activity["synthese"],
+        "activite_clients": activity["clients"],
+        "conversion_synthese": conversion["synthese"],
+        "conversion_clients": conversion["clients"],
+        "concentration_synthese": concentration["synthese"],
+        "concentration_clients": concentration["clients"],
+        "qualite_synthese": quality["synthese"],
+        "alertes_transactions": quality["alertes"],
+        "dat_echeances_synthese": dat_maturity["synthese"],
+        "dat_echeances_detail": dat_maturity["detail"],
+        "perfect_adoption_synthese": perfect_adoption["synthese"],
+        "perfect_adoption_statuts": perfect_adoption["statuts"],
+        "perfect_adoption_detail": perfect_adoption["detail"],
     }
 
 
@@ -3027,13 +4368,52 @@ def build_diagnostics(prepared: MpesaPreparedData, customer_id: str | None = Non
     def add(control: str, value: int | str, status: str, detail: str = "") -> None:
         diagnostics.append({"controle": control, "valeur": value, "statut": status, "detail": detail})
 
+    def add_dat_controls() -> None:
+        fixed = prepared.fixed_savings
+        if not isinstance(fixed, pd.DataFrame) or fixed.empty:
+            return
+        fixed = fixed.copy()
+        if customer_id is not None and "customer_id" in fixed.columns:
+            fixed = fixed.loc[fixed["customer_id"].astype("string").eq(str(customer_id))].copy()
+        if fixed.empty or not {"date_approved", "maturity_date"}.issubset(fixed.columns):
+            return
+        approved = pd.to_datetime(fixed["date_approved"], errors="coerce")
+        maturity = pd.to_datetime(fixed["maturity_date"], errors="coerce")
+        invalid_order = approved.notna() & maturity.notna() & maturity.lt(approved)
+        invalid_count = int(invalid_order.sum())
+        add(
+            "DAT - echeance anterieure a l'approbation",
+            invalid_count,
+            "OK" if invalid_count == 0 else "A surveiller",
+            "Verifier les dates d'approbation et d'echeance des DAT concernes.",
+        )
+
+        analysis_date = pd.to_datetime(_mpesa_analysis_date(prepared), errors="coerce")
+        if pd.isna(analysis_date):
+            analysis_date = pd.Timestamp.now()
+        positive_balance = numeric_column(fixed, "balance").gt(0)
+        expired_positive = maturity.notna() & maturity.lt(pd.Timestamp(analysis_date).normalize()) & positive_balance
+        expired_count = int(expired_positive.sum())
+        rate = 100 * expired_count / len(fixed) if len(fixed) else 0.0
+        add(
+            "DAT echus avec solde positif",
+            expired_count,
+            "OK" if expired_count == 0 else "Controle metier",
+            (
+                f"{rate:.1f}% des DAT du perimetre. Peut correspondre a un renouvellement ou a un DAT non cloture; "
+                "ne pas traiter automatiquement comme une erreur de donnees."
+            ),
+        )
+
     if tx.empty:
         add("Transactions chargees", 0, "A verifier", "Aucun fichier Transactions exploitable.")
         if not prepared.g2_transactions.empty:
             add("Transactions G2 chargees", int(len(prepared.g2_transactions)), "Information")
+        add_dat_controls()
         return pd.DataFrame(diagnostics)
 
-    add("Lignes sans customer_id", int(tx["customer_id"].apply(_is_empty_text).sum()) if "customer_id" in tx.columns else len(tx), "A verifier")
+    missing_customer = int(tx["customer_id"].apply(_is_empty_text).sum()) if "customer_id" in tx.columns else len(tx)
+    add("Lignes sans customer_id", missing_customer, "OK" if missing_customer == 0 else "A verifier")
     reference_missing = 0
     if "reference_id" in tx.columns:
         reference_missing += int(tx["reference_id"].apply(_is_empty_text).sum())
@@ -3052,10 +4432,68 @@ def build_diagnostics(prepared: MpesaPreparedData, customer_id: str | None = Non
     add("Soldes bal_before/bal_after negatifs", negative_balance, "OK" if negative_balance == 0 else "A verifier")
     empty_currency = int(tx["currency_code"].apply(_is_empty_text).sum()) if "currency_code" in tx.columns else len(tx)
     add("currency_code vide", empty_currency, "OK" if empty_currency == 0 else "A verifier")
-    unknown_account = int((~tx["account_type"].isin(KNOWN_ACCOUNT_TYPES)).sum()) if "account_type" in tx.columns else 0
-    add("account_type inconnu", unknown_account, "OK" if unknown_account == 0 else "A verifier")
-    duplicates = int(tx.duplicated(subset=[column for column in ["customer_id", "created_at", "ref_no", "reference_id", "dr", "cr"] if column in tx.columns]).sum())
-    add("Doublons potentiels", duplicates, "OK" if duplicates == 0 else "A verifier")
+    if "account_type" in tx.columns:
+        account_types = clean_text(tx["account_type"]).str.upper()
+        empty_account = int(account_types.eq("").sum())
+        unknown_mask = account_types.ne("") & ~account_types.isin(KNOWN_ACCOUNT_TYPES)
+        unknown_account = int(unknown_mask.sum())
+        unknown_values = concat_unique(account_types.loc[unknown_mask])
+    else:
+        empty_account = len(tx)
+        unknown_account = 0
+        unknown_values = ""
+    add("account_type vide", empty_account, "OK" if empty_account == 0 else "A verifier")
+    add(
+        "Types de comptes a classifier",
+        unknown_account,
+        "OK" if unknown_account == 0 else "A verifier",
+        f"Valeurs non referencees : {unknown_values}" if unknown_values else "Tous les types charges sont references.",
+    )
+
+    exact_duplicates = int(tx.duplicated().sum())
+    add("Doublons exacts", exact_duplicates, "OK" if exact_duplicates == 0 else "A verifier")
+    duplicate_key_columns = [
+        column
+        for column in ["customer_id", "created_at", "ref_no", "reference_id", "dr", "cr"]
+        if column in tx.columns
+    ]
+    linked_groups = 0
+    linked_rows = 0
+    repeated_to_review = 0
+    if duplicate_key_columns:
+        duplicate_work = tx.copy()
+        duplicate_work["__account_type_control"] = clean_text(
+            duplicate_work.get("account_type", pd.Series("", index=duplicate_work.index))
+        ).str.upper()
+        duplicate_work["__id_control"] = clean_identifier(
+            duplicate_work.get("id", pd.Series("", index=duplicate_work.index))
+        )
+        duplicate_groups = (
+            duplicate_work.groupby(duplicate_key_columns, dropna=False, as_index=False)
+            .agg(
+                nombre_lignes=("__account_type_control", "size"),
+                nombre_types_comptes=("__account_type_control", "nunique"),
+                nombre_ids=("__id_control", "nunique"),
+            )
+        )
+        repeated = duplicate_groups["nombre_lignes"].gt(1)
+        linked = repeated & duplicate_groups["nombre_types_comptes"].gt(1)
+        linked_groups = int(linked.sum())
+        linked_rows = int(duplicate_groups.loc[linked, "nombre_lignes"].sum())
+        repeated_to_review = int((repeated & ~linked).sum())
+    add(
+        "Ecritures comptables liees",
+        linked_groups,
+        "Information",
+        f"{linked_rows} lignes reparties dans {linked_groups} groupe(s) multi-comptes; elles ne sont pas des doublons.",
+    )
+    add(
+        "Groupes d'ecritures repetees a verifier",
+        repeated_to_review,
+        "OK" if repeated_to_review == 0 else "A verifier",
+        "Memes attributs de controle sans changement de type de compte.",
+    )
+    add_dat_controls()
     if not prepared.g2_transactions.empty:
         g2_missing_phone = (
             int(prepared.g2_transactions["phone_prefixe"].isna().sum())
@@ -3123,6 +4561,121 @@ def format_statement_columns(statement: pd.DataFrame) -> pd.DataFrame:
     present = [column for column in ordered if column in statement.columns]
     rest = [column for column in statement.columns if column not in present]
     return statement[present + rest].copy()
+
+
+def build_customer_statement_view(
+    statement: pd.DataFrame,
+    *,
+    account_number: object = "",
+) -> dict[str, Any]:
+    """Construit la vue courte d'un extrait client pour une seule devise."""
+    empty_transactions = pd.DataFrame(columns=CUSTOMER_STATEMENT_COLUMNS)
+    empty_result: dict[str, Any] = {
+        "transactions": empty_transactions,
+        "currency": "",
+        "customer_id": "",
+        "customer_name": "",
+        "telephone": "",
+        "account_number": str(account_number).strip(),
+        "total_entries": 0.0,
+        "total_outputs": 0.0,
+        "opening_amount": np.nan,
+        "closing_amount": np.nan,
+        "balance_is_real": False,
+        "balance_label": "Cumul net",
+    }
+    if not isinstance(statement, pd.DataFrame) or statement.empty:
+        return empty_result
+
+    frame = statement.copy()
+    frame["currency_code"] = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper()
+    currencies = [value for value in frame["currency_code"].dropna().unique().tolist() if value]
+    if len(currencies) > 1:
+        raise ValueError("L'extrait client officiel doit contenir une seule devise.")
+    currency = currencies[0] if currencies else "SANS DEVISE"
+
+    frame["created_at"] = pd.to_datetime(
+        frame.get("created_at", pd.Series(pd.NaT, index=frame.index)), errors="coerce"
+    )
+    frame = frame.sort_values(["created_at", "operation_reference"], na_position="last").reset_index(drop=True)
+    entries = pd.to_numeric(
+        frame.get("entree_mpesa", pd.Series(0.0, index=frame.index)), errors="coerce"
+    ).fillna(0.0)
+    outputs = pd.to_numeric(
+        frame.get("sortie_mpesa", pd.Series(0.0, index=frame.index)), errors="coerce"
+    ).fillna(0.0)
+    movements = pd.to_numeric(
+        frame.get("mouvement_net_mpesa", entries - outputs), errors="coerce"
+    ).fillna(entries - outputs)
+
+    real_after = pd.to_numeric(
+        frame.get("solde_mpesa_apres", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
+    real_before = pd.to_numeric(
+        frame.get("solde_mpesa_avant", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
+    if "solde_mpesa_disponible" in frame.columns:
+        available = frame["solde_mpesa_disponible"].astype("boolean").fillna(False)
+    else:
+        available = real_after.notna()
+    balance_is_real = bool(available.all() and real_after.notna().all())
+
+    relative_balance = pd.to_numeric(
+        frame.get("cumul_net_depuis_debut_fichier", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    )
+    if relative_balance.isna().any():
+        calculated = movements.cumsum()
+        relative_balance = relative_balance.where(relative_balance.notna(), calculated)
+    displayed_balance = real_after if balance_is_real else relative_balance
+
+    names = frame.get("Nom_client", pd.Series("", index=frame.index))
+    phones = frame.get("telephone", pd.Series("", index=frame.index))
+
+    def statement_description(row: pd.Series) -> str:
+        operation = row.get("type_operation")
+        if _is_empty_text(operation):
+            operation = row.get("descriptions")
+        parts = [operation, row.get("telephone"), row.get("Nom_client")]
+        return " - ".join(str(value).strip() for value in parts if not _is_empty_text(value))
+
+    transactions = pd.DataFrame(
+        {
+            "date": frame["created_at"],
+            "compte": str(account_number).strip(),
+            "receipt_no": frame.get("operation_reference", pd.Series("", index=frame.index)),
+            "description": frame.apply(statement_description, axis=1),
+            "entree": entries,
+            "sortie": outputs,
+            "solde": displayed_balance,
+        }
+    )[CUSTOMER_STATEMENT_COLUMNS]
+
+    if balance_is_real:
+        opening_amount = real_before.iloc[0]
+        if pd.isna(opening_amount):
+            opening_amount = real_after.iloc[0] - movements.iloc[0]
+    else:
+        opening_amount = displayed_balance.iloc[0] - movements.iloc[0]
+
+    result = dict(empty_result)
+    result.update(
+        {
+            "transactions": transactions,
+            "currency": currency,
+            "customer_id": concat_unique(frame.get("customer_id", pd.Series("", index=frame.index))),
+            "customer_name": concat_unique(names),
+            "telephone": concat_unique(phones),
+            "total_entries": float(entries.sum()),
+            "total_outputs": float(outputs.sum()),
+            "opening_amount": float(opening_amount) if pd.notna(opening_amount) else np.nan,
+            "closing_amount": float(displayed_balance.iloc[-1]) if pd.notna(displayed_balance.iloc[-1]) else np.nan,
+            "balance_is_real": balance_is_real,
+            "balance_label": "Solde" if balance_is_real else "Cumul net",
+        }
+    )
+    return result
 
 
 def _pdf_number(value: Any, *, decimals: int = 0) -> str:
@@ -3220,6 +4773,33 @@ def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
     daily_pivot = report.get("rapport_journalier_pivot", pd.DataFrame())
     g2_dat = report.get("g2_dat", pd.DataFrame())
     monthly = report.get("retention_mensuelle", pd.DataFrame())
+    transaction_detail = report.get("rapport_journalier_detail", pd.DataFrame())
+    transactions_by_day = report.get("transactions_par_jour", pd.DataFrame())
+    transactions_by_weekday = report.get("transactions_par_jour_semaine", pd.DataFrame())
+    transactions_by_hour = report.get("transactions_par_heure", pd.DataFrame())
+    status_summary = report.get("statuts_g2", pd.DataFrame())
+
+    if not isinstance(transaction_detail, pd.DataFrame):
+        transaction_detail = pd.DataFrame()
+    if not isinstance(transactions_by_day, pd.DataFrame):
+        transactions_by_day = pd.DataFrame()
+    if not isinstance(transactions_by_weekday, pd.DataFrame):
+        transactions_by_weekday = pd.DataFrame()
+    if not isinstance(transactions_by_hour, pd.DataFrame):
+        transactions_by_hour = pd.DataFrame()
+    if not isinstance(status_summary, pd.DataFrame):
+        status_summary = pd.DataFrame()
+    if status_summary.empty and not transaction_detail.empty:
+        status_summary = build_g2_transaction_status_summary(transaction_detail)
+    if (
+        transactions_by_day.empty
+        or transactions_by_weekday.empty
+        or transactions_by_hour.empty
+    ) and not transaction_detail.empty:
+        time_report = build_g2_transaction_time_analysis(transaction_detail)
+        transactions_by_day = time_report["par_jour"]
+        transactions_by_weekday = time_report["par_jour_semaine"]
+        transactions_by_hour = time_report["par_heure"]
 
     active_items: list[str] = []
     retention_items: list[str] = []
@@ -3256,6 +4836,85 @@ def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
                 f"{currency} : entrees {_pdf_number(row.get('montant_total_entrees'), decimals=2)}, "
                 f"sorties {_pdf_number(row.get('montant_total_sorties'), decimals=2)}, "
                 f"net {_pdf_number(row.get('solde_net_flux'), decimals=2)}"
+            )
+
+    status_text = ""
+    if not status_summary.empty and "nombre_transactions" in status_summary.columns:
+        status_counts = pd.to_numeric(status_summary["nombre_transactions"], errors="coerce").fillna(0)
+        included = clean_text(
+            status_summary.get("prise_en_compte_analyse", pd.Series("", index=status_summary.index))
+        ).eq("Oui")
+        completed_count = int(status_counts.loc[included].sum())
+        control_only_count = int(status_counts.loc[~included].sum())
+        status_text = (
+            f"{completed_count} transaction(s) Completed incluse(s) dans les analyses; "
+            f"{control_only_count} transaction(s) d'autres statuts conservee(s) pour controle uniquement."
+        )
+
+    time_items: list[str] = []
+    total_transactions = 0
+    if not transactions_by_hour.empty and "nombre_transactions" in transactions_by_hour.columns:
+        hourly_totals = (
+            transactions_by_hour.groupby(["heure_num", "heure"], as_index=False, dropna=False)["nombre_transactions"]
+            .sum()
+            .sort_values("heure_num")
+            .reset_index(drop=True)
+        )
+        hourly_totals["nombre_transactions"] = pd.to_numeric(
+            hourly_totals["nombre_transactions"], errors="coerce"
+        ).fillna(0)
+        total_transactions = int(hourly_totals["nombre_transactions"].sum())
+        if total_transactions > 0:
+            busiest_hour = hourly_totals.loc[hourly_totals["nombre_transactions"].idxmax()]
+            busiest_hour_count = int(busiest_hour["nombre_transactions"])
+            busiest_hour_share = 100 * busiest_hour_count / total_transactions
+            time_items.append(
+                f"Heure la plus fréquente : {busiest_hour.get('heure', '-')}, "
+                f"avec {busiest_hour_count} transaction(s), soit {busiest_hour_share:.1f}% du volume"
+            )
+
+    analysis_start = pd.to_datetime(report.get("analysis_date_start"), errors="coerce")
+    analysis_end = pd.to_datetime(report.get("analysis_date_end"), errors="coerce")
+    if pd.notna(analysis_start) and pd.notna(analysis_end):
+        spans_multiple_days = analysis_end.normalize() > analysis_start.normalize()
+    else:
+        detail_dates = pd.to_datetime(
+            transaction_detail.get("date", pd.Series(dtype="datetime64[ns]")), errors="coerce"
+        ).dropna()
+        spans_multiple_days = detail_dates.dt.normalize().nunique() > 1
+        if not spans_multiple_days and not transactions_by_day.empty:
+            reported_dates = pd.to_datetime(
+                transactions_by_day.get(
+                    "date_transaction", pd.Series(dtype="datetime64[ns]")
+                ),
+                errors="coerce",
+            ).dropna()
+            spans_multiple_days = reported_dates.dt.normalize().nunique() > 1
+
+    if (
+        spans_multiple_days
+        and not transactions_by_weekday.empty
+        and "nombre_transactions" in transactions_by_weekday.columns
+    ):
+        weekday_totals = (
+            transactions_by_weekday.groupby(
+                ["jour_semaine_num", "jour_semaine"], as_index=False, dropna=False
+            )["nombre_transactions"]
+            .sum()
+            .sort_values("jour_semaine_num")
+            .reset_index(drop=True)
+        )
+        weekday_totals["nombre_transactions"] = pd.to_numeric(
+            weekday_totals["nombre_transactions"], errors="coerce"
+        ).fillna(0)
+        weekday_total = int(weekday_totals["nombre_transactions"].sum())
+        if weekday_total > 0:
+            busiest_weekday = weekday_totals.loc[weekday_totals["nombre_transactions"].idxmax()]
+            busiest_weekday_count = int(busiest_weekday["nombre_transactions"])
+            busiest_weekday_share = 100 * busiest_weekday_count / weekday_total
+            time_items.append(
+                f"Jour de semaine le plus actif : {busiest_weekday.get('jour_semaine', '-')}, "
+                f"avec {busiest_weekday_count} transaction(s), soit {busiest_weekday_share:.1f}% du volume"
             )
 
     control_text = ""
@@ -3303,6 +4962,8 @@ def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "active_text": "; ".join(active_items) or "Aucune activite client eligible.",
         "flow_text": "; ".join(flow_items) or "Aucun flux disponible.",
+        "status_text": status_text,
+        "time_text": "; ".join(time_items),
         "retention_text": "; ".join(retention_items) or "Non calculable sur la periode chargee.",
         "control_text": control_text,
         "attention_text": attention_text,
@@ -3388,6 +5049,8 @@ p {{ margin: 4px 0 7px; }}
 <p class="meta">{escape(period_text)} | Sens : {escape(direction_label)} | {generated_at:%d/%m/%Y}</p>
 <section class="summary"><h2>Synthese executive</h2><ul>
 <li><strong>Activite.</strong> {escape(context["active_text"])}</li>
+{f'<li><strong>Perimetre des statuts.</strong> {escape(context["status_text"])}</li>' if context["status_text"] else ''}
+{f'<li><strong>Fréquence temporelle.</strong> {escape(context["time_text"])}</li>' if context["time_text"] else ''}
 <li><strong>Flux financiers.</strong> {escape(context["flow_text"])}</li>
 {control_bullet}
 </ul></section>
@@ -3463,6 +5126,273 @@ def create_g2_dat_pdf(
         return pdf_path.read_bytes()
 
 
+def create_customer_statement_word(
+    statement: pd.DataFrame,
+    *,
+    customer_id: object,
+    customer_name: object = "",
+    telephone: object = "",
+    currency: object,
+    account_number: object = "",
+    period_start: object | None = None,
+    period_end: object | None = None,
+    generated_at: pd.Timestamp | None = None,
+) -> bytes:
+    """Genere un extrait de compte client Word editable, limite a une devise."""
+    try:
+        from docx import Document
+        from docx.enum.section import WD_ORIENT
+        from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.shared import Cm, Pt, RGBColor
+    except ImportError as exc:
+        raise RuntimeError("La dependance python-docx est requise pour generer l'extrait Word.") from exc
+
+    if not isinstance(statement, pd.DataFrame) or statement.empty:
+        raise ValueError("Aucune operation filtree n'est disponible pour l'extrait Word.")
+    currency_text = str(currency).strip().upper()
+    frame = statement.copy()
+    frame_currency = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper()
+    frame = frame.loc[frame_currency.eq(currency_text)].copy()
+    if frame.empty:
+        raise ValueError(f"Aucune operation {currency_text or 'sans devise'} n'est disponible pour l'extrait Word.")
+
+    view = build_customer_statement_view(frame, account_number=account_number)
+    transactions = view["transactions"]
+    customer_id_text = str(customer_id).strip() or view["customer_id"] or "Non disponible"
+    customer_name_text = str(customer_name).strip() or view["customer_name"] or "Nom non disponible"
+    telephone_text = str(telephone).strip() or view["telephone"] or "Non disponible"
+    account_text = str(account_number).strip() or "Non renseigne"
+    generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
+
+    observed_dates = pd.to_datetime(transactions["date"], errors="coerce").dropna()
+
+    def report_date(value: object | None, fallback: pd.Timestamp | None) -> str:
+        parsed = pd.to_datetime(value, errors="coerce") if value is not None else pd.NaT
+        if pd.isna(parsed):
+            parsed = fallback
+        return f"{parsed:%d/%m/%Y}" if parsed is not None and pd.notna(parsed) else "Non disponible"
+
+    first_observed = observed_dates.min() if not observed_dates.empty else None
+    last_observed = observed_dates.max() if not observed_dates.empty else None
+    start_text = report_date(period_start, first_observed)
+    end_text = report_date(period_end, last_observed)
+    decimals = 0 if currency_text == "CDF" else 2
+
+    document = Document()
+    section = document.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width, section.page_height = section.page_height, section.page_width
+    section.top_margin = Cm(1.0)
+    section.bottom_margin = Cm(1.0)
+    section.left_margin = Cm(1.0)
+    section.right_margin = Cm(1.0)
+
+    styles = document.styles
+    styles["Normal"].font.name = "Aptos"
+    styles["Normal"].font.size = Pt(8.5)
+    styles["Title"].font.name = "Aptos Display"
+    styles["Title"].font.size = Pt(16)
+    styles["Title"].font.color.rgb = RGBColor(24, 41, 58)
+
+    def set_cell_shading(cell: Any, fill: str) -> None:
+        cell_properties = cell._tc.get_or_add_tcPr()
+        shading = OxmlElement("w:shd")
+        shading.set(qn("w:fill"), fill)
+        cell_properties.append(shading)
+
+    def set_repeat_header(row: Any) -> None:
+        row_properties = row._tr.get_or_add_trPr()
+        repeat_header = OxmlElement("w:tblHeader")
+        repeat_header.set(qn("w:val"), "true")
+        row_properties.append(repeat_header)
+
+    header = document.add_table(rows=2, cols=2)
+    header.alignment = WD_TABLE_ALIGNMENT.CENTER
+    header.autofit = False
+    brand_cell = header.cell(0, 0).merge(header.cell(1, 0))
+    brand_cell.width = Cm(17.5)
+    brand_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    brand_paragraph = brand_cell.paragraphs[0]
+    brand_paragraph.paragraph_format.space_after = Pt(0)
+    brand_run = brand_paragraph.add_run("Bisou Bisou")
+    brand_run.bold = True
+    brand_run.italic = True
+    brand_run.font.size = Pt(22)
+    brand_run.font.color.rgb = RGBColor(178, 34, 34)
+    brand_subtitle = brand_cell.add_paragraph("microfinance")
+    brand_subtitle.paragraph_format.space_after = Pt(0)
+    brand_subtitle.runs[0].font.size = Pt(9)
+    brand_subtitle.runs[0].font.color.rgb = RGBColor(70, 110, 50)
+
+    criteria_title = header.cell(0, 1)
+    criteria_title.width = Cm(9.0)
+    criteria_title.text = "Critères"
+    criteria_title.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    set_cell_shading(criteria_title, "1F2937")
+    for run in criteria_title.paragraphs[0].runs:
+        run.bold = True
+        run.font.size = Pt(10)
+        run.font.color.rgb = RGBColor(255, 255, 255)
+
+    criteria_cell = header.cell(1, 1)
+    criteria_cell.width = Cm(9.0)
+    criteria = criteria_cell.add_table(rows=5, cols=2)
+    criteria.autofit = False
+    criteria_rows = [
+        ("Date du :", start_text),
+        ("Au :", end_text),
+        ("Numéro du client :", customer_id_text),
+        ("Téléphone :", telephone_text),
+        ("Compte :", account_text),
+    ]
+    for row_index, (label, value) in enumerate(criteria_rows):
+        criteria.cell(row_index, 0).text = label
+        criteria.cell(row_index, 1).text = value
+        criteria.cell(row_index, 0).width = Cm(4.1)
+        criteria.cell(row_index, 1).width = Cm(4.9)
+        for run in criteria.cell(row_index, 0).paragraphs[0].runs:
+            run.bold = True
+            run.font.size = Pt(8)
+        for run in criteria.cell(row_index, 1).paragraphs[0].runs:
+            run.font.size = Pt(8)
+    criteria_cell.paragraphs[0].paragraph_format.space_after = Pt(0)
+
+    title = document.add_paragraph(style="Title")
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.space_before = Pt(5)
+    title.paragraph_format.space_after = Pt(6)
+    title.add_run(
+        f"Extrait de compte - {telephone_text} - {customer_name_text.upper()} - {currency_text or view['currency']}"
+    )
+
+    balance_prefix = "Solde" if view["balance_is_real"] else "Cumul"
+    summary = document.add_table(rows=2, cols=4)
+    summary.alignment = WD_TABLE_ALIGNMENT.RIGHT
+    summary.autofit = False
+    summary_labels = [
+        f"{balance_prefix} initial",
+        "Total entrees",
+        "Total sorties",
+        f"{balance_prefix} final",
+    ]
+    summary_values = [
+        view["opening_amount"],
+        view["total_entries"],
+        view["total_outputs"],
+        view["closing_amount"],
+    ]
+    for index, label in enumerate(summary_labels):
+        summary.cell(0, index).text = label
+        summary.cell(1, index).text = _pdf_number(summary_values[index], decimals=decimals)
+        summary.cell(0, index).width = Cm(3.8)
+        summary.cell(1, index).width = Cm(3.8)
+        set_cell_shading(summary.cell(0, index), "E8EEF4")
+        summary.cell(0, index).paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        summary.cell(1, index).paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        for run in summary.cell(0, index).paragraphs[0].runs:
+            run.bold = True
+            run.font.size = Pt(8)
+        for run in summary.cell(1, index).paragraphs[0].runs:
+            run.bold = True
+            run.font.size = Pt(9)
+
+    document.add_paragraph().paragraph_format.space_after = Pt(0)
+    table = document.add_table(rows=1, cols=len(CUSTOMER_STATEMENT_COLUMNS))
+    table.style = "Table Grid"
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
+    labels = {
+        "date": "Date",
+        "compte": "Compte",
+        "receipt_no": "Receipt No",
+        "description": "Description",
+        "entree": "Entrée",
+        "sortie": "Sortie",
+        "solde": view["balance_label"],
+    }
+    widths = {
+        "date": 2.3,
+        "compte": 1.7,
+        "receipt_no": 2.8,
+        "description": 10.4,
+        "entree": 2.4,
+        "sortie": 2.4,
+        "solde": 2.6,
+    }
+    set_repeat_header(table.rows[0])
+    for index, column in enumerate(CUSTOMER_STATEMENT_COLUMNS):
+        cell = table.rows[0].cells[index]
+        cell.text = labels[column]
+        cell.width = Cm(widths[column])
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        set_cell_shading(cell, "1F2937")
+        for run in cell.paragraphs[0].runs:
+            run.bold = True
+            run.font.size = Pt(8)
+            run.font.color.rgb = RGBColor(255, 255, 255)
+
+    for _, row in transactions.iterrows():
+        cells = table.add_row().cells
+        for index, column in enumerate(CUSTOMER_STATEMENT_COLUMNS):
+            value = row.get(column)
+            if column == "date":
+                parsed = pd.to_datetime(value, errors="coerce")
+                text = f"{parsed:%d/%m/%Y}" if pd.notna(parsed) else "-"
+            elif column in {"entree", "sortie"}:
+                numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+                text = "" if pd.isna(numeric_value) or float(numeric_value) == 0 else _pdf_number(numeric_value, decimals=decimals)
+            elif column == "solde":
+                text = _pdf_number(value, decimals=decimals)
+            else:
+                text = "-" if _is_empty_text(value) else str(value)
+            cells[index].text = text
+            cells[index].width = Cm(widths[column])
+            cells[index].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            for paragraph in cells[index].paragraphs:
+                paragraph.paragraph_format.space_after = Pt(0)
+                if column in {"entree", "sortie", "solde"}:
+                    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                for run in paragraph.runs:
+                    run.font.size = Pt(7.5)
+
+    note = document.add_paragraph()
+    note.paragraph_format.space_before = Pt(4)
+    note.paragraph_format.space_after = Pt(0)
+    if view["balance_is_real"]:
+        note_text = "Le solde est calcule a partir du solde d'ouverture renseigne et des mouvements du fichier charge."
+        note_color = RGBColor(70, 90, 110)
+    else:
+        note_text = (
+            "Attention : le solde d'ouverture n'a pas ete fourni. La derniere colonne presente un cumul net relatif, "
+            "et non le solde reel du compte."
+        )
+        note_color = RGBColor(156, 103, 10)
+    note_run = note.add_run(note_text)
+    note_run.italic = True
+    note_run.font.size = Pt(8)
+    note_run.font.color.rgb = note_color
+
+    footer = section.footer.paragraphs[0]
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer_run = footer.add_run(f"Extrait genere le {generated_at:%d/%m/%Y %H:%M} - Solution Controle Interne")
+    footer_run.font.size = Pt(7.5)
+    footer_run.font.color.rgb = RGBColor(110, 125, 140)
+
+    document.core_properties.title = f"Extrait de compte {customer_id_text} - {currency_text}"
+    document.core_properties.subject = "Extrait client M-PESA"
+    document.core_properties.author = "Solution Controle Interne"
+    buffer = BytesIO()
+    document.save(buffer)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 def create_g2_dat_word(
     report: dict[str, Any],
     *,
@@ -3491,6 +5421,18 @@ def create_g2_dat_word(
     word_report = dict(report)
     word_report["rapport_journalier_pivot"] = daily_pivot
     context = _g2_executive_context(word_report)
+    if (
+        isinstance(transaction_detail, pd.DataFrame)
+        and not transaction_detail.empty
+        and "incluse_synthese" in transaction_detail.columns
+    ):
+        eligible_word_detail = (
+            transaction_detail["incluse_synthese"]
+            .astype("boolean")
+            .fillna(False)
+            .astype(bool)
+        )
+        transaction_detail = transaction_detail.loc[eligible_word_detail].copy()
 
     classified = daily_synthese.copy()
     if not classified.empty and "details_rapport" in classified.columns:
@@ -3535,6 +5477,10 @@ def create_g2_dat_word(
         paragraph.add_run(text)
 
     add_summary_bullet("Activite", context["active_text"])
+    if context["status_text"]:
+        add_summary_bullet("Perimetre des statuts", context["status_text"])
+    if context["time_text"]:
+        add_summary_bullet("Fréquence temporelle", context["time_text"])
     add_summary_bullet("Flux financiers", context["flow_text"])
     if context["control_text"]:
         add_summary_bullet("Controle", context["control_text"])
@@ -3722,8 +5668,13 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         ("rapport_journalier_comptages", "Rapport_Journalier_Comptages"),
         ("rapport_journalier_vertical", "Rapport_Journalier_Vertical"),
         ("rapport_journalier_synthese", "Rapport_Journalier_Synthese"),
+        ("statuts_g2", "Statuts_G2"),
         ("rapport_journalier_detail", "Rapport_Journalier_Detail"),
         ("rapport_journalier_anomalies", "Anomalies_G2"),
+        ("transactions_par_jour", "Transactions_Jour"),
+        ("transactions_par_jour_semaine", "Transactions_Jour_Semaine"),
+        ("transactions_par_heure", "Transactions_Heure"),
+        ("transactions_jour_heure", "Transactions_Jour_Heure"),
         ("retention_mensuelle", "Retention_Mensuelle"),
         ("retention_operations", "Retention_Operations"),
         ("retention_detail", "Retention_Detail"),
@@ -3734,6 +5685,17 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         ("clients_perfect_dans_turbo", "Perfect_Turbo"),
         ("clients_perfect_dans_turbo_et_mpesa", "Perfect_Turbo_M_PESA"),
         ("clients_3_systemes", "Clients_3_Systemes"),
+        ("credit_synthese", "Pilotage_Credit"),
+        ("credit_detail", "Credits_A_Risque"),
+        ("liquidite_synthese", "Pilotage_Liquidite"),
+        ("liquidite_journaliere", "Liquidite_Journaliere"),
+        ("activite_clients", "Activite_Clients"),
+        ("conversion_clients", "Conversion_Epargne_DAT"),
+        ("concentration_clients", "Concentration_Clients"),
+        ("qualite_synthese", "Qualite_Transactions"),
+        ("alertes_transactions", "Alertes_Transactions"),
+        ("dat_echeances_detail", "Echeances_DAT"),
+        ("perfect_adoption_detail", "Adoption_Perfect"),
         ("diagnostics", "Diagnostics"),
     ]
     sheets = {

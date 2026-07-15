@@ -11,6 +11,7 @@ import streamlit as st
 
 from credit_app.services.mpesa_analysis import (
     CURRENT_SAVINGS_REQUIRED_COLUMNS,
+    CUSTOMER_STATEMENT_COLUMNS,
     CUSTOMERS_REQUIRED_COLUMNS,
     FIXED_SAVINGS_REQUIRED_COLUMNS,
     G2_CLASSIFIED_TRANSACTION_COLUMNS,
@@ -24,10 +25,14 @@ from credit_app.services.mpesa_analysis import (
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
     build_g2_retention_report,
+    build_g2_transaction_time_analysis,
     build_load_report,
+    build_mpesa_management_dashboard,
     build_mpesa_statement,
+    build_customer_statement_view,
     build_perfect_client_crosscheck,
     create_excel_export,
+    create_customer_statement_word,
     create_g2_dat_word,
     enrich_transactions_with_g2_customer_names,
     enrich_turbo_with_g2_customer_names,
@@ -99,6 +104,31 @@ def _uploaded_dataframe(uploaded_file: Any) -> pd.DataFrame:
     return _read_excel_bytes(uploaded_file.getvalue(), uploaded_file.name)
 
 
+def _uploaded_dataframes(
+    uploaded_files: Any,
+    *,
+    source_column: str,
+) -> pd.DataFrame:
+    """Fusionne plusieurs exports d'une source en conservant leur provenance."""
+    if not uploaded_files:
+        return pd.DataFrame()
+    files = uploaded_files if isinstance(uploaded_files, (list, tuple)) else [uploaded_files]
+    frames: list[pd.DataFrame] = []
+    for file_order, uploaded_file in enumerate(files):
+        frame = _uploaded_dataframe(uploaded_file)
+        if frame.empty:
+            continue
+        frame = frame.copy()
+        frame[source_column] = uploaded_file.name
+        frame["ordre_fichier_import"] = file_order
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+
+
+def _uploaded_g2_dataframes(uploaded_files: Any) -> pd.DataFrame:
+    return _uploaded_dataframes(uploaded_files, source_column="fichier_source_g2")
+
+
 @st.cache_data(show_spinner=False)
 def _create_excel_export_cached(export_report: dict[str, Any]) -> bytes:
     return create_excel_export(export_report)
@@ -117,9 +147,38 @@ def _create_g2_dat_word_cached(
     )
 
 
-def _render_expected_columns(title: str, columns: set[str]) -> None:
-    with st.expander(title, expanded=False):
-        st.code(", ".join(sorted(columns)), language="text")
+@st.cache_data(show_spinner=False)
+def _create_customer_statement_word_cached(
+    statement: pd.DataFrame,
+    customer_id: str,
+    customer_name: str,
+    telephone: str,
+    currency: str,
+    account_number: str,
+    period_start: object | None,
+    period_end: object | None,
+) -> bytes:
+    return create_customer_statement_word(
+        statement,
+        customer_id=customer_id,
+        customer_name=customer_name,
+        telephone=telephone,
+        currency=currency,
+        account_number=account_number,
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _build_mpesa_management_dashboard_cached(
+    prepared: MpesaPreparedData,
+    dat_annual_interest_rate_pct: float,
+) -> dict[str, Any]:
+    return build_mpesa_management_dashboard(
+        prepared,
+        dat_annual_interest_rate_pct=dat_annual_interest_rate_pct,
+    )
 
 
 def _build_prepared_data(
@@ -290,15 +349,27 @@ def _render_import_tab(prepared: MpesaPreparedData, missing: dict[str, list[str]
     st.caption(f"Colonnes `Unnamed` restantes apres nettoyage : {unnamed_count}.")
 
 
-def _filter_statement(statement: pd.DataFrame, *, key_prefix: str) -> pd.DataFrame:
+def _filter_statement(
+    statement: pd.DataFrame,
+    *,
+    key_prefix: str,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    context: dict[str, Any] = {
+        "currency": "Toutes",
+        "operation_types": [],
+        "date_start": None,
+        "date_end": None,
+        "reference_query": "",
+    }
     if statement.empty:
-        return statement
+        return statement, context
     filtered = statement.copy()
     first_row, second_row = st.columns(2)
     currencies = _currency_options(filtered)
     selected_currency = "Toutes"
     if currencies:
         selected_currency = first_row.selectbox("Devise", ["Toutes"] + currencies, key=f"{key_prefix}_currency")
+        context["currency"] = selected_currency
         if selected_currency != "Toutes":
             filtered = filtered.loc[filtered["currency_code"].eq(selected_currency)]
     operation_types = sorted(filtered["type_operation"].dropna().astype(str).unique()) if "type_operation" in filtered.columns else []
@@ -311,6 +382,7 @@ def _filter_statement(statement: pd.DataFrame, *, key_prefix: str) -> pd.DataFra
             placeholder="Choose options",
             help="Aucune option choisie = tous les types d'operation.",
         )
+        context["operation_types"] = selected_types
         if selected_types:
             filtered = filtered.loc[filtered["type_operation"].isin(selected_types)]
     if "created_at" in filtered.columns:
@@ -326,6 +398,8 @@ def _filter_statement(statement: pd.DataFrame, *, key_prefix: str) -> pd.DataFra
             )
             if isinstance(date_range, tuple) and len(date_range) == 2:
                 start, end = date_range
+                context["date_start"] = start
+                context["date_end"] = end
                 filtered = filtered.loc[
                     pd.to_datetime(filtered["created_at"], errors="coerce").between(
                         pd.Timestamp(start),
@@ -333,6 +407,7 @@ def _filter_statement(statement: pd.DataFrame, *, key_prefix: str) -> pd.DataFra
                     )
                 ]
     ref_query = second_row.text_input("Reference M-PESA, DAT ou credit", key=f"{key_prefix}_reference").strip()
+    context["reference_query"] = ref_query
     if ref_query:
         ref_columns = ["operation_reference", "reference_dat_operation", "reference_credit_operation", "references_internes"]
         mask = pd.Series(False, index=filtered.index)
@@ -340,7 +415,7 @@ def _filter_statement(statement: pd.DataFrame, *, key_prefix: str) -> pd.DataFra
             if column in filtered.columns:
                 mask = mask | filtered[column].astype("string").str.contains(ref_query, case=False, regex=False, na=False)
         filtered = filtered.loc[mask]
-    return filtered.reset_index(drop=True)
+    return filtered.reset_index(drop=True), context
 
 
 def _render_customer_kpis(summary: pd.DataFrame) -> None:
@@ -425,6 +500,87 @@ def _render_statement_charts(statement: pd.DataFrame) -> None:
                 st_plot(fig, key="mpesa_savings_balance", height=330)
 
 
+def _display_text(value: Any, fallback: str = "Non disponible") -> str:
+    if value is None or pd.isna(value) or str(value).strip() in {"", "<NA>", "nan", "None"}:
+        return fallback
+    return str(value).strip()
+
+
+def _render_customer_statement_preview(
+    statement: pd.DataFrame,
+    *,
+    customer_id: str,
+    customer_name: str,
+    telephone: str,
+    account_number: str,
+    filter_context: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    previews: dict[str, dict[str, Any]] = {}
+    if statement.empty:
+        st.info("Aucune operation ne correspond aux filtres. L'extrait Word ne peut pas etre genere.")
+        return previews
+
+    currencies = _currency_options(statement)
+    for currency in currencies:
+        currency_statement = statement.loc[statement["currency_code"].eq(currency)].copy()
+        view = build_customer_statement_view(currency_statement, account_number=account_number)
+        previews[currency] = view
+        dates = pd.to_datetime(currency_statement.get("created_at"), errors="coerce").dropna()
+        date_start = filter_context.get("date_start")
+        date_end = filter_context.get("date_end")
+        if date_start is None and not dates.empty:
+            date_start = dates.min().date()
+        if date_end is None and not dates.empty:
+            date_end = dates.max().date()
+
+        st.markdown(f"#### Extrait de compte - {telephone} - {customer_name} - {currency}")
+        render_summary_box(
+            "Criteres du releve",
+            [
+                f"Date du : {pd.Timestamp(date_start):%d/%m/%Y}" if date_start is not None else "Date du : Non disponible",
+                f"Au : {pd.Timestamp(date_end):%d/%m/%Y}" if date_end is not None else "Au : Non disponible",
+                f"Numero du client : {customer_id}",
+                f"Telephone : {telephone}",
+                f"Compte : {account_number or 'Non renseigne'}",
+            ],
+        )
+        balance_prefix = "Solde" if view["balance_is_real"] else "Cumul"
+        render_kpi_cards(
+            [
+                (f"{balance_prefix} initial", _format_amount(view["opening_amount"]), currency, "slate"),
+                ("Total entrees", _format_amount(view["total_entries"]), currency, "green"),
+                ("Total sorties", _format_amount(view["total_outputs"]), currency, "orange"),
+                (f"{balance_prefix} final", _format_amount(view["closing_amount"]), currency, "navy"),
+            ]
+        )
+        if not view["balance_is_real"]:
+            st.warning(
+                "Le solde d'ouverture n'est pas renseigne pour cette devise. "
+                "La colonne affiche un cumul net relatif et non le solde reel du compte."
+            )
+
+        display = view["transactions"][CUSTOMER_STATEMENT_COLUMNS].copy()
+        display["date"] = pd.to_datetime(display["date"], errors="coerce").dt.strftime("%d/%m/%Y")
+        for column in ["entree", "sortie"]:
+            display[column] = display[column].map(
+                lambda value: "" if pd.isna(value) or float(value) == 0 else _format_amount(value)
+            )
+        display["solde"] = display["solde"].map(_format_amount)
+        display = display.rename(
+            columns={
+                "date": "Date",
+                "compte": "Compte",
+                "receipt_no": "Receipt No",
+                "description": "Description",
+                "entree": "Entree",
+                "sortie": "Sortie",
+                "solde": view["balance_label"],
+            }
+        )
+        st.dataframe(display, width="stretch", hide_index=True)
+    return previews
+
+
 def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | None:
     if prepared.transactions.empty:
         st.info("Chargez au minimum le fichier Transactions M-PESA pour construire un extrait client.")
@@ -507,6 +663,16 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         ],
     )
 
+    statement_account = st.text_input(
+        "Compte M-PESA de l'organisation",
+        value="1441",
+        key=f"mpesa_statement_account_{selected_customer}",
+        help=(
+            "Ce numero apparait dans la colonne Compte de l'extrait. "
+            "Il est configurable car il n'est pas fourni par le fichier Transactions Turbo."
+        ),
+    ).strip()
+
     currencies = _currency_options(prepared.transactions.loc[prepared.transactions["customer_id"].astype(str).eq(selected_customer)])
     opening_balances: dict[str, float | None] = {}
     with st.expander("Optionnel - renseigner les soldes d'ouverture M-PESA", expanded=False):
@@ -545,41 +711,98 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         )
 
     render_panel_title("4. Filtrer les mouvements")
-    filtered_statement = _filter_statement(statement, key_prefix=f"mpesa_statement_{selected_customer}")
+    filtered_statement, filter_context = _filter_statement(
+        statement,
+        key_prefix=f"mpesa_statement_{selected_customer}",
+    )
     st.caption(f"{len(filtered_statement)} operation(s) retenue(s) sur {len(statement)} pour le client.")
     filtered_report = dict(report)
     filtered_report["extrait"] = filtered_statement
     filtered_report["synthese"] = report["synthese"]
 
-    render_panel_title("5. Evolution des mouvements filtres")
-    _render_statement_charts(filtered_statement)
+    customer_name = _display_text(identity["Nom_client"])
+    customer_phone = _display_text(identity["telephone"])
+    render_panel_title("5. Apercu de l'extrait de compte")
+    previews = _render_customer_statement_preview(
+        filtered_statement,
+        customer_id=selected_customer,
+        customer_name=customer_name,
+        telephone=customer_phone,
+        account_number=statement_account,
+        filter_context=filter_context,
+    )
 
-    render_panel_title("6. Extrait client")
-    statement_columns = [
-        "created_at",
-        "operation_reference",
-        "currency_code",
-        "type_operation",
-        "Nom_client",
-        "telephone",
-        "entree_mpesa",
-        "sortie_mpesa",
-        "mouvement_net_mpesa",
-        "solde_mpesa_avant",
-        "solde_mpesa_apres",
-        "solde_epargne_au_moment",
-        "solde_dat_total_au_moment",
-        "reference_dat_operation",
-        "reference_credit_operation",
-        "descriptions",
-        "controle_mouvement",
-    ]
-    statement_columns = [column for column in statement_columns if column in filtered_statement.columns]
-    st.dataframe(filtered_statement[statement_columns], width="stretch", hide_index=True)
-    with st.expander("Afficher toutes les colonnes techniques", expanded=False):
+    render_panel_title("6. Analyses complementaires")
+    with st.expander("Afficher les graphiques", expanded=False):
+        _render_statement_charts(filtered_statement)
+    with st.expander("Afficher les colonnes techniques", expanded=False):
+        statement_columns = [
+            "created_at",
+            "operation_reference",
+            "currency_code",
+            "type_operation",
+            "Nom_client",
+            "telephone",
+            "entree_mpesa",
+            "sortie_mpesa",
+            "mouvement_net_mpesa",
+            "solde_mpesa_avant",
+            "solde_mpesa_apres",
+            "solde_epargne_au_moment",
+            "solde_dat_total_au_moment",
+            "reference_dat_operation",
+            "reference_credit_operation",
+            "descriptions",
+            "controle_mouvement",
+        ]
+        statement_columns = [column for column in statement_columns if column in filtered_statement.columns]
+        st.dataframe(filtered_statement[statement_columns], width="stretch", hide_index=True)
+        st.caption("Vue complete des colonnes disponibles")
         st.dataframe(filtered_statement, width="stretch", hide_index=True)
 
     render_panel_title("7. Export")
+    st.caption(
+        "Le Word reprend exactement le client, la periode, la devise, les types d'operation et les references filtres. "
+        "Un document distinct est produit pour chaque devise afin de ne jamais melanger CDF et USD."
+    )
+    if previews:
+        word_columns = st.columns(min(len(previews), 3))
+        for index, (currency, view) in enumerate(previews.items()):
+            currency_statement = filtered_statement.loc[
+                filtered_statement["currency_code"].eq(currency)
+            ].copy()
+            dates = pd.to_datetime(currency_statement.get("created_at"), errors="coerce").dropna()
+            date_start = filter_context.get("date_start")
+            date_end = filter_context.get("date_end")
+            if date_start is None and not dates.empty:
+                date_start = dates.min().date()
+            if date_end is None and not dates.empty:
+                date_end = dates.max().date()
+            try:
+                word_bytes = _create_customer_statement_word_cached(
+                    currency_statement,
+                    selected_customer,
+                    customer_name,
+                    customer_phone,
+                    currency,
+                    statement_account,
+                    date_start,
+                    date_end,
+                )
+            except (RuntimeError, ValueError) as exc:
+                word_columns[index % len(word_columns)].error(str(exc))
+                continue
+            start_token = f"{pd.Timestamp(date_start):%Y%m%d}" if date_start is not None else "debut"
+            end_token = f"{pd.Timestamp(date_end):%Y%m%d}" if date_end is not None else "fin"
+            word_columns[index % len(word_columns)].download_button(
+                f"Telecharger l'extrait Word {currency}",
+                data=word_bytes,
+                file_name=f"extrait_compte_{selected_customer}_{currency}_{start_token}_{end_token}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                width="stretch",
+                key=f"mpesa_customer_word_{selected_customer}_{currency}_{start_token}_{end_token}",
+            )
+
     st.caption(
         "La feuille `Extrait_MPESA` reprend les filtres appliques a l'etape 4. "
         "Le classeur conserve uniquement la synthese, l'extrait, le DAT final, les credits, le controle G2/DAT et les diagnostics."
@@ -597,48 +820,6 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         width="stretch",
     )
     return filtered_report
-
-
-def _render_overview(prepared: MpesaPreparedData) -> None:
-    if prepared.transactions.empty:
-        st.info("Chargez le fichier Transactions M-PESA pour afficher la vue d'ensemble.")
-        return
-    tx = prepared.transactions
-    clients = tx["customer_id"].dropna().astype(str).nunique() if "customer_id" in tx.columns else 0
-    mpesa = tx.loc[tx["account_type"].eq("MPESA ACCOUNT")] if "account_type" in tx.columns else tx
-    total_in = numeric_column(mpesa, "cr").sum()
-    total_out = numeric_column(mpesa, "dr").sum()
-    render_kpi_cards(
-        [
-            ("Lignes Transactions", _format_count(len(tx)), "Fichier M-PESA", "blue"),
-            ("Clients", _format_count(clients), "Clients distincts", "navy"),
-            ("Entrees", _format_amount(total_in), "Toutes devises, lecture brute", "green"),
-            ("Sorties", _format_amount(total_out), "Toutes devises, lecture brute", "orange"),
-        ]
-    )
-    render_summary_box(
-        "Lecture",
-        [
-            "Les montants CDF et USD restent separes dans les extraits et KPI client.",
-            "Cette vue globale sert uniquement de repere de chargement.",
-            f"Periode disponible : {_period_label(tx)}.",
-        ],
-    )
-    if "created_at" in tx.columns and "currency_code" in tx.columns:
-        work = tx.copy()
-        work["created_at"] = pd.to_datetime(work["created_at"], errors="coerce")
-        work = work.dropna(subset=["created_at"])
-        work["jour"] = work["created_at"].dt.date
-        daily = work.groupby(["jour", "currency_code"], as_index=False).agg(dr=("dr", "sum"), cr=("cr", "sum"))
-        long_daily = daily.melt(
-            id_vars=["jour", "currency_code"],
-            value_vars=["dr", "cr"],
-            var_name="sens",
-            value_name="montant",
-        )
-        fig = px.line(long_daily, x="jour", y="montant", color="sens", facet_row="currency_code", markers=True)
-        style_standard_line(fig, height=360, tickangle=-20)
-        st_plot(fig, key="mpesa_overview_daily", height=360)
 
 
 def _render_large_dat_summary(prepared: MpesaPreparedData) -> None:
@@ -799,29 +980,38 @@ def _render_g2_report_export(
     daily_pivot: pd.DataFrame,
     daily_comptages: pd.DataFrame,
     daily_synthese: pd.DataFrame,
+    daily_statuts: pd.DataFrame,
     daily_detail: pd.DataFrame,
     daily_anomalies: pd.DataFrame,
     g2_dat: pd.DataFrame,
     retention_report: dict[str, pd.DataFrame],
+    transaction_time_report: dict[str, pd.DataFrame],
     date_start: Any | None,
     date_end: Any | None,
     direction_suffix: str,
     period_text: str,
     direction_label: str,
 ) -> None:
-    render_panel_title("6. Export du rapport")
+    render_panel_title("7. Export du rapport")
     export_report = {
         "rapport_journalier_comptages": daily_comptages,
         "rapport_journalier_synthese": daily_synthese,
+        "statuts_g2": daily_statuts,
         "rapport_journalier_detail": daily_detail,
         "rapport_journalier_anomalies": daily_anomalies,
         "g2_dat": g2_dat,
+        "transactions_par_jour": transaction_time_report.get("par_jour", pd.DataFrame()),
+        "transactions_par_jour_semaine": transaction_time_report.get("par_jour_semaine", pd.DataFrame()),
+        "transactions_par_heure": transaction_time_report.get("par_heure", pd.DataFrame()),
+        "transactions_jour_heure": transaction_time_report.get("jour_heure", pd.DataFrame()),
         "retention_mensuelle": retention_report.get("mensuelle", pd.DataFrame()),
         "retention_detail": retention_report.get("detail_clients", pd.DataFrame()),
     }
     report_bytes = _create_excel_export_cached(export_report)
     word_report = dict(export_report)
     word_report["rapport_journalier_pivot"] = daily_pivot
+    word_report["analysis_date_start"] = date_start
+    word_report["analysis_date_end"] = date_end
     period_suffix = f"{date_start:%Y%m%d}_{date_end:%Y%m%d}" if date_start is not None and date_end is not None else "complet"
     excel_column, word_column = st.columns(2)
     with excel_column:
@@ -851,8 +1041,120 @@ def _render_g2_report_export(
     )
 
 
+def _render_g2_transaction_time_analysis(time_report: dict[str, pd.DataFrame]) -> None:
+    render_panel_title("3. Transactions par jour et par heure")
+    par_jour = time_report.get("par_jour", pd.DataFrame())
+    par_jour_semaine = time_report.get("par_jour_semaine", pd.DataFrame())
+    par_heure = time_report.get("par_heure", pd.DataFrame())
+    jour_heure = time_report.get("jour_heure", pd.DataFrame())
+    if par_jour.empty or par_heure.empty:
+        st.info("Aucune transaction terminee avec une date et une heure valides dans le perimetre analyse.")
+        return
+
+    daily_totals = par_jour.groupby("date_transaction", as_index=False)["nombre_transactions"].sum()
+    weekday_totals = par_jour_semaine.groupby(
+        ["jour_semaine_num", "jour_semaine"], as_index=False
+    )["nombre_transactions"].sum()
+    hourly_totals = par_heure.groupby(["heure_num", "heure"], as_index=False)["nombre_transactions"].sum()
+    total_transactions = int(daily_totals["nombre_transactions"].sum())
+    number_of_days = max(int(daily_totals["date_transaction"].nunique()), 1)
+    busiest_day = daily_totals.loc[daily_totals["nombre_transactions"].idxmax()]
+    busiest_weekday = weekday_totals.loc[weekday_totals["nombre_transactions"].idxmax()]
+    busiest_hour = hourly_totals.loc[hourly_totals["nombre_transactions"].idxmax()]
+    render_kpi_cards(
+        [
+            ("Transactions", _format_count(total_transactions), "Operations terminees", "blue"),
+            (
+                "Moyenne par jour",
+                _format_amount(total_transactions / number_of_days),
+                f"Sur {number_of_days} jour(s) calendaire(s)",
+                "green",
+            ),
+            (
+                "Jour le plus actif",
+                _format_count(busiest_day["nombre_transactions"]),
+                pd.Timestamp(busiest_day["date_transaction"]).strftime("%d/%m/%Y"),
+                "navy",
+            ),
+            (
+                "Jour de semaine le plus actif",
+                str(busiest_weekday["jour_semaine"]),
+                f"{_format_count(busiest_weekday['nombre_transactions'])} transaction(s)",
+                "slate",
+            ),
+            (
+                "Heure la plus active",
+                _format_count(busiest_hour["nombre_transactions"]),
+                str(busiest_hour["heure"]),
+                "orange",
+            ),
+        ]
+    )
+    st.caption(
+        "Les compteurs utilisent le meme perimetre que la synthese G2/DAT : filtres de date, d'heure et de sens, "
+        "transactions terminees seulement, une occurrence par Receipt No."
+    )
+
+    daily_chart = px.line(
+        par_jour,
+        x="date_transaction",
+        y="nombre_transactions",
+        color="sens_flux",
+        facet_col="currency_code",
+        facet_col_wrap=2,
+        markers=True,
+        labels={
+            "date_transaction": "Date",
+            "nombre_transactions": "Nombre de transactions",
+            "sens_flux": "Sens",
+            "currency_code": "Devise",
+        },
+        category_orders={"sens_flux": ["Entree", "Sortie", "Indetermine"]},
+    )
+    daily_chart.update_yaxes(rangemode="tozero")
+    style_standard_line(daily_chart, height=380, tickangle=-20)
+    st_plot(daily_chart, key="mpesa_g2_transactions_daily", height=380)
+
+    hourly_chart = px.bar(
+        par_heure,
+        x="heure",
+        y="nombre_transactions",
+        color="sens_flux",
+        facet_col="currency_code",
+        facet_col_wrap=2,
+        barmode="group",
+        labels={
+            "heure": "Heure de la journee",
+            "nombre_transactions": "Nombre de transactions",
+            "sens_flux": "Sens",
+            "currency_code": "Devise",
+        },
+        category_orders={
+            "heure": [f"{hour:02d}h" for hour in range(24)],
+            "sens_flux": ["Entree", "Sortie", "Indetermine"],
+        },
+    )
+    hourly_chart.update_yaxes(rangemode="tozero")
+    style_standard_vertical_bar(hourly_chart, height=400, tickangle=-45)
+    st_plot(hourly_chart, key="mpesa_g2_transactions_hourly", height=400)
+
+    with st.expander("Afficher les tableaux de volumes par jour et par heure", expanded=False):
+        daily_tab, weekday_tab, hourly_tab, day_hour_tab = st.tabs(
+            ["Par jour", "Par jour de semaine", "Par heure", "Jour x heure"]
+        )
+        with daily_tab:
+            st.dataframe(par_jour, width="stretch", hide_index=True)
+        with weekday_tab:
+            st.dataframe(par_jour_semaine, width="stretch", hide_index=True)
+        with hourly_tab:
+            st.dataframe(par_heure, width="stretch", hide_index=True)
+        with day_hour_tab:
+            st.caption("Detail des heures effectivement actives; les heures sans transaction ne sont pas repetees.")
+            st.dataframe(jour_heure, width="stretch", hide_index=True)
+
+
 def _render_g2_retention_report(retention_report: dict[str, pd.DataFrame]) -> None:
-    render_panel_title("3. Fidelisation des clients M-PESA")
+    render_panel_title("4. Fidelisation des clients M-PESA")
     render_summary_box(
         "Definitions du rapport",
         [
@@ -1079,7 +1381,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         if date_start is not None and date_end is not None and time_start is not None and time_end is not None
         else "sur toute la periode disponible"
     )
-    st.caption(f"{len(filtered_g2)} transaction(s) G2 retenue(s) {period_text} - {direction_label.lower()}.")
+    st.caption(f"{len(filtered_g2)} transaction(s) G2 chargee(s) dans le perimetre {period_text} - {direction_label.lower()}.")
     if filtered_g2.empty:
         st.warning("Aucune transaction G2 ne correspond a la periode et au sens selectionnes.")
         return
@@ -1090,14 +1392,52 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     daily_pivot = daily_report.get("pivot", pd.DataFrame())
     daily_synthese = daily_report.get("synthese", pd.DataFrame())
     daily_comptages = daily_report.get("comptages", pd.DataFrame())
+    daily_statuts = daily_report.get("statuts", pd.DataFrame())
     daily_anomalies = daily_report.get("anomalies", pd.DataFrame())
+    transaction_time_report = build_g2_transaction_time_analysis(daily_detail)
     retention_report = build_g2_retention_report(filtered_prepared, daily_detail=daily_detail)
+
+    completed_count = int(
+        daily_detail.get("incluse_synthese", pd.Series(False, index=daily_detail.index))
+        .astype("boolean")
+        .fillna(False)
+        .sum()
+    )
+    control_only_count = int(len(daily_detail) - completed_count)
+    render_kpi_cards(
+        [
+            ("Transactions chargees", _format_count(len(daily_detail)), "Tous les statuts G2", "blue"),
+            ("Transactions Completed", _format_count(completed_count), "Incluses dans les analyses", "green"),
+            ("Autres statuts", _format_count(control_only_count), "Conserves pour controle uniquement", "orange"),
+        ]
+    )
+    with st.expander("Afficher la repartition des statuts G2", expanded=control_only_count > 0):
+        if daily_statuts.empty:
+            st.info("Aucun statut de transaction n'est disponible.")
+        else:
+            status_view = daily_statuts.rename(
+                columns={
+                    "currency_code": "Devise",
+                    "fichier_source_g2": "Fichier source G2",
+                    "statut_transaction_g2": "Statut normalise",
+                    "transaction_status_source": "Statut source G2",
+                    "nombre_transactions": "Nombre de transactions",
+                    "part_transactions_pct": "Part dans la devise (%)",
+                    "prise_en_compte_analyse": "Incluse dans les analyses",
+                }
+            )
+            st.dataframe(status_view, width="stretch", hide_index=True)
+            st.caption(
+                "Completed alimente les montants, tendances, fidelisation et controles DAT. "
+                "Declined, Cancelled, Expired, Pending et les statuts non renseignes restent tracables sans modifier les resultats."
+            )
 
     render_summary_box(
         "Lecture unique du sous-onglet",
         [
             "Le sens repose sur les colonnes du releve : `Paid In` = entree et `Withdrawn` = sortie.",
             "Une seule ligne analytique est conservee par `Receipt No.` afin de ne pas compter deux fois une operation.",
+            "Seules les transactions au statut `Completed` alimentent les syntheses; les autres statuts sont conserves pour le controle.",
             "La classification utilise d'abord `Receipt No. = ref_no`, puis `account_type` et `description` du portail; la regle G2 sert de repli.",
             "Les nombres, montants d'entree, montants de sortie et soldes nets sont presentes separement pour chaque devise.",
             "Le telephone, la devise, le montant et la date sont controles sans additionner les ecritures techniques du portail.",
@@ -1155,9 +1495,11 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         with st.expander("Afficher la synthese detaillee en colonnes", expanded=False):
             st.dataframe(daily_pivot, width="stretch", hide_index=True)
 
+    _render_g2_transaction_time_analysis(transaction_time_report)
+
     _render_g2_retention_report(retention_report)
 
-    render_panel_title("4. Transactions")
+    render_panel_title("5. Transactions")
     with st.expander("Afficher le detail des transactions G2", expanded=False):
         daily_view = _apply_local_multiselect_filters(
             daily_detail,
@@ -1178,7 +1520,13 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             key_prefix="mpesa_daily_g2_report_filter",
         )
         st.caption(f"{len(daily_view)} ligne(s) affichee(s).")
-        detail_columns = G2_CLASSIFIED_TRANSACTION_COLUMNS
+        detail_columns = list(G2_CLASSIFIED_TRANSACTION_COLUMNS)
+        receipt_position = detail_columns.index("receipt_no") + 1
+        detail_columns[receipt_position:receipt_position] = [
+            "fichier_source_g2",
+            "transaction_status",
+            "traitement_statut_g2",
+        ]
         detail_columns = [column for column in detail_columns if column in daily_view.columns]
         st.dataframe(daily_view[detail_columns], width="stretch", hide_index=True)
 
@@ -1192,6 +1540,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         with st.expander("Afficher les anomalies G2 / Portail", expanded=False):
             anomaly_columns = [
                 "receipt_no",
+                "fichier_source_g2",
                 "completion_time",
                 "currency_code",
                 "transaction_amount_numeric",
@@ -1206,12 +1555,13 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                 "controle_devise",
                 "controle_montant",
                 "controle_date",
+                "Observation",
                 "motif_anomalie",
             ]
             anomaly_columns = [column for column in anomaly_columns if column in daily_anomalies.columns]
             st.dataframe(daily_anomalies[anomaly_columns], width="stretch", hide_index=True)
 
-    render_panel_title("5. Controle de rapprochement G2 / DAT")
+    render_panel_title("6. Controle de rapprochement G2 / DAT")
     render_summary_box(
         "Role du controle",
         [
@@ -1235,6 +1585,18 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     else:
         g2_dat = build_g2_dat_crosscheck(filtered_prepared)
 
+    if not g2_dat.empty and "incluse_synthese" in g2_dat.columns:
+        eligible_control = (
+            g2_dat["incluse_synthese"].astype("boolean").fillna(False).astype(bool)
+        )
+        excluded_control_count = int((~eligible_control).sum())
+        g2_dat = g2_dat.loc[eligible_control].reset_index(drop=True)
+        if excluded_control_count:
+            st.caption(
+                f"{excluded_control_count} transaction(s) non Completed exclue(s) du rapprochement DAT; "
+                "elles restent disponibles dans la repartition des statuts, le detail et les anomalies."
+            )
+
     if not g2_dat.empty and "sens_flux" in g2_dat.columns:
         g2_dat = g2_dat.loc[g2_dat["sens_flux"].astype("string").eq("Entree")].reset_index(drop=True)
         st.caption("Le controle DAT porte uniquement sur les entrees; les sorties restent dans l'analyse des flux ci-dessus.")
@@ -1248,10 +1610,12 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             daily_pivot=daily_pivot,
             daily_comptages=daily_comptages,
             daily_synthese=daily_synthese,
+            daily_statuts=daily_statuts,
             daily_detail=daily_detail,
             daily_anomalies=daily_anomalies,
             g2_dat=g2_dat,
             retention_report=retention_report,
+            transaction_time_report=transaction_time_report,
             date_start=date_start,
             date_end=date_end,
             direction_suffix=direction_suffix,
@@ -1320,6 +1684,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             "controle_montant",
             "ecart_date_minutes",
             "controle_date",
+            "Observation",
             "customer_id_ref_no",
             "dat_operation",
             "solde_dat_operation",
@@ -1339,10 +1704,12 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         daily_pivot=daily_pivot,
         daily_comptages=daily_comptages,
         daily_synthese=daily_synthese,
+        daily_statuts=daily_statuts,
         daily_detail=daily_detail,
         daily_anomalies=daily_anomalies,
         g2_dat=g2_dat,
         retention_report=retention_report,
+        transaction_time_report=transaction_time_report,
         date_start=date_start,
         date_end=date_end,
         direction_suffix=direction_suffix,
@@ -1591,6 +1958,352 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
     )
 
 
+def _filter_pilotage_currencies(report: dict[str, Any], currencies: list[str]) -> dict[str, Any]:
+    if not currencies:
+        return report
+    filtered: dict[str, Any] = {}
+    for key, value in report.items():
+        if isinstance(value, pd.DataFrame) and "currency_code" in value.columns:
+            filtered[key] = value.loc[value["currency_code"].astype("string").isin(currencies)].reset_index(drop=True)
+        else:
+            filtered[key] = value
+    return filtered
+
+
+def _render_management_dashboard(prepared: MpesaPreparedData) -> None:
+    dat_interest_rate = float(st.session_state.get("mpesa_dat_annual_interest_rate_pct", 0.0))
+    report = _build_mpesa_management_dashboard_cached(prepared, dat_interest_rate)
+    analysis_date = report.get("date_analyse")
+    render_summary_box(
+        "Objectif du cockpit",
+        [
+            "Transformer les fichiers G2, Turbo, Credits, DAT et Perfect en controles directement actionnables.",
+            "Les montants CDF et USD restent toujours separes; seuls les nombres de clients ou d'alertes peuvent etre consolides.",
+            "Le PAR utilise exclusivement les echeances et encours du fichier Credits. Une donnee absente reste non calculable.",
+            "La projection de liquidite a sept jours est mecanique et n'est affichee qu'avec un solde G2 et au moins sept jours d'historique.",
+        ],
+    )
+    if pd.notna(analysis_date):
+        st.caption(f"Date d'analyse retenue : {pd.Timestamp(analysis_date):%d/%m/%Y} (derniere date operationnelle chargee).")
+
+    currency_options: set[str] = set()
+    for value in report.values():
+        if isinstance(value, pd.DataFrame) and not value.empty and "currency_code" in value.columns:
+            currency_options.update(
+                item for item in value["currency_code"].dropna().astype(str).unique() if item.strip()
+            )
+    currency_options_sorted = sorted(currency_options)
+    selected_currencies = st.multiselect(
+        "Devises affichees",
+        options=currency_options_sorted,
+        default=currency_options_sorted,
+        key="mpesa_pilotage_currencies",
+        help="Une selection vide conserve toutes les devises.",
+    )
+    report_view = _filter_pilotage_currencies(report, selected_currencies)
+
+    sources = report_view.get("sources", pd.DataFrame())
+    if not sources.empty and {"source", "disponible"}.issubset(sources.columns):
+        missing_sources = sources.loc[
+            ~sources["disponible"].astype("boolean").fillna(False).astype(bool), "source"
+        ].astype(str).tolist()
+        if missing_sources:
+            st.info(
+                "Sources facultatives non chargees : "
+                + ", ".join(missing_sources)
+                + ". Consultez Importation pour le detail technique."
+            )
+
+    overview_tab, credit_tab, clients_tab, risk_tab = st.tabs(
+        ["Vue direction", "Credit et liquidite", "Clients et epargne", "Risques et qualite"]
+    )
+
+    with overview_tab:
+        activity_clients = report_view.get("activite_clients", pd.DataFrame())
+        alerts = report_view.get("alertes_transactions", pd.DataFrame())
+        credit_detail = report_view.get("credit_detail", pd.DataFrame())
+        dat_detail = report_view.get("dat_echeances_detail", pd.DataFrame())
+        perfect_summary = report_view.get("perfect_adoption_synthese", pd.DataFrame())
+        active_clients = (
+            int(activity_clients.loc[activity_clients["statut_activite"].eq("Actif 30 jours"), "phone_prefixe"].nunique())
+            if not activity_clients.empty and {"statut_activite", "phone_prefixe"}.issubset(activity_clients.columns)
+            else 0
+        )
+        overdue_credits = (
+            int(credit_detail["jours_retard"].ge(30).sum())
+            if not credit_detail.empty and "jours_retard" in credit_detail.columns
+            else 0
+        )
+        dat_due_30 = (
+            int(dat_detail["tranche_echeance"].isin(["Echu", "0 a 7 jours", "8 a 30 jours"]).sum())
+            if not dat_detail.empty and "tranche_echeance" in dat_detail.columns
+            else 0
+        )
+        perfect_active = (
+            int(perfect_summary.iloc[0].get("clients_perfect_actifs_30j", 0))
+            if not perfect_summary.empty
+            else 0
+        )
+        render_kpi_cards(
+            [
+                ("Clients actifs 30j", _format_count(active_clients), "Telephones distincts", "green"),
+                ("Credits en retard 30j+", _format_count(overdue_credits), "Dossiers a traiter", "red"),
+                ("DAT echus ou a 30j", _format_count(dat_due_30), "Comptes a anticiper", "orange"),
+                ("Alertes transactions", _format_count(len(alerts)), "Controle ou comportement", "navy"),
+                ("Perfect actifs 30j", _format_count(perfect_active), "Adoption M-PESA", "blue"),
+            ]
+        )
+        st.caption("Ces cartes sont des volumes de dossiers ou de clients; aucun montant multidevise n'est additionne.")
+
+        render_panel_title("Priorites de suivi")
+        priority_rows: list[dict[str, Any]] = []
+        if not credit_detail.empty:
+            for currency, group in credit_detail.loc[credit_detail["jours_retard"].ge(30)].groupby("currency_code"):
+                priority_rows.append(
+                    {"priorite": "Credits en retard 30 jours et plus", "devise": currency, "dossiers": len(group), "montant": group["encours_total"].sum()}
+                )
+        if not dat_detail.empty:
+            due_mask = dat_detail["tranche_echeance"].isin(["Echu", "0 a 7 jours", "8 a 30 jours"])
+            for currency, group in dat_detail.loc[due_mask].groupby("currency_code"):
+                priority_rows.append(
+                    {"priorite": "DAT echus ou a echeance sous 30 jours", "devise": currency, "dossiers": len(group), "montant": group["balance"].sum()}
+                )
+        if priority_rows:
+            st.dataframe(pd.DataFrame(priority_rows), width="stretch", hide_index=True)
+        else:
+            st.success("Aucune priorite credit/DAT calculable dans les fichiers charges.")
+
+    with credit_tab:
+        render_panel_title("1. Performance et risque des credits")
+        credit_summary = report_view.get("credit_synthese", pd.DataFrame())
+        credit_detail = report_view.get("credit_detail", pd.DataFrame())
+        if credit_summary.empty:
+            st.info("Chargez le fichier Credits Turbo pour calculer l'encours, les retards et le PAR.")
+        else:
+            st.dataframe(credit_summary, width="stretch", hide_index=True)
+            if not credit_detail.empty:
+                risk_chart = (
+                    credit_detail.groupby(["currency_code", "statut_risque"], as_index=False)
+                    .agg(nombre_credits=("loan_id", "nunique"), encours_total=("encours_total", "sum"))
+                )
+                fig = px.bar(
+                    risk_chart,
+                    x="statut_risque",
+                    y="nombre_credits",
+                    color="statut_risque",
+                    facet_col="currency_code",
+                    facet_col_wrap=2,
+                    labels={"statut_risque": "Statut", "nombre_credits": "Nombre de credits", "currency_code": "Devise"},
+                )
+                style_standard_vertical_bar(fig, height=390, tickangle=-25)
+                st_plot(fig, key="mpesa_pilotage_credit_risk", height=390)
+                with st.expander("Afficher les credits a suivre", expanded=False):
+                    credit_view = _apply_local_multiselect_filters(
+                        credit_detail,
+                        ["currency_code", "statut_risque", "status_name", "customer_id"],
+                        key_prefix="mpesa_pilotage_credit_filter",
+                    )
+                    st.dataframe(credit_view, width="stretch", hide_index=True)
+
+        render_panel_title("2. Liquidite M-PESA")
+        liquidity_summary = report_view.get("liquidite_synthese", pd.DataFrame())
+        liquidity_daily = report_view.get("liquidite_journaliere", pd.DataFrame())
+        if liquidity_summary.empty:
+            st.info("Chargez Transactions G2 avec Completion Time et montants pour analyser la liquidite.")
+        else:
+            st.dataframe(liquidity_summary, width="stretch", hide_index=True)
+            if not liquidity_daily.empty:
+                chart_data = liquidity_daily.melt(
+                    id_vars=["date_transaction", "currency_code"],
+                    value_vars=["montant_entrees", "montant_sorties"],
+                    var_name="flux",
+                    value_name="montant",
+                )
+                chart_data["flux"] = chart_data["flux"].map(
+                    {"montant_entrees": "Entrees", "montant_sorties": "Sorties"}
+                )
+                fig = px.line(
+                    chart_data,
+                    x="date_transaction",
+                    y="montant",
+                    color="flux",
+                    facet_col="currency_code",
+                    facet_col_wrap=2,
+                    markers=True,
+                    labels={"date_transaction": "Date", "montant": "Montant", "flux": "Flux", "currency_code": "Devise"},
+                )
+                style_standard_line(fig, height=390, tickangle=-20)
+                st_plot(fig, key="mpesa_pilotage_liquidity", height=390)
+                with st.expander("Afficher les flux journaliers de liquidite", expanded=False):
+                    st.dataframe(liquidity_daily, width="stretch", hide_index=True)
+
+    with clients_tab:
+        render_panel_title("1. Activite, dormance et reactivation")
+        activity_summary = report_view.get("activite_synthese", pd.DataFrame())
+        activity_clients = report_view.get("activite_clients", pd.DataFrame())
+        if activity_summary.empty:
+            st.info("Aucune operation avec telephone et date valides ne permet de segmenter les clients.")
+        else:
+            fig = px.bar(
+                activity_summary,
+                x="statut_activite",
+                y="nombre_clients",
+                color="statut_activite",
+                facet_col="currency_code",
+                facet_col_wrap=2,
+                labels={"statut_activite": "Activite", "nombre_clients": "Clients", "currency_code": "Devise"},
+            )
+            style_standard_vertical_bar(fig, height=390, tickangle=-25)
+            st_plot(fig, key="mpesa_pilotage_activity", height=390)
+            with st.expander("Afficher les clients actifs, dormants et reactives", expanded=False):
+                activity_view = _apply_local_multiselect_filters(
+                    activity_clients,
+                    ["currency_code", "statut_activite", "est_nouveau_30j", "est_reactive_30j"],
+                    key_prefix="mpesa_pilotage_activity_filter",
+                )
+                st.dataframe(activity_view, width="stretch", hide_index=True)
+
+        render_panel_title("2. Conversion depot normal vers DAT")
+        conversion_summary = report_view.get("conversion_synthese", pd.DataFrame())
+        conversion_clients = report_view.get("conversion_clients", pd.DataFrame())
+        if conversion_summary.empty:
+            st.info("La conversion exige des operations G2 classees Depot normal et DAT.")
+        else:
+            st.dataframe(conversion_summary, width="stretch", hide_index=True)
+            st.caption("La conversion est observee dans la periode chargee; elle ne prouve pas l'affectation exacte d'un depot a un DAT.")
+            with st.expander("Afficher le detail client de la conversion", expanded=False):
+                st.dataframe(conversion_clients, width="stretch", hide_index=True)
+
+        render_panel_title("3. Adoption globale M-PESA des clients Perfect")
+        perfect_summary = report_view.get("perfect_adoption_synthese", pd.DataFrame())
+        perfect_statuses = report_view.get("perfect_adoption_statuts", pd.DataFrame())
+        perfect_detail = report_view.get("perfect_adoption_detail", pd.DataFrame())
+        if perfect_summary.empty:
+            st.info("Chargez Clients Perfect pour mesurer l'adoption M-PESA sur les Phone_Prefixe valides.")
+        else:
+            st.dataframe(perfect_summary, width="stretch", hide_index=True)
+            if not perfect_statuses.empty:
+                fig = px.bar(
+                    perfect_statuses,
+                    x="statut_adoption",
+                    y="nombre_clients",
+                    color="statut_adoption",
+                    labels={"statut_adoption": "Statut d'adoption", "nombre_clients": "Clients Perfect"},
+                )
+                style_standard_vertical_bar(fig, height=360, tickangle=-25)
+                st_plot(fig, key="mpesa_pilotage_perfect_adoption", height=360)
+            with st.expander("Afficher les clients Perfect par statut d'adoption", expanded=False):
+                st.dataframe(perfect_detail, width="stretch", hide_index=True)
+
+    with risk_tab:
+        render_panel_title("1. Concentration des transactions")
+        concentration_summary = report_view.get("concentration_synthese", pd.DataFrame())
+        concentration_clients = report_view.get("concentration_clients", pd.DataFrame())
+        if concentration_summary.empty:
+            st.info("Aucun telephone G2 valide ne permet de mesurer la concentration.")
+        else:
+            st.dataframe(concentration_summary, width="stretch", hide_index=True)
+            top_clients = concentration_clients.loc[concentration_clients["rang_volume"].le(10)].copy()
+            if not top_clients.empty:
+                fig = px.bar(
+                    top_clients.sort_values("volume_total"),
+                    x="volume_total",
+                    y="phone_prefixe",
+                    color="currency_code",
+                    facet_col="currency_code",
+                    facet_col_wrap=2,
+                    orientation="h",
+                    labels={"volume_total": "Volume entrees + sorties", "phone_prefixe": "Telephone", "currency_code": "Devise"},
+                )
+                style_standard_horizontal_bar(fig, height=max(380, 30 * len(top_clients)))
+                st_plot(fig, key="mpesa_pilotage_concentration", height=max(380, 30 * len(top_clients)))
+            with st.expander("Afficher le classement complet des clients", expanded=False):
+                st.dataframe(concentration_clients, width="stretch", hide_index=True)
+
+        render_panel_title("2. Qualite et alertes transactions")
+        quality_summary = report_view.get("qualite_synthese", pd.DataFrame())
+        alerts = report_view.get("alertes_transactions", pd.DataFrame())
+        if quality_summary.empty:
+            st.info("Chargez Transactions G2 pour calculer les taux de succes, d'anomalie et de qualite.")
+        else:
+            st.dataframe(quality_summary, width="stretch", hide_index=True)
+            alert_reason = alerts.get(
+                "motif_alerte_comportement", pd.Series("", index=alerts.index)
+            ).astype("string").fillna("")
+            operational_mask = alert_reason.str.startswith("Anomalie de controle")
+            behavioral_alerts = alerts.loc[~operational_mask].copy()
+            operational_count = int(operational_mask.sum())
+            if operational_count:
+                st.caption(
+                    f"{operational_count} anomalie(s) de rapprochement : le detail est centralise dans G2 / DAT."
+                )
+            with st.expander(
+                f"Afficher les {len(behavioral_alerts)} signal(aux) comportemental(aux)",
+                expanded=False,
+            ):
+                st.caption("Une alerte comportementale est un signal de revue, pas une preuve de fraude.")
+                st.dataframe(behavioral_alerts, width="stretch", hide_index=True)
+
+        render_panel_title("3. Echeancier DAT - risque d'echeance")
+        dat_summary = report_view.get("dat_echeances_synthese", pd.DataFrame())
+        dat_detail = report_view.get("dat_echeances_detail", pd.DataFrame())
+        if dat_summary.empty:
+            st.info("Chargez le fichier DAT Turbo avec maturity_date pour construire l'echeancier.")
+        else:
+            if dat_interest_rate > 0:
+                st.caption(
+                    f"Interet simple estime avec le taux annuel DAT de {dat_interest_rate:.2f}% defini dans "
+                    "Reference et stockage. Le solde DAT est utilise comme capital de calcul."
+                )
+            else:
+                st.caption(
+                    "L'estimation des interets est desactivee. Renseignez un taux annuel DAT superieur a 0 "
+                    "dans Reference et stockage avant le chargement."
+                )
+            fig = px.bar(
+                dat_summary,
+                x="tranche_echeance",
+                y="montant_dat",
+                color="currency_code",
+                facet_col="currency_code",
+                facet_col_wrap=2,
+                labels={"tranche_echeance": "Echeance", "montant_dat": "Montant DAT", "currency_code": "Devise"},
+                category_orders={
+                    "tranche_echeance": ["Echu", "0 a 7 jours", "8 a 30 jours", "31 a 60 jours", "61 a 90 jours", "Plus de 90 jours", "Date manquante"]
+                },
+            )
+            style_standard_vertical_bar(fig, height=390, tickangle=-25)
+            st_plot(fig, key="mpesa_pilotage_dat_maturity", height=390)
+            with st.expander("Afficher les DAT et leurs echeances", expanded=False):
+                st.dataframe(dat_detail, width="stretch", hide_index=True)
+
+    render_panel_title("Export cible du cockpit")
+    export_keys = [
+        "credit_synthese", "credit_detail", "liquidite_synthese", "liquidite_journaliere",
+        "activite_clients", "conversion_clients", "concentration_clients", "qualite_synthese",
+        "alertes_transactions", "dat_echeances_detail", "perfect_adoption_detail",
+    ]
+    export_report = {
+        key: report_view[key]
+        for key in export_keys
+        if key in report_view and isinstance(report_view[key], pd.DataFrame) and not report_view[key].empty
+    }
+    if st.button("Preparer l'export Excel du cockpit", key="mpesa_prepare_pilotage_export", width="stretch"):
+        with st.spinner("Preparation des feuilles importantes..."):
+            export_bytes = _create_excel_export_cached(export_report)
+        st.download_button(
+            "Telecharger le cockpit M-PESA",
+            data=export_bytes,
+            file_name=f"pilotage_mpesa_{pd.Timestamp(analysis_date):%Y%m%d}.xlsx" if pd.notna(analysis_date) else "pilotage_mpesa.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            width="stretch",
+        )
+    st.caption(
+        "L'Excel est genere uniquement sur demande et contient les syntheses et listes d'action du cockpit; "
+        "aucun PDF n'est genere."
+    )
+
+
 def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) -> None:
     if report is not None:
         render_panel_title("Credits du client")
@@ -1656,37 +2369,103 @@ def render_solution_mpesa_tab() -> None:
         ],
     )
 
-    upload_col1, upload_col2 = st.columns(2)
-    with upload_col1:
-        transactions_file = st.file_uploader("Transactions M-PESA_Turbo", type=["xlsx", "xls"], key="mpesa_transactions_file")
-        current_file = st.file_uploader("Comptes d'epargne courante_Turbo", type=["xlsx", "xls"], key="mpesa_current_file")
-        g2_file = st.file_uploader("Transactions M-PESA_G2", type=["xlsx", "xls"], key="mpesa_g2_file")
-    with upload_col2:
-        fixed_file = st.file_uploader("Comptes DAT_Turbo", type=["xlsx", "xls"], key="mpesa_fixed_file")
-        customers_file = st.file_uploader("Clients_Turbo", type=["xlsx", "xls"], key="mpesa_customers_file")
-        loans_file = st.file_uploader("Credits_Turbo", type=["xlsx", "xls"], key="mpesa_loans_file")
+    transactions_column, savings_column, customers_column = st.columns(3, gap="small")
+    with transactions_column:
+        st.markdown("**Transactions**")
+        transactions_file = st.file_uploader(
+            "Transactions M-PESA_Turbo",
+            type=["xlsx", "xls"],
+            key="mpesa_transactions_file",
+            accept_multiple_files=True,
+            help="Vous pouvez charger plusieurs périodes Turbo. Les écritures sont dédupliquées par id; les colonnes dr et cr conservent leur logique comptable.",
+        )
+        g2_file = st.file_uploader(
+            "Transactions M-PESA_G2",
+            type=["xlsx", "xls"],
+            key="mpesa_g2_file",
+            accept_multiple_files=True,
+            help="Vous pouvez charger ensemble les releves d'entrees et de sorties G2; ils seront unifies sans double comptage par Receipt No.",
+        )
+    with savings_column:
+        st.markdown("**Epargne et DAT**")
+        current_file = st.file_uploader(
+            "Epargne courante_Turbo (Current Savings)",
+            type=["xlsx", "xls"],
+            key="mpesa_current_file",
+            accept_multiple_files=True,
+            help="Plusieurs instantanés peuvent être chargés; la version la plus récente d'un même compte est conservée.",
+        )
+        fixed_file = st.file_uploader(
+            "DAT_Turbo (Fixed Savings)",
+            type=["xlsx", "xls"],
+            key="mpesa_fixed_file",
+            accept_multiple_files=True,
+            help="Plusieurs instantanés DAT peuvent être chargés sans doubler les comptes présents dans plusieurs fichiers.",
+        )
+    with customers_column:
+        st.markdown("**Clients et credits**")
+        loans_file = st.file_uploader(
+            "Credits_Turbo (Loans)",
+            type=["xlsx", "xls"],
+            key="mpesa_loans_file",
+            accept_multiple_files=True,
+            help="Les fichiers sont unifiés par loan_id et la version la plus récente du crédit est conservée.",
+        )
+        customers_file = st.file_uploader(
+            "Clients_Turbo",
+            type=["xlsx", "xls"],
+            key="mpesa_customers_file",
+            accept_multiple_files=True,
+            help="Les exports clients peuvent être cumulés sans répéter les mêmes fiches.",
+        )
         perfect_file = st.file_uploader(
             "Clients_Perfect",
             type=["xlsx", "xls"],
             key="mpesa_perfect_clients_file",
-            help="La colonne Phone_Prefixe est utilisee pour le rapprochement.",
+            accept_multiple_files=True,
+            help="Plusieurs exports Perfect peuvent être chargés. La colonne Phone_Prefixe sert au rapprochement et les fiches sont dédupliquées par identifiant client.",
         )
 
-    _render_expected_columns("Colonnes attendues - Transactions M-PESA_Turbo", TRANSACTION_REQUIRED_COLUMNS)
-    _render_expected_columns("Colonnes attendues - Epargne courante_Turbo", CURRENT_SAVINGS_REQUIRED_COLUMNS)
-    _render_expected_columns("Colonnes attendues - DAT_Turbo", FIXED_SAVINGS_REQUIRED_COLUMNS)
-    _render_expected_columns("Colonnes attendues - Transactions M-PESA_G2", G2_TRANSACTION_REQUIRED_COLUMNS)
-    _render_expected_columns("Colonnes attendues - Clients_Turbo", CUSTOMERS_REQUIRED_COLUMNS)
-    _render_expected_columns("Colonnes attendues - Clients_Perfect", PERFECT_CLIENTS_REQUIRED_COLUMNS)
+    with st.expander("Voir les colonnes attendues pour les fichiers", expanded=False):
+        expected_transactions, expected_savings, expected_customers = st.columns(3, gap="small")
+        with expected_transactions:
+            st.markdown("**Transactions M-PESA_Turbo**")
+            st.code(", ".join(sorted(TRANSACTION_REQUIRED_COLUMNS)), language="text")
+            st.markdown("**Transactions M-PESA_G2**")
+            st.code(", ".join(sorted(G2_TRANSACTION_REQUIRED_COLUMNS)), language="text")
+        with expected_savings:
+            st.markdown("**Epargne courante_Turbo (Current Savings)**")
+            st.code(", ".join(sorted(CURRENT_SAVINGS_REQUIRED_COLUMNS)), language="text")
+            st.markdown("**DAT_Turbo (Fixed Savings)**")
+            st.code(", ".join(sorted(FIXED_SAVINGS_REQUIRED_COLUMNS)), language="text")
+        with expected_customers:
+            st.markdown("**Credits_Turbo (Loans)**")
+            st.code("customer_id, loan_id", language="text")
+            st.markdown("**Clients_Turbo**")
+            st.code(", ".join(sorted(CUSTOMERS_REQUIRED_COLUMNS)), language="text")
+            st.markdown("**Clients_Perfect**")
+            st.code(", ".join(sorted(PERFECT_CLIENTS_REQUIRED_COLUMNS)), language="text")
 
     try:
-        transactions_raw = _uploaded_dataframe(transactions_file)
-        current_raw = _uploaded_dataframe(current_file)
-        fixed_raw = _uploaded_dataframe(fixed_file)
-        customers_raw = _uploaded_dataframe(customers_file)
-        loans_raw = _uploaded_dataframe(loans_file)
-        g2_raw = _uploaded_dataframe(g2_file)
-        perfect_raw = _uploaded_dataframe(perfect_file)
+        transactions_raw = _uploaded_dataframes(
+            transactions_file, source_column="fichier_source_transactions_turbo"
+        )
+        current_raw = _uploaded_dataframes(
+            current_file, source_column="fichier_source_epargne_turbo"
+        )
+        fixed_raw = _uploaded_dataframes(
+            fixed_file, source_column="fichier_source_dat_turbo"
+        )
+        customers_raw = _uploaded_dataframes(
+            customers_file, source_column="fichier_source_clients_turbo"
+        )
+        loans_raw = _uploaded_dataframes(
+            loans_file, source_column="fichier_source_credits_turbo"
+        )
+        g2_raw = _uploaded_g2_dataframes(g2_file)
+        perfect_raw = _uploaded_dataframes(
+            perfect_file, source_column="fichier_source_clients_perfect"
+        )
     except ValueError as exc:
         st.error(str(exc))
         return
@@ -1701,13 +2480,22 @@ def render_solution_mpesa_tab() -> None:
         perfect_raw,
     )
     sub_tabs = st.tabs(
-        ["Importation", "Vue d'ensemble", "Extrait client", "DAT", "G2 / DAT", "Perfect_client", "Credits", "Controle des donnees"]
+        [
+            "Importation",
+            "Pilotage M-PESA",
+            "Extrait client",
+            "DAT",
+            "G2 / DAT",
+            "Perfect_client",
+            "Detail des credits",
+            "Controle des donnees",
+        ]
     )
     report: dict[str, Any] | None = None
     with sub_tabs[0]:
         _render_import_tab(prepared, missing)
     with sub_tabs[1]:
-        _render_overview(prepared)
+        _render_management_dashboard(prepared)
     with sub_tabs[2]:
         report = _render_customer_extract(prepared)
     with sub_tabs[3]:

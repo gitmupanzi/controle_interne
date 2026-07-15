@@ -16,9 +16,25 @@ La source de vérité exécutable reste `credit_app/data_schema.py`. Les règles
 
 Les colonnes facultatives et alias acceptés sont définis dans `credit_app/data_schema.py`.
 
+## Chargement de plusieurs fichiers
+
+Chaque source peut recevoir plusieurs exports. Ajouter le nom du fichier source avant la normalisation, puis supprimer les chevauchements sans supprimer des opérations distinctes :
+
+| Source | Clé de déduplication prioritaire | Version conservée |
+|---|---|---|
+| Transactions Turbo | `id`; sinon référence × compte × client × devise × `dr` × `cr` × date | écriture la plus récente |
+| Épargne courante | client × devise × compte × produit × création | `updated_at` le plus récent |
+| DAT | client × devise × compte × approbation × échéance | dernier fichier chargé en cas de même compte |
+| Crédits | `loan_id`, puis `id` | `updated_at` le plus récent |
+| Clients Turbo | `customer_id`, puis téléphone × création | version la plus récente |
+| Clients Perfect | `id_client`, `code_client`, puis identifiant manuel × nom | dernier fichier chargé |
+| Transactions G2 | `Receipt No` | statut terminé prioritaire, puis date la plus récente |
+
+Conserver la liste des fichiers ayant fourni un enregistrement canonique. Le nombre de fichiers chargés doit rester visible dans le contrôle d'importation.
+
 ## Formats G2 acceptés
 
-Accepter les deux structures suivantes sans modifier le fichier source :
+Accepter les deux structures suivantes sans modifier le fichier source. Plusieurs relevés d'entrées et de sorties peuvent être chargés ensemble; conserver leur nom dans `fichier_source_g2` avant l'unification :
 
 1. Format avec `Transaction Amount`, éventuellement accompagné de `Details`, `Reason Type`, `Transaction Status`, `Completion Time` et `Balance`.
 2. Format relevé organisation avec montant éclaté dans `Paid In` et `Withdrawn`, solde dans `Balance` et nature dans `Details`.
@@ -30,6 +46,8 @@ Règles de montant et de sens :
 - utiliser le signe de `Transaction Amount` comme repli si les colonnes éclatées sont absentes;
 - conserver `balance_numeric` comme solde du relevé G2, sans le confondre avec un mouvement;
 - convertir les dates et montants avec erreurs contrôlées et conserver la colonne source utilisée.
+
+Pour Transactions Turbo, ne pas appliquer ces règles G2. Utiliser `dr` comme sortie du compte `MPESA ACCOUNT` et `cr` comme entrée, puis regrouper les écritures techniques par `ref_no` pour le rapprochement.
 
 ## Grain et clés
 
@@ -79,8 +97,10 @@ Ne jamais utiliser une sortie comme candidate DAT. Conserver `Autre entree`, `Au
 
 ## Inclusion et anomalies
 
-- Inclure dans les synthèses les statuts vides ou terminés reconnus (`Completed`, `Successful` et variantes normalisées).
-- Exclure des synthèses les statuts explicitement non terminés, mais les conserver dans le détail.
+- Si la colonne contient au moins un statut, inclure dans les synthèses uniquement les statuts terminés reconnus (`Completed`, `Successful` et variantes normalisées).
+- Si l'ancien export ne contient aucun statut exploitable, conserver toutes ses lignes pour compatibilité. Dans un export moderne à statuts mixtes, traiter une valeur vide comme `Non renseigne` et l'exclure des analyses.
+- Normaliser les statuts de contrôle en `Completed`, `Declined`, `Cancelled`, `Expired`, `Pending`, `Non renseigne` ou `Autre`; conserver la valeur source.
+- Exclure les statuts non terminés des analyses financières, temporelles, DAT, Perfect et du Word, mais les conserver dans `Statuts_G2`, le détail Excel et les anomalies.
 - Créer une anomalie pour : reçu manquant ou dupliqué, statut non terminé, référence Portal absente, écart de téléphone/devise/montant/date ou opération non classée.
 - Exporter les anomalies dans `Anomalies_G2` et les afficher dans G2/DAT.
 
@@ -152,6 +172,7 @@ Le bloc Word `Synthese des flux G2 par devise` utilise `rapport_journalier_pivot
 - Appliquer d'abord les bornes inclusives de date et d'heure de `Completion Time`, puis le multisélecteur de sens. Sans heure explicite, conserver toute la journée de début et de fin.
 - Interpréter une sélection vide ou toutes les valeurs sélectionnées comme tous les flux.
 - Appliquer le même périmètre à la synthèse, au détail, au contrôle et aux exports.
+- Agréger le jour de semaine de `Completion Time` de lundi à dimanche, avec les jours sans transaction à zéro; l'indicateur du jour le plus actif utilise le cumul de chaque jour de semaine sur toute la période filtrée.
 - Calculer la fidélisation par téléphone, mois de base et devise.
 - Laisser les taux M+1 ou 90 jours vides tant que la fenêtre complète n'est pas observable.
 - Exclure de la fidélisation les opérations internes, téléphones invalides et statuts en échec/annulés/inversés.
@@ -160,7 +181,8 @@ Le bloc Word `Synthese des flux G2 par devise` utilise `rapport_journalier_pivot
 
 - Préparation : `prepare_transactions`, `prepare_current_savings`, `prepare_fixed_savings`, `prepare_loans`, `prepare_g2_transactions`, `prepare_customers`, `prepare_perfect_clients`.
 - Extrait : `build_mpesa_statement`, `build_customer_summary`, `build_diagnostics`.
-- G2/DAT : `build_g2_dat_crosscheck`, `build_g2_entry_report`, `build_g2_daily_savings_report`, `build_g2_retention_report`.
+- G2/DAT : `build_g2_dat_crosscheck`, `build_g2_entry_report`, `build_g2_daily_savings_report`, `build_g2_transaction_time_analysis`, `build_g2_retention_report`.
+- Pilotage : `build_mpesa_management_dashboard`, `build_mpesa_credit_risk_analysis`, `build_mpesa_liquidity_analysis`, `build_mpesa_client_activity_analysis`, `build_mpesa_savings_conversion_analysis`, `build_mpesa_transaction_concentration_analysis`, `build_mpesa_transaction_quality_analysis`, `build_mpesa_dat_maturity_analysis`, `build_mpesa_perfect_adoption_analysis`.
 - Perfect : `build_perfect_client_crosscheck`.
 - Recherche : `search_customers`, `resolve_customer_id`.
 - Export : `create_excel_export`, `create_g2_dat_word`.

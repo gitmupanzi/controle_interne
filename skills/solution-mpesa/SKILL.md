@@ -1,6 +1,6 @@
 ---
 name: solution-mpesa
-description: Importer, normaliser, contrôler et rapprocher les fichiers Excel M-PESA de G2, Turbo et Perfect; construire les sous-onglets G2/DAT, Extrait client, Crédits et Perfect_client, enrichir les noms clients, segmenter Perfect dans G2, Turbo et leur intersection, classifier les entrées et sorties, détecter les anomalies et produire les exports Excel ciblés et Word sans mélanger les devises. Utiliser pour toute question ou modification liée à Solution M-PESA, Bisou Bisou Digital, Portal/Turbo, G2, Perfect, Phone_Prefixe, Receipt No/ref_no, DAT, épargne, crédit, fidélisation, rapprochement client ou rapport M-PESA du projet Streamlit.
+description: Importer, normaliser, contrôler et rapprocher les fichiers Excel M-PESA de G2, Turbo et Perfect; construire les sous-onglets Pilotage M-PESA, G2/DAT, Extrait client, Crédits et Perfect_client, mesurer risque crédit, liquidité, activité client, conversion DAT, concentration, qualité et adoption, détecter les anomalies et produire les exports Excel ciblés et Word sans mélanger les devises. Utiliser pour toute question ou modification liée à Solution M-PESA, Bisou Bisou Digital, Portal/Turbo, G2, Perfect, Phone_Prefixe, Receipt No/ref_no, DAT, épargne, crédit, fidélisation, rapprochement client ou rapport M-PESA du projet Streamlit.
 ---
 
 # Solution M-PESA
@@ -19,15 +19,19 @@ Réutiliser les contrats et fonctions métier existants. Préserver la traçabil
 8. Calculer chaque solde, total et taux par devise. Ne jamais sommer CDF et USD.
 9. Tester les cas nominal, source absente, format G2 alternatif, doublon, référence inconnue, contrôle en écart et solde d'ouverture manquant.
 
+Tous les téléversements de Solution M-PESA peuvent recevoir plusieurs fichiers. Conserver leur provenance, supprimer les chevauchements avec la clé métier propre à chaque source et ne jamais additionner plusieurs instantanés du même compte, crédit ou client.
+
 ## Invariants G2/DAT
 
 - Conserver une ligne analytique canonique par `Receipt No.`; signaler tout reçu dupliqué et ne pas le compter deux fois.
+- Accepter plusieurs relevés G2 simultanément, notamment les fichiers d'entrées et de sorties; conserver le fichier source avant de les unifier.
+- Compter les transactions terminees par date, jour de semaine et heure de `Completion Time`, sur des grilles completes de lundi a dimanche et de 00h a 23h; conserver la separation par devise et par sens et afficher les periodes sans activite a zero.
 - Rapprocher d'abord `Receipt No.` avec `ref_no` du Portal/Turbo. Agréger les écritures techniques du même `ref_no` sans additionner les miroirs comptables comme plusieurs opérations G2.
 - Classifier les entrées rapprochées avec `account_type` et `description` du Portal : `FIXED SAVINGS`/`Depot Bloque` = `DAT`, `NORMAL SAVINGS`/`Epargne depot` = `Depot normal`, compte prêt/principal/portefeuille = `Remboursement prets`.
 - Utiliser les règles G2 comme repli lorsque le Portal ne contient pas la référence; classifier les sorties B2C, demandes de crédit et opérations internes selon `Details`, `Reason Type`, `Paid In` et `Withdrawn`.
 - Contrôler séparément téléphone, devise, montant et date. Distinguer `Rapproche exact`, `Rapproche avec ecart` et `Non rapproche`.
-- Retenir uniquement les statuts G2 terminés dans les synthèses financières, tout en conservant les autres lignes dans le détail et les anomalies.
-- Utiliser `G2_CLASSIFIED_TRANSACTION_COLUMNS` comme ordre commun du tableau `Transactions` à l'écran et dans le Word : `date`, `receipt_no`, `currency_code`, `details_rapport`, `opposite_party`, `duree`, `compte_cree`, `montant`, `montant_entree`, `montant_sortie`, `balance_numeric`.
+- Dès qu'un export fournit des statuts, retenir uniquement les statuts G2 explicitement terminés dans les synthèses financières, le rapprochement DAT, Perfect_client et le Word; conserver les autres lignes dans la répartition des statuts, le détail Excel et les anomalies. Un ancien export sans aucun statut reste compatible.
+- Utiliser `G2_CLASSIFIED_TRANSACTION_COLUMNS` comme ordre du noyau métier du tableau `Transactions` et du Word : `date`, `receipt_no`, `currency_code`, `details_rapport`, `opposite_party`, `duree`, `compte_cree`, `montant`, `montant_entree`, `montant_sortie`, `balance_numeric`. L'écran peut ajouter le fichier source et le statut comme colonnes de contrôle.
 - Appliquer les bornes inclusives de date et d'heure de `Completion Time`, puis le filtre de sens, avant les synthèses, contrôles et exports; une sélection vide du multisélecteur de sens signifie tous les flux.
 
 ## Règles client et sources facultatives
@@ -43,15 +47,28 @@ Réutiliser les contrats et fonctions métier existants. Préserver la traçabil
 - Présenter un cumul relatif, et non un solde réel, si le solde d'ouverture M-PESA n'est pas fourni.
 - Ne jamais modifier les fichiers Excel sources pendant l'analyse.
 
+## Invariants Pilotage M-PESA
+
+- Pour Transactions Turbo, conserver la sémantique comptable : `dr` = sortie du compte M-PESA et `cr` = entrée. Ne jamais appliquer les règles G2 `Paid In`/`Withdrawn` aux fichiers Turbo.
+- Dédupliquer les transactions Turbo par `id`, les crédits par `loan_id`, les clients par identifiant ou téléphone/date, les comptes d'épargne et DAT par leur clé de compte; conserver la version la plus récente et la liste des fichiers sources.
+- Utiliser la derniere date operationnelle chargee comme date d'analyse par defaut; ne pas utiliser une echeance future comme date de fraicheur.
+- Calculer le PAR 1/7/30 uniquement depuis `due_date` et un encours credit disponible. Laisser le taux vide si un encours actif n'a pas d'echeance.
+- Dedupliquer les credits par `loan_id` et les operations G2/Turbo par reference, avec priorite au recu G2 canonique.
+- Classer l'activite client au grain telephone x devise : actif 30 jours, dormant 31-60 jours, dormant 61-90 jours ou inactif au-dela de 90 jours.
+- Presenter la conversion Depot normal vers DAT comme une conversion observee dans la periode, jamais comme une affectation comptable certaine.
+- Traiter les montants eleves, horaires rares et rafales d'operations comme des alertes de revue et non comme des preuves de fraude.
+- Produire l'echeancier DAT par tranche et devise. Mesurer l'adoption Perfect uniquement sur les `Phone_Prefixe` valides.
+
 ## Exports
 
 - Générer uniquement les feuilles Excel demandées par le contexte; ne jamais ajouter automatiquement toutes les feuilles vides du module.
-- Pour G2/DAT, conserver la synthèse, les comptages, le détail, `Anomalies_G2`, `G2_DAT`, `Retention_Mensuelle` et `Retention_Detail`.
+- Pour G2/DAT, conserver la synthèse, les comptages, `Statuts_G2`, le détail, `Anomalies_G2`, `G2_DAT`, `Transactions_Jour`, `Transactions_Jour_Semaine`, `Transactions_Heure`, `Transactions_Jour_Heure`, `Retention_Mensuelle` et `Retention_Detail`.
 - Garder le Word modifiable et ajouter en annexe le tableau unique `Transactions`, dans le même ordre que l'écran et en orientation paysage.
 - Transmettre `rapport_journalier_pivot` au Word même lorsqu'il est exclu de l'Excel compact; reconstruire la synthèse par devise depuis le détail si le pivot manque.
-- Répéter les en-têtes Word sur plusieurs pages et conserver toutes les lignes du périmètre filtré.
+- Répéter les en-têtes Word sur plusieurs pages et conserver toutes les lignes `Completed` du périmètre filtré; garder les autres statuts dans l'Excel de contrôle.
 - Vérifier qu'un export client reprend les filtres de l'extrait sans perdre les feuilles contextuelles du client.
 - Exporter les trois populations Perfect dans `Perfect_M_PESA`, `Perfect_Turbo` et `Perfect_Turbo_M_PESA`.
+- Generer l'Excel du cockpit uniquement sur demande et limiter ses feuilles aux syntheses et listes d'action utiles.
 
 ## Architecture à respecter
 

@@ -622,6 +622,88 @@ def main() -> None:
         if cycle_available_files:
             st.caption(f"{len(cycle_available_files)} fichier(s) local(aux) disponible(s) pour ce cycle.")
 
+    with st.sidebar.expander("Référence et stockage", expanded=False):
+        st.markdown("**Préparation des données**")
+        standardize_columns = st.checkbox(
+            "Renommer automatiquement les colonnes",
+            value=True,
+            key="credit_standardize_columns",
+            help="Désactivez cette option pour conserver les noms de colonnes du fichier chargé.",
+        )
+        st.caption(
+            f"Référence de renommage active : `data/Rename_columns.xlsx` ({get_reference_column_count()} alias)"
+            if standardize_columns
+            else "Renommage désactivé : les colonnes du fichier sont conservées telles quelles."
+        )
+
+        st.markdown("**Paramètres de calcul**")
+        st.number_input(
+            "Taux d'intérêt annuel DAT (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(st.session_state.get("mpesa_dat_annual_interest_rate_pct", 0.0)),
+            step=0.25,
+            format="%.2f",
+            key="mpesa_dat_annual_interest_rate_pct",
+            help=(
+                "Utilisé par Solution M-PESA pour estimer l'intérêt simple du DAT entre "
+                "date_approved et maturity_date. La valeur 0 désactive l'estimation."
+            ),
+        )
+
+        if selected_cycle_key == "epargne":
+            st.number_input(
+                "Taux CDF/USD (1 USD = x CDF)",
+                min_value=1.0,
+                max_value=100000.0,
+                value=float(st.session_state.get("credit_epargne_fx_rate", 2300.0)),
+                step=50.0,
+                key="credit_epargne_fx_rate",
+                help=(
+                    "Exemple : 2300 signifie que 1 USD = 2300,00 CDF. Ce taux sert à convertir "
+                    "les montants en CDF en équivalent USD dans le rapport épargne."
+                ),
+            )
+        if selected_cycle_key == "operations_depot_retrait":
+            st.number_input(
+                "Taux de reporting CDF/USD",
+                min_value=1.0,
+                max_value=100000.0,
+                value=float(st.session_state.get("credit_operations_fx_rate", 2800.0)),
+                step=50.0,
+                key="credit_operations_fx_rate",
+                help=(
+                    "Exemple : 2800 signifie que 10 000 USD correspondent à 28 000 000 CDF "
+                    "pour les seuils de reporting et de vigilance."
+                ),
+            )
+
+        st.markdown("**Affichage commun**")
+        st.checkbox(
+            "Afficher annotations (valeurs)",
+            value=True,
+            key="credit_annot_vals",
+            help="Affiche directement les valeurs sur les graphiques lorsque l'espace le permet.",
+        )
+        st.number_input(
+            "Seuil d'affichage des annotations (valeur >)",
+            min_value=0,
+            max_value=1_000_000,
+            value=1,
+            step=1,
+            key="credit_annot_min",
+            disabled=not st.session_state.get("credit_annot_vals", False),
+        )
+        st.button(
+            "Réinitialiser l'affichage",
+            key="credit_reset_display_options",
+            on_click=_reset_display_options,
+            width="stretch",
+        )
+
+        st.markdown("**Stockage local**")
+        st.caption("Vous pouvez déposer vos fichiers de travail dans `line_list/` pour les relire ensuite sans téléversement.")
+
     render_sidebar_section("Source des données", "Téléversez un fichier ou utilisez une base déjà stockée.")
     if "credit_source_mode" not in st.session_state:
         st.session_state["credit_source_mode"] = "Téléverser un fichier"
@@ -814,20 +896,6 @@ def main() -> None:
                 if sql_operations_cycle
                 else "Aucun fichier Excel n'a été trouvé dans `line_list/` pour la compilation."
             )
-
-    with st.sidebar.expander("Référence et stockage", expanded=False):
-        standardize_columns = st.checkbox(
-            "Renommer automatiquement les colonnes",
-            value=True,
-            key="credit_standardize_columns",
-            help="Désactivez cette option pour conserver les noms de colonnes du fichier chargé.",
-        )
-        st.caption(
-            f"Référence de renommage active : `data/Rename_columns.xlsx` ({get_reference_column_count()} alias)"
-            if standardize_columns
-            else "Renommage désactivé : les colonnes du fichier sont conservées telles quelles."
-        )
-        st.caption("Vous pouvez déposer vos fichiers de travail dans `line_list/` pour les relire ensuite sans téléversement.")
 
     if source_mode == "Téléverser un fichier" and uploaded_file is None:
         selected_local_path = None
@@ -1141,50 +1209,6 @@ def main() -> None:
         for column_name in cycle_filter_columns[:4]:
             detected_count = int(standardized_df[column_name].dropna().nunique()) if column_name in standardized_df.columns else 0
             st.write(f"{_filter_column_label(column_name)} détectés : **{detected_count:,}**".replace(",", " "))
-
-    with st.sidebar.expander("Options d'affichage", expanded=False):
-        render_sidebar_section("Affichage", "Réglez l'affichage des valeurs et la lisibilité des graphiques.", container=st)
-        if selected_cycle_key == "epargne":
-            st.number_input(
-                "Taux CDF/USD (1 USD = x CDF)",
-                min_value=1.0,
-                max_value=100000.0,
-                value=float(st.session_state.get("credit_epargne_fx_rate", 2300.0)),
-                step=50.0,
-                key="credit_epargne_fx_rate",
-                help="Exemple : 2300 signifie que 1 USD = 2300,00 CDF. Ce taux sert à convertir les montants en CDF en équivalent USD dans le rapport épargne.",
-            )
-        if selected_cycle_key == "operations_depot_retrait":
-            st.number_input(
-                "Taux de reporting CDF/USD",
-                min_value=1.0,
-                max_value=100000.0,
-                value=float(st.session_state.get("credit_operations_fx_rate", 2800.0)),
-                step=50.0,
-                key="credit_operations_fx_rate",
-                help="Exemple : 2800 signifie que 10 000 USD correspondent à 28 000 000 CDF pour les seuils de reporting et de vigilance.",
-            )
-        st.checkbox(
-            "Afficher annotations (valeurs)",
-            value=True,
-            key="credit_annot_vals",
-            help="Affiche directement les valeurs sur les graphiques lorsque l'espace le permet.",
-        )
-        st.number_input(
-            "Seuil d'affichage des annotations (valeur >)",
-            min_value=0,
-            max_value=1_000_000,
-            value=1,
-            step=1,
-            key="credit_annot_min",
-            disabled=not st.session_state.get("credit_annot_vals", False),
-        )
-        st.button(
-            "Réinitialiser l'affichage",
-            key="credit_reset_display_options",
-            on_click=_reset_display_options,
-            width="stretch",
-        )
 
     render_dashboard_section(
         "Synthèse du cycle",
