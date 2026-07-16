@@ -39,11 +39,22 @@ CUSTOMER_STATEMENT_COLUMNS = [
     "date",
     "compte",
     "receipt_no",
+    "devise",
     "description",
     "entree",
     "sortie",
     "solde",
 ]
+
+CUSTOMER_STATEMENT_FOCUS_OPERATION_TYPES = frozenset(
+    {
+        "Sortie M-PESA_Turbo vers epargne",
+        "Sortie M-PESA_Turbo vers DAT",
+        "Decaissement de credit",
+        "Remboursement de credit",
+        "Remboursement avec penalite",
+    }
+)
 
 LOAN_USEFUL_COLUMNS = {
     "loan_id",
@@ -133,7 +144,10 @@ G2_OPERATION_CATEGORIES = [
 ]
 
 G2_COMPLETED_STATUS_LABELS = frozenset({"completed", "complete", "successful", "success"})
-G2_TURBO_DATE_TOLERANCE_MINUTES = 120.0
+# Conserver une fenetre assez large pour retrouver une sortie B2C Turbo, puis
+# appliquer un seuil de controle plus strict pour le rapport d'anomalies.
+G2_TURBO_OUTPUT_MATCH_TOLERANCE_MINUTES = 120.0
+G2_TURBO_DATE_ANOMALY_TOLERANCE_MINUTES = 60.0
 
 G2_CLASSIFIED_TRANSACTION_COLUMNS = [
     "date",
@@ -2073,7 +2087,7 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
                 candidates = candidates.loc[
                     candidates["__ecart_minutes"]
                     .abs()
-                    .le(G2_TURBO_DATE_TOLERANCE_MINUTES)
+                    .le(G2_TURBO_OUTPUT_MATCH_TOLERANCE_MINUTES)
                 ].copy()
             if candidates.empty:
                 continue
@@ -2177,17 +2191,20 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
         .fillna(False)
         .astype(bool)
     )
-    creation_cross_date_tolerated = (
+    creation_within_tolerance = (
         creation_comparable
-        & ~creation_same_date
         & output["ecart_creation_minutes"]
-        .abs().le(G2_TURBO_DATE_TOLERANCE_MINUTES)
+        .abs().le(G2_TURBO_DATE_ANOMALY_TOLERANCE_MINUTES)
         .fillna(False)
+    )
+    creation_cross_date_tolerated = (
+        creation_within_tolerance
+        & ~creation_same_date
     )
     output["controle_date_creation"] = np.select(
         [
             (~creation_comparable).fillna(True).astype(bool),
-            creation_same_date,
+            creation_within_tolerance & creation_same_date,
             creation_cross_date_tolerated,
         ],
         ["Non controlable", "Conforme", "Conforme - passage de date"],
@@ -2204,17 +2221,20 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
         .fillna(False)
         .astype(bool)
     )
-    finalisation_cross_date_tolerated = (
+    finalisation_within_tolerance = (
         finalisation_comparable
-        & ~finalisation_same_date
         & output["ecart_finalisation_minutes"]
-        .abs().le(G2_TURBO_DATE_TOLERANCE_MINUTES)
+        .abs().le(G2_TURBO_DATE_ANOMALY_TOLERANCE_MINUTES)
         .fillna(False)
+    )
+    finalisation_cross_date_tolerated = (
+        finalisation_within_tolerance
+        & ~finalisation_same_date
     )
     output["controle_date_finalisation"] = np.select(
         [
             (~finalisation_comparable).fillna(True).astype(bool),
-            finalisation_same_date,
+            finalisation_within_tolerance & finalisation_same_date,
             finalisation_cross_date_tolerated,
         ],
         ["Non controlable", "Conforme", "Conforme - passage de date"],
@@ -2273,7 +2293,7 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
                 f"Creation G2 : {creation_g2_text} | "
                 f"Creation Turbo : {creation_turbo_text}{creation_gap_text} | "
                 f"Finalisation G2 : {finalisation_text}{delay_text} | "
-                f"Passage de date tolere (seuil {G2_TURBO_DATE_TOLERANCE_MINUTES:.0f} minutes)"
+                f"Passage de date tolere (seuil {G2_TURBO_DATE_ANOMALY_TOLERANCE_MINUTES:.0f} minutes)"
             )
         if row.get("controle_date_finalisation") in {
             "Ecart de date",
@@ -2441,6 +2461,28 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
     return output
 
 
+def _filter_g2_crosscheck_by_customer(
+    frame: pd.DataFrame,
+    customer_id: str | None,
+) -> pd.DataFrame:
+    """Limite un controle G2 aux identifiants Turbo effectivement rapproches."""
+    if customer_id is None or frame.empty:
+        return frame
+    customer_text = str(customer_id).strip()
+    matches = pd.Series(False, index=frame.index)
+    for column in ["customer_id_dat", "customer_id_ref_no", "customer_id_portal"]:
+        if column not in frame.columns:
+            continue
+        matches = matches | frame[column].apply(
+            lambda value: (
+                False
+                if _is_empty_text(value)
+                else any(part.strip() == customer_text for part in str(value).split("|"))
+            )
+        )
+    return frame.loc[matches].copy().reset_index(drop=True)
+
+
 def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None = None) -> pd.DataFrame:
     g2 = prepared.g2_transactions
     fixed = prepared.fixed_savings
@@ -2573,7 +2615,7 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
             default="Non rapproche",
         )
         output["statut_rapprochement_dat"] = "Fichier DAT absent"
-        return output.reset_index(drop=True)
+        return _filter_g2_crosscheck_by_customer(output, customer_id)
 
     dat = fixed.copy()
     dat["phone_prefixe"] = normalize_phone(dat["msisdn"])
@@ -2649,13 +2691,7 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
     output["solde_dat_operation"] = pd.to_numeric(output["solde_dat_operation_apres"], errors="coerce")
     output["dat_final"] = pd.to_numeric(output["dat_final_client_devise"], errors="coerce")
 
-    if customer_id is not None:
-        customer_text = str(customer_id)
-        output = output.loc[
-            output["customer_id_dat"].astype("string").fillna("").str.split("|").apply(
-                lambda values: any(str(value).strip() == customer_text for value in values)
-            )
-        ].copy()
+    output = _filter_g2_crosscheck_by_customer(output, customer_id)
     output["nombre_dat_client_devise"] = pd.to_numeric(output["nombre_dat_client_devise"], errors="coerce").fillna(0).astype(int)
     has_ref_match = output["customer_id_ref_no"].astype("string").fillna("").ne("")
     has_dat_operation = output["reference_dat_operation"].astype("string").fillna("").ne("") | output["nb_lignes_fixed_savings"].gt(0)
@@ -4854,13 +4890,28 @@ def build_mpesa_statement(
             default="Actif",
         )
 
+    tx_client["operation_reference"] = tx_client["ref_no"].where(
+        ~tx_client["ref_no"].apply(_is_empty_text), tx_client["reference_id"]
+    )
+    missing_reference = tx_client["operation_reference"].apply(_is_empty_text)
+    tx_client.loc[missing_reference, "operation_reference"] = (
+        "LIGNE-" + tx_client.loc[missing_reference, "id"].astype("string")
+    )
+    operation_metadata = (
+        tx_client.groupby(
+            ["customer_id", "currency_code", "created_at", "operation_reference"],
+            as_index=False,
+            dropna=False,
+        )
+        .agg(
+            description_turbo=("description", concat_unique),
+            account_types_operation=("account_type", concat_unique),
+        )
+    )
+
     mpesa = tx_client.loc[tx_client["account_type"].eq("MPESA ACCOUNT")].copy()
     if mpesa.empty:
         raise ValueError(f"Aucun mouvement MPESA ACCOUNT trouve pour le client {customer_id}.")
-
-    mpesa["operation_reference"] = mpesa["ref_no"].where(~mpesa["ref_no"].apply(_is_empty_text), mpesa["reference_id"])
-    missing_reference = mpesa["operation_reference"].apply(_is_empty_text)
-    mpesa.loc[missing_reference, "operation_reference"] = "LIGNE-" + mpesa.loc[missing_reference, "id"].astype("string")
 
     statement_aggregations: dict[str, tuple[str, object]] = {
         "telephone": ("msisdn1", concat_unique),
@@ -4880,6 +4931,20 @@ def build_mpesa_statement(
         .agg(**statement_aggregations)
         .sort_values(["currency_code", "created_at", "operation_reference"])
     )
+    statement = statement.merge(
+        operation_metadata,
+        on=["customer_id", "currency_code", "created_at", "operation_reference"],
+        how="left",
+    )
+    has_turbo_description = ~statement["description_turbo"].apply(_is_empty_text)
+    statement["descriptions"] = statement["description_turbo"].where(
+        has_turbo_description, statement["descriptions"]
+    )
+    has_operation_accounts = ~statement["account_types_operation"].apply(_is_empty_text)
+    statement["account_types"] = statement["account_types_operation"].where(
+        has_operation_accounts, statement["account_types"]
+    )
+    statement = statement.drop(columns=["account_types_operation"])
     if "Nom_client" not in statement.columns:
         statement["Nom_client"] = pd.NA
     if "mode_rapprochement_nom_client" not in statement.columns:
@@ -4955,8 +5020,17 @@ def build_mpesa_statement(
     summary = build_customer_summary(statement, dat_client, loans_client, str(customer_id))
     diagnostics = build_diagnostics(prepared, str(customer_id), statement)
     g2_dat = build_g2_dat_crosscheck(prepared, str(customer_id))
+    g2_available = not prepared.g2_transactions.empty
+    name_enriched_by_g2 = bool(
+        "Nom_client" in statement.columns
+        and clean_text(statement["Nom_client"]).ne("").any()
+        and g2_available
+    )
     return {
         "customer_id": str(customer_id),
+        "mode_source_extrait": "Turbo + verification G2" if g2_available else "Turbo seul",
+        "controle_g2_disponible": g2_available,
+        "nom_client_enrichi_g2": name_enriched_by_g2,
         "extrait": format_statement_columns(statement),
         "synthese": summary,
         "dat_final": dat_client,
@@ -5211,6 +5285,7 @@ def format_statement_columns(statement: pd.DataFrame) -> pd.DataFrame:
         "references_internes",
         "reference_dat_operation",
         "reference_credit_operation",
+        "description_turbo",
         "descriptions",
         "entree_mpesa",
         "sortie_mpesa",
@@ -5246,8 +5321,23 @@ def build_customer_statement_view(
     statement: pd.DataFrame,
     *,
     account_number: object = "",
+    entry_account_number: object | None = None,
+    output_account_number: object | None = None,
+    allow_multiple_currencies: bool = False,
 ) -> dict[str, Any]:
-    """Construit la vue courte d'un extrait client pour une seule devise."""
+    """Construit l'extrait officiel selon le sens metier Bisou Bisou.
+
+    Le compte Turbo ``MPESA ACCOUNT`` porte le mouvement inverse du flux de
+    l'organisation : un debit Turbo correspond a une entree Bisou Bisou et un
+    credit Turbo a une sortie. Les cumuls restent calcules separement par devise.
+    """
+    legacy_account = str(account_number).strip()
+    entry_account = (
+        legacy_account if entry_account_number is None else str(entry_account_number).strip()
+    )
+    output_account = (
+        legacy_account if output_account_number is None else str(output_account_number).strip()
+    )
     empty_transactions = pd.DataFrame(columns=CUSTOMER_STATEMENT_COLUMNS)
     empty_result: dict[str, Any] = {
         "transactions": empty_transactions,
@@ -5255,13 +5345,16 @@ def build_customer_statement_view(
         "customer_id": "",
         "customer_name": "",
         "telephone": "",
-        "account_number": str(account_number).strip(),
+        "account_number": legacy_account,
+        "entry_account_number": entry_account,
+        "output_account_number": output_account,
         "total_entries": 0.0,
         "total_outputs": 0.0,
         "opening_amount": np.nan,
         "closing_amount": np.nan,
         "balance_is_real": False,
         "balance_label": "Cumul net",
+        "summary_by_currency": pd.DataFrame(),
     }
     if not isinstance(statement, pd.DataFrame) or statement.empty:
         return empty_result
@@ -5271,59 +5364,83 @@ def build_customer_statement_view(
         frame.get("currency_code", pd.Series("", index=frame.index))
     ).str.upper()
     currencies = [value for value in frame["currency_code"].dropna().unique().tolist() if value]
-    if len(currencies) > 1:
+    if len(currencies) > 1 and not allow_multiple_currencies:
         raise ValueError("L'extrait client officiel doit contenir une seule devise.")
-    currency = currencies[0] if currencies else "SANS DEVISE"
+    currency = "ALL" if len(currencies) > 1 else currencies[0] if currencies else "SANS DEVISE"
 
     frame["created_at"] = pd.to_datetime(
         frame.get("created_at", pd.Series(pd.NaT, index=frame.index)), errors="coerce"
     )
     frame = frame.sort_values(["created_at", "operation_reference"], na_position="last").reset_index(drop=True)
-    entries = pd.to_numeric(
+    turbo_entries = pd.to_numeric(
         frame.get("entree_mpesa", pd.Series(0.0, index=frame.index)), errors="coerce"
     ).fillna(0.0)
-    outputs = pd.to_numeric(
+    turbo_outputs = pd.to_numeric(
         frame.get("sortie_mpesa", pd.Series(0.0, index=frame.index)), errors="coerce"
     ).fillna(0.0)
-    movements = pd.to_numeric(
-        frame.get("mouvement_net_mpesa", entries - outputs), errors="coerce"
-    ).fillna(entries - outputs)
+    # Le sens du compte MPESA Turbo est inverse du flux de l'organisation.
+    entries = turbo_outputs
+    outputs = turbo_entries
+    movements = entries - outputs
 
-    real_after = pd.to_numeric(
-        frame.get("solde_mpesa_apres", pd.Series(np.nan, index=frame.index)), errors="coerce"
-    )
     real_before = pd.to_numeric(
         frame.get("solde_mpesa_avant", pd.Series(np.nan, index=frame.index)), errors="coerce"
     )
     if "solde_mpesa_disponible" in frame.columns:
         available = frame["solde_mpesa_disponible"].astype("boolean").fillna(False)
     else:
-        available = real_after.notna()
-    balance_is_real = bool(available.all() and real_after.notna().all())
+        available = real_before.notna()
 
-    relative_balance = pd.to_numeric(
-        frame.get("cumul_net_depuis_debut_fichier", pd.Series(np.nan, index=frame.index)), errors="coerce"
+    displayed_balance = pd.Series(np.nan, index=frame.index, dtype="float64")
+    summary_rows: list[dict[str, object]] = []
+    for currency_code, index in frame.groupby("currency_code", sort=True, dropna=False).groups.items():
+        group_movements = movements.loc[index]
+        group_real = bool(available.loc[index].all() and real_before.loc[index].notna().all())
+        if group_real:
+            opening = float(real_before.loc[index].iloc[0])
+            group_balance = opening + group_movements.cumsum()
+        else:
+            opening = 0.0
+            group_balance = group_movements.cumsum()
+        displayed_balance.loc[index] = group_balance
+        summary_rows.append(
+            {
+                "currency_code": currency_code or "SANS DEVISE",
+                "total_entries": float(entries.loc[index].sum()),
+                "total_outputs": float(outputs.loc[index].sum()),
+                "opening_amount": opening,
+                "closing_amount": float(group_balance.iloc[-1]),
+                "balance_is_real": group_real,
+                "balance_label": "Solde" if group_real else "Cumul net",
+            }
+        )
+    summary_by_currency = pd.DataFrame(summary_rows)
+    balance_is_real = bool(
+        not summary_by_currency.empty
+        and summary_by_currency["balance_is_real"].astype(bool).all()
     )
-    if relative_balance.isna().any():
-        calculated = movements.cumsum()
-        relative_balance = relative_balance.where(relative_balance.notna(), calculated)
-    displayed_balance = real_after if balance_is_real else relative_balance
 
     names = frame.get("Nom_client", pd.Series("", index=frame.index))
     phones = frame.get("telephone", pd.Series("", index=frame.index))
 
     def statement_description(row: pd.Series) -> str:
-        operation = row.get("type_operation")
-        if _is_empty_text(operation):
-            operation = row.get("descriptions")
-        parts = [operation, row.get("telephone"), row.get("Nom_client")]
+        turbo_description = row.get("description_turbo")
+        if _is_empty_text(turbo_description):
+            turbo_description = row.get("descriptions")
+        parts = [turbo_description, row.get("telephone"), row.get("Nom_client")]
         return " - ".join(str(value).strip() for value in parts if not _is_empty_text(value))
 
+    account_values = np.select(
+        [entries.gt(0), outputs.gt(0)],
+        [entry_account, output_account],
+        default=entry_account or output_account,
+    )
     transactions = pd.DataFrame(
         {
             "date": frame["created_at"],
-            "compte": str(account_number).strip(),
+            "compte": account_values,
             "receipt_no": frame.get("operation_reference", pd.Series("", index=frame.index)),
+            "devise": frame["currency_code"],
             "description": frame.apply(statement_description, axis=1),
             "entree": entries,
             "sortie": outputs,
@@ -5331,12 +5448,19 @@ def build_customer_statement_view(
         }
     )[CUSTOMER_STATEMENT_COLUMNS]
 
-    if balance_is_real:
-        opening_amount = real_before.iloc[0]
-        if pd.isna(opening_amount):
-            opening_amount = real_after.iloc[0] - movements.iloc[0]
+    if len(summary_by_currency) == 1:
+        summary_row = summary_by_currency.iloc[0]
+        opening_amount = summary_row["opening_amount"]
+        closing_amount = summary_row["closing_amount"]
+        total_entries = summary_row["total_entries"]
+        total_outputs = summary_row["total_outputs"]
+        balance_label = summary_row["balance_label"]
     else:
-        opening_amount = displayed_balance.iloc[0] - movements.iloc[0]
+        opening_amount = np.nan
+        closing_amount = np.nan
+        total_entries = np.nan
+        total_outputs = np.nan
+        balance_label = "Solde par devise" if balance_is_real else "Cumul net par devise"
 
     result = dict(empty_result)
     result.update(
@@ -5346,12 +5470,15 @@ def build_customer_statement_view(
             "customer_id": concat_unique(frame.get("customer_id", pd.Series("", index=frame.index))),
             "customer_name": concat_unique(names),
             "telephone": concat_unique(phones),
-            "total_entries": float(entries.sum()),
-            "total_outputs": float(outputs.sum()),
+            "total_entries": float(total_entries) if pd.notna(total_entries) else np.nan,
+            "total_outputs": float(total_outputs) if pd.notna(total_outputs) else np.nan,
             "opening_amount": float(opening_amount) if pd.notna(opening_amount) else np.nan,
-            "closing_amount": float(displayed_balance.iloc[-1]) if pd.notna(displayed_balance.iloc[-1]) else np.nan,
+            "closing_amount": float(closing_amount) if pd.notna(closing_amount) else np.nan,
             "balance_is_real": balance_is_real,
-            "balance_label": "Solde" if balance_is_real else "Cumul net",
+            "balance_label": balance_label,
+            "entry_account_number": entry_account,
+            "output_account_number": output_account,
+            "summary_by_currency": summary_by_currency,
         }
     )
     return result
@@ -5856,11 +5983,13 @@ def create_customer_statement_word(
     telephone: object = "",
     currency: object,
     account_number: object = "",
+    entry_account_number: object | None = None,
+    output_account_number: object | None = None,
     period_start: object | None = None,
     period_end: object | None = None,
     generated_at: pd.Timestamp | None = None,
 ) -> bytes:
-    """Genere un extrait de compte client Word editable, limite a une devise."""
+    """Genere un extrait Word CDF, USD ou ALL sans sommer les devises."""
     try:
         from docx import Document
         from docx.enum.section import WD_ORIENT
@@ -5875,20 +6004,35 @@ def create_customer_statement_word(
     if not isinstance(statement, pd.DataFrame) or statement.empty:
         raise ValueError("Aucune operation filtree n'est disponible pour l'extrait Word.")
     currency_text = str(currency).strip().upper()
+    all_currencies = currency_text in {"ALL", "TOUTES", "TOUS", "CDF + USD"}
     frame = statement.copy()
     frame_currency = clean_text(
         frame.get("currency_code", pd.Series("", index=frame.index))
     ).str.upper()
-    frame = frame.loc[frame_currency.eq(currency_text)].copy()
+    if not all_currencies:
+        frame = frame.loc[frame_currency.eq(currency_text)].copy()
     if frame.empty:
         raise ValueError(f"Aucune operation {currency_text or 'sans devise'} n'est disponible pour l'extrait Word.")
 
-    view = build_customer_statement_view(frame, account_number=account_number)
+    view = build_customer_statement_view(
+        frame,
+        account_number=account_number,
+        entry_account_number=entry_account_number,
+        output_account_number=output_account_number,
+        allow_multiple_currencies=all_currencies,
+    )
     transactions = view["transactions"]
     customer_id_text = str(customer_id).strip() or view["customer_id"] or "Non disponible"
     customer_name_text = str(customer_name).strip() or view["customer_name"] or "Nom non disponible"
     telephone_text = str(telephone).strip() or view["telephone"] or "Non disponible"
-    account_text = str(account_number).strip() or "Non renseigne"
+    observed_currencies = sorted(
+        value for value in transactions["devise"].dropna().astype(str).unique().tolist() if value
+    )
+    currency_label = (
+        f"ALL ({', '.join(observed_currencies)})"
+        if all_currencies
+        else currency_text or view["currency"]
+    )
     generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
 
     observed_dates = pd.to_datetime(transactions["date"], errors="coerce").dropna()
@@ -5970,7 +6114,7 @@ def create_customer_statement_word(
         ("Au :", end_text),
         ("Numéro du client :", customer_id_text),
         ("Téléphone :", telephone_text),
-        ("Compte :", account_text),
+        ("Devise :", currency_label),
     ]
     for row_index, (label, value) in enumerate(criteria_rows):
         criteria.cell(row_index, 0).text = label
@@ -5989,39 +6133,75 @@ def create_customer_statement_word(
     title.paragraph_format.space_before = Pt(5)
     title.paragraph_format.space_after = Pt(6)
     title.add_run(
-        f"Extrait de compte [Turbo] - {telephone_text} - {customer_name_text.upper()} - {currency_text or view['currency']}"
+        f"Extrait de compte [Turbo] - {telephone_text} - {customer_name_text.upper()} - {currency_label}"
     )
 
-    balance_prefix = "Solde" if view["balance_is_real"] else "Cumul"
-    summary = document.add_table(rows=2, cols=4)
-    summary.alignment = WD_TABLE_ALIGNMENT.RIGHT
-    summary.autofit = False
-    summary_labels = [
-        f"{balance_prefix} initial",
-        "Total entrees [Turbo]",
-        "Total sorties [Turbo]",
-        f"{balance_prefix} final",
-    ]
-    summary_values = [
-        view["opening_amount"],
-        view["total_entries"],
-        view["total_outputs"],
-        view["closing_amount"],
-    ]
-    for index, label in enumerate(summary_labels):
-        summary.cell(0, index).text = label
-        summary.cell(1, index).text = _pdf_number(summary_values[index], decimals=decimals)
-        summary.cell(0, index).width = Cm(3.8)
-        summary.cell(1, index).width = Cm(3.8)
-        set_cell_shading(summary.cell(0, index), "E8EEF4")
-        summary.cell(0, index).paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
-        summary.cell(1, index).paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        for run in summary.cell(0, index).paragraphs[0].runs:
-            run.bold = True
-            run.font.size = Pt(8)
-        for run in summary.cell(1, index).paragraphs[0].runs:
-            run.bold = True
-            run.font.size = Pt(9)
+    summary_by_currency = view["summary_by_currency"]
+    if all_currencies:
+        summary_headers = ["Devise", "Ouverture", "Entrees [Turbo]", "Sorties [Turbo]", "Cloture"]
+        summary = document.add_table(rows=1, cols=len(summary_headers))
+        summary.alignment = WD_TABLE_ALIGNMENT.RIGHT
+        summary.autofit = False
+        for index, label in enumerate(summary_headers):
+            summary.cell(0, index).text = label
+            summary.cell(0, index).width = Cm(3.3)
+            set_cell_shading(summary.cell(0, index), "E8EEF4")
+            summary.cell(0, index).paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in summary.cell(0, index).paragraphs[0].runs:
+                run.bold = True
+                run.font.size = Pt(8)
+        for _, summary_row in summary_by_currency.iterrows():
+            cells = summary.add_row().cells
+            row_currency = str(summary_row.get("currency_code", ""))
+            row_decimals = 0 if row_currency == "CDF" else 2
+            balance_kind = "Solde" if bool(summary_row.get("balance_is_real", False)) else "Cumul"
+            values = [
+                f"{row_currency} ({balance_kind})",
+                _pdf_number(summary_row.get("opening_amount"), decimals=row_decimals),
+                _pdf_number(summary_row.get("total_entries"), decimals=row_decimals),
+                _pdf_number(summary_row.get("total_outputs"), decimals=row_decimals),
+                _pdf_number(summary_row.get("closing_amount"), decimals=row_decimals),
+            ]
+            for index, value in enumerate(values):
+                cells[index].text = value
+                cells[index].width = Cm(3.3)
+                cells[index].paragraphs[0].alignment = (
+                    WD_ALIGN_PARAGRAPH.CENTER if index == 0 else WD_ALIGN_PARAGRAPH.RIGHT
+                )
+                for run in cells[index].paragraphs[0].runs:
+                    run.bold = True
+                    run.font.size = Pt(8.5)
+    else:
+        balance_prefix = "Solde" if view["balance_is_real"] else "Cumul"
+        summary = document.add_table(rows=2, cols=4)
+        summary.alignment = WD_TABLE_ALIGNMENT.RIGHT
+        summary.autofit = False
+        summary_labels = [
+            f"{balance_prefix} initial",
+            "Total entrees [Turbo]",
+            "Total sorties [Turbo]",
+            f"{balance_prefix} final",
+        ]
+        summary_values = [
+            view["opening_amount"],
+            view["total_entries"],
+            view["total_outputs"],
+            view["closing_amount"],
+        ]
+        for index, label in enumerate(summary_labels):
+            summary.cell(0, index).text = label
+            summary.cell(1, index).text = _pdf_number(summary_values[index], decimals=decimals)
+            summary.cell(0, index).width = Cm(3.8)
+            summary.cell(1, index).width = Cm(3.8)
+            set_cell_shading(summary.cell(0, index), "E8EEF4")
+            summary.cell(0, index).paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            summary.cell(1, index).paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            for run in summary.cell(0, index).paragraphs[0].runs:
+                run.bold = True
+                run.font.size = Pt(8)
+            for run in summary.cell(1, index).paragraphs[0].runs:
+                run.bold = True
+                run.font.size = Pt(9)
 
     document.add_paragraph().paragraph_format.space_after = Pt(0)
     table = document.add_table(rows=1, cols=len(CUSTOMER_STATEMENT_COLUMNS))
@@ -6032,6 +6212,7 @@ def create_customer_statement_word(
         "date": "Date",
         "compte": "Compte",
         "receipt_no": "Receipt No",
+        "devise": "Devise",
         "description": "Description",
         "entree": "Entrée",
         "sortie": "Sortie",
@@ -6041,7 +6222,8 @@ def create_customer_statement_word(
         "date": 2.3,
         "compte": 1.7,
         "receipt_no": 2.8,
-        "description": 10.4,
+        "devise": 1.5,
+        "description": 8.9,
         "entree": 2.4,
         "sortie": 2.4,
         "solde": 2.6,
@@ -6063,14 +6245,16 @@ def create_customer_statement_word(
         cells = table.add_row().cells
         for index, column in enumerate(CUSTOMER_STATEMENT_COLUMNS):
             value = row.get(column)
+            row_currency = str(row.get("devise", currency_text)).upper()
+            row_decimals = 0 if row_currency == "CDF" else 2
             if column == "date":
                 parsed = pd.to_datetime(value, errors="coerce")
                 text = f"{parsed:%d/%m/%Y}" if pd.notna(parsed) else "-"
             elif column in {"entree", "sortie"}:
                 numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-                text = "" if pd.isna(numeric_value) or float(numeric_value) == 0 else _pdf_number(numeric_value, decimals=decimals)
+                text = "" if pd.isna(numeric_value) or float(numeric_value) == 0 else _pdf_number(numeric_value, decimals=row_decimals)
             elif column == "solde":
-                text = _pdf_number(value, decimals=decimals)
+                text = _pdf_number(value, decimals=row_decimals)
             else:
                 text = "-" if _is_empty_text(value) else str(value)
             cells[index].text = text
@@ -6106,7 +6290,7 @@ def create_customer_statement_word(
     footer_run.font.size = Pt(7.5)
     footer_run.font.color.rgb = RGBColor(110, 125, 140)
 
-    document.core_properties.title = f"Extrait de compte Turbo {customer_id_text} - {currency_text}"
+    document.core_properties.title = f"Extrait de compte Turbo {customer_id_text} - {currency_label}"
     document.core_properties.subject = "Extrait client M-PESA_Turbo"
     document.core_properties.author = "Solution Controle Interne"
     buffer = BytesIO()

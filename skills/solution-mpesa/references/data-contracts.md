@@ -75,7 +75,7 @@ Pour un `Receipt No.` dupliqué, sélectionner comme ligne canonique une ligne t
    - finalisation `Completion Time` et délai `Completion Time - Initiation Time` séparément.
 6. Produire `Rapproche exact`, `Rapproche avec ecart`, `Non rapproche` ou `Non applicable - operation interne`.
 
-Un changement de date civile reste `Conforme - passage de date` si l'écart absolu ne dépasse pas 120 minutes; conserver alors les dates G2/Turbo dans `Observation`. Au-delà, produire `Ecart de date`. Un délai de traitement G2 négatif est toujours une anomalie.
+Le contrôle de date utilise un seuil de 60 minutes, distinct de la fenêtre de recherche B2C de 120 minutes. Une différence absolue supérieure à 60 minutes produit `Ecart de date`, même le même jour, et doit apparaître dans `Anomalies_G2`. Un changement de date civile reste `Conforme - passage de date` si l'écart ne dépasse pas 60 minutes; conserver alors les dates G2/Turbo dans `Observation`. Un délai de traitement G2 négatif est toujours une anomalie.
 
 Colonnes de traçabilité du repli sortie : `reference_sortie_turbo`, `cle_sortie_turbo`, `cle_rapprochement_turbo`, `methode_rapprochement_turbo`, `nombre_candidats_sortie_turbo` et `operation_turbo_confirmee`. Plus d'un candidat déclenche une revue et ne doit pas être présenté comme un rapprochement exact.
 
@@ -126,8 +126,16 @@ Une sortie B2C confirmée par Turbo conserve `Paiement client B2C` comme classif
 ## Client, nom et compte créé
 
 - Normaliser les numéros vers le format `243...` avant toute comparaison.
+- Construire l'extrait client depuis Transactions M-PESA_Turbo sans exiger G2. Le mode `Turbo seul` conserve la recherche par `customer_id` ou téléphone, les filtres, la synthèse et les exports.
 - Extraire le téléphone et le nom G2 depuis `Opposite Party`.
-- Enrichir les rapports Turbo avec `Nom_client` par téléphone; utiliser la référence G2/Portal lorsqu'elle est disponible et pertinente.
+- Considérer G2 comme une vérification facultative et un complément de nom. Enrichir les rapports Turbo avec `Nom_client` par téléphone; utiliser la référence G2/Portal lorsqu'elle est disponible et pertinente, sans substituer les mouvements G2 aux mouvements Turbo.
+- Dans l'extrait officiel écran/Word, alimenter `Description` avec toutes les valeurs distinctes de `description` Turbo partageant `customer_id + devise + created_at + operation_reference`. Conserver l'ordre Turbo, puis ajouter le téléphone et `Nom_client` s'ils sont disponibles. `Details`, `Reason Type` et les autres libellés G2 restent des colonnes de contrôle et ne remplacent jamais cette description.
+- Inverser le sens comptable Turbo uniquement dans la restitution officielle client : `dr`/`sortie_mpesa` correspond à une entrée Bisou Bisou et `cr`/`entree_mpesa` à une sortie Bisou Bisou. Ne pas modifier les colonnes techniques Turbo sources.
+- Affecter `compte = 1441` aux entrées et `compte = 15558` aux sorties. Conserver `devise` dans chaque ligne de l'extrait.
+- Autoriser `currency = ALL` dans le Word. Dans ce mode, garder une seule annexe transactionnelle mais produire une ligne de synthèse distincte pour CDF et USD; laisser les totaux globaux multidevises vides.
+- Les critères Word affichent `Devise : CDF`, `Devise : USD` ou `Devise : ALL (CDF, USD)` et n'affichent plus `Compte :`.
+- Le périmètre par défaut comprend `Sortie M-PESA_Turbo vers epargne`, `Sortie M-PESA_Turbo vers DAT`, `Decaissement de credit`, `Remboursement de credit` et `Remboursement avec penalite`.
+- Dans l'Extrait client, filtrer `g2_dat` sur le `customer_id` sélectionné avant affichage et export, même sans fichier DAT.
 - Rechercher `compte_cree` dans cet ordre : `Clients.created_at`, épargne courante `created_at`, DAT `created_at` ou `date_approved`.
 - Résoudre vers `customer_id` avant de construire l'extrait client.
 - Permettre la recherche de l'extrait par `customer_id`, téléphone et nom G2 lorsque le fichier G2 est chargé.

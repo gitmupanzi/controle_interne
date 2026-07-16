@@ -8,6 +8,7 @@ import re
 ROOT = Path(__file__).resolve().parents[3]
 SCHEMA = ROOT / "data" / "vision" / "BB_VISION_PRO.sql"
 QUERIES = ROOT / "data" / "vision" / "requetes.sql"
+QUERY_HEADER_PATTERN = re.compile(r"^\s*(\d{1,3})\.\s+(.+?)\s*$")
 
 
 def read_lines(path: Path) -> list[str]:
@@ -32,11 +33,28 @@ def print_matches(path: Path, term: str, context: int, limit: int) -> int:
 
 
 def list_queries() -> None:
-    pattern = re.compile(r"^\s*(\d{1,3})\.\s+(.+?)\s*$")
     for line in read_lines(QUERIES):
-        match = pattern.match(line.strip(" /*"))
+        match = QUERY_HEADER_PATTERN.match(line.strip(" /*"))
         if match:
             print(f"{int(match.group(1)):03d} | {match.group(2)}")
+
+
+def print_query_number(query_number: int) -> None:
+    lines = read_lines(QUERIES)
+    headers: list[tuple[int, int, str]] = []
+    for index, line in enumerate(lines):
+        match = QUERY_HEADER_PATTERN.match(line.strip(" /*"))
+        if match:
+            headers.append((index, int(match.group(1)), match.group(2)))
+    for position, (start, number, title) in enumerate(headers):
+        if number != query_number:
+            continue
+        end = headers[position + 1][0] if position + 1 < len(headers) else len(lines)
+        print(f"--- Requete {number:03d} | {title} | lignes {start + 1}-{end} ---")
+        for line_number in range(start, end):
+            print(f"{line_number + 1:>7}: {lines[line_number]}")
+        return
+    raise SystemExit(f"Requete {query_number:03d} introuvable dans {QUERIES.name}.")
 
 
 def main() -> None:
@@ -45,12 +63,16 @@ def main() -> None:
     group.add_argument("--table", help="Nom exact ou partiel d'une table à chercher dans le schéma.")
     group.add_argument("--query", help="Terme métier, table ou colonne à chercher dans le catalogue et le schéma.")
     group.add_argument("--list-queries", action="store_true", help="Lister les titres numérotés du catalogue.")
+    group.add_argument("--number", type=int, help="Afficher une requete numerotee complete, y compris son SELECT final.")
     parser.add_argument("--context", type=int, default=8, help="Nombre de lignes de contexte.")
     parser.add_argument("--limit", type=int, default=12, help="Nombre maximal d'occurrences par fichier.")
     args = parser.parse_args()
 
     if args.list_queries:
         list_queries()
+        return
+    if args.number is not None:
+        print_query_number(args.number)
         return
     if args.table:
         count = print_matches(SCHEMA, args.table, args.context, args.limit)

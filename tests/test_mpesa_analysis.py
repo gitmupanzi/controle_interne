@@ -986,11 +986,101 @@ class MpesaAnalysisTests(unittest.TestCase):
         report = build_mpesa_statement(prepared, "1001", {"CDF": 10000})
         statement = report["extrait"]
 
+        self.assertEqual(report["mode_source_extrait"], "Turbo seul")
+        self.assertFalse(report["controle_g2_disponible"])
+        self.assertFalse(report["nom_client_enrichi_g2"])
+        self.assertTrue(report["g2_dat"].empty)
         self.assertEqual(len(statement), 2)
         self.assertIn("solde_mpesa_apres", statement.columns)
         self.assertEqual(float(statement.iloc[-1]["solde_mpesa_apres"]), 11000.0)
         self.assertIn("loan_balance", statement.columns)
         self.assertEqual(float(statement["dat_final_client"].iloc[0]), 5000.0)
+
+    def test_customer_statement_uses_g2_only_for_name_and_selected_customer_control(self) -> None:
+        transactions = prepare_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "id": 1,
+                        "customer_id": 1001,
+                        "msisdn1": "0811111111",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "SA-1001",
+                        "currency_code": "CDF",
+                        "dr": 100,
+                        "cr": 0,
+                        "bal_before": 500,
+                        "bal_after": 400,
+                        "ref_no": "G2-1001",
+                        "description": "M-Pesa Compte",
+                        "created_at": "2026-07-15 08:00:00",
+                    },
+                    {
+                        "id": 2,
+                        "customer_id": 2002,
+                        "msisdn1": "0822222222",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "SA-2002",
+                        "currency_code": "CDF",
+                        "dr": 200,
+                        "cr": 0,
+                        "bal_before": 800,
+                        "bal_after": 600,
+                        "ref_no": "G2-2002",
+                        "description": "M-Pesa Compte",
+                        "created_at": "2026-07-15 09:00:00",
+                    },
+                ]
+            )
+        )
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "Receipt No.": "G2-1001",
+                        "Initiation Time": "2026-07-15 08:00:00",
+                        "Completion Time": "2026-07-15 08:00:10",
+                        "Details": "BisouBisouC2B",
+                        "Transaction Status": "Completed",
+                        "Currency": "CDF",
+                        "Paid In": 100,
+                        "Opposite Party": "0811111111 - CLIENT UN",
+                    },
+                    {
+                        "Receipt No.": "G2-2002",
+                        "Initiation Time": "2026-07-15 09:00:00",
+                        "Completion Time": "2026-07-15 09:00:10",
+                        "Details": "BisouBisouC2B",
+                        "Transaction Status": "Completed",
+                        "Currency": "CDF",
+                        "Paid In": 200,
+                        "Opposite Party": "0822222222 - CLIENT DEUX",
+                    },
+                ]
+            )
+        )
+        transactions = enrich_transactions_with_g2_customer_names(transactions, g2)
+        prepared = MpesaPreparedData(
+            transactions=transactions,
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+            g2_transactions=g2,
+        )
+
+        report = build_mpesa_statement(prepared, "1001", {"CDF": None})
+
+        self.assertEqual(report["mode_source_extrait"], "Turbo + verification G2")
+        self.assertTrue(report["controle_g2_disponible"])
+        self.assertTrue(report["nom_client_enrichi_g2"])
+        self.assertEqual(report["extrait"]["Nom_client"].dropna().unique().tolist(), ["CLIENT UN"])
+        self.assertEqual(report["g2_dat"]["receipt_no"].tolist(), ["G2-1001"])
+        official_view = build_customer_statement_view(report["extrait"], account_number="1441")
+        official_description = official_view["transactions"].iloc[0]["description"]
+        self.assertIn("M-Pesa Compte", official_description)
+        self.assertIn("CLIENT UN", official_description)
+        self.assertNotIn("BisouBisouC2B", official_description)
 
     def test_customer_statement_view_matches_the_short_statement_contract(self) -> None:
         prepared = _sample_prepared_data()
@@ -1005,18 +1095,22 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertTrue(view["balance_is_real"])
         self.assertEqual(view["balance_label"], "Solde")
         self.assertEqual(float(view["opening_amount"]), 10000.0)
-        self.assertEqual(float(view["total_entries"]), 2000.0)
-        self.assertEqual(float(view["total_outputs"]), 1000.0)
-        self.assertEqual(float(view["closing_amount"]), 11000.0)
+        self.assertEqual(float(view["total_entries"]), 1000.0)
+        self.assertEqual(float(view["total_outputs"]), 2000.0)
+        self.assertEqual(float(view["closing_amount"]), 9000.0)
         self.assertTrue(view["transactions"]["compte"].eq("1441").all())
-        self.assertIn("CLIENT TEST", view["transactions"].iloc[0]["description"])
+        self.assertTrue(view["transactions"]["devise"].eq("CDF").all())
+        first_description = view["transactions"].iloc[0]["description"]
+        self.assertIn("M-Pesa Compte", first_description)
+        self.assertIn("Depot Bloque", first_description)
+        self.assertIn("CLIENT TEST", first_description)
 
         relative_report = build_mpesa_statement(prepared, "1001", {"CDF": None})
         relative_view = build_customer_statement_view(relative_report["extrait"], account_number="1441")
         self.assertFalse(relative_view["balance_is_real"])
         self.assertEqual(relative_view["balance_label"], "Cumul net")
         self.assertEqual(float(relative_view["opening_amount"]), 0.0)
-        self.assertEqual(float(relative_view["closing_amount"]), 1000.0)
+        self.assertEqual(float(relative_view["closing_amount"]), -1000.0)
 
     def test_customer_statement_word_is_editable_filtered_and_single_currency(self) -> None:
         from docx import Document
@@ -1033,7 +1127,8 @@ class MpesaAnalysisTests(unittest.TestCase):
             customer_name="CLIENT TEST",
             telephone="243812345678",
             currency="CDF",
-            account_number="1441",
+            entry_account_number="1441",
+            output_account_number="15558",
             period_start=pd.Timestamp("2026-07-01"),
             period_end=pd.Timestamp("2026-07-02"),
             generated_at=pd.Timestamp("2026-07-15 10:30:00"),
@@ -1051,10 +1146,17 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(statement_tables), 1)
         self.assertEqual(
             [cell.text for cell in statement_tables[0].rows[0].cells],
-            ["Date", "Compte", "Receipt No", "Description", "Entrée", "Sortie", "Solde"],
+            ["Date", "Compte", "Receipt No", "Devise", "Description", "Entrée", "Sortie", "Solde"],
         )
         self.assertEqual(statement_tables[0].rows[1].cells[1].text, "1441")
         self.assertEqual(statement_tables[0].rows[1].cells[2].text, "TX001")
+        self.assertEqual(statement_tables[0].rows[1].cells[3].text, "CDF")
+        self.assertIn("M-Pesa Compte", statement_tables[0].rows[1].cells[4].text)
+        self.assertEqual(statement_tables[0].rows[2].cells[1].text, "15558")
+        criteria_table = document.tables[0].cell(1, 1).tables[0]
+        criteria_labels = [row.cells[0].text for row in criteria_table.rows]
+        self.assertIn("Devise :", criteria_labels)
+        self.assertNotIn("Compte :", criteria_labels)
         self.assertEqual(document.sections[0].orientation, WD_ORIENT.LANDSCAPE)
 
         relative_statement = build_mpesa_statement(prepared, "1001", {"CDF": None})["extrait"]
@@ -1064,7 +1166,8 @@ class MpesaAnalysisTests(unittest.TestCase):
             customer_name="CLIENT TEST",
             telephone="243812345678",
             currency="CDF",
-            account_number="1441",
+            entry_account_number="1441",
+            output_account_number="15558",
         )
         relative_document = Document(BytesIO(relative_content))
         relative_tables = [
@@ -1075,6 +1178,60 @@ class MpesaAnalysisTests(unittest.TestCase):
         relative_text = "\n".join(paragraph.text for paragraph in relative_document.paragraphs)
         self.assertEqual(relative_tables[0].rows[0].cells[-1].text, "Cumul net")
         self.assertIn("le solde d'ouverture n'a pas ete fourni", relative_text)
+
+    def test_customer_statement_word_all_keeps_currency_totals_separate(self) -> None:
+        from docx import Document
+
+        prepared = _sample_prepared_data()
+        cdf_statement = build_mpesa_statement(prepared, "1001", {"CDF": None})["extrait"]
+        usd_statement = cdf_statement.copy()
+        usd_statement["currency_code"] = "USD"
+        usd_statement["operation_reference"] = "USD-" + usd_statement["operation_reference"].astype(str)
+        combined = pd.concat([cdf_statement, usd_statement], ignore_index=True)
+
+        view = build_customer_statement_view(
+            combined,
+            entry_account_number="1441",
+            output_account_number="15558",
+            allow_multiple_currencies=True,
+        )
+        self.assertEqual(view["currency"], "ALL")
+        self.assertTrue(pd.isna(view["total_entries"]))
+        self.assertEqual(set(view["summary_by_currency"]["currency_code"]), {"CDF", "USD"})
+
+        content = create_customer_statement_word(
+            combined,
+            customer_id="1001",
+            customer_name="CLIENT TEST",
+            telephone="243812345678",
+            currency="ALL",
+            entry_account_number="1441",
+            output_account_number="15558",
+            generated_at=pd.Timestamp("2026-07-16 10:30:00"),
+        )
+        document = Document(BytesIO(content))
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        statement_table = next(
+            table for table in document.tables if table.rows[0].cells[0].text == "Date"
+        )
+        summary_table = next(
+            table
+            for table in document.tables
+            if table.rows[0].cells[0].text == "Devise" and len(table.rows[0].cells) == 5
+        )
+        self.assertIn("ALL (CDF, USD)", text)
+        self.assertEqual(
+            {row.cells[0].text.split()[0] for row in summary_table.rows[1:]},
+            {"CDF", "USD"},
+        )
+        self.assertEqual(
+            {row.cells[3].text for row in statement_table.rows[1:]},
+            {"CDF", "USD"},
+        )
+        self.assertEqual(
+            {row.cells[1].text for row in statement_table.rows[1:]},
+            {"1441", "15558"},
+        )
 
     def test_excel_export_contains_content(self) -> None:
         prepared = _sample_prepared_data()
@@ -1825,10 +1982,11 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(row["controle_devise"], "Conforme")
         self.assertEqual(row["controle_montant"], "Conforme")
         self.assertAlmostEqual(float(row["ecart_creation_minutes"]), 60.0166667, places=4)
-        self.assertEqual(row["controle_date_creation"], "Conforme")
-        self.assertEqual(row["statut_rapprochement"], "Rapproche exact")
+        self.assertEqual(row["controle_date_creation"], "Ecart de date")
+        self.assertEqual(row["statut_rapprochement"], "Rapproche avec ecart")
         self.assertEqual(row["source_analytique"], "G2 + Turbo")
-        self.assertTrue(report["anomalies"].empty)
+        self.assertEqual(len(report["anomalies"]), 1)
+        self.assertIn("Ecart de date de creation", row["motif_anomalie"])
 
     def test_daily_g2_report_retains_phone_currency_amount_and_date_gaps(self) -> None:
         g2 = prepare_g2_transactions(

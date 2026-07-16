@@ -14,8 +14,9 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 3. Chercher d'abord une requête existante dans `data/vision/requetes.sql` avec `scripts/inspect_vision_sql.py --query "terme"`.
 4. Vérifier chaque table et colonne dans `data/vision/BB_VISION_PRO.sql` avec `--table NOM_TABLE` ou `--query NOM_COLONNE`.
 5. Réutiliser la requête existante si elle répond au besoin. Sinon, produire une variante minimale et expliquer les adaptations.
-6. Valider les paramètres de dates, devise, seuils et statut d'annulation avant toute exécution.
-7. Livrer la requête, ses hypothèses, les champs de sortie et les contrôles de cohérence.
+6. Afficher la requête complète avec `--number N`, puis vérifier séparément les colonnes techniques internes et les colonnes métier du `SELECT` final.
+7. Valider les paramètres de dates, devise, seuils et statut d'annulation avant toute exécution.
+8. Livrer la requête, ses hypothèses, les champs de sortie et les contrôles de cohérence.
 
 ## Règles SQL
 
@@ -27,12 +28,23 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 - Distinguer les sources back-office et API avant de les réunir avec `UNION ALL`.
 - Éviter `NOLOCK` pour les contrôles nécessitant une image cohérente, sauf demande explicite et risque documenté.
 - Signaler toute jointure incertaine et la confirmer dans le schéma ou dans une requête existante.
+- Ne jamais remplacer les colonnes nécessaires aux CTE, jointures, filtres, agrégations ou tris uniquement pour alléger l'export.
+- Éviter `SELECT *` dans la projection finale et afficher seulement les colonnes utiles à la décision et au contrôle.
+
+## Projection métier des exports
+
+- Considérer `data/vision/requetes.sql` comme le catalogue métier/export épuré de référence.
+- Simplifier uniquement le `SELECT` final; conserver les calculs et identifiants techniques nécessaires en amont.
+- Garder les références auditables : client, transaction, reçu, compte, prêt, demande ou dossier selon le contrôle.
+- Préférer les codes, numéros et libellés métier aux identifiants techniques redondants. Conserver un identifiant technique seulement s'il est la seule clé exploitable pour la revue.
+- Vérifier que les colonnes finales suffisent pour identifier la population, comprendre l'anomalie, mesurer le montant, connaître la devise, dater le fait et retrouver la pièce source.
 
 ## Utilitaire de recherche
 
 ```powershell
 python skills/perfect-vision/scripts/inspect_vision_sql.py --list-queries
 python skills/perfect-vision/scripts/inspect_vision_sql.py --query "crédit sans garantie"
+python skills/perfect-vision/scripts/inspect_vision_sql.py --number 144
 python skills/perfect-vision/scripts/inspect_vision_sql.py --table PRETS
 ```
 

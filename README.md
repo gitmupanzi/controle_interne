@@ -391,7 +391,7 @@ Le rapprochement principal suit ces règles :
 - Une sortie B2C rapprochée à `Retrait Vers M-Pesa` reçoit aussi le libellé de contrôle `Retrait epargne vers M-PESA` sans modifier sa classification G2.
 - `Super Transaction` est classé en `Operation interne Bisou`; son rapprochement client est `Non applicable - operation interne`, et une sortie n’est jamais utilisée comme candidate DAT.
 
-Chaque opération Turbo retrouvée fait ensuite l’objet de quatre contrôles indépendants : téléphone, devise, montant et date. La date de création compare d'abord `Initiation Time` G2 à `created_at` Turbo; `Completion Time` représente la finalisation G2 et permet de calculer le délai de traitement. Si `Initiation Time` manque, `Completion Time` sert de repli explicite. Un passage de date avec un écart inférieur ou égal à 120 minutes reste conforme et les deux dates sont conservées dans `Observation`; au-delà, il devient un écart de date. Le résultat devient `Rapproche exact`, `Rapproche avec ecart`, `Non rapproche` ou `Non applicable - operation interne`. Les reçus dupliqués, statuts non terminés, références absentes, écarts et opérations non classées restent visibles dans les anomalies.
+Chaque opération Turbo retrouvée fait ensuite l’objet de quatre contrôles indépendants : téléphone, devise, montant et date. La date de création compare d'abord `Initiation Time` G2 à `created_at` Turbo; `Completion Time` représente la finalisation G2 et permet de calculer le délai de traitement. Si `Initiation Time` manque, `Completion Time` sert de repli explicite. Une différence absolue supérieure à 60 minutes devient un `Ecart de date`, même le même jour, et apparaît dans `Afficher les anomalies [G2]`. Un passage de date inférieur ou égal à 60 minutes reste conforme et les deux dates sont conservées dans `Observation`. La fenêtre de 120 minutes reste uniquement utilisée pour rechercher une sortie B2C candidate. Le résultat devient `Rapproche exact`, `Rapproche avec ecart`, `Non rapproche` ou `Non applicable - operation interne`. Les reçus dupliqués, statuts non terminés, références absentes, écarts et opérations non classées restent visibles dans les anomalies.
 
 Les statuts G2 sont normalisés en `Completed`, `Declined`, `Cancelled`, `Expired`, `Pending`, `Non renseigne` ou `Autre`. Seules les transactions explicitement `Completed` alimentent les montants, tendances, fidélisation, contrôles DAT et analyses Perfect. Les autres statuts restent visibles dans la répartition des statuts, le détail et les anomalies. Un ancien export entièrement dépourvu de statut reste compatible; dans un fichier moderne où au moins un statut est renseigné, une ligne sans statut est réservée au contrôle.
 
@@ -399,6 +399,11 @@ Pour les informations client :
 
 - `Opposite Party` fournit le téléphone et le nom G2; le numéro est normalisé au format `243...`.
 - `Nom_client` enrichit les rapports Turbo lorsque G2 est disponible.
+- `Extrait client` fonctionne avec Transactions M-PESA_Turbo seul : recherche par `customer_id` ou téléphone, mouvements, synthèse, filtres et exports restent disponibles. G2 est facultatif et sert uniquement à compléter le nom et à afficher un contrôle des opérations liées au client sélectionné.
+- Dans l'extrait écran et Word, la colonne `Description` reprend les libellés `description` du portail Turbo pour toutes les écritures de l'opération. Le téléphone et le nom G2 peuvent être ajoutés après ce libellé, mais `Details` et `Reason Type` G2 ne remplacent jamais la description Turbo.
+- Dans l'extrait officiel, les flux sont présentés du point de vue de Bisou Bisou : les dépôts et remboursements sont des entrées sur le compte `1441`; les décaissements et sorties sont affectés au compte `15558`. La colonne `Compte` du tableau conserve cette affectation ligne par ligne.
+- L'en-tête Word affiche `Devise` et non `Compte`. Trois exports sont disponibles lorsque les deux devises existent : `CDF`, `USD` et `ALL`. Le document `ALL` conserve une synthèse et un cumul distincts pour chaque devise.
+- Le filtre des types d'opération sélectionne par défaut les dépôts, les décaissements de crédit et les remboursements de crédit.
 - `Compte créer` provient d’abord de `Clients.created_at`, puis de l’épargne courante et enfin du DAT.
 - `Phone_Prefixe` rapproche les clients transactionnels Turbo/G2 avec `Clients_Perfect`. La présence est contrôlée séparément dans G2, Turbo et `Clients_Perfect` afin de produire l'intersection stricte des trois systèmes. Un numéro partagé par plusieurs fiches est agrégé avant la jointure afin de ne pas multiplier les opérations.
 
@@ -465,7 +470,7 @@ USD    | Total USD                          | 4 777
 
 Les exports Excel sont volontairement limités aux feuilles importantes pour réduire le temps de génération.
 
-Dans `Extrait client`, le classeur contient `Synthese`, `Extrait_Turbo`, `DAT_Final`, `Credits`, `G2_DAT` et `Diagnostics`.
+Dans `Extrait client`, le classeur contient les feuilles non vides parmi `Synthese`, `Extrait_Turbo`, `DAT_Final`, `Credits`, `G2_DAT` et `Diagnostics`. `G2_DAT` est facultative et limitée au client sélectionné.
 
 Dans `G2 / DAT`, le classeur contient `Rapport_Journalier_Comptages`, `Rapport_Journalier_Synthese`, `Statuts_G2`, `Rapport_Journalier_Detail`, `Anomalies_G2`, `G2_DAT`, `Retention_Mensuelle` et `Retention_Detail`.
 

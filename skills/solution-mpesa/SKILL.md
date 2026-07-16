@@ -34,7 +34,7 @@ Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou
 - Pour une sortie `BisouBisouB2C` sans `ref_no`, autoriser le repli uniquement vers `Retrait Vers M-Pesa` avec téléphone, devise et montant identiques et un écart maximal de 120 minutes. Identifier l'opération Turbo par `reference_id + created_at`; ne jamais utiliser `reference_id` seul, car il peut désigner un compte réutilisé.
 - Classifier les entrées rapprochées avec `account_type` et `description` du Portal : `FIXED SAVINGS`/`Depot Bloque` = `DAT`, `NORMAL SAVINGS`/`Epargne depot` = `Depot normal`, compte prêt/principal/portefeuille = `Remboursement prets`.
 - Utiliser les règles G2 comme repli lorsque le Portal ne contient pas la référence; classifier les sorties B2C, demandes de crédit et opérations internes selon `Details`, `Reason Type`, `Paid In` et `Withdrawn`.
-- Comparer la création avec `Initiation Time` G2 contre `created_at` Turbo; utiliser `Completion Time` seulement comme repli de création, puis comme date de finalisation et source du délai de traitement. Tolérer un passage de date jusqu'à 120 minutes en conservant les deux dates dans `Observation`; au-delà, signaler un écart de date. Un délai G2 négatif est une anomalie.
+- Comparer la création avec `Initiation Time` G2 contre `created_at` Turbo; utiliser `Completion Time` seulement comme repli de création, puis comme date de finalisation et source du délai de traitement. Une différence absolue supérieure à 60 minutes est une anomalie de date, même si les deux horodatages sont le même jour. Tolérer un passage de date jusqu'à 60 minutes en conservant les deux dates dans `Observation`. Un délai G2 négatif est une anomalie.
 - Contrôler séparément téléphone, devise, montant et date. Distinguer `Rapproche exact`, `Rapproche avec ecart`, `Non rapproche` et `Non applicable - operation interne`. Une `Super Transaction` non rapprochée ne constitue pas, à elle seule, une anomalie client.
 - Dès qu'un export fournit des statuts, retenir uniquement les statuts G2 explicitement terminés dans les synthèses financières, le rapprochement DAT, Perfect_client et le Word; conserver les autres lignes dans la répartition des statuts, le détail Excel et les anomalies. Un ancien export sans aucun statut reste compatible.
 - Utiliser `G2_CLASSIFIED_TRANSACTION_COLUMNS` comme ordre du noyau métier du tableau `Transactions` et du Word : `date`, `receipt_no`, `currency_code`, `details_rapport`, `opposite_party`, `duree`, `compte_cree`, `montant`, `montant_entree`, `montant_sortie`, `balance_numeric`. L'écran peut ajouter le fichier source et le statut comme colonnes de contrôle.
@@ -43,7 +43,14 @@ Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou
 ## Règles client et sources facultatives
 
 - Considérer Transactions M-PESA Turbo comme la source minimale de l'extrait client.
-- Enrichir Turbo avec le nom G2 par téléphone normalisé et, quand disponible, par `Receipt No = ref_no`.
+- Construire la recherche, l'extrait, la synthèse et les exports depuis Turbo même si G2 est absent; afficher alors explicitement `Turbo seul` et réduire le contrôle G2 sans bloquer le client.
+- Utiliser G2 comme source facultative de vérification et de complément du nom : enrichir Turbo par téléphone normalisé et, quand disponible, par `Receipt No = ref_no`. Ne jamais remplacer les montants ou mouvements Turbo de l'extrait par les montants G2.
+- Construire la colonne `Description` de l'extrait officiel depuis les valeurs brutes `description` de Transactions M-PESA_Turbo, agrégées au grain de l'opération. Ajouter éventuellement téléphone et nom G2 après le libellé Turbo; ne jamais substituer `Details` ou `Reason Type` G2 à la description Turbo.
+- Présenter les flux de l'extrait du point de vue de Bisou Bisou : le débit du compte `MPESA ACCOUNT` Turbo devient une entrée et le crédit devient une sortie. Affecter le compte `1441` aux entrées et `15558` aux sorties dans le Word et l'aperçu.
+- Remplacer `Compte :` par `Devise :` dans les critères de l'en-tête Word. Conserver la colonne `Compte` dans le tableau transactionnel pour montrer 1441 ou 15558 ligne par ligne.
+- Proposer les exports Word `CDF`, `USD` et `ALL`. Dans `ALL`, afficher la devise sur chaque ligne et calculer ouvertures, entrées, sorties et clôtures séparément par devise; ne jamais produire de total CDF + USD.
+- Sélectionner par défaut les dépôts, décaissements de crédit et remboursements de crédit dans l'Extrait client. Permettre une autre sélection explicite sans changer le périmètre par défaut.
+- Limiter le tableau de vérification G2 au seul `customer_id` sélectionné, y compris lorsque le fichier DAT est absent.
 - Résoudre vers `customer_id` après rapprochement; utiliser MSISDN ou référence uniquement selon les règles documentées.
 - Rechercher `compte_cree` dans `Clients_Turbo`, puis l'épargne courante, puis le DAT.
 - Agréger Perfect par `Phone_Prefixe` avant la jointure et conserver le nombre d'identités associées au numéro.
@@ -75,6 +82,7 @@ Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou
 - Répéter les en-têtes Word sur plusieurs pages et conserver toutes les lignes `Completed` du périmètre filtré; garder les autres statuts dans l'Excel de contrôle.
 - Calculer la ligne `Activite` de la synthèse exécutive Word directement depuis le détail `Completed` filtré par date, heure et sens; ne jamais la reprendre du dernier mois de fidélisation.
 - Vérifier qu'un export client reprend les filtres de l'extrait sans perdre les feuilles contextuelles du client.
+- Pour le Word client, vérifier les trois sorties CDF, USD et ALL, les comptes 1441/15558, l'en-tête `Devise` et les synthèses multidevises séparées.
 - Exporter les trois populations `Clients_Perfect` dans `Clients_Perfect_G2`, `Clients_Perfect_Turbo` et `Clients_Perfect_Turbo_G2`.
 - Dans l'export de pilotage mixte, suffixer aussi chaque feuille par sa source : `_Turbo`, `_G2` ou `_Turbo_G2`.
 - Generer l'Excel du cockpit uniquement sur demande et limiter ses feuilles aux syntheses et listes d'action utiles.
