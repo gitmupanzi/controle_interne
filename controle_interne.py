@@ -3,8 +3,18 @@ from __future__ import annotations
 import html
 import logging
 import tempfile
+import warnings
 from datetime import date
 from pathlib import Path
+
+# Plotly 6.3 peut valider l'ancien traceur conserve dans ses templates internes,
+# meme lorsque l'application ne construit aucune carte Mapbox. Ne masquer que
+# cet avertissement precis; les autres DeprecationWarning restent visibles.
+warnings.filterwarnings(
+    "ignore",
+    message=r"\*scattermapbox\* is deprecated!",
+    category=DeprecationWarning,
+)
 
 import pandas as pd
 

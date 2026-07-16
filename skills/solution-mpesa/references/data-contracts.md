@@ -134,7 +134,10 @@ Une sortie B2C confirmée par Turbo conserve `Paiement client B2C` comme classif
 - Affecter `compte = 1441` aux entrées et `compte = 15558` aux sorties. Conserver `devise` dans chaque ligne de l'extrait.
 - Autoriser `currency = ALL` dans le Word. Dans ce mode, garder une seule annexe transactionnelle mais produire une ligne de synthèse distincte pour CDF et USD; laisser les totaux globaux multidevises vides.
 - Les critères Word affichent `Devise : CDF`, `Devise : USD` ou `Devise : ALL (CDF, USD)` et n'affichent plus `Compte :`.
-- Le périmètre par défaut comprend `Sortie M-PESA_Turbo vers epargne`, `Sortie M-PESA_Turbo vers DAT`, `Decaissement de credit`, `Remboursement de credit` et `Remboursement avec penalite`.
+- Le périmètre par défaut comprend `Sortie M-PESA_Turbo vers epargne`, `Sortie M-PESA_Turbo vers DAT`, `Entree M-PESA_Turbo depuis epargne` pour les retraits client, `Decaissement de credit`, `Remboursement de credit` et `Remboursement avec penalite`. Pour `Retrait Vers M-Pesa` sans `ref_no`, une transaction unique est définie par `customer_id + currency_code + created_at + reference_id`; les lignes `MPESA ACCOUNT` et `NORMAL SAVINGS` sont deux faces de cette même transaction.
+- Le nom du Word Turbo seul suit `extrait_compte_<customer_id>_<telephone>_<devise>_<debut>_<fin>.docx`. Avec G2 chargé, insérer `Nom_client` entre `customer_id` et le téléphone. Le contenu du Word officiel ne porte pas de suffixe `[Turbo]` et n'imprime pas l'ancien avertissement de solde d'ouverture; `Cumul net` continue d'indiquer qu'aucun solde réel n'a été fourni.
+- Le Word client exclut `Synthese du comportement observe`, `Positions observees et rapprochement des soldes` et `Jalons du parcours financier`. Il conserve `Detail des transactions` et utilise `Solution Bisou Bisou Digital` dans son pied de page.
+- Le titre Word inclut le nom seulement lorsqu'il est réellement disponible. Sans nom, il suit `Extrait de compte - <telephone> - <devise>` et n'affiche ni `NON DISPONIBLE` ni un séparateur vide.
 - Dans l'Extrait client, filtrer `g2_dat` sur le `customer_id` sélectionné avant affichage et export, même sans fichier DAT.
 - Rechercher `compte_cree` dans cet ordre : `Clients.created_at`, épargne courante `created_at`, DAT `created_at` ou `date_approved`.
 - Résoudre vers `customer_id` avant de construire l'extrait client.

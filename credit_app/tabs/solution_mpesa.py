@@ -31,6 +31,8 @@ from credit_app.services.mpesa_analysis import (
     build_load_report,
     build_mpesa_management_dashboard,
     build_mpesa_statement,
+    build_customer_transaction_analysis,
+    build_customer_statement_filename,
     build_customer_statement_view,
     build_perfect_client_crosscheck,
     create_excel_export,
@@ -152,6 +154,7 @@ def _create_g2_dat_word_cached(
 @st.cache_data(show_spinner=False)
 def _create_customer_statement_word_cached(
     statement: pd.DataFrame,
+    analysis_report: dict[str, pd.DataFrame],
     customer_id: str,
     customer_name: str,
     telephone: str,
@@ -163,6 +166,7 @@ def _create_customer_statement_word_cached(
 ) -> bytes:
     return create_customer_statement_word(
         statement,
+        analysis_report=analysis_report,
         customer_id=customer_id,
         customer_name=customer_name,
         telephone=telephone,
@@ -171,6 +175,27 @@ def _create_customer_statement_word_cached(
         output_account_number=output_account_number,
         period_start=period_start,
         period_end=period_end,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _build_customer_transaction_analysis_cached(
+    prepared: MpesaPreparedData,
+    customer_id: str,
+    currency: str,
+    operation_types: tuple[str, ...],
+    date_start: object | None,
+    date_end: object | None,
+    reference_query: str,
+) -> dict[str, pd.DataFrame]:
+    return build_customer_transaction_analysis(
+        prepared,
+        customer_id,
+        currency=currency,
+        operation_types=operation_types,
+        date_start=date_start,
+        date_end=date_end,
+        reference_query=reference_query,
     )
 
 
@@ -395,7 +420,7 @@ def _filter_statement(
             key=f"{key_prefix}_{selected_currency}_type",
             placeholder="Choose options",
             help=(
-                "Par defaut : depots, decaissements de credit et remboursements de credit. "
+                "Par defaut : depots, retraits vers M-PESA, decaissements de credit et remboursements de credit. "
                 "Aucune option choisie = tous les types d'operation."
             ),
         )
@@ -515,6 +540,217 @@ def _render_statement_charts(statement: pd.DataFrame) -> None:
                 fig = px.line(chart_df, x="created_at", y="solde_epargne_au_moment", color="currency_code", markers=True)
                 style_standard_line(fig, height=330, tickangle=-20)
                 st_plot(fig, key="mpesa_savings_balance", height=330)
+
+
+def _format_customer_analysis_dates(frame: pd.DataFrame) -> pd.DataFrame:
+    display = frame.copy()
+    for column in display.columns:
+        if "date" in str(column).lower() or column in {"created_at", "premiere_operation", "derniere_operation"}:
+            parsed = pd.to_datetime(display[column], errors="coerce")
+            if parsed.notna().any():
+                display[column] = parsed.dt.strftime("%d/%m/%Y %H:%M:%S")
+    return display
+
+
+def _render_customer_journey_analysis(analysis: dict[str, pd.DataFrame]) -> None:
+    behavior = analysis.get("comportement_turbo", pd.DataFrame())
+    milestones = analysis.get("jalons_turbo", pd.DataFrame())
+    path = analysis.get("parcours_turbo", pd.DataFrame())
+    if behavior.empty and milestones.empty and path.empty:
+        st.info("Aucun parcours financier ne correspond aux filtres actifs.")
+        return
+
+    for _, row in behavior.iterrows():
+        currency = str(row.get("currency_code", ""))
+        render_panel_title(f"Comportement observe [Turbo] - {currency}")
+        render_kpi_cards(
+            [
+                ("Jours actifs", _format_count(row.get("jours_actifs")), f"Devise {currency}", "blue"),
+                (
+                    "Operations / jour actif",
+                    _format_amount(row.get("operations_par_jour_actif")),
+                    "Frequence observee",
+                    "navy",
+                ),
+                ("Montant median", _format_amount(row.get("montant_median")), currency, "green"),
+                ("Plus forte operation", _format_amount(row.get("plus_forte_operation")), currency, "orange"),
+                (
+                    "Moment frequent",
+                    f"{row.get('jour_semaine_frequent', '-')} - {row.get('heure_frequente', '-')}",
+                    "Sur le perimetre filtre",
+                    "slate",
+                ),
+                (
+                    "Plus longue inactivite",
+                    _format_amount(row.get("plus_longue_inactivite_jours")),
+                    "Jours entre deux operations",
+                    "red",
+                ),
+            ]
+        )
+        first = pd.to_datetime(row.get("premiere_operation"), errors="coerce")
+        last = pd.to_datetime(row.get("derniere_operation"), errors="coerce")
+        render_summary_box(
+            f"Lecture du parcours {currency}",
+            [
+                f"Premiere operation : {first:%d/%m/%Y %H:%M}" if pd.notna(first) else "Premiere operation : -",
+                f"Derniere operation : {last:%d/%m/%Y %H:%M}" if pd.notna(last) else "Derniere operation : -",
+                f"Type le plus frequent : {row.get('type_operation_frequent', '-')}",
+                (
+                    f"Intervalle median : {_format_amount(row.get('intervalle_median_heures'))} heure(s)"
+                    if pd.notna(row.get("intervalle_median_heures"))
+                    else "Intervalle median : non calculable avec une seule operation"
+                ),
+            ],
+        )
+
+    if not milestones.empty:
+        render_panel_title("Jalons du parcours financier [Turbo]")
+        st.caption(
+            "Une ligne par devise et type d'operation. Les montants CDF et USD restent toujours separes."
+        )
+        st.dataframe(
+            _format_customer_analysis_dates(milestones),
+            width="stretch",
+            hide_index=True,
+        )
+    if not path.empty:
+        with st.expander("Afficher la chronologie complete [Turbo]", expanded=False):
+            st.dataframe(
+                _format_customer_analysis_dates(path),
+                width="stretch",
+                hide_index=True,
+            )
+
+
+def _render_customer_credit_and_positions(analysis: dict[str, pd.DataFrame]) -> None:
+    credit_summary = analysis.get("credit_turbo_synthese_client", pd.DataFrame())
+    credit_detail = analysis.get("credit_turbo_detail_client", pd.DataFrame())
+    positions = analysis.get("positions_turbo", pd.DataFrame())
+    internal = analysis.get("mouvements_internes_turbo", pd.DataFrame())
+
+    if credit_summary.empty:
+        st.info("Aucun decaissement ou remboursement de credit ne correspond aux filtres actifs.")
+    else:
+        st.caption(
+            "Les interets et penalites ci-dessous sont des montants comptabilises observes dans Transactions M-PESA_Turbo. "
+            "Ils ne constituent ni un taux annuel contractuel ni une rentabilite nette du client."
+        )
+        for _, row in credit_summary.iterrows():
+            currency = str(row.get("currency_code", ""))
+            render_panel_title(f"Credit et remboursements observes [Turbo] - {currency}")
+            render_kpi_cards(
+                [
+                    (
+                        "Decaissements",
+                        _format_count(row.get("nombre_decaissements")),
+                        f"Verse au client : {_format_amount(row.get('montant_decaisse_client'))} {currency}",
+                        "blue",
+                    ),
+                    (
+                        "Dette creee observee",
+                        _format_amount(row.get("dette_creee_observee")),
+                        currency,
+                        "navy",
+                    ),
+                    (
+                        "Interet observe",
+                        _format_amount(row.get("interet_observe")),
+                        f"Ratio / decaissement : {_format_percent(row.get('ratio_interet_decaissement_pct'))}",
+                        "green",
+                    ),
+                    (
+                        "Remboursements",
+                        _format_count(row.get("nombre_remboursements")),
+                        f"Principal : {_format_amount(row.get('principal_rembourse'))} {currency}",
+                        "orange",
+                    ),
+                    (
+                        "Avec penalite",
+                        _format_count(row.get("remboursements_avec_penalite")),
+                        f"Penalite observee : {_format_amount(row.get('penalite_observee'))} {currency}",
+                        "red",
+                    ),
+                    (
+                        "Avec epargne / DAT",
+                        _format_count(row.get("remboursements_avec_epargne_dat")),
+                        "Ecritures associees observees",
+                        "slate",
+                    ),
+                ]
+            )
+        if not credit_detail.empty:
+            with st.expander("Afficher la ventilation des operations de credit [Turbo]", expanded=False):
+                st.dataframe(
+                    _format_customer_analysis_dates(credit_detail),
+                    width="stretch",
+                    hide_index=True,
+                )
+
+    render_panel_title("Positions observees par produit [Turbo]")
+    if positions.empty:
+        st.info("Aucun solde de produit n'est disponible pour ce client et ce perimetre.")
+    else:
+        st.caption(
+            "`solde_transactions_observe` est le dernier `bal_after` exploitable dans Transactions M-PESA_Turbo. "
+            "Il n'est qualifie de conforme que lorsqu'un fichier Epargne, DAT ou Credits_Turbo charge confirme le meme montant."
+        )
+        st.dataframe(
+            _format_customer_analysis_dates(positions),
+            width="stretch",
+            hide_index=True,
+        )
+
+    if not internal.empty:
+        with st.expander("Afficher les mouvements internes epargne / DAT [Turbo]", expanded=False):
+            st.caption(
+                "Ces transferts n'ont pas toujours de ligne `MPESA ACCOUNT`. Ils sont presentes separement et ne sont pas "
+                "ajoutes aux entrees ou sorties M-PESA de l'extrait officiel."
+            )
+            st.dataframe(
+                _format_customer_analysis_dates(internal),
+                width="stretch",
+                hide_index=True,
+            )
+
+
+def _render_customer_turbo_controls(analysis: dict[str, pd.DataFrame]) -> None:
+    controls = analysis.get("controles_client_turbo", pd.DataFrame())
+    if controls.empty:
+        st.info("Aucun controle Turbo disponible pour le perimetre filtre.")
+        return
+    review_mask = controls.get(
+        "statut_controle_turbo", pd.Series("", index=controls.index)
+    ).astype("string").eq("A verifier")
+    review = controls.loc[review_mask].copy()
+    render_kpi_cards(
+        [
+            ("Operations controlees [Turbo]", _format_count(len(controls)), "Perimetre filtre", "blue"),
+            ("Montants miroirs conformes", _format_count(controls["controle_montant_operation"].eq("Conforme").sum()), "Paires metier", "green"),
+            ("Operations a verifier", _format_count(len(review)), "Controle Turbo", "orange"),
+        ]
+    )
+    if review.empty:
+        st.success("Aucun ecart metier Turbo n'a ete detecte dans les operations filtrees.")
+    else:
+        st.warning(
+            "Les lignes ci-dessous sont des points de revue. Elles ne constituent pas automatiquement une erreur ou une fraude."
+        )
+        st.dataframe(
+            _format_customer_analysis_dates(review),
+            width="stretch",
+            hide_index=True,
+        )
+    with st.expander("Afficher tous les controles et les debits/credits techniques", expanded=False):
+        st.caption(
+            "L'ecart debit/credit global est informatif : certaines operations Turbo contiennent des comptes de collecte "
+            "ou de revenu dont la semantique n'est pas celle du seul compte client."
+        )
+        st.dataframe(
+            _format_customer_analysis_dates(controls),
+            width="stretch",
+            hide_index=True,
+        )
 
 
 def _display_text(value: Any, fallback: str = "Non disponible") -> str:
@@ -759,6 +995,16 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
     filtered_report = dict(report)
     filtered_report["extrait"] = filtered_statement
     filtered_report["synthese"] = report["synthese"]
+    filtered_analysis = _build_customer_transaction_analysis_cached(
+        prepared,
+        selected_customer,
+        str(filter_context.get("currency", "Toutes")),
+        tuple(str(value) for value in filter_context.get("operation_types", [])),
+        filter_context.get("date_start"),
+        filter_context.get("date_end"),
+        str(filter_context.get("reference_query", "")),
+    )
+    filtered_report.update(filtered_analysis)
 
     customer_name = _display_text(identity["Nom_client"])
     customer_phone = _display_text(identity["telephone"])
@@ -773,9 +1019,17 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         filter_context=filter_context,
     )
 
-    render_panel_title("6. Analyses complementaires")
+    render_panel_title("6. Parcours financier du client [Turbo]")
+    _render_customer_journey_analysis(filtered_analysis)
+
+    render_panel_title("7. Credit, remboursements et positions observees [Turbo]")
+    _render_customer_credit_and_positions(filtered_analysis)
+
+    render_panel_title("8. Analyses et controles complementaires")
     with st.expander("Afficher les graphiques", expanded=False):
         _render_statement_charts(filtered_statement)
+    with st.expander("Afficher les controles metier [Turbo]", expanded=False):
+        _render_customer_turbo_controls(filtered_analysis)
     with st.expander("Afficher la verification facultative [G2]", expanded=False):
         g2_control = report.get("g2_dat", pd.DataFrame())
         if not report.get("controle_g2_disponible", False):
@@ -879,7 +1133,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         )
         st.dataframe(full_display, width="stretch", hide_index=True)
 
-    render_panel_title("7. Export")
+    render_panel_title("9. Export")
     st.caption(
         "Le Word reprend exactement le client, la periode, la devise, les types d'operation et les references filtres. "
         "Les boutons CDF et USD produisent un document par devise; ALL les reunit dans un seul Word "
@@ -908,6 +1162,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
             try:
                 word_bytes = _create_customer_statement_word_cached(
                     target_statement,
+                    filtered_analysis,
                     selected_customer,
                     customer_name,
                     customer_phone,
@@ -920,12 +1175,21 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
             except (RuntimeError, ValueError) as exc:
                 word_columns[index % len(word_columns)].error(str(exc))
                 continue
+            file_name = build_customer_statement_filename(
+                customer_id=selected_customer,
+                customer_name=customer_name,
+                telephone=customer_phone,
+                currency=currency,
+                period_start=date_start,
+                period_end=date_end,
+                g2_available=not prepared.g2_transactions.empty,
+            )
             start_token = f"{pd.Timestamp(date_start):%Y%m%d}" if date_start is not None else "debut"
             end_token = f"{pd.Timestamp(date_end):%Y%m%d}" if date_end is not None else "fin"
             word_columns[index % len(word_columns)].download_button(
-                f"Telecharger l'extrait Word [Turbo] {currency}",
+                f"Telecharger l'extrait Word {currency}",
                 data=word_bytes,
-                file_name=f"extrait_compte_{selected_customer}_{currency}_{start_token}_{end_token}.docx",
+                file_name=file_name,
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 width="stretch",
                 key=f"mpesa_customer_word_{selected_customer}_{currency}_{start_token}_{end_token}",
@@ -933,11 +1197,24 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
 
     st.caption(
         "La feuille `Extrait_Turbo` reprend les filtres appliques a l'etape 4. "
-        "Le classeur conserve uniquement la synthese, l'extrait, le DAT final, les credits, le controle G2/DAT et les diagnostics."
+        "Le classeur ajoute uniquement les analyses client utiles : parcours, credit, positions, comportement et controles Turbo."
     )
     customer_export = {
         key: filtered_report.get(key, pd.DataFrame())
-        for key in ["synthese", "extrait", "dat_final", "credits", "g2_dat", "diagnostics"]
+        for key in [
+            "synthese",
+            "extrait",
+            "parcours_turbo",
+            "credit_turbo_detail_client",
+            "positions_turbo",
+            "comportement_turbo",
+            "mouvements_internes_turbo",
+            "controles_client_turbo",
+            "dat_final",
+            "credits",
+            "g2_dat",
+            "diagnostics",
+        ]
     }
     export_bytes = _create_excel_export_cached(customer_export)
     st.download_button(

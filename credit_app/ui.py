@@ -1048,7 +1048,17 @@ def _build_plotly_config(fig: go.Figure) -> dict[str, Any]:
         "ohlc",
         "candlestick",
     }
-    geo_types = {"choropleth", "scattergeo", "choroplethmapbox", "scattermapbox", "densitymapbox"}
+    geo_types = {
+        "choropleth",
+        "scattergeo",
+        "choroplethmap",
+        "scattermap",
+        "densitymap",
+        # Compatibilite de lecture d'anciennes figures mises en cache.
+        "choroplethmapbox",
+        "scattermapbox",
+        "densitymapbox",
+    }
 
     config: dict[str, Any] = {
         "displaylogo": False,

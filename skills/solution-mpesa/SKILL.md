@@ -21,7 +21,7 @@ Réutiliser les contrats et fonctions métier existants. Préserver la traçabil
 
 Tous les téléversements de Solution M-PESA peuvent recevoir plusieurs fichiers. Conserver leur provenance, supprimer les chevauchements avec la clé métier propre à chaque source et ne jamais additionner plusieurs instantanés du même compte, crédit ou client.
 
-Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou `[Turbo + G2]` selon la source effective. Réserver `Solution M-PESA` au nom global du module; ne jamais utiliser `M-PESA` seul comme source d'un indicateur.
+Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou `[Turbo + G2]` selon la source effective. Réserver `Solution M-PESA` au nom global du module; ne jamais utiliser `M-PESA` seul comme source d'un indicateur. Exception : le Word officiel de l'Extrait client ne contient aucun suffixe `[Turbo]`, car il constitue un relevé client et non un écran de traçabilité technique.
 
 ## Invariants G2/DAT
 
@@ -49,7 +49,7 @@ Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou
 - Présenter les flux de l'extrait du point de vue de Bisou Bisou : le débit du compte `MPESA ACCOUNT` Turbo devient une entrée et le crédit devient une sortie. Affecter le compte `1441` aux entrées et `15558` aux sorties dans le Word et l'aperçu.
 - Remplacer `Compte :` par `Devise :` dans les critères de l'en-tête Word. Conserver la colonne `Compte` dans le tableau transactionnel pour montrer 1441 ou 15558 ligne par ligne.
 - Proposer les exports Word `CDF`, `USD` et `ALL`. Dans `ALL`, afficher la devise sur chaque ligne et calculer ouvertures, entrées, sorties et clôtures séparément par devise; ne jamais produire de total CDF + USD.
-- Sélectionner par défaut les dépôts, décaissements de crédit et remboursements de crédit dans l'Extrait client. Permettre une autre sélection explicite sans changer le périmètre par défaut.
+- Sélectionner par défaut les dépôts, les retraits `Retrait Vers M-Pesa`, les décaissements de crédit et les remboursements de crédit dans l'Extrait client. Regrouper un retrait au grain `customer_id + devise + created_at + reference_id` lorsque `ref_no` est absent, afin de ne pas compter deux fois les lignes miroir `MPESA ACCOUNT` et `NORMAL SAVINGS`.
 - Limiter le tableau de vérification G2 au seul `customer_id` sélectionné, y compris lorsque le fichier DAT est absent.
 - Résoudre vers `customer_id` après rapprochement; utiliser MSISDN ou référence uniquement selon les règles documentées.
 - Rechercher `compte_cree` dans `Clients_Turbo`, puis l'épargne courante, puis le DAT.
@@ -83,6 +83,10 @@ Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou
 - Calculer la ligne `Activite` de la synthèse exécutive Word directement depuis le détail `Completed` filtré par date, heure et sens; ne jamais la reprendre du dernier mois de fidélisation.
 - Vérifier qu'un export client reprend les filtres de l'extrait sans perdre les feuilles contextuelles du client.
 - Pour le Word client, vérifier les trois sorties CDF, USD et ALL, les comptes 1441/15558, l'en-tête `Devise` et les synthèses multidevises séparées.
+- Nommer le Word Turbo seul `extrait_compte_<customer_id>_<telephone>_<devise>_<debut>_<fin>.docx`. Si G2 est chargé, insérer le nom G2 entre l'identifiant et le téléphone. Conserver les espaces du nom, supprimer uniquement les caractères interdits des noms de fichiers et ne jamais utiliser G2 pour recalculer les montants.
+- Dans le Word client, retirer tous les suffixes `[Turbo]`. Si le solde d'ouverture n'est pas renseigné, conserver l'intitulé `Cumul net` mais ne plus imprimer l'ancien avertissement relatif au solde d'ouverture.
+- Dans le Word client, ne pas inclure les tableaux `Synthese du comportement observe`, `Positions observees et rapprochement des soldes` et `Jalons du parcours financier`. Conserver obligatoirement `Detail des transactions`. Le pied de page porte `Solution Bisou Bisou Digital`.
+- Dans le titre du Word client, omettre entièrement le segment du nom lorsque celui-ci est vide, `Non disponible` ou `Nom non disponible`; produire alors `Extrait de compte - <telephone> - <devise>` sans séparateur vide.
 - Exporter les trois populations `Clients_Perfect` dans `Clients_Perfect_G2`, `Clients_Perfect_Turbo` et `Clients_Perfect_Turbo_G2`.
 - Dans l'export de pilotage mixte, suffixer aussi chaque feuille par sa source : `_Turbo`, `_G2` ou `_Turbo_G2`.
 - Generer l'Excel du cockpit uniquement sur demande et limiter ses feuilles aux syntheses et listes d'action utiles.

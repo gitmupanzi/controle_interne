@@ -9,8 +9,11 @@ import pandas as pd
 from credit_app.services.mpesa_analysis import (
     MpesaPreparedData,
     CUSTOMER_STATEMENT_COLUMNS,
+    CUSTOMER_STATEMENT_FOCUS_OPERATION_TYPES,
     G2_CLASSIFIED_TRANSACTION_COLUMNS,
     build_customer_statement_view,
+    build_customer_statement_filename,
+    build_customer_transaction_analysis,
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
     build_g2_retention_report,
@@ -155,6 +158,125 @@ def _sample_prepared_data() -> MpesaPreparedData:
         fixed_savings=prepare_fixed_savings(fixed),
         loans=prepare_loans(loans),
         load_report=build_load_report({}, {}),
+    )
+
+
+def _sample_customer_transaction_analysis_data() -> MpesaPreparedData:
+    common = {
+        "customer_id": "CLIENT-ANALYSE",
+        "msisdn1": "0812345678",
+        "currency_code": "CDF",
+    }
+    rows: list[dict[str, object]] = []
+
+    def add(
+        row_id: int,
+        *,
+        account_type: str,
+        reference_id: str,
+        description: str,
+        created_at: str,
+        dr: float = 0,
+        cr: float = 0,
+        bal_before: float = 0,
+        bal_after: float = 0,
+        ref_no: str = "",
+    ) -> None:
+        rows.append(
+            {
+                **common,
+                "id": row_id,
+                "account_type": account_type,
+                "reference_id": reference_id,
+                "dr": dr,
+                "cr": cr,
+                "bal_before": bal_before,
+                "bal_after": bal_after,
+                "ref_no": ref_no,
+                "description": description,
+                "created_at": created_at,
+            }
+        )
+
+    add(1, account_type="MPESA ACCOUNT", reference_id="SAV-1", description="M-Pesa Depot", created_at="2026-07-01 08:00:00", dr=100, bal_after=100, ref_no="DEP-1")
+    add(2, account_type="NORMAL SAVINGS", reference_id="SAV-1", description="Epargne depot", created_at="2026-07-01 08:00:00", cr=100, bal_after=100, ref_no="DEP-1")
+    add(3, account_type="MPESA ACCOUNT", reference_id="DAT-1", description="M-Pesa Compte", created_at="2026-07-02 08:00:00", dr=50, bal_after=50, ref_no="DAT-DEP-1")
+    add(4, account_type="FIXED SAVINGS", reference_id="DAT-1", description="Depot Bloque", created_at="2026-07-02 08:00:00", cr=50, bal_after=50, ref_no="DAT-DEP-1")
+
+    loan_time = "2026-07-03 08:00:00"
+    add(5, account_type="PRINCIPLE", reference_id="LOAN-1", description="Montant principal", created_at=loan_time, dr=100, bal_after=100)
+    add(6, account_type="LOAN ACCOUNT", reference_id="LOAN-1", description="Compte de pret", created_at=loan_time, cr=110, bal_after=110)
+    add(7, account_type="PRINCIPLE", reference_id="LOAN-1", description="Montant principal", created_at=loan_time, cr=10, bal_after=10)
+    add(8, account_type="LOAN ACCOUNT", reference_id="LOAN-1", description="Revenu du interets", created_at=loan_time, dr=10, bal_after=10)
+    add(9, account_type="INTEREST EARNED", reference_id="LOAN-1", description="Revenu du interets", created_at=loan_time, cr=10, bal_after=10)
+    add(10, account_type="LOAN AMOUNT A/C", reference_id="LOAN-1", description="Montant pret", created_at=loan_time, cr=100, bal_after=100)
+    add(11, account_type="MPESA ACCOUNT", reference_id="LOAN-1", description="Montant pret", created_at=loan_time, cr=100, bal_after=100)
+    add(12, account_type="MPESA ACCOUNT", reference_id="LOAN-1", description="Compte du M-Pesa", created_at=loan_time, dr=10, bal_after=10)
+
+    repayment_time = "2026-07-04 08:00:00"
+    add(13, account_type="PRINCIPLE", reference_id="LOAN-1", description="Remboursement du principal", created_at=repayment_time, cr=40, bal_before=100, bal_after=60)
+    add(14, account_type="LOAN ACCOUNT", reference_id="LOAN-1", description="Remboursement du Pret", created_at=repayment_time, dr=40, bal_before=100, bal_after=60)
+    add(15, account_type="LOAN PORTFOLIO", reference_id="LOAN-1", description="Portefeuille Pret Remboursement", created_at=repayment_time, dr=40, bal_before=100, bal_after=60)
+    add(16, account_type="MPESA ACCOUNT", reference_id="LOAN-1", description="Remboursement du M-Pesa", created_at=repayment_time, dr=40, bal_after=40)
+    add(17, account_type="LOAN PENALTY FEES", reference_id="LOAN-1", description="Compte de penalite de pret", created_at=repayment_time, cr=5, bal_after=5)
+    add(18, account_type="CUSTOMER USD WALLET PENALTY", reference_id="LOAN-1", description="Compte de penalite de pret", created_at=repayment_time, cr=5, bal_after=5)
+
+    transfer_time = "2026-07-05 08:00:00"
+    add(19, account_type="FIXED SAVINGS", reference_id="DAT-1", description="Retrait Compte Bloque", created_at=transfer_time, dr=20, bal_before=50, bal_after=30)
+    add(20, account_type="NORMAL SAVINGS", reference_id="SAV-1", description="Retrait Compte Bloque", created_at=transfer_time, dr=20, bal_before=100, bal_after=120)
+
+    current = pd.DataFrame(
+        [
+            {
+                "customer_id": "CLIENT-ANALYSE",
+                "msisdn": "0812345678",
+                "product_name": "Courant",
+                "account_type": "NORMAL SAVINGS",
+                "balance": 120,
+                "currency_code": "CDF",
+                "created_at": "2026-01-01",
+                "updated_at": "2026-07-05",
+            }
+        ]
+    )
+    fixed = pd.DataFrame(
+        [
+            {
+                "customer_id": "CLIENT-ANALYSE",
+                "msisdn": "0812345678",
+                "product_name": "DAT",
+                "account_type": "FIXED SAVINGS",
+                "balance": 30,
+                "currency_code": "CDF",
+                "date_approved": "2026-07-02",
+                "maturity_date": "2026-10-02",
+            }
+        ]
+    )
+    loans = pd.DataFrame(
+        [
+            {
+                "loan_id": "LOAN-1",
+                "customer_id": "CLIENT-ANALYSE",
+                "currency_code": "CDF",
+                "loan_amount": 100,
+                "loan_balance": 60,
+                "amount_paid": 40,
+                "outstanding_principle": 60,
+                "outstanding_interest": 0,
+                "outstanding_penalty_fees": 5,
+                "status_name": "Active",
+                "created_at": "2026-07-03",
+                "updated_at": "2026-07-05",
+            }
+        ]
+    )
+    return MpesaPreparedData(
+        transactions=prepare_transactions(pd.DataFrame(rows)),
+        current_savings=prepare_current_savings(current),
+        fixed_savings=prepare_fixed_savings(fixed),
+        loans=prepare_loans(loans),
+        load_report=pd.DataFrame(),
     )
 
 
@@ -996,6 +1118,64 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("loan_balance", statement.columns)
         self.assertEqual(float(statement["dat_final_client"].iloc[0]), 5000.0)
 
+    def test_customer_transaction_analysis_reconstructs_credit_internal_dat_and_positions(self) -> None:
+        prepared = _sample_customer_transaction_analysis_data()
+
+        analysis = build_customer_transaction_analysis(prepared, "CLIENT-ANALYSE")
+
+        self.assertEqual(len(analysis["parcours_turbo"]), 5)
+        credit = analysis["credit_turbo_synthese_client"].iloc[0]
+        self.assertEqual(credit["currency_code"], "CDF")
+        self.assertEqual(int(credit["nombre_decaissements"]), 1)
+        self.assertEqual(float(credit["montant_decaisse_client"]), 100.0)
+        self.assertEqual(float(credit["dette_creee_observee"]), 110.0)
+        self.assertEqual(float(credit["interet_observe"]), 10.0)
+        self.assertEqual(int(credit["nombre_remboursements"]), 1)
+        self.assertEqual(float(credit["principal_rembourse"]), 40.0)
+        self.assertEqual(int(credit["remboursements_avec_penalite"]), 1)
+        self.assertEqual(float(credit["penalite_observee"]), 5.0)
+
+        internal = analysis["mouvements_internes_turbo"]
+        self.assertEqual(len(internal), 1)
+        self.assertEqual(internal.iloc[0]["type_operation"], "Transfert DAT vers epargne courante")
+        self.assertEqual(float(internal.iloc[0]["montant_operation"]), 20.0)
+
+        positions = analysis["positions_turbo"].set_index("famille_position")
+        self.assertEqual(float(positions.loc["Epargne courante", "solde_transactions_observe"]), 120.0)
+        self.assertEqual(float(positions.loc["DAT", "solde_transactions_observe"]), 30.0)
+        self.assertEqual(float(positions.loc["Credit", "solde_transactions_observe"]), 60.0)
+        self.assertTrue(positions["statut_rapprochement_solde"].eq("Conforme").all())
+        self.assertTrue(
+            analysis["controles_client_turbo"]["statut_controle_turbo"].eq("Conforme").all()
+        )
+
+    def test_customer_transaction_analysis_applies_currency_type_date_and_reference_filters(self) -> None:
+        prepared = _sample_customer_transaction_analysis_data()
+
+        analysis = build_customer_transaction_analysis(
+            prepared,
+            "CLIENT-ANALYSE",
+            currency="CDF",
+            operation_types=["Sortie M-PESA_Turbo vers DAT"],
+            date_start=pd.Timestamp("2026-07-02").date(),
+            date_end=pd.Timestamp("2026-07-02").date(),
+            reference_query="DAT-DEP-1",
+        )
+
+        self.assertEqual(len(analysis["parcours_turbo"]), 1)
+        self.assertEqual(
+            analysis["parcours_turbo"].iloc[0]["type_operation"],
+            "Sortie M-PESA_Turbo vers DAT",
+        )
+        self.assertTrue(analysis["credit_turbo_detail_client"].empty)
+        self.assertEqual(analysis["jalons_turbo"]["nombre_operations"].tolist(), [1])
+        self.assertTrue(
+            analysis["positions_turbo"]["statut_rapprochement_solde"]
+            .astype(str)
+            .str.contains("Non comparable")
+            .any()
+        )
+
     def test_customer_statement_uses_g2_only_for_name_and_selected_customer_control(self) -> None:
         transactions = prepare_transactions(
             pd.DataFrame(
@@ -1112,6 +1292,110 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(relative_view["opening_amount"]), 0.0)
         self.assertEqual(float(relative_view["closing_amount"]), -1000.0)
 
+    def test_customer_statement_filename_uses_turbo_identity_and_optional_g2_name(self) -> None:
+        turbo_only = build_customer_statement_filename(
+            customer_id="37335",
+            customer_name="CE NOM DOIT ETRE IGNORE",
+            telephone="243827972206",
+            currency="USD",
+            period_start=pd.Timestamp("2026-07-09"),
+            period_end=pd.Timestamp("2026-07-15"),
+            g2_available=False,
+        )
+        turbo_with_g2 = build_customer_statement_filename(
+            customer_id="37335",
+            customer_name="ELIANE LUAMBA MULEMBO",
+            telephone="243827972206",
+            currency="USD",
+            period_start=pd.Timestamp("2026-07-09"),
+            period_end=pd.Timestamp("2026-07-15"),
+            g2_available=True,
+        )
+
+        self.assertEqual(
+            turbo_only,
+            "extrait_compte_37335_243827972206_USD_20260709_20260715.docx",
+        )
+        self.assertEqual(
+            turbo_with_g2,
+            "extrait_compte_37335_ELIANE LUAMBA MULEMBO_243827972206_USD_20260709_20260715.docx",
+        )
+
+    def test_turbo_withdrawals_are_unique_default_outputs_in_customer_statement(self) -> None:
+        amounts = [20.0, 30.0, 35.0, 6.0, 50.0, 10.0, 40.0]
+        dates = pd.to_datetime(
+            [
+                "2026-07-09 23:47:49",
+                "2026-07-11 14:03:57",
+                "2026-07-12 18:00:12",
+                "2026-07-13 07:49:05",
+                "2026-07-14 14:42:18",
+                "2026-07-14 16:29:23",
+                "2026-07-15 08:48:11",
+            ]
+        )
+        rows: list[dict[str, object]] = []
+        for index, (amount, created_at) in enumerate(zip(amounts, dates, strict=True), start=1):
+            rows.extend(
+                [
+                    {
+                        "id": index * 2 - 1,
+                        "customer_id": "37301",
+                        "msisdn1": "243814256725",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "SA8G57RHR4",
+                        "currency_code": "USD",
+                        "dr": 0.0,
+                        "cr": amount,
+                        "bal_before": 0.0,
+                        "bal_after": amount,
+                        "ref_no": "",
+                        "description": "Retrait Vers M-Pesa",
+                        "created_at": created_at,
+                    },
+                    {
+                        "id": index * 2,
+                        "customer_id": "37301",
+                        "msisdn1": "243814256725",
+                        "account_type": "NORMAL SAVINGS",
+                        "reference_id": "SA8G57RHR4",
+                        "currency_code": "USD",
+                        "dr": amount,
+                        "cr": 0.0,
+                        "bal_before": amount,
+                        "bal_after": 0.0,
+                        "ref_no": "",
+                        "description": "Retrait Vers M-Pesa",
+                        "created_at": created_at,
+                    },
+                ]
+            )
+        transactions = prepare_transactions(pd.DataFrame(rows))
+        prepared = MpesaPreparedData(
+            transactions=transactions,
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=pd.DataFrame(),
+        )
+
+        statement = build_mpesa_statement(prepared, "37301")["extrait"]
+        focused = statement.loc[
+            statement["type_operation"].isin(CUSTOMER_STATEMENT_FOCUS_OPERATION_TYPES)
+        ].copy()
+        view = build_customer_statement_view(
+            focused,
+            entry_account_number="1441",
+            output_account_number="15558",
+        )
+
+        self.assertEqual(len(focused), 7)
+        self.assertTrue(focused["type_operation"].eq("Entree M-PESA_Turbo depuis epargne").all())
+        self.assertEqual(float(view["total_entries"]), 0.0)
+        self.assertEqual(float(view["total_outputs"]), 191.0)
+        self.assertTrue(view["transactions"]["compte"].eq("15558").all())
+        self.assertEqual(len(view["transactions"]), 7)
+
     def test_customer_statement_word_is_editable_filtered_and_single_currency(self) -> None:
         from docx import Document
         from docx.enum.section import WD_ORIENT
@@ -1142,7 +1426,8 @@ class MpesaAnalysisTests(unittest.TestCase):
             if table.rows and table.rows[0].cells[0].text == "Date"
         ]
         self.assertTrue(content.startswith(b"PK"))
-        self.assertIn("Extrait de compte [Turbo] - 243812345678 - CLIENT TEST - CDF", text)
+        self.assertIn("Extrait de compte - 243812345678 - CLIENT TEST - CDF", text)
+        self.assertNotIn("[Turbo]", text)
         self.assertEqual(len(statement_tables), 1)
         self.assertEqual(
             [cell.text for cell in statement_tables[0].rows[0].cells],
@@ -1163,7 +1448,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         relative_content = create_customer_statement_word(
             relative_statement,
             customer_id="1001",
-            customer_name="CLIENT TEST",
+            customer_name="NON DISPONIBLE",
             telephone="243812345678",
             currency="CDF",
             entry_account_number="1441",
@@ -1177,7 +1462,44 @@ class MpesaAnalysisTests(unittest.TestCase):
         ]
         relative_text = "\n".join(paragraph.text for paragraph in relative_document.paragraphs)
         self.assertEqual(relative_tables[0].rows[0].cells[-1].text, "Cumul net")
-        self.assertIn("le solde d'ouverture n'a pas ete fourni", relative_text)
+        self.assertNotIn("le solde d'ouverture n'a pas ete fourni", relative_text)
+        self.assertIn("Extrait de compte - 243812345678 - CDF", relative_text)
+        self.assertNotIn("Extrait de compte - 243812345678 - NON DISPONIBLE - CDF", relative_text)
+
+    def test_customer_statement_word_includes_filtered_turbo_analyses(self) -> None:
+        from docx import Document
+
+        prepared = _sample_customer_transaction_analysis_data()
+        report = build_mpesa_statement(prepared, "CLIENT-ANALYSE", {"CDF": None})
+        analysis = build_customer_transaction_analysis(prepared, "CLIENT-ANALYSE")
+
+        content = create_customer_statement_word(
+            report["extrait"],
+            analysis_report=analysis,
+            customer_id="CLIENT-ANALYSE",
+            customer_name="CLIENT ANALYSE",
+            telephone="243812345678",
+            currency="CDF",
+            entry_account_number="1441",
+            output_account_number="15558",
+        )
+
+        document = Document(BytesIO(content))
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        footer_text = "\n".join(
+            paragraph.text
+            for section in document.sections
+            for paragraph in section.footer.paragraphs
+        )
+        self.assertNotIn("Synthese du comportement observe", text)
+        self.assertIn("Credit et remboursements observes", text)
+        self.assertNotIn("Positions observees et rapprochement des soldes", text)
+        self.assertNotIn("Jalons du parcours financier", text)
+        self.assertIn("Mouvements internes epargne / DAT", text)
+        self.assertIn("Detail des transactions", text)
+        self.assertNotIn("[Turbo]", text)
+        self.assertIn("Solution Bisou Bisou Digital", footer_text)
+        self.assertNotIn("Solution Controle Interne", footer_text)
 
     def test_customer_statement_word_all_keeps_currency_totals_separate(self) -> None:
         from docx import Document
@@ -1264,6 +1586,12 @@ class MpesaAnalysisTests(unittest.TestCase):
         required_sheets = {
             "Synthese",
             "Extrait_Turbo",
+            "Parcours_Turbo",
+            "Credit_Client_Turbo",
+            "Positions_Turbo",
+            "Comportement_Turbo",
+            "Mouvements_Internes",
+            "Controles_Client_Turbo",
             "DAT_Final",
             "Mouvements_DAT",
             "Mouvements_Epargne",

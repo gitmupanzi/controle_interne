@@ -83,3 +83,11 @@ def test_plotly_controls_do_not_capture_page_scroll() -> None:
     assert config["displayModeBar"] == "hover"
     assert config["scrollZoom"] is False
     assert config["responsive"] is True
+
+
+def test_plotly_maplibre_trace_uses_geo_controls() -> None:
+    fig = go.Figure(go.Scattermap(lat=[-4.32], lon=[15.31]))
+
+    config = _build_plotly_config(fig)
+
+    assert config["modeBarButtonsToAdd"] == ["zoomInGeo", "zoomOutGeo", "resetGeo"]
