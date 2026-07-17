@@ -416,6 +416,21 @@ Pour les informations client :
 
 ### Restitutions disponibles
 
+Le sous-onglet `Comptabilité Turbo` construit les analyses financières observables directement dans Transactions M-PESA_Turbo :
+
+- une synthèse séparée par devise avec écritures, clients, opérations, débits, crédits et taux de symétrie
+- une balance par client enrichie du nom G2 sans reprendre les montants G2
+- une balance auxiliaire des positions `NORMAL SAVINGS`, `FIXED SAVINGS` et `PRINCIPLE`
+- une balance des mouvements par type de compte Turbo
+- un journal des opérations regroupées par `ref_no`, puis par client, devise et horodatage lorsque la référence manque
+- le journal brut des écritures, les opérations à vérifier et le contrôle de variation `bal_before` / `bal_after`
+- les flux du compte `MPESA ACCOUNT`, avec le sens Bisou Bisou documenté
+- les intérêts, pénalités, parts Bisou et parts Voda présentés séparément pour éviter le double comptage
+- les positions des instantanés Current Savings, Fixed Savings et Loans, affichées à part de la balance journalière
+- la couverture des noms G2 et du rapprochement direct `Receipt No = ref_no`
+
+Cette restitution est une balance observée des sous-registres Turbo. Sans plan comptable complet et soldes d'ouverture officiels, elle n'est pas présentée comme une balance générale certifiée, un bilan ou un compte de résultat officiel. CDF et USD ne sont jamais additionnés.
+
 Le sous-onglet `Pilotage Turbo + G2` centralise les analyses operationnelles de la microfinance et indique la source de chaque bloc :
 
 - risque credit par devise : encours, retards, PAR 1/7/30 jours et taux de remboursement lorsque les colonnes Credits sont disponibles
@@ -486,6 +501,8 @@ Le classeur G2/DAT ajoute `Transactions_Jour`, `Transactions_Jour_Semaine`, `Tra
 Dans `Perfect_client`, le classeur contient `Clients_Perfect_G2`, `Clients_Perfect_Turbo` et `Clients_Perfect_Turbo_G2`. L'export des forts DAT conserve uniquement `Forts_DAT` et `Portefeuille_DAT`.
 
 Dans `Pilotage Turbo + G2`, l'Excel est genere seulement sur demande. Il conserve les feuilles utiles au suivi et leur nom indique aussi la source : credit et dossiers a risque `_Turbo`, liquidite `_G2`, activite clients `_Turbo_G2`, conversion epargne-DAT `_G2`, concentration et qualite `_G2`, echeances DAT `_Turbo` et adoption Perfect `_Turbo_G2`.
+
+Dans `Comptabilité Turbo`, l'Excel contient la synthèse, les balances clients et comptes, les positions auxiliaires, les journaux regroupé et brut, les contrôles, les flux M-PESA, les produits financiers observés, les positions de portefeuille et le contrôle G2. Chaque feuille porte le suffixe `_Turbo` ou `_G2_Turbo` selon sa source effective.
 
 ## Cycle Suivi clients CRM
 

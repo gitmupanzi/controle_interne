@@ -29,6 +29,7 @@ from credit_app.services.mpesa_analysis import (
     build_g2_transaction_time_analysis,
     build_turbo_only_g2_transactions,
     build_load_report,
+    build_mpesa_accounting_analysis,
     build_mpesa_management_dashboard,
     build_mpesa_statement,
     build_customer_transaction_analysis,
@@ -36,6 +37,7 @@ from credit_app.services.mpesa_analysis import (
     build_customer_statement_view,
     build_perfect_client_crosscheck,
     create_excel_export,
+    create_customer_statement_pdf,
     create_customer_statement_word,
     create_g2_dat_word,
     enrich_transactions_with_g2_customer_names,
@@ -54,6 +56,8 @@ from credit_app.services.mpesa_analysis import (
     validate_required_columns,
 )
 from credit_app.ui import (
+    format_professional_tab_labels,
+    inject_professional_tabs_css,
     render_kpi_cards,
     render_panel_title,
     render_summary_box,
@@ -179,6 +183,33 @@ def _create_customer_statement_word_cached(
 
 
 @st.cache_data(show_spinner=False)
+def _create_customer_statement_pdf_cached(
+    statement: pd.DataFrame,
+    analysis_report: dict[str, pd.DataFrame],
+    customer_id: str,
+    customer_name: str,
+    telephone: str,
+    currency: str,
+    entry_account_number: str,
+    output_account_number: str,
+    period_start: object | None,
+    period_end: object | None,
+) -> bytes:
+    return create_customer_statement_pdf(
+        statement,
+        analysis_report=analysis_report,
+        customer_id=customer_id,
+        customer_name=customer_name,
+        telephone=telephone,
+        currency=currency,
+        entry_account_number=entry_account_number,
+        output_account_number=output_account_number,
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+
+@st.cache_data(show_spinner=False)
 def _build_customer_transaction_analysis_cached(
     prepared: MpesaPreparedData,
     customer_id: str,
@@ -210,6 +241,20 @@ def _build_mpesa_management_dashboard_cached(
     )
 
 
+@st.cache_data(show_spinner=False, max_entries=12)
+def _build_mpesa_accounting_analysis_cached(
+    prepared: MpesaPreparedData,
+    date_start: object,
+    date_end: object,
+) -> dict[str, pd.DataFrame]:
+    return build_mpesa_accounting_analysis(
+        prepared,
+        date_start=date_start,
+        date_end=date_end,
+    )
+
+
+@st.cache_data(show_spinner=False)
 def _build_prepared_data(
     transactions_raw: pd.DataFrame,
     current_raw: pd.DataFrame,
@@ -335,6 +380,7 @@ def _apply_local_multiselect_filters(
     return filtered.reset_index(drop=True)
 
 
+@st.fragment
 def _render_import_tab(prepared: MpesaPreparedData, missing: dict[str, list[str]]) -> None:
     render_panel_title("Controle de chargement")
     report = prepared.load_report
@@ -840,6 +886,7 @@ def _render_customer_statement_preview(
     return previews
 
 
+@st.fragment
 def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | None:
     if prepared.transactions.empty:
         st.info("Chargez au minimum le fichier Transactions M-PESA_Turbo pour construire un extrait client Turbo.")
@@ -1135,15 +1182,17 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
 
     render_panel_title("9. Export")
     st.caption(
-        "Le Word reprend exactement le client, la periode, la devise, les types d'operation et les references filtres. "
-        "Les boutons CDF et USD produisent un document par devise; ALL les reunit dans un seul Word "
+        "Les exports Word et PDF reprennent exactement le client, la periode, la devise, les types d'operation et les references filtres. "
+        "Les boutons CDF et USD produisent un document par devise; ALL les reunit dans un seul document "
         "avec des totaux et cumuls toujours separes par devise."
     )
     if previews:
         export_targets = list(previews)
         if len(export_targets) > 1:
             export_targets.append("ALL")
-        word_columns = st.columns(min(len(export_targets), 3))
+        # Garder des actions compactes meme lorsqu'une seule devise est disponible.
+        # Trois colonnes donnent une largeur maximale d'environ un tiers sur ordinateur.
+        word_columns = st.columns(3)
         for index, currency in enumerate(export_targets):
             target_statement = (
                 filtered_statement.copy()
@@ -1194,6 +1243,57 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
                 width="stretch",
                 key=f"mpesa_customer_word_{selected_customer}_{currency}_{start_token}_{end_token}",
             )
+        pdf_columns = st.columns(3)
+        for index, currency in enumerate(export_targets):
+            target_statement = (
+                filtered_statement.copy()
+                if currency == "ALL"
+                else filtered_statement.loc[
+                    filtered_statement["currency_code"].eq(currency)
+                ].copy()
+            )
+            dates = pd.to_datetime(target_statement.get("created_at"), errors="coerce").dropna()
+            date_start = filter_context.get("date_start")
+            date_end = filter_context.get("date_end")
+            if date_start is None and not dates.empty:
+                date_start = dates.min().date()
+            if date_end is None and not dates.empty:
+                date_end = dates.max().date()
+            try:
+                pdf_bytes = _create_customer_statement_pdf_cached(
+                    target_statement,
+                    filtered_analysis,
+                    selected_customer,
+                    customer_name,
+                    customer_phone,
+                    currency,
+                    entry_account_number,
+                    output_account_number,
+                    date_start,
+                    date_end,
+                )
+            except (RuntimeError, ValueError) as exc:
+                pdf_columns[index % len(pdf_columns)].error(str(exc))
+                continue
+            pdf_file_name = build_customer_statement_filename(
+                customer_id=selected_customer,
+                customer_name=customer_name,
+                telephone=customer_phone,
+                currency=currency,
+                period_start=date_start,
+                period_end=date_end,
+                g2_available=not prepared.g2_transactions.empty,
+            ).removesuffix(".docx") + ".pdf"
+            start_token = f"{pd.Timestamp(date_start):%Y%m%d}" if date_start is not None else "debut"
+            end_token = f"{pd.Timestamp(date_end):%Y%m%d}" if date_end is not None else "fin"
+            pdf_columns[index % len(pdf_columns)].download_button(
+                f"Telecharger l'extrait PDF {currency}",
+                data=pdf_bytes,
+                file_name=pdf_file_name,
+                mime="application/pdf",
+                width="stretch",
+                key=f"mpesa_customer_pdf_{selected_customer}_{currency}_{start_token}_{end_token}",
+            )
 
     st.caption(
         "La feuille `Extrait_Turbo` reprend les filtres appliques a l'etape 4. "
@@ -1217,7 +1317,8 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         ]
     }
     export_bytes = _create_excel_export_cached(customer_export)
-    st.download_button(
+    excel_column = st.columns(3)[0]
+    excel_column.download_button(
         "Telecharger le rapport complet du client [Turbo]",
         data=export_bytes,
         file_name=f"extrait_turbo_dat_client_{selected_customer}.xlsx",
@@ -1348,6 +1449,7 @@ def _render_large_dat_summary(prepared: MpesaPreparedData) -> None:
     )
 
 
+@st.fragment
 def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) -> None:
     _render_large_dat_summary(prepared)
     if report is not None:
@@ -1734,6 +1836,7 @@ def _render_g2_retention_report(
         )
 
 
+@st.fragment
 def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) -> None:
     source_label = "G2"
     source_date_label = "Completion Time"
@@ -2290,6 +2393,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     )
 
 
+@st.fragment
 def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
     render_summary_box(
         "Lecture du rapprochement",
@@ -2555,6 +2659,7 @@ def _filter_pilotage_currencies(report: dict[str, Any], currencies: list[str]) -
     return filtered
 
 
+@st.fragment
 def _render_management_dashboard(prepared: MpesaPreparedData) -> None:
     dat_interest_rate = float(st.session_state.get("mpesa_dat_annual_interest_rate_pct", 0.0))
     report = _build_mpesa_management_dashboard_cached(prepared, dat_interest_rate)
@@ -2903,6 +3008,7 @@ def _render_management_dashboard(prepared: MpesaPreparedData) -> None:
     )
 
 
+@st.fragment
 def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) -> None:
     if report is not None:
         render_panel_title("Credits du client [Turbo]")
@@ -2928,6 +3034,265 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         st.info("Le fichier Credits est facultatif. Chargez-le pour enrichir l'extrait avec les informations LN.")
 
 
+@st.fragment
+def _render_accounting_tab(prepared: MpesaPreparedData) -> None:
+    if prepared.transactions.empty or "created_at" not in prepared.transactions.columns:
+        st.info(
+            "Chargez Transactions M-PESA_Turbo pour construire la balance auxiliaire et les analyses comptables."
+        )
+        return
+
+    transaction_dates = pd.to_datetime(prepared.transactions["created_at"], errors="coerce").dropna()
+    if transaction_dates.empty:
+        st.warning("Aucune date Turbo exploitable pour construire la periode comptable.")
+        return
+    minimum_date = transaction_dates.min().date()
+    maximum_date = transaction_dates.max().date()
+    default_date = maximum_date
+    if minimum_date < maximum_date and transaction_dates.max().hour < 18:
+        previous_date = (pd.Timestamp(maximum_date) - pd.Timedelta(days=1)).date()
+        if previous_date >= minimum_date:
+            default_date = previous_date
+
+    render_panel_title("Comptabilité financière observée [Turbo]")
+    render_summary_box(
+        "Perimetre et methode",
+        [
+            "Transactions M-PESA_Turbo fournit toutes les ecritures, les montants et les soldes observes.",
+            "G2 complete le nom du client et mesure le rapprochement Receipt No = ref_no; ses montants ne remplacent jamais Turbo.",
+            "La balance auxiliaire retient NORMAL SAVINGS, FIXED SAVINGS et PRINCIPLE. Les comptes techniques restent dans la balance des mouvements.",
+            "CDF et USD sont calcules et presentes separement.",
+        ],
+    )
+    selected_period = st.date_input(
+        "Periode comptable [Turbo]",
+        value=(default_date, default_date),
+        min_value=minimum_date,
+        max_value=maximum_date,
+        key="mpesa_accounting_period",
+        help=(
+            "La derniere journee complete connue est proposee lorsque le fichier contient "
+            "une journee d'extraction encore partielle."
+        ),
+    )
+    if isinstance(selected_period, (tuple, list)) and len(selected_period) == 2:
+        date_start, date_end = selected_period
+    elif isinstance(selected_period, (tuple, list)) and len(selected_period) == 1:
+        date_start = date_end = selected_period[0]
+    else:
+        date_start = date_end = selected_period
+
+    report = _build_mpesa_accounting_analysis_cached(prepared, date_start, date_end)
+    summary = report["synthese"]
+    if summary.empty:
+        st.info("Aucune ecriture Turbo sur la periode selectionnee.")
+        return
+
+    st.warning(
+        "Cette restitution est une balance observee des sous-registres Turbo. Elle ne remplace pas "
+        "la balance generale officielle de Perfect Vision : le plan comptable complet et les soldes "
+        "d'ouverture certifies ne figurent pas dans cet export."
+    )
+    for _, row in summary.iterrows():
+        currency = str(row["currency_code"])
+        render_panel_title(f"Synthese comptable [Turbo] - {currency}")
+        render_kpi_cards(
+            [
+                ("Ecritures", _format_count(row["nombre_lignes"]), f"Devise {currency}", "navy"),
+                ("Clients", _format_count(row["nombre_clients"]), "Customer ID distincts", "blue"),
+                ("Operations", _format_count(row["nombre_operations"]), "Regroupees au bon grain", "green"),
+                (
+                    "Operations symetriques",
+                    _format_percent(row["taux_operations_symetriques_pct"]),
+                    "Debit = credit dans l'export",
+                    "green" if float(row["taux_operations_symetriques_pct"]) >= 95 else "orange",
+                ),
+                ("Total debit", _format_amount(row["total_debit"]), "Mouvements bruts Turbo", "slate"),
+                ("Total credit", _format_amount(row["total_credit"]), "Mouvements bruts Turbo", "slate"),
+                (
+                    "Variation de solde conforme",
+                    _format_percent(row["taux_variation_solde_conforme_pct"]),
+                    "Amplitude bal_before / bal_after",
+                    "green" if float(row["taux_variation_solde_conforme_pct"]) >= 95 else "orange",
+                ),
+                (
+                    "Clients nommes [G2]",
+                    _format_percent(row.get("taux_clients_nommes_g2_pct")),
+                    "Identification secondaire",
+                    "blue",
+                ),
+            ]
+        )
+
+    render_panel_title("Balance par client [Turbo]")
+    st.caption(
+        "Les debits et credits couvrent toutes les lignes Turbo du client. Les colonnes de position "
+        "reprennent uniquement les derniers soldes observes des comptes produits actifs dans la periode."
+    )
+    balance_clients = report["balance_clients"]
+    client_view = _apply_local_multiselect_filters(
+        balance_clients,
+        ["currency_code", "Nom_client", "customer_id"],
+        key_prefix="mpesa_accounting_client_balance_filter",
+    )
+    client_columns = [
+        "customer_id", "Nom_client", "telephone", "currency_code", "nombre_operations",
+        "nombre_lignes", "total_debit", "total_credit", "solde_debiteur_mouvement",
+        "solde_crediteur_mouvement", "solde_epargne_courante_observe", "solde_dat_observe",
+        "avoirs_epargne_observes", "encours_principal_observe", "operations_a_verifier",
+        "premiere_ecriture", "derniere_ecriture",
+    ]
+    client_columns = [column for column in client_columns if column in client_view.columns]
+    st.caption(f"{len(client_view)} ligne(s) client x devise affichee(s).")
+    st.dataframe(client_view[client_columns], width="stretch", hide_index=True)
+
+    with st.expander("Afficher la balance auxiliaire detaillee par produit [Turbo]", expanded=False):
+        auxiliary = report["balance_auxiliaire_clients"]
+        if auxiliary.empty:
+            st.info("Aucun compte produit actif sur la periode.")
+        else:
+            auxiliary_view = _apply_local_multiselect_filters(
+                auxiliary,
+                ["currency_code", "famille_position", "nature_comptable_indicative", "customer_id"],
+                key_prefix="mpesa_accounting_auxiliary_filter",
+            )
+            st.dataframe(auxiliary_view, width="stretch", hide_index=True)
+
+    render_panel_title("Balance des mouvements par type de compte [Turbo]")
+    st.caption(
+        "Ce tableau conserve tous les sous-registres Turbo. Les soldes debiteur et crediteur sont des "
+        "soldes de mouvements de la periode, pas des soldes de cloture officiels."
+    )
+    account_balance = report["balance_comptes"]
+    for currency in account_balance["currency_code"].astype(str).unique():
+        currency_accounts = account_balance.loc[
+            account_balance["currency_code"].astype(str).eq(currency)
+        ].copy()
+        chart_data = currency_accounts.melt(
+            id_vars=["account_type"],
+            value_vars=["total_debit", "total_credit"],
+            var_name="sens_comptable",
+            value_name="montant",
+        )
+        fig = px.bar(
+            chart_data,
+            x="account_type",
+            y="montant",
+            color="sens_comptable",
+            barmode="group",
+            color_discrete_map={"total_debit": "#1553a1", "total_credit": "#e94b5f"},
+            labels={
+                "account_type": "Type de compte Turbo",
+                "montant": f"Montant ({currency})",
+                "sens_comptable": "Mouvement",
+            },
+        )
+        style_standard_vertical_bar(fig, height=390, tickangle=-35)
+        st_plot(fig, key=f"mpesa_account_balance_{currency}", height=390)
+    st.dataframe(account_balance, width="stretch", hide_index=True)
+
+    render_panel_title("Flux et produits financiers observes [Turbo]")
+    flow_column, products_column = st.columns(2, gap="small")
+    with flow_column:
+        st.markdown("**Flux du compte MPESA ACCOUNT**")
+        st.caption(
+            "Dans la restitution Bisou Bisou, le debit technique du MPESA ACCOUNT devient une entree "
+            "et le credit technique une sortie."
+        )
+        st.dataframe(report["flux_mpesa"], width="stretch", hide_index=True)
+    with products_column:
+        st.markdown("**Produits et repartitions observes**")
+        st.caption(
+            "Les lignes Interets, Penalites, Part Bisou et Part Voda sont presentees separement; "
+            "elles ne sont pas additionnees pour eviter de compter deux fois une meme ventilation."
+        )
+        st.dataframe(report["produits_financiers"], width="stretch", hide_index=True)
+
+    render_panel_title("Positions de portefeuille des fichiers de reference [Turbo]")
+    portfolio = report["positions_portefeuille"]
+    if portfolio.empty:
+        st.info("Chargez Epargne courante, DAT et Credits pour comparer les positions de portefeuille.")
+    else:
+        st.caption(
+            "Ces positions proviennent des instantanes Current Savings, Fixed Savings et Loans. "
+            "Elles peuvent etre posterieures a la periode du journal et ne sont donc pas forcees dans la balance journaliere."
+        )
+        for _, row in portfolio.iterrows():
+            currency = str(row["currency_code"])
+            render_kpi_cards(
+                [
+                    ("Epargne courante", _format_amount(row["solde_epargne_courante_reference"]), currency, "blue"),
+                    ("DAT", _format_amount(row["solde_dat_reference"]), currency, "navy"),
+                    ("Depots clients", _format_amount(row["depots_clients_reference"]), currency, "green"),
+                    ("Encours credit", _format_amount(row["encours_credit_reference"]), currency, "orange"),
+                    ("Credits / depots", _format_percent(row["ratio_credits_depots_pct"]), f"Devise {currency}", "slate"),
+                ]
+            )
+        st.dataframe(portfolio, width="stretch", hide_index=True)
+
+    render_panel_title("Controle secondaire Transactions M-PESA_G2")
+    g2_control = report["controle_g2"]
+    if prepared.g2_transactions.empty:
+        st.info("G2 n'est pas charge. Les balances et mouvements Turbo restent disponibles sans nom ni controle G2.")
+    else:
+        st.caption(
+            "Le taux de rapprochement compare uniquement les transactions G2 terminees de la periode "
+            "avec ref_no Turbo. Un fichier G2 limite au compte 1441 ne couvre pas les sorties 15558."
+        )
+        st.dataframe(g2_control, width="stretch", hide_index=True)
+
+    render_panel_title("Journal et controles comptables [Turbo]")
+    control_count = len(report["controles_operations"]) + len(report["controles_soldes"])
+    render_kpi_cards(
+        [
+            ("Operations a verifier", _format_count(len(report["controles_operations"])), "Symetrie debit / credit", "orange"),
+            ("Variations a verifier", _format_count(len(report["controles_soldes"])), "bal_before / bal_after", "orange"),
+            ("Total signaux", _format_count(control_count), "Signaux de revue, pas preuves d'erreur", "slate"),
+        ]
+    )
+    with st.expander("Afficher le journal des operations [Turbo]", expanded=False):
+        operation_view = _apply_local_multiselect_filters(
+            report["journal_operations"],
+            ["currency_code", "statut_controle_operation", "customer_id"],
+            key_prefix="mpesa_accounting_operation_journal_filter",
+        )
+        st.dataframe(operation_view, width="stretch", hide_index=True)
+    with st.expander("Afficher les operations a verifier [Turbo]", expanded=False):
+        st.dataframe(report["controles_operations"], width="stretch", hide_index=True)
+    with st.expander("Afficher les variations de solde a verifier [Turbo]", expanded=False):
+        st.dataframe(report["controles_soldes"], width="stretch", hide_index=True)
+    with st.expander("Afficher le journal brut des ecritures [Turbo]", expanded=False):
+        st.dataframe(report["journal_ecritures"], width="stretch", hide_index=True)
+
+    render_panel_title("Export comptable [Turbo]")
+    export_report = {
+        "accounting_summary": report["synthese"],
+        "accounting_client_balances": report["balance_clients"],
+        "accounting_client_positions": report["balance_auxiliaire_clients"],
+        "accounting_account_balance": report["balance_comptes"],
+        "accounting_operation_journal": report["journal_operations"],
+        "accounting_entry_journal": report["journal_ecritures"],
+        "accounting_operation_controls": report["controles_operations"],
+        "accounting_balance_controls": report["controles_soldes"],
+        "accounting_cash_flow": report["flux_mpesa"],
+        "accounting_financial_products": report["produits_financiers"],
+        "accounting_portfolio_positions": report["positions_portefeuille"],
+        "accounting_g2_controls": report["controle_g2"],
+    }
+    export_bytes = _create_excel_export_cached(export_report)
+    start_token = pd.Timestamp(date_start).strftime("%Y%m%d")
+    end_token = pd.Timestamp(date_end).strftime("%Y%m%d")
+    st.download_button(
+        "Telecharger les analyses comptables Turbo",
+        data=export_bytes,
+        file_name=f"analyses_comptables_turbo_{start_token}_{end_token}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        width="content",
+        key=f"mpesa_accounting_export_{start_token}_{end_token}",
+    )
+
+
+@st.fragment
 def _render_diagnostics_tab(prepared: MpesaPreparedData, report: dict[str, Any] | None) -> None:
     diagnostics = report["diagnostics"] if report is not None else build_diagnostics(prepared)
     diagnostics_view = _apply_local_multiselect_filters(
@@ -3082,32 +3447,36 @@ def render_solution_mpesa_tab() -> None:
         customers_raw,
         perfect_raw,
     )
-    sub_tabs = st.tabs(
-        [
-            "Importation",
-            "Pilotage Turbo + G2",
-            "Extrait client",
-            "DAT",
-            "G2 / DAT",
-            "Perfect_client",
-            "Detail des credits",
-            "Controle des donnees",
-        ]
-    )
-    report: dict[str, Any] | None = None
+    sub_tab_names = [
+        "Importation",
+        "Pilotage Turbo + G2",
+        "Comptabilité Turbo",
+        "Extrait client",
+        "DAT",
+        "G2 / DAT",
+        "Perfect_client",
+        "Detail des credits",
+        "Controle des donnees",
+    ]
+    tabs_container_key = "mpesa_solution_tabs"
+    inject_professional_tabs_css(container_key=tabs_container_key)
+    tabs_container = st.container(key=tabs_container_key)
+    sub_tabs = tabs_container.tabs(format_professional_tab_labels(sub_tab_names))
     with sub_tabs[0]:
         _render_import_tab(prepared, missing)
     with sub_tabs[1]:
         _render_management_dashboard(prepared)
     with sub_tabs[2]:
-        report = _render_customer_extract(prepared)
+        _render_accounting_tab(prepared)
     with sub_tabs[3]:
-        _render_dat_tab(report, prepared)
+        _render_customer_extract(prepared)
     with sub_tabs[4]:
-        _render_g2_dat_tab(report, prepared)
+        _render_dat_tab(None, prepared)
     with sub_tabs[5]:
-        _render_perfect_client_tab(prepared)
+        _render_g2_dat_tab(None, prepared)
     with sub_tabs[6]:
-        _render_loans_tab(report, prepared)
+        _render_perfect_client_tab(prepared)
     with sub_tabs[7]:
-        _render_diagnostics_tab(prepared, report)
+        _render_loans_tab(None, prepared)
+    with sub_tabs[8]:
+        _render_diagnostics_tab(prepared, None)

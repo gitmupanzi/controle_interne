@@ -57,6 +57,28 @@ CUSTOMER_STATEMENT_FOCUS_OPERATION_TYPES = frozenset(
     }
 )
 
+CUSTOMER_STATEMENT_LOGO_PATH = (
+    Path(__file__).resolve().parents[2] / "skills" / "logo Bisou Bisou.PNG"
+)
+
+
+def _timestamp_plus(
+    value: object,
+    *,
+    days: int = 0,
+    hours: int = 0,
+    minutes: int = 0,
+    seconds: int = 0,
+    microseconds: int = 0,
+) -> pd.Timestamp:
+    """Ajoute une duree avec des unites NumPy explicites."""
+    total_microseconds = (
+        (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1_000_000
+        + microseconds
+    )
+    base = np.datetime64(pd.Timestamp(value), "us")
+    return pd.Timestamp(base + np.timedelta64(total_microseconds, "us"))
+
 
 def _customer_statement_filename_token(value: object, fallback: str) -> str:
     """Nettoie un segment de nom de fichier sans supprimer les espaces du nom."""
@@ -596,7 +618,7 @@ def build_large_dat_summary(
     dat["echeance_30j"] = (
         dat["maturity_date"].notna()
         & dat["maturity_date"].ge(reporting_date)
-        & dat["maturity_date"].le(reporting_date + pd.Timedelta(days=30))
+        & dat["maturity_date"].le(_timestamp_plus(reporting_date, days=30))
     )
     dat["solde_dat_echu"] = dat["balance"].where(dat["dat_echu"], 0.0)
     dat["solde_echeance_30j"] = dat["balance"].where(dat["echeance_30j"], 0.0)
@@ -1336,7 +1358,8 @@ def filter_g2_transactions_by_completion_time(
     if start_date is not None:
         start_bound = pd.Timestamp(start_date).normalize()
         if start_time is not None:
-            start_bound += pd.Timedelta(
+            start_bound = _timestamp_plus(
+                start_bound,
                 hours=start_time.hour,
                 minutes=start_time.minute,
                 seconds=start_time.second,
@@ -1346,9 +1369,10 @@ def filter_g2_transactions_by_completion_time(
     if end_date is not None:
         end_bound = pd.Timestamp(end_date).normalize()
         if end_time is None:
-            mask &= completion_time.lt(end_bound + pd.Timedelta(days=1))
+            mask &= completion_time.lt(_timestamp_plus(end_bound, days=1))
         else:
-            end_bound += pd.Timedelta(
+            end_bound = _timestamp_plus(
+                end_bound,
                 hours=end_time.hour,
                 minutes=end_time.minute,
                 seconds=end_time.second,
@@ -3841,11 +3865,13 @@ def build_g2_retention_report(
     }
     base_groups = activity.groupby(["periode", "currency_code", "phone_prefixe"], dropna=False)
     for (period, currency, phone), base in base_groups:
-        period = pd.Timestamp(period)
+        # Les cles issues d'un Period peuvent conserver l'unite NumPy generique.
+        # Forcer les nanosecondes evite l'addition de timedelta sans unite explicite.
+        period = pd.Timestamp(period).as_unit("ns")
         month_end = period + pd.offsets.MonthEnd(1)
         next_month_start = period + pd.offsets.MonthBegin(1)
         next_month_end = next_month_start + pd.offsets.MonthEnd(1)
-        deadline_90 = month_end + pd.Timedelta(days=90)
+        deadline_90 = _timestamp_plus(month_end, days=90)
         eligible_m1 = observation_end >= next_month_end
         eligible_90 = observation_end >= deadline_90
         client_history = client_activity[(currency, phone)]
@@ -4758,6 +4784,579 @@ def build_mpesa_perfect_adoption_analysis(
     return {"synthese": summary, "statuts": statuses, "detail": detail.sort_values(["statut_adoption", "phone_prefixe"]).reset_index(drop=True)}
 
 
+MPESA_ACCOUNTING_AUXILIARY_ACCOUNTS = {
+    "NORMAL SAVINGS": ("Epargne courante", "Passif client observe"),
+    "FIXED SAVINGS": ("DAT", "Passif client observe"),
+    "PRINCIPLE": ("Principal credit", "Actif credit observe"),
+}
+
+MPESA_ACCOUNTING_FINANCIAL_PRODUCTS = {
+    "INTEREST EARNED": "Interets comptabilises observes",
+    "LOAN PENALTY FEES": "Penalites comptabilisees observees",
+    "BISOU COLLECTION": "Part Bisou observee",
+    "VODA COLLECTION A/C": "Part Voda observee",
+}
+
+
+def _empty_mpesa_accounting_analysis() -> dict[str, pd.DataFrame]:
+    return {
+        "periode": pd.DataFrame(),
+        "synthese": pd.DataFrame(),
+        "balance_clients": pd.DataFrame(),
+        "balance_auxiliaire_clients": pd.DataFrame(),
+        "balance_comptes": pd.DataFrame(),
+        "journal_operations": pd.DataFrame(),
+        "journal_ecritures": pd.DataFrame(),
+        "controles_operations": pd.DataFrame(),
+        "controles_soldes": pd.DataFrame(),
+        "flux_mpesa": pd.DataFrame(),
+        "produits_financiers": pd.DataFrame(),
+        "positions_portefeuille": pd.DataFrame(),
+        "controle_g2": pd.DataFrame(),
+    }
+
+
+def build_mpesa_accounting_analysis(
+    prepared: MpesaPreparedData,
+    *,
+    date_start: object | None = None,
+    date_end: object | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Construit les analyses comptables observables dans Transactions Turbo.
+
+    Turbo reste la source unique des mouvements et des montants. G2 enrichit le
+    nom et mesure la couverture du rapprochement direct ``Receipt No = ref_no``.
+    Les soldes ``bal_before``/``bal_after`` sont presentes comme des positions
+    observees; ils ne constituent pas une balance generale certifiee sans plan
+    comptable complet ni soldes d'ouverture officiels.
+    """
+    result = _empty_mpesa_accounting_analysis()
+    transactions = prepared.transactions
+    required = {
+        "id", "customer_id", "msisdn1", "account_type", "reference_id",
+        "currency_code", "dr", "cr", "bal_before", "bal_after", "ref_no",
+        "description", "created_at",
+    }
+    if not isinstance(transactions, pd.DataFrame) or transactions.empty or not required.issubset(transactions.columns):
+        return result
+
+    full = transactions.copy()
+    for column in ["id", "customer_id", "msisdn1", "account_type", "reference_id", "currency_code", "ref_no", "description"]:
+        full[column] = clean_text(full[column])
+    full["currency_code"] = full["currency_code"].str.upper().replace("", "NON RENSEIGNEE")
+    full["created_at"] = pd.to_datetime(full["created_at"], errors="coerce")
+    full = full.dropna(subset=["created_at"]).copy()
+    if full.empty:
+        return result
+    for column in ["dr", "cr", "bal_before", "bal_after"]:
+        full[column] = numeric_column(full, column)
+    if "Nom_client" not in full.columns:
+        full["Nom_client"] = ""
+    full["Nom_client"] = clean_text(full["Nom_client"])
+    full["__row_order"] = np.arange(len(full))
+
+    available_dates = full["created_at"].dropna()
+    start = pd.to_datetime(date_start, errors="coerce") if date_start is not None else available_dates.min()
+    end = pd.to_datetime(date_end, errors="coerce") if date_end is not None else available_dates.max()
+    if pd.isna(start):
+        start = available_dates.min()
+    if pd.isna(end):
+        end = available_dates.max()
+    start = pd.Timestamp(start)
+    end = pd.Timestamp(end)
+    if start == start.normalize():
+        start = start.normalize()
+    if end == end.normalize():
+        end = _timestamp_plus(end.normalize(), days=1, microseconds=-1)
+    if start > end:
+        start, end = end.normalize(), _timestamp_plus(start.normalize(), days=1, microseconds=-1)
+
+    scoped = full.loc[full["created_at"].between(start, end, inclusive="both")].copy()
+    if scoped.empty:
+        result["periode"] = pd.DataFrame(
+            [{"date_debut": start, "date_fin": end, "source": "Transactions M-PESA_Turbo", "nombre_lignes": 0}]
+        )
+        return result
+
+    reference = clean_identifier(scoped["ref_no"])
+    timestamp_token = scoped["created_at"].dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+    scoped["cle_operation_turbo"] = np.where(
+        reference.ne(""),
+        "REF|" + reference,
+        "HORODATAGE|" + scoped["customer_id"] + "|" + scoped["currency_code"] + "|" + timestamp_token,
+    )
+    scoped["reference_operation"] = reference.where(
+        reference.ne(""),
+        "TURBO-" + scoped["customer_id"] + "-" + timestamp_token,
+    )
+    scoped["date_operation"] = scoped["created_at"].dt.normalize()
+
+    operation_group = ["customer_id", "currency_code", "cle_operation_turbo"]
+    journal_operations = (
+        scoped.groupby(operation_group, as_index=False, dropna=False)
+        .agg(
+            date_operation=("date_operation", "min"),
+            created_at=("created_at", "min"),
+            reference_operation=("reference_operation", first_non_empty),
+            ref_no=("ref_no", concat_unique),
+            Nom_client=("Nom_client", concat_unique),
+            telephone=("msisdn1", concat_unique),
+            comptes_turbo=("account_type", concat_unique),
+            descriptions_turbo=("description", concat_unique),
+            total_debit=("dr", "sum"),
+            total_credit=("cr", "sum"),
+            nombre_lignes=("id", "size"),
+        )
+        .sort_values(["currency_code", "created_at", "reference_operation"])
+        .reset_index(drop=True)
+    )
+    journal_operations["ecart_debit_credit"] = journal_operations["total_debit"] - journal_operations["total_credit"]
+    operation_tolerance = np.maximum(
+        0.01,
+        journal_operations[["total_debit", "total_credit"]].abs().max(axis=1) * 1e-6,
+    )
+    journal_operations["operation_symetrique"] = journal_operations["ecart_debit_credit"].abs().le(operation_tolerance)
+    journal_operations["statut_controle_operation"] = np.where(
+        journal_operations["operation_symetrique"],
+        "Symetrique dans l'export Turbo",
+        "A verifier - sous-registres ou ecritures incompletes",
+    )
+    journal_operations["solde_debiteur_mouvement"] = journal_operations["ecart_debit_credit"].clip(lower=0)
+    journal_operations["solde_crediteur_mouvement"] = (-journal_operations["ecart_debit_credit"]).clip(lower=0)
+
+    operation_controls = journal_operations.loc[
+        ~journal_operations["operation_symetrique"]
+    ].copy().reset_index(drop=True)
+
+    client_control = (
+        journal_operations.groupby(["customer_id", "currency_code"], as_index=False, dropna=False)
+        .agg(
+            nombre_operations=("cle_operation_turbo", "size"),
+            operations_a_verifier=("operation_symetrique", lambda values: int((~values.astype(bool)).sum())),
+        )
+    )
+    balance_clients = (
+        scoped.groupby(["customer_id", "currency_code"], as_index=False, dropna=False)
+        .agg(
+            Nom_client=("Nom_client", concat_unique),
+            telephone=("msisdn1", concat_unique),
+            total_debit=("dr", "sum"),
+            total_credit=("cr", "sum"),
+            nombre_lignes=("id", "size"),
+            nombre_types_comptes=("account_type", "nunique"),
+            premiere_ecriture=("created_at", "min"),
+            derniere_ecriture=("created_at", "max"),
+        )
+        .merge(client_control, on=["customer_id", "currency_code"], how="left")
+    )
+    balance_clients["ecart_debit_credit"] = balance_clients["total_debit"] - balance_clients["total_credit"]
+    balance_clients["solde_debiteur_mouvement"] = balance_clients["ecart_debit_credit"].clip(lower=0)
+    balance_clients["solde_crediteur_mouvement"] = (-balance_clients["ecart_debit_credit"]).clip(lower=0)
+
+    balance_comptes = (
+        scoped.groupby(["currency_code", "account_type"], as_index=False, dropna=False)
+        .agg(
+            total_debit=("dr", "sum"),
+            total_credit=("cr", "sum"),
+            nombre_lignes=("id", "size"),
+            nombre_operations=("cle_operation_turbo", "nunique"),
+            nombre_clients=("customer_id", "nunique"),
+            premiere_ecriture=("created_at", "min"),
+            derniere_ecriture=("created_at", "max"),
+        )
+    )
+    balance_comptes["ecart_debit_credit"] = balance_comptes["total_debit"] - balance_comptes["total_credit"]
+    balance_comptes["solde_debiteur_mouvement"] = balance_comptes["ecart_debit_credit"].clip(lower=0)
+    balance_comptes["solde_crediteur_mouvement"] = (-balance_comptes["ecart_debit_credit"]).clip(lower=0)
+    balance_comptes = balance_comptes.sort_values(["currency_code", "account_type"]).reset_index(drop=True)
+
+    # Balance auxiliaire : uniquement les comptes produits qui representent une
+    # position client exploitable. Les comptes techniques restent dans la
+    # balance des mouvements et le journal des operations.
+    auxiliary_full = full.loc[full["account_type"].isin(MPESA_ACCOUNTING_AUXILIARY_ACCOUNTS)].copy()
+    auxiliary_balance = pd.DataFrame()
+    if not auxiliary_full.empty:
+        reference_keys = ["customer_id", "currency_code", "account_type"]
+        known_references = (
+            auxiliary_full.loc[auxiliary_full["reference_id"].ne("")]
+            .groupby(reference_keys, as_index=False, dropna=False)
+            .agg(
+                reference_connue=("reference_id", first_non_empty),
+                nombre_references_connues=("reference_id", "nunique"),
+            )
+        )
+        auxiliary_scoped = scoped.loc[
+            scoped["account_type"].isin(MPESA_ACCOUNTING_AUXILIARY_ACCOUNTS)
+        ].copy()
+        auxiliary_scoped = auxiliary_scoped.merge(known_references, on=reference_keys, how="left")
+        auxiliary_scoped["nombre_references_connues"] = pd.to_numeric(
+            auxiliary_scoped["nombre_references_connues"], errors="coerce"
+        ).fillna(0).astype(int)
+        exact_reference = auxiliary_scoped["reference_id"].ne("")
+        resolvable_reference = ~exact_reference & auxiliary_scoped["nombre_references_connues"].eq(1)
+        auxiliary_scoped["cle_compte_turbo"] = np.select(
+            [exact_reference, resolvable_reference],
+            [auxiliary_scoped["reference_id"], auxiliary_scoped["reference_connue"]],
+            default="REFERENCE_A_VERIFIER",
+        )
+        auxiliary_scoped["statut_reference_compte"] = np.select(
+            [exact_reference, resolvable_reference],
+            ["Reference Turbo presente", "Reference resolue par le compte unique du client"],
+            default="Reference compte ambigue ou absente",
+        )
+        auxiliary_scoped["famille_position"] = auxiliary_scoped["account_type"].map(
+            lambda value: MPESA_ACCOUNTING_AUXILIARY_ACCOUNTS[value][0]
+        )
+        auxiliary_scoped["nature_comptable_indicative"] = auxiliary_scoped["account_type"].map(
+            lambda value: MPESA_ACCOUNTING_AUXILIARY_ACCOUNTS[value][1]
+        )
+        auxiliary_scoped = auxiliary_scoped.sort_values(["created_at", "__row_order"])
+        account_keys = [
+            "customer_id", "currency_code", "account_type", "famille_position",
+            "nature_comptable_indicative", "cle_compte_turbo",
+        ]
+        account_positions = (
+            auxiliary_scoped.groupby(account_keys, as_index=False, dropna=False)
+            .agg(
+                Nom_client=("Nom_client", concat_unique),
+                telephone=("msisdn1", concat_unique),
+                statut_reference_compte=("statut_reference_compte", concat_unique),
+                solde_ouverture_observe=("bal_before", "first"),
+                total_debit=("dr", "sum"),
+                total_credit=("cr", "sum"),
+                solde_cloture_observe=("bal_after", "last"),
+                nombre_lignes=("id", "size"),
+                nombre_operations=("cle_operation_turbo", "nunique"),
+                premiere_ecriture=("created_at", "min"),
+                derniere_ecriture=("created_at", "max"),
+            )
+        )
+        account_positions["variation_solde_observee"] = (
+            account_positions["solde_cloture_observe"] - account_positions["solde_ouverture_observe"]
+        )
+        account_positions["reference_a_verifier"] = account_positions["cle_compte_turbo"].eq("REFERENCE_A_VERIFIER")
+        auxiliary_balance = (
+            account_positions.groupby(
+                ["customer_id", "currency_code", "famille_position", "nature_comptable_indicative"],
+                as_index=False,
+                dropna=False,
+            )
+            .agg(
+                Nom_client=("Nom_client", concat_unique),
+                telephone=("telephone", concat_unique),
+                nombre_comptes_observes=("cle_compte_turbo", "nunique"),
+                references_a_verifier=("reference_a_verifier", "sum"),
+                solde_ouverture_observe=("solde_ouverture_observe", "sum"),
+                total_debit=("total_debit", "sum"),
+                total_credit=("total_credit", "sum"),
+                variation_solde_observee=("variation_solde_observee", "sum"),
+                solde_cloture_observe=("solde_cloture_observe", "sum"),
+                nombre_lignes=("nombre_lignes", "sum"),
+                nombre_operations=("nombre_operations", "sum"),
+                premiere_ecriture=("premiere_ecriture", "min"),
+                derniere_ecriture=("derniere_ecriture", "max"),
+            )
+            .sort_values(["currency_code", "customer_id", "famille_position"])
+            .reset_index(drop=True)
+        )
+
+        position_pivot = auxiliary_balance.pivot_table(
+            index=["customer_id", "currency_code"],
+            columns="famille_position",
+            values="solde_cloture_observe",
+            aggfunc="sum",
+            fill_value=0.0,
+        ).reset_index()
+        position_pivot.columns.name = None
+        position_pivot = position_pivot.rename(
+            columns={
+                "Epargne courante": "solde_epargne_courante_observe",
+                "DAT": "solde_dat_observe",
+                "Principal credit": "encours_principal_observe",
+            }
+        )
+        for column in ["solde_epargne_courante_observe", "solde_dat_observe", "encours_principal_observe"]:
+            if column not in position_pivot.columns:
+                position_pivot[column] = 0.0
+        position_pivot["avoirs_epargne_observes"] = (
+            position_pivot["solde_epargne_courante_observe"] + position_pivot["solde_dat_observe"]
+        )
+        balance_clients = balance_clients.merge(
+            position_pivot,
+            on=["customer_id", "currency_code"],
+            how="left",
+        )
+
+    for column in ["solde_epargne_courante_observe", "solde_dat_observe", "avoirs_epargne_observes", "encours_principal_observe"]:
+        if column not in balance_clients.columns:
+            balance_clients[column] = 0.0
+        balance_clients[column] = pd.to_numeric(balance_clients[column], errors="coerce").fillna(0.0)
+    balance_clients = balance_clients.sort_values(
+        ["currency_code", "avoirs_epargne_observes", "encours_principal_observe", "customer_id"],
+        ascending=[True, False, False, True],
+    ).reset_index(drop=True)
+
+    scoped["variation_solde_observee"] = scoped["bal_after"] - scoped["bal_before"]
+    scoped["amplitude_variation_solde"] = scoped["variation_solde_observee"].abs()
+    scoped["amplitude_mouvement_ligne"] = scoped["dr"].abs() + scoped["cr"].abs()
+    scoped["ecart_amplitude_solde_mouvement"] = (
+        scoped["amplitude_variation_solde"] - scoped["amplitude_mouvement_ligne"]
+    )
+    line_tolerance = np.maximum(0.01, scoped["amplitude_mouvement_ligne"] * 1e-6)
+    scoped["variation_solde_coherente"] = scoped["ecart_amplitude_solde_mouvement"].abs().le(line_tolerance)
+    scoped["statut_controle_solde"] = np.where(
+        scoped["variation_solde_coherente"],
+        "Amplitude de solde conforme au mouvement",
+        "A verifier - variation de solde differente du mouvement",
+    )
+    balance_control_columns = [
+        "created_at", "id", "customer_id", "Nom_client", "msisdn1", "currency_code",
+        "account_type", "reference_id", "ref_no", "description", "dr", "cr",
+        "bal_before", "bal_after", "variation_solde_observee", "amplitude_mouvement_ligne",
+        "ecart_amplitude_solde_mouvement", "statut_controle_solde",
+    ]
+    balance_controls = scoped.loc[
+        ~scoped["variation_solde_coherente"], balance_control_columns
+    ].copy().reset_index(drop=True)
+
+    cash = scoped.loc[scoped["account_type"].eq("MPESA ACCOUNT")].copy()
+    if not cash.empty:
+        cash["entree_bisou_observee"] = cash["dr"]
+        cash["sortie_bisou_observee"] = cash["cr"]
+        cash_flow = (
+            cash.groupby("currency_code", as_index=False, dropna=False)
+            .agg(
+                entrees_bisou_observees=("entree_bisou_observee", "sum"),
+                sorties_bisou_observees=("sortie_bisou_observee", "sum"),
+                nombre_operations=("cle_operation_turbo", "nunique"),
+                nombre_clients=("customer_id", "nunique"),
+            )
+        )
+        cash_flow["flux_net_bisou_observe"] = (
+            cash_flow["entrees_bisou_observees"] - cash_flow["sorties_bisou_observees"]
+        )
+    else:
+        cash_flow = pd.DataFrame()
+
+    product_rows = scoped.loc[
+        scoped["account_type"].isin(MPESA_ACCOUNTING_FINANCIAL_PRODUCTS)
+    ].copy()
+    if not product_rows.empty:
+        product_rows["produit_financier_observe"] = product_rows["account_type"].map(
+            MPESA_ACCOUNTING_FINANCIAL_PRODUCTS
+        )
+        product_rows["montant_observe"] = product_rows[["dr", "cr"]].abs().max(axis=1)
+        financial_products = (
+            product_rows.groupby(
+                ["currency_code", "account_type", "produit_financier_observe"],
+                as_index=False,
+                dropna=False,
+            )
+            .agg(
+                montant_observe=("montant_observe", "sum"),
+                nombre_lignes=("id", "size"),
+                nombre_operations=("cle_operation_turbo", "nunique"),
+            )
+            .sort_values(["currency_code", "account_type"])
+            .reset_index(drop=True)
+        )
+    else:
+        financial_products = pd.DataFrame()
+
+    portfolio_parts: list[pd.DataFrame] = []
+    for frame, source_label, value_column, output_column, date_columns in [
+        (prepared.current_savings, "Epargne courante_Turbo", "balance", "solde_epargne_courante_reference", ["updated_at", "created_at"]),
+        (prepared.fixed_savings, "DAT_Turbo", "balance", "solde_dat_reference", ["date_approved"]),
+        (prepared.loans, "Credits_Turbo", "loan_balance", "encours_credit_reference", ["updated_at", "created_at"]),
+    ]:
+        if not isinstance(frame, pd.DataFrame) or frame.empty or "currency_code" not in frame.columns or value_column not in frame.columns:
+            continue
+        snapshot = frame.copy()
+        snapshot["currency_code"] = clean_text(snapshot["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
+        snapshot[value_column] = numeric_column(snapshot, value_column)
+        available_date_column = next((column for column in date_columns if column in snapshot.columns), None)
+        if available_date_column:
+            snapshot["__source_date"] = pd.to_datetime(snapshot[available_date_column], errors="coerce")
+        else:
+            snapshot["__source_date"] = pd.NaT
+        aggregated = (
+            snapshot.groupby("currency_code", as_index=False, dropna=False)
+            .agg(**{
+                output_column: (value_column, "sum"),
+                f"nombre_lignes_{output_column}": (value_column, "size"),
+                f"date_source_{output_column}": ("__source_date", "max"),
+            })
+        )
+        aggregated[f"source_{output_column}"] = source_label
+        portfolio_parts.append(aggregated)
+    portfolio_positions = pd.DataFrame()
+    for part in portfolio_parts:
+        portfolio_positions = part if portfolio_positions.empty else portfolio_positions.merge(
+            part, on="currency_code", how="outer"
+        )
+    if not portfolio_positions.empty:
+        for column in ["solde_epargne_courante_reference", "solde_dat_reference", "encours_credit_reference"]:
+            if column not in portfolio_positions.columns:
+                portfolio_positions[column] = 0.0
+            portfolio_positions[column] = pd.to_numeric(portfolio_positions[column], errors="coerce").fillna(0.0)
+        portfolio_positions["depots_clients_reference"] = (
+            portfolio_positions["solde_epargne_courante_reference"]
+            + portfolio_positions["solde_dat_reference"]
+        )
+        portfolio_positions["ratio_credits_depots_pct"] = (
+            portfolio_positions["encours_credit_reference"]
+            .div(portfolio_positions["depots_clients_reference"].replace(0, pd.NA))
+            .mul(100)
+        )
+        portfolio_positions = portfolio_positions.sort_values("currency_code").reset_index(drop=True)
+
+    g2_control_rows: list[dict[str, object]] = []
+    g2 = prepared.g2_transactions.copy() if isinstance(prepared.g2_transactions, pd.DataFrame) else pd.DataFrame()
+    if not g2.empty:
+        g2_time = pd.to_datetime(
+            g2.get("completion_time", pd.Series(pd.NaT, index=g2.index)), errors="coerce"
+        )
+        g2 = g2.loc[g2_time.between(start, end, inclusive="both")].copy()
+        g2["__completed"] = g2_completed_transaction_mask(g2)
+        g2["__receipt_key"] = clean_identifier(g2.get("receipt_no", pd.Series("", index=g2.index)))
+        g2["currency_code"] = clean_text(g2.get("currency_code", pd.Series("", index=g2.index))).str.upper()
+        turbo_reference_keys = set(
+            zip(
+                scoped.loc[scoped["ref_no"].ne(""), "currency_code"],
+                clean_identifier(scoped.loc[scoped["ref_no"].ne(""), "ref_no"]),
+            )
+        )
+        g2["__direct_match"] = [
+            (currency, receipt) in turbo_reference_keys and bool(receipt)
+            for currency, receipt in zip(g2["currency_code"], g2["__receipt_key"])
+        ]
+    currencies = sorted(
+        set(scoped["currency_code"].dropna().astype(str))
+        | (set(g2["currency_code"].dropna().astype(str)) if not g2.empty else set())
+    )
+    for currency in currencies:
+        turbo_currency = scoped.loc[scoped["currency_code"].eq(currency)]
+        client_names = (
+            turbo_currency.groupby("customer_id", as_index=False)
+            .agg(Nom_client=("Nom_client", concat_unique))
+        )
+        named_clients = int(client_names["Nom_client"].ne("").sum())
+        total_clients = int(len(client_names))
+        g2_currency = g2.loc[g2["currency_code"].eq(currency)] if not g2.empty else pd.DataFrame()
+        completed_g2 = g2_currency.loc[g2_currency["__completed"]] if not g2_currency.empty else pd.DataFrame()
+        matched_g2 = int(completed_g2["__direct_match"].sum()) if not completed_g2.empty else 0
+        g2_control_rows.append(
+            {
+                "currency_code": currency,
+                "clients_turbo": total_clients,
+                "clients_turbo_avec_nom_g2": named_clients,
+                "taux_clients_nommes_g2_pct": 100 * named_clients / total_clients if total_clients else np.nan,
+                "operations_turbo_avec_ref_no": int(
+                    journal_operations.loc[
+                        journal_operations["currency_code"].eq(currency)
+                        & journal_operations["ref_no"].ne("")
+                    ].shape[0]
+                ),
+                "transactions_g2_chargees": int(len(g2_currency)),
+                "transactions_g2_terminees": int(len(completed_g2)),
+                "references_g2_turbo_rapprochees": matched_g2,
+                "taux_rapprochement_g2_pct": (
+                    100 * matched_g2 / len(completed_g2) if len(completed_g2) else np.nan
+                ),
+            }
+        )
+    g2_control = pd.DataFrame(g2_control_rows)
+
+    summary = (
+        balance_clients.groupby("currency_code", as_index=False, dropna=False)
+        .agg(
+            nombre_clients=("customer_id", "nunique"),
+            nombre_lignes=("nombre_lignes", "sum"),
+            nombre_operations=("nombre_operations", "sum"),
+            operations_a_verifier=("operations_a_verifier", "sum"),
+            total_debit=("total_debit", "sum"),
+            total_credit=("total_credit", "sum"),
+            solde_debiteur_mouvement=("solde_debiteur_mouvement", "sum"),
+            solde_crediteur_mouvement=("solde_crediteur_mouvement", "sum"),
+            avoirs_epargne_observes=("avoirs_epargne_observes", "sum"),
+            encours_principal_observe=("encours_principal_observe", "sum"),
+        )
+    )
+    summary["operations_symetriques"] = summary["nombre_operations"] - summary["operations_a_verifier"]
+    summary["taux_operations_symetriques_pct"] = (
+        summary["operations_symetriques"]
+        .div(summary["nombre_operations"].replace(0, pd.NA))
+        .mul(100)
+    )
+    line_quality = (
+        scoped.groupby("currency_code", as_index=False, dropna=False)
+        .agg(
+            lignes_variation_solde_conforme=("variation_solde_coherente", "sum"),
+            lignes_variation_solde_total=("variation_solde_coherente", "size"),
+        )
+    )
+    line_quality["taux_variation_solde_conforme_pct"] = (
+        line_quality["lignes_variation_solde_conforme"]
+        .div(line_quality["lignes_variation_solde_total"].replace(0, pd.NA))
+        .mul(100)
+    )
+    summary = summary.merge(line_quality, on="currency_code", how="left")
+    if not g2_control.empty:
+        summary = summary.merge(
+            g2_control[
+                ["currency_code", "taux_clients_nommes_g2_pct", "taux_rapprochement_g2_pct"]
+            ],
+            on="currency_code",
+            how="left",
+        )
+    summary["date_debut"] = start
+    summary["date_fin"] = end
+    summary["source_mouvements"] = "Transactions M-PESA_Turbo"
+    summary["role_g2"] = "Nom client et controle uniquement"
+
+    journal_entry_columns = [
+        "created_at", "date_operation", "id", "customer_id", "Nom_client", "msisdn1",
+        "currency_code", "account_type", "reference_id", "ref_no", "reference_operation",
+        "description", "dr", "cr", "bal_before", "bal_after", "variation_solde_observee",
+        "statut_controle_solde", "cle_operation_turbo",
+    ]
+    period = pd.DataFrame(
+        [
+            {
+                "date_debut": start,
+                "date_fin": end,
+                "source_mouvements": "Transactions M-PESA_Turbo",
+                "source_identite_controle": "Transactions M-PESA_G2" if not prepared.g2_transactions.empty else "Non chargee",
+                "nombre_lignes": int(len(scoped)),
+                "nombre_clients": int(scoped["customer_id"].nunique()),
+                "nombre_devises": int(scoped["currency_code"].nunique()),
+                "limite": "Balance observee; pas de balance generale certifiee sans plan comptable et soldes d'ouverture.",
+            }
+        ]
+    )
+
+    result.update(
+        {
+            "periode": period,
+            "synthese": summary.sort_values("currency_code").reset_index(drop=True),
+            "balance_clients": balance_clients,
+            "balance_auxiliaire_clients": auxiliary_balance,
+            "balance_comptes": balance_comptes,
+            "journal_operations": journal_operations,
+            "journal_ecritures": scoped[journal_entry_columns].sort_values(
+                ["currency_code", "created_at", "id"]
+            ).reset_index(drop=True),
+            "controles_operations": operation_controls,
+            "controles_soldes": balance_controls,
+            "flux_mpesa": cash_flow,
+            "produits_financiers": financial_products,
+            "positions_portefeuille": portfolio_positions,
+            "controle_g2": g2_control,
+        }
+    )
+    return result
+
+
 def build_mpesa_management_dashboard(
     prepared: MpesaPreparedData,
     *,
@@ -5446,7 +6045,7 @@ def build_customer_transaction_analysis(
         base = base.loc[pd.to_datetime(base["created_at"], errors="coerce").ge(start)].copy()
     if pd.notna(end):
         if not hasattr(date_end, "hour"):
-            end = end + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+            end = _timestamp_plus(end, days=1, microseconds=-1)
         base = base.loc[pd.to_datetime(base["created_at"], errors="coerce").le(end)].copy()
     query = str(reference_query).strip()
     if query:
@@ -5713,7 +6312,7 @@ def build_mpesa_statement(
         end = pd.to_datetime(date_end, errors="coerce")
         if pd.notna(end):
             if not hasattr(date_end, "hour"):
-                end = end + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+                end = _timestamp_plus(end, days=1, microseconds=-1)
             statement = statement.loc[statement["created_at"].le(end)]
 
     statement["controle_mouvement"] = np.select(
@@ -6797,15 +7396,19 @@ def create_customer_statement_word(
     brand_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
     brand_paragraph = brand_cell.paragraphs[0]
     brand_paragraph.paragraph_format.space_after = Pt(0)
-    brand_run = brand_paragraph.add_run("Bisou Bisou")
-    brand_run.bold = True
-    brand_run.italic = True
-    brand_run.font.size = Pt(22)
-    brand_run.font.color.rgb = RGBColor(178, 34, 34)
-    brand_subtitle = brand_cell.add_paragraph("microfinance")
-    brand_subtitle.paragraph_format.space_after = Pt(0)
-    brand_subtitle.runs[0].font.size = Pt(9)
-    brand_subtitle.runs[0].font.color.rgb = RGBColor(70, 110, 50)
+    if CUSTOMER_STATEMENT_LOGO_PATH.is_file():
+        try:
+            brand_paragraph.add_run().add_picture(
+                str(CUSTOMER_STATEMENT_LOGO_PATH), width=Cm(4.6)
+            )
+        except (OSError, ValueError):
+            brand_run = brand_paragraph.add_run("IMF Microfinance Bisou Bisou")
+            brand_run.bold = True
+            brand_run.font.size = Pt(16)
+    else:
+        brand_run = brand_paragraph.add_run("IMF Microfinance Bisou Bisou")
+        brand_run.bold = True
+        brand_run.font.size = Pt(16)
 
     criteria_title = header.cell(0, 1)
     criteria_title.width = Cm(9.0)
@@ -7127,6 +7730,212 @@ def create_customer_statement_word(
     return buffer.getvalue()
 
 
+def create_customer_statement_pdf(
+    statement: pd.DataFrame,
+    *,
+    analysis_report: dict[str, pd.DataFrame] | None = None,
+    customer_id: object,
+    customer_name: object = "",
+    telephone: object = "",
+    currency: object,
+    account_number: object = "",
+    entry_account_number: object | None = None,
+    output_account_number: object | None = None,
+    period_start: object | None = None,
+    period_end: object | None = None,
+    generated_at: pd.Timestamp | None = None,
+) -> bytes:
+    """Genere la version PDF de l'extrait officiel, sans conversion externe."""
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import cm
+        from reportlab.platypus import (
+            Image,
+            Paragraph,
+            SimpleDocTemplate,
+            Spacer,
+            Table,
+            TableStyle,
+        )
+    except ImportError as exc:
+        raise RuntimeError("La dependance reportlab est requise pour generer l'extrait PDF.") from exc
+
+    if not isinstance(statement, pd.DataFrame) or statement.empty:
+        raise ValueError("Aucune operation filtree n'est disponible pour l'extrait PDF.")
+    currency_text = str(currency).strip().upper()
+    all_currencies = currency_text in {"ALL", "TOUTES", "TOUS", "CDF + USD"}
+    frame = statement.copy()
+    frame_currency = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper()
+    if not all_currencies:
+        frame = frame.loc[frame_currency.eq(currency_text)].copy()
+    if frame.empty:
+        raise ValueError(f"Aucune operation {currency_text or 'sans devise'} n'est disponible pour l'extrait PDF.")
+
+    view = build_customer_statement_view(
+        frame,
+        account_number=account_number,
+        entry_account_number=entry_account_number,
+        output_account_number=output_account_number,
+        allow_multiple_currencies=all_currencies,
+    )
+    transactions = view["transactions"]
+    customer_id_text = str(customer_id).strip() or view["customer_id"] or "Non disponible"
+    customer_name_text = str(customer_name).strip() or view["customer_name"] or "Nom non disponible"
+    telephone_text = str(telephone).strip() or view["telephone"] or "Non disponible"
+    observed_currencies = sorted(
+        value for value in transactions["devise"].dropna().astype(str).unique() if value
+    )
+    currency_label = (
+        f"ALL ({', '.join(observed_currencies)})"
+        if all_currencies
+        else currency_text or view["currency"]
+    )
+    observed_dates = pd.to_datetime(transactions["date"], errors="coerce").dropna()
+
+    def report_date(value: object | None, fallback: pd.Timestamp | None) -> str:
+        parsed = pd.to_datetime(value, errors="coerce") if value is not None else pd.NaT
+        if pd.isna(parsed):
+            parsed = fallback
+        return f"{parsed:%d/%m/%Y}" if parsed is not None and pd.notna(parsed) else "Non disponible"
+
+    start_text = report_date(period_start, observed_dates.min() if not observed_dates.empty else None)
+    end_text = report_date(period_end, observed_dates.max() if not observed_dates.empty else None)
+    generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "CustomerStatementTitle", parent=styles["Title"], fontName="Helvetica-Bold",
+        fontSize=15, leading=18, textColor=colors.HexColor("#18293A"), alignment=TA_CENTER,
+        spaceAfter=8,
+    )
+    body_style = ParagraphStyle(
+        "CustomerStatementBody", parent=styles["BodyText"], fontName="Helvetica",
+        fontSize=6.8, leading=8.2,
+    )
+    header_style = ParagraphStyle(
+        "CustomerStatementHeader", parent=body_style, fontName="Helvetica-Bold",
+        textColor=colors.white, alignment=TA_CENTER,
+    )
+    amount_style = ParagraphStyle(
+        "CustomerStatementAmount", parent=body_style, alignment=TA_RIGHT,
+    )
+    section_style = ParagraphStyle(
+        "CustomerStatementSection", parent=styles["Heading3"], fontName="Helvetica-Bold",
+        fontSize=10, textColor=colors.HexColor("#183F5B"), spaceBefore=7, spaceAfter=4,
+    )
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer, pagesize=landscape(A4), leftMargin=1 * cm, rightMargin=1 * cm,
+        topMargin=0.8 * cm, bottomMargin=1.1 * cm,
+        title=f"Extrait de compte {customer_id_text} - {currency_label}",
+        author="Solution Controle Interne",
+    )
+    story: list[Any] = []
+    if CUSTOMER_STATEMENT_LOGO_PATH.is_file():
+        logo: Any = Image(str(CUSTOMER_STATEMENT_LOGO_PATH), width=3.1 * cm, height=3.1 * cm)
+    else:
+        logo = Paragraph("<b>IMF Microfinance Bisou Bisou</b>", styles["Heading2"])
+    criteria = Table(
+        [
+            [Paragraph("<b>Critères</b>", header_style), ""],
+            ["Date du :", start_text], ["Au :", end_text],
+            ["Numéro du client :", customer_id_text], ["Téléphone :", telephone_text],
+            ["Devise :", currency_label],
+        ],
+        colWidths=[4.2 * cm, 4.8 * cm],
+    )
+    criteria.setStyle(TableStyle([
+        ("SPAN", (0, 0), (1, 0)), ("BACKGROUND", (0, 0), (1, 0), colors.HexColor("#1F2937")),
+        ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"), ("FONTSIZE", (0, 1), (-1, -1), 7.5),
+        ("GRID", (0, 1), (-1, -1), 0.25, colors.HexColor("#CBD5E1")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4), ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    masthead = Table([[logo, criteria]], colWidths=[17.5 * cm, 9 * cm])
+    masthead.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+    story.extend([masthead, Spacer(1, 0.15 * cm)])
+    name_available = normalize_label(customer_name_text) not in {"", "non disponible", "nom non disponible"}
+    title_parts = ["Extrait de compte", telephone_text]
+    if name_available:
+        title_parts.append(customer_name_text.upper())
+    title_parts.append(currency_label)
+    story.append(Paragraph(" - ".join(escape(part) for part in title_parts), title_style))
+
+    summary_rows = [["Devise", "Ouverture", "Entrées", "Sorties", "Clôture"]]
+    for _, row in view["summary_by_currency"].iterrows():
+        row_currency = str(row.get("currency_code", ""))
+        decimals = 0 if row_currency == "CDF" else 2
+        balance_kind = "Solde" if bool(row.get("balance_is_real", False)) else "Cumul"
+        summary_rows.append([
+            f"{row_currency} ({balance_kind})",
+            _pdf_number(row.get("opening_amount"), decimals=decimals),
+            _pdf_number(row.get("total_entries"), decimals=decimals),
+            _pdf_number(row.get("total_outputs"), decimals=decimals),
+            _pdf_number(row.get("closing_amount"), decimals=decimals),
+        ])
+    summary_table = Table(summary_rows, colWidths=[3.5 * cm] * 5, hAlign="RIGHT", repeatRows=1)
+    summary_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EEF4")),
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ALIGN", (1, 1), (-1, -1), "RIGHT"), ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CBD5E1")),
+        ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.extend([summary_table, Paragraph("Détail des transactions", section_style)])
+
+    labels = ["Date", "Compte", "Receipt No", "Devise", "Description", "Entrée", "Sortie", view["balance_label"]]
+    detail_rows: list[list[Any]] = [[Paragraph(label, header_style) for label in labels]]
+    for _, row in transactions.iterrows():
+        row_currency = str(row.get("devise", currency_text)).upper()
+        decimals = 0 if row_currency == "CDF" else 2
+        date_value = pd.to_datetime(row.get("date"), errors="coerce")
+        values = [
+            f"{date_value:%d/%m/%Y}" if pd.notna(date_value) else "-",
+            row.get("compte", "-"), row.get("receipt_no", "-"), row_currency,
+            row.get("description", "-"), row.get("entree"), row.get("sortie"), row.get("solde"),
+        ]
+        formatted: list[Any] = []
+        for index, value in enumerate(values):
+            if index in {5, 6}:
+                numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+                text_value = "" if pd.isna(numeric) or float(numeric) == 0 else _pdf_number(numeric, decimals=decimals)
+                formatted.append(Paragraph(text_value, amount_style))
+            elif index == 7:
+                formatted.append(Paragraph(_pdf_number(value, decimals=decimals), amount_style))
+            else:
+                formatted.append(Paragraph(escape("-" if _is_empty_text(value) else str(value)), body_style))
+        detail_rows.append(formatted)
+    detail = Table(
+        detail_rows,
+        colWidths=[2.1 * cm, 1.5 * cm, 2.7 * cm, 1.4 * cm, 9.1 * cm, 2.3 * cm, 2.3 * cm, 2.6 * cm],
+        repeatRows=1,
+    )
+    detail.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2937")),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B7C1CC")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2.5), ("RIGHTPADDING", (0, 0), (-1, -1), 2.5),
+        ("TOPPADDING", (0, 0), (-1, -1), 2.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+    ]))
+    story.append(detail)
+
+    def draw_footer(canvas: Any, doc: Any) -> None:
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7)
+        canvas.setFillColor(colors.HexColor("#6E7D8C"))
+        footer = f"Extrait généré le {generated_at:%d/%m/%Y %H:%M} - Solution Bisou Bisou Digital - Page {doc.page}"
+        canvas.drawCentredString(landscape(A4)[0] / 2, 0.45 * cm, footer)
+        canvas.restoreState()
+
+    document.build(story, onFirstPage=draw_footer, onLaterPages=draw_footer)
+    return buffer.getvalue()
+
+
 def create_g2_dat_word(
     report: dict[str, Any],
     *,
@@ -7444,6 +8253,18 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         ("alertes_transactions", "Alertes_G2"),
         ("dat_echeances_detail", "Echeances_DAT_Turbo"),
         ("perfect_adoption_detail", "Adoption_Turbo_G2"),
+        ("accounting_summary", "Compta_Synthese_Turbo"),
+        ("accounting_client_balances", "Balance_Clients_Turbo"),
+        ("accounting_client_positions", "Positions_Clients_Turbo"),
+        ("accounting_account_balance", "Balance_Comptes_Turbo"),
+        ("accounting_operation_journal", "Journal_Operations_Turbo"),
+        ("accounting_entry_journal", "Journal_Ecritures_Turbo"),
+        ("accounting_operation_controls", "Controles_Operations_Turbo"),
+        ("accounting_balance_controls", "Controles_Soldes_Turbo"),
+        ("accounting_cash_flow", "Flux_MPESA_Turbo"),
+        ("accounting_financial_products", "Produits_Financiers_Turbo"),
+        ("accounting_portfolio_positions", "Positions_Portefeuille_Turbo"),
+        ("accounting_g2_controls", "Controle_G2_Turbo"),
         ("diagnostics", "Diagnostics"),
     ]
     sheets = {

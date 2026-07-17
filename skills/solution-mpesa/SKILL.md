@@ -1,6 +1,6 @@
 ---
 name: solution-mpesa
-description: Importer, normaliser, contrôler et rapprocher les fichiers Excel M-PESA de G2, Turbo et Perfect; construire les sous-onglets Pilotage Turbo + G2, G2/DAT, Extrait client, Crédits et Perfect_client, mesurer risque crédit, liquidité, activité client, conversion DAT, concentration, qualité et adoption, détecter les anomalies et produire les exports Excel ciblés et Word sans mélanger les devises. Utiliser pour toute question ou modification liée à Solution M-PESA, Bisou Bisou Digital, Portal/Turbo, G2, Perfect, Phone_Prefixe, Receipt No/ref_no, DAT, épargne, crédit, fidélisation, rapprochement client ou rapport M-PESA du projet Streamlit.
+description: Importer, normaliser, contrôler et rapprocher les fichiers Excel M-PESA de G2, Turbo et Perfect; construire les sous-onglets Pilotage Turbo + G2, Comptabilité Turbo, G2/DAT, Extrait client, Crédits et Perfect_client, produire la balance auxiliaire client, mesurer risque crédit, liquidité, activité client, conversion DAT, concentration, qualité et adoption, détecter les anomalies et produire les exports Excel ciblés, Word et PDF sans mélanger les devises. Utiliser pour toute question ou modification liée à Solution M-PESA, Bisou Bisou Digital, Portal/Turbo, G2, Perfect, Phone_Prefixe, Receipt No/ref_no, DAT, épargne, crédit, comptabilité, balance, fidélisation, rapprochement client ou rapport M-PESA du projet Streamlit.
 ---
 
 # Solution M-PESA
@@ -73,6 +73,33 @@ Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou
 - Traiter les montants eleves, horaires rares et rafales d'operations comme des alertes de revue et non comme des preuves de fraude.
 - Produire l'echeancier DAT par tranche et devise. Mesurer l'adoption Perfect uniquement sur les `Phone_Prefixe` valides.
 
+## Invariants Comptabilité Turbo
+
+- Utiliser exclusivement Transactions M-PESA_Turbo pour les écritures, les débits, les crédits, les soldes observés et les journaux comptables. G2 sert seulement à compléter le nom du client et à mesurer le rapprochement `Receipt No = ref_no`; ses montants ne remplacent jamais Turbo.
+- Construire la balance auxiliaire client sur les comptes produits `NORMAL SAVINGS`, `FIXED SAVINGS` et `PRINCIPLE`, au grain `customer_id x devise x famille de position`. Résoudre une référence absente uniquement lorsqu'un seul compte connu du même type existe pour le client; sinon conserver `Reference compte ambigue ou absente`.
+- Présenter tous les autres types de compte dans la balance des mouvements et le journal Turbo. Ne pas additionner les sous-registres techniques d'un crédit comme s'ils formaient une écriture unique : Turbo peut décrire plusieurs couches comptables de la même opération.
+- Regrouper les opérations d'abord par `ref_no`; lorsque la référence manque, utiliser `customer_id + devise + created_at`. Conserver le journal brut, le journal regroupé, le contrôle de symétrie débit/crédit et le contrôle d'amplitude `abs(bal_after - bal_before) = abs(dr) + abs(cr)`.
+- Qualifier chaque ouverture, clôture et position comme `observée`. Sans plan comptable complet ni soldes d'ouverture officiels, ne jamais appeler cette restitution `balance générale certifiée`, bilan ou compte de résultat officiel.
+- Présenter séparément les intérêts, pénalités, parts Bisou et parts Voda observées. Ne pas les additionner automatiquement, car ces lignes peuvent constituer plusieurs ventilations d'un même produit financier.
+- Afficher les positions des instantanés Current Savings, Fixed Savings et Loans à part de la balance journalière : leur date d'extraction peut être postérieure à la période comptable filtrée.
+- Calculer et exporter toutes les synthèses par devise. Ne jamais compenser ou totaliser CDF et USD.
+
+## Architecture Streamlit des sous-onglets
+
+- Construire tous les sous-onglets avec `st.tabs` au premier chargement de Solution M-PESA afin qu'ils soient immédiatement disponibles après l'importation.
+- Isoler chaque fonction de rendu avec `st.fragment`. Après le chargement initial, une interaction locale doit recalculer uniquement le sous-onglet concerné.
+- Garder les téléversements et la préparation partagée en dehors des fragments : toute modification des fichiers sources déclenche volontairement une reconstruction complète des sous-onglets.
+- Mettre en cache avec `st.cache_data` la lecture, la normalisation et les calculs déterministes lourds. Laisser les widgets et le rendu Streamlit hors du cache.
+- Conserver le contexte client dans `Extrait client`. Alimenter DAT, G2/DAT, crédits et diagnostics depuis les données globales préparées afin qu'un fragment ne dépende pas de l'état local d'un autre sous-onglet.
+- Exiger Streamlit 1.59 ou une version ultérieure compatible avec les fragments écrivant dans les conteneurs `st.tabs` créés à l'extérieur du fragment.
+
+## Norme visuelle commune des onglets
+
+- Conserver une barre d'onglets sobre et professionnelle.
+- Afficher l'onglet actif en bleu avec un soulignement rouge.
+- Appliquer un survol discret et rendre la navigation au clavier clairement visible.
+- Permettre le défilement horizontal des onglets sur les petits écrans.
+
 ## Exports
 
 - Générer uniquement les feuilles Excel demandées par le contexte; ne jamais ajouter automatiquement toutes les feuilles vides du module.
@@ -83,6 +110,8 @@ Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou
 - Calculer la ligne `Activite` de la synthèse exécutive Word directement depuis le détail `Completed` filtré par date, heure et sens; ne jamais la reprendre du dernier mois de fidélisation.
 - Vérifier qu'un export client reprend les filtres de l'extrait sans perdre les feuilles contextuelles du client.
 - Pour le Word client, vérifier les trois sorties CDF, USD et ALL, les comptes 1441/15558, l'en-tête `Devise` et les synthèses multidevises séparées.
+- Proposer le PDF client en CDF, USD et ALL avec le même périmètre filtré et les mêmes règles de séparation des devises que le Word. Générer le PDF nativement avec ReportLab afin de fonctionner sur Streamlit en ligne sans navigateur système.
+- Intégrer le logo officiel `skills/logo Bisou Bisou.PNG` dans les exports Word et PDF de l'Extrait client; conserver un libellé texte de repli si l'image est absente ou illisible.
 - Nommer le Word Turbo seul `extrait_compte_<customer_id>_<telephone>_<devise>_<debut>_<fin>.docx`. Si G2 est chargé, insérer le nom G2 entre l'identifiant et le téléphone. Conserver les espaces du nom, supprimer uniquement les caractères interdits des noms de fichiers et ne jamais utiliser G2 pour recalculer les montants.
 - Dans le Word client, retirer tous les suffixes `[Turbo]`. Si le solde d'ouverture n'est pas renseigné, conserver l'intitulé `Cumul net` mais ne plus imprimer l'ancien avertissement relatif au solde d'ouverture.
 - Dans le Word client, ne pas inclure les tableaux `Synthese du comportement observe`, `Positions observees et rapprochement des soldes` et `Jalons du parcours financier`. Conserver obligatoirement `Detail des transactions`. Le pied de page porte `Solution Bisou Bisou Digital`.
@@ -90,6 +119,7 @@ Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou
 - Exporter les trois populations `Clients_Perfect` dans `Clients_Perfect_G2`, `Clients_Perfect_Turbo` et `Clients_Perfect_Turbo_G2`.
 - Dans l'export de pilotage mixte, suffixer aussi chaque feuille par sa source : `_Turbo`, `_G2` ou `_Turbo_G2`.
 - Generer l'Excel du cockpit uniquement sur demande et limiter ses feuilles aux syntheses et listes d'action utiles.
+- Pour `Comptabilité Turbo`, exporter uniquement les feuilles demandées parmi `Compta_Synthese_Turbo`, `Balance_Clients_Turbo`, `Positions_Clients_Turbo`, `Balance_Comptes_Turbo`, `Journal_Operations_Turbo`, `Journal_Ecritures_Turbo`, `Controles_Operations_Turbo`, `Controles_Soldes_Turbo`, `Flux_MPESA_Turbo`, `Produits_Financiers_Turbo`, `Positions_Portefeuille_Turbo` et `Controle_G2_Turbo`.
 
 ## Architecture à respecter
 
@@ -109,4 +139,4 @@ Exécuter au minimum avec l'environnement Python du projet :
 & $PYTHON -m pytest tests/test_mpesa_analysis.py -q
 ```
 
-Pour un changement G2/DAT ou Word, tester aussi un fichier réel sans l'écrire dans le dépôt et vérifier le nombre de reçus, l'ordre des colonnes, les devises, les totaux et les anomalies. Vérifier également que chaque Excel contient seulement les feuilles prévues. Pour `Perfect_client`, vérifier les trois populations inclusives et leurs trois feuilles Excel avec un export 122 réel.
+Pour un changement G2/DAT, Word ou PDF, tester aussi un fichier réel sans l'écrire dans le dépôt et vérifier le nombre de reçus, l'ordre des colonnes, les devises, les totaux, le logo et les anomalies. Vérifier également que chaque Excel contient seulement les feuilles prévues. Pour `Perfect_client`, vérifier les trois populations inclusives et leurs trois feuilles Excel avec un export 122 réel.

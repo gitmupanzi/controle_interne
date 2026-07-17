@@ -20,9 +20,11 @@ from credit_app.services.mpesa_analysis import (
     build_g2_transaction_time_analysis,
     build_turbo_only_g2_transactions,
     build_mpesa_dat_maturity_analysis,
+    build_mpesa_accounting_analysis,
     build_mpesa_management_dashboard,
     build_g2_dat_pdf_html,
     create_g2_dat_word,
+    create_customer_statement_pdf,
     create_customer_statement_word,
     build_g2_entry_report,
     build_entry_count_summary,
@@ -1443,6 +1445,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Devise :", criteria_labels)
         self.assertNotIn("Compte :", criteria_labels)
         self.assertEqual(document.sections[0].orientation, WD_ORIENT.LANDSCAPE)
+        self.assertGreaterEqual(len(document.inline_shapes), 1)
 
         relative_statement = build_mpesa_statement(prepared, "1001", {"CDF": None})["extrait"]
         relative_content = create_customer_statement_word(
@@ -1465,6 +1468,29 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("le solde d'ouverture n'a pas ete fourni", relative_text)
         self.assertIn("Extrait de compte - 243812345678 - CDF", relative_text)
         self.assertNotIn("Extrait de compte - 243812345678 - NON DISPONIBLE - CDF", relative_text)
+
+    def test_customer_statement_pdf_contains_logo_and_keeps_currency_totals_separate(self) -> None:
+        prepared = _sample_prepared_data()
+        cdf_statement = build_mpesa_statement(prepared, "1001", {"CDF": None})["extrait"]
+        usd_statement = cdf_statement.copy()
+        usd_statement["currency_code"] = "USD"
+        usd_statement["operation_reference"] = "USD-" + usd_statement["operation_reference"].astype(str)
+        combined = pd.concat([cdf_statement, usd_statement], ignore_index=True)
+
+        content = create_customer_statement_pdf(
+            combined,
+            customer_id="1001",
+            customer_name="CLIENT TEST",
+            telephone="243812345678",
+            currency="ALL",
+            entry_account_number="1441",
+            output_account_number="15558",
+            generated_at=pd.Timestamp("2026-07-16 10:30:00"),
+        )
+
+        self.assertTrue(content.startswith(b"%PDF-"))
+        self.assertGreater(len(content), 5_000)
+        self.assertIn(b"/Subtype /Image", content)
 
     def test_customer_statement_word_includes_filtered_turbo_analyses(self) -> None:
         from docx import Document
@@ -2538,6 +2564,212 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertTrue(report["par_jour_semaine"].empty)
         self.assertTrue(report["par_heure"].empty)
         self.assertTrue(report["jour_heure"].empty)
+
+    def test_mpesa_accounting_analysis_builds_client_balance_from_turbo_only(self) -> None:
+        transactions = prepare_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "id": "CDF-1",
+                        "customer_id": "CLIENT-CDF",
+                        "msisdn1": "0811111111",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "SA-CDF",
+                        "currency_code": "CDF",
+                        "dr": 100,
+                        "cr": 0,
+                        "bal_before": 0,
+                        "bal_after": 100,
+                        "ref_no": "REF-CDF",
+                        "description": "M-Pesa Depot",
+                        "created_at": "2026-07-16 10:00:00",
+                    },
+                    {
+                        "id": "CDF-2",
+                        "customer_id": "CLIENT-CDF",
+                        "msisdn1": "0811111111",
+                        "account_type": "NORMAL SAVINGS",
+                        "reference_id": "SA-CDF",
+                        "currency_code": "CDF",
+                        "dr": 0,
+                        "cr": 100,
+                        "bal_before": 200,
+                        "bal_after": 300,
+                        "ref_no": "REF-CDF",
+                        "description": "Epargne depot",
+                        "created_at": "2026-07-16 10:00:00",
+                    },
+                    {
+                        "id": "USD-1",
+                        "customer_id": "CLIENT-USD",
+                        "msisdn1": "0822222222",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "LN-USD",
+                        "currency_code": "USD",
+                        "dr": 0,
+                        "cr": 20,
+                        "bal_before": 0,
+                        "bal_after": 20,
+                        "ref_no": "REF-USD",
+                        "description": "Montant pret",
+                        "created_at": "2026-07-16 11:00:00",
+                    },
+                    {
+                        "id": "USD-2",
+                        "customer_id": "CLIENT-USD",
+                        "msisdn1": "0822222222",
+                        "account_type": "PRINCIPLE",
+                        "reference_id": "LN-USD",
+                        "currency_code": "USD",
+                        "dr": 20,
+                        "cr": 0,
+                        "bal_before": 0,
+                        "bal_after": 20,
+                        "ref_no": "REF-USD",
+                        "description": "Montant principal",
+                        "created_at": "2026-07-16 11:00:00",
+                    },
+                    {
+                        "id": "NEXT-DAY",
+                        "customer_id": "CLIENT-CDF",
+                        "msisdn1": "0811111111",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "SA-CDF",
+                        "currency_code": "CDF",
+                        "dr": 999,
+                        "cr": 0,
+                        "bal_before": 100,
+                        "bal_after": 1099,
+                        "ref_no": "REF-NEXT",
+                        "description": "M-Pesa Depot",
+                        "created_at": "2026-07-17 08:00:00",
+                    },
+                ]
+            )
+        )
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "Receipt No.": "REF-CDF",
+                        "Completion Time": "2026-07-16 10:01:00",
+                        "Initiation Time": "2026-07-16 10:00:00",
+                        "Opposite Party": "0811111111 - CLIENT CDF",
+                        "Currency": "CDF",
+                        "Paid In": 900,
+                        "Withdrawn": 0,
+                        "Transaction Status": "Completed",
+                        "Details": "BisouBisouC2B",
+                    },
+                    {
+                        "Receipt No.": "REF-USD",
+                        "Completion Time": "2026-07-16 11:01:00",
+                        "Initiation Time": "2026-07-16 11:00:00",
+                        "Opposite Party": "0822222222 - CLIENT USD",
+                        "Currency": "USD",
+                        "Paid In": 800,
+                        "Withdrawn": 0,
+                        "Transaction Status": "Completed",
+                        "Details": "BisouBisouC2B",
+                    },
+                ]
+            )
+        )
+        transactions = enrich_transactions_with_g2_customer_names(transactions, g2)
+        prepared = MpesaPreparedData(
+            transactions=transactions,
+            current_savings=prepare_current_savings(
+                pd.DataFrame(
+                    [
+                        {
+                            "customer_id": "CLIENT-CDF",
+                            "msisdn": "0811111111",
+                            "product_name": "Courant",
+                            "account_type": "NORMAL SAVINGS",
+                            "balance": 300,
+                            "currency_code": "CDF",
+                            "created_at": "2026-01-01",
+                            "updated_at": "2026-07-17",
+                        }
+                    ]
+                )
+            ),
+            fixed_savings=pd.DataFrame(),
+            loans=prepare_loans(
+                pd.DataFrame(
+                    [
+                        {
+                            "loan_id": "LN-USD",
+                            "customer_id": "CLIENT-USD",
+                            "currency_code": "USD",
+                            "loan_balance": 20,
+                            "updated_at": "2026-07-17",
+                        }
+                    ]
+                )
+            ),
+            load_report=build_load_report({}, {}),
+            g2_transactions=g2,
+        )
+
+        report = build_mpesa_accounting_analysis(
+            prepared,
+            date_start="2026-07-16",
+            date_end="2026-07-16",
+        )
+
+        self.assertEqual(set(report["synthese"]["currency_code"]), {"CDF", "USD"})
+        self.assertEqual(len(report["journal_ecritures"]), 4)
+        self.assertEqual(len(report["journal_operations"]), 2)
+        self.assertTrue(report["journal_operations"]["operation_symetrique"].all())
+        cdf_summary = report["synthese"].loc[
+            report["synthese"]["currency_code"].eq("CDF")
+        ].iloc[0]
+        self.assertEqual(float(cdf_summary["total_debit"]), 100.0)
+        self.assertEqual(float(cdf_summary["total_credit"]), 100.0)
+        self.assertEqual(float(cdf_summary["taux_rapprochement_g2_pct"]), 100.0)
+        cdf_client = report["balance_clients"].loc[
+            report["balance_clients"]["customer_id"].eq("CLIENT-CDF")
+        ].iloc[0]
+        usd_client = report["balance_clients"].loc[
+            report["balance_clients"]["customer_id"].eq("CLIENT-USD")
+        ].iloc[0]
+        self.assertEqual(float(cdf_client["solde_epargne_courante_observe"]), 300.0)
+        self.assertEqual(float(usd_client["encours_principal_observe"]), 20.0)
+        self.assertEqual(cdf_client["Nom_client"], "CLIENT CDF")
+        # Les montants G2 volontairement differents ne remplacent jamais Turbo.
+        self.assertNotEqual(float(cdf_summary["total_debit"]), 900.0)
+
+    def test_mpesa_accounting_analysis_degrades_without_g2_and_exports_targeted_sheets(self) -> None:
+        prepared = _sample_prepared_data()
+
+        report = build_mpesa_accounting_analysis(
+            prepared,
+            date_start="2026-07-01",
+            date_end="2026-07-01",
+        )
+
+        self.assertFalse(report["synthese"].empty)
+        self.assertFalse(report["balance_clients"].empty)
+        self.assertEqual(int(report["controle_g2"]["transactions_g2_chargees"].sum()), 0)
+        export = create_excel_export(
+            {
+                "accounting_summary": report["synthese"],
+                "accounting_client_balances": report["balance_clients"],
+                "accounting_account_balance": report["balance_comptes"],
+                "accounting_operation_journal": report["journal_operations"],
+            }
+        )
+        workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
+        self.assertEqual(
+            workbook.sheet_names,
+            [
+                "Compta_Synthese_Turbo",
+                "Balance_Clients_Turbo",
+                "Balance_Comptes_Turbo",
+                "Journal_Operations_Turbo",
+            ],
+        )
 
     def test_mpesa_management_dashboard_builds_actionable_microfinance_views(self) -> None:
         g2 = prepare_g2_transactions(

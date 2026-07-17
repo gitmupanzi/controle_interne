@@ -1,6 +1,6 @@
 ---
 name: perfect-vision
-description: Analyser la base Microsoft SQL Server BB_VISION_PRO de Perfect Vision, retrouver tables et colonnes dans le schéma, sélectionner ou adapter les requêtes de contrôle interne, expliquer les jointures et produire des requêtes SELECT sûres. Utiliser pour toute question sur Perfect Vision, BB_VISION_PRO, les opérations, adhérents, comptes, épargne, crédits, HDPM, rapprochements API, indicateurs ou extractions d'audit issues des fichiers SQL du projet.
+description: Analyser la base Microsoft SQL Server BB_VISION_PRO et maintenir le tableau de bord Streamlit Perfect Vision, retrouver tables et colonnes dans le schéma, sélectionner ou adapter les requêtes de contrôle interne, expliquer les jointures et produire des requêtes SELECT sûres. Utiliser pour toute question ou modification sur Perfect Vision, BB_VISION_PRO, ses sous-onglets, les opérations, adhérents, comptes, épargne, crédits, HDPM, rapprochements API, indicateurs ou extractions d'audit issues des fichiers SQL du projet.
 ---
 
 # Perfect Vision
@@ -38,6 +38,20 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 - Garder les références auditables : client, transaction, reçu, compte, prêt, demande ou dossier selon le contrôle.
 - Préférer les codes, numéros et libellés métier aux identifiants techniques redondants. Conserver un identifiant technique seulement s'il est la seule clé exploitable pour la revue.
 - Vérifier que les colonnes finales suffisent pour identifier la population, comprendre l'anomalie, mesurer le montant, connaître la devise, dater le fait et retrouver la pièce source.
+
+## Invariants du tableau de bord Streamlit
+
+- Conserver les analyses détaillées de Perfect Vision dans des `st.tabs`. Perfect Vision constitue un tableau de bord complet : calculer tous les sous-onglets ensemble au chargement initial afin qu'ils soient ensuite immédiatement consultables.
+- Ne jamais remplacer ces `st.tabs` par une navigation conditionnelle qui calcule uniquement l'onglet sélectionné. Cette optimisation à la demande est réservée aux modules dont le fonctionnement métier l'autorise, pas à Perfect Vision.
+- Améliorer les performances avec `st.cache_data` sur la lecture, la normalisation et les calculs déterministes coûteux. Invalider naturellement le cache lorsque le fichier, la feuille, les paramètres ou les filtres changent; ne pas mettre en cache un rendu Streamlit susceptible de devenir obsolète.
+- Vérifier après toute modification que l'ouverture initiale alimente tous les sous-onglets et que le passage d'un onglet déjà chargé à un autre ne déclenche pas un nouveau calcul Python.
+
+## Norme visuelle commune des onglets
+
+- Conserver une barre d'onglets sobre et professionnelle.
+- Afficher l'onglet actif en bleu avec un soulignement rouge.
+- Appliquer un survol discret et rendre la navigation au clavier clairement visible.
+- Permettre le défilement horizontal des onglets sur les petits écrans.
 
 ## Utilitaire de recherche
 

@@ -116,7 +116,9 @@ import credit_app.ui as credit_ui
 logger = logging.getLogger(__name__)
 
 format_context_value = credit_ui.format_context_value
+format_professional_tab_labels = credit_ui.format_professional_tab_labels
 inject_professional_credit_css = credit_ui.inject_professional_credit_css
+inject_professional_tabs_css = credit_ui.inject_professional_tabs_css
 render_context_row = credit_ui.render_context_row
 render_chart_guide = credit_ui.render_chart_guide
 render_dashboard_section = credit_ui.render_dashboard_section
@@ -584,7 +586,6 @@ def _build_cycle_sidebar_filters(
         selected_values = st.sidebar.multiselect(
             f"{_filter_column_label(column_name)} ({len(options)})",
             widget_options,
-            default=[],
             key=widget_key,
             placeholder="Choose options",
             help="Aucune option choisie = toutes les valeurs.",
@@ -1259,7 +1260,10 @@ def main() -> None:
             "Méthode",
         ]
     )
-    tabs = st.tabs(tab_labels)
+    perfect_tabs_key = "perfect_vision_detailed_tabs"
+    inject_professional_tabs_css(container_key=perfect_tabs_key)
+    perfect_tabs_container = st.container(key=perfect_tabs_key)
+    tabs = perfect_tabs_container.tabs(format_professional_tab_labels(tab_labels))
 
     with tabs[0]:
         render_summary_box(

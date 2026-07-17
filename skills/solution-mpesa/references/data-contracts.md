@@ -207,12 +207,25 @@ Le bloc Word `Synthese des flux G2 par devise` utilise `rapport_journalier_pivot
 - Laisser les taux M+1 ou 90 jours vides tant que la fenêtre complète n'est pas observable.
 - Exclure de la fidélisation les opérations internes, téléphones invalides et statuts en échec/annulés/inversés.
 
+## Balance et analyses comptables Turbo
+
+- La source des mouvements est exclusivement Transactions M-PESA_Turbo. G2 ne fournit que le nom client et le contrôle direct `Receipt No = ref_no`.
+- La balance auxiliaire client retient `NORMAL SAVINGS` comme épargne courante, `FIXED SAVINGS` comme DAT et `PRINCIPLE` comme principal du crédit. Son grain est `customer_id x devise x famille de position`.
+- Une opération utilise `ref_no` comme clé prioritaire. Sans `ref_no`, regrouper les écritures du même `customer_id`, de la même devise et du même `created_at`; ne pas utiliser le nombre de lignes comme nombre d'opérations.
+- Conserver séparément : la balance client, la balance auxiliaire par produit, la balance des mouvements par `account_type`, le journal regroupé, le journal brut, les contrôles de symétrie, les contrôles de variation de solde, les flux `MPESA ACCOUNT`, les produits financiers observés, les positions des instantanés et le contrôle G2.
+- Le contrôle de variation compare l'amplitude du mouvement à l'amplitude du solde : `abs(bal_after - bal_before)` contre `abs(dr) + abs(cr)`. Un écart est un signal de revue et non une preuve automatique d'erreur.
+- Les comptes `INTEREST EARNED`, `LOAN PENALTY FEES`, `BISOU COLLECTION` et `VODA COLLECTION A/C` sont présentés séparément. Ne pas produire un total de revenu sans preuve que ces lignes ne sont pas des ventilations du même produit.
+- Les soldes Current Savings, Fixed Savings et Loans sont des instantanés de référence. Ne pas les forcer dans la clôture d'une journée antérieure; afficher leur date disponible et leur source.
+- Sans plan comptable complet et soldes d'ouverture officiels, employer `balance observée`, `position observée` et `solde de mouvement`; ne jamais annoncer une balance générale certifiée, un bilan ou un compte de résultat officiel.
+- Toutes les colonnes monétaires, tous les ratios et tous les contrôles sont calculés par devise.
+
 ## Fonctions à privilégier
 
 - Préparation : `prepare_transactions`, `prepare_current_savings`, `prepare_fixed_savings`, `prepare_loans`, `prepare_g2_transactions`, `prepare_customers`, `prepare_perfect_clients`.
 - Extrait : `build_mpesa_statement`, `build_customer_summary`, `build_diagnostics`.
 - G2/DAT : `build_g2_dat_crosscheck`, `build_g2_entry_report`, `build_g2_daily_savings_report`, `build_g2_transaction_time_analysis`, `build_g2_retention_report`.
 - Pilotage : `build_mpesa_management_dashboard`, `build_mpesa_credit_risk_analysis`, `build_mpesa_liquidity_analysis`, `build_mpesa_client_activity_analysis`, `build_mpesa_savings_conversion_analysis`, `build_mpesa_transaction_concentration_analysis`, `build_mpesa_transaction_quality_analysis`, `build_mpesa_dat_maturity_analysis`, `build_mpesa_perfect_adoption_analysis`.
+- Comptabilité : `build_mpesa_accounting_analysis`.
 - Perfect : `build_perfect_client_crosscheck`.
 - Recherche : `search_customers`, `resolve_customer_id`.
 - Export : `create_excel_export`, `create_g2_dat_word`.
@@ -223,5 +236,5 @@ Le bloc Word `Synthese des flux G2 par devise` utilise `rapport_journalier_pivot
 - Une absence de correspondance est un résultat de contrôle, pas une ligne à supprimer.
 - Un fichier facultatif absent doit réduire le rapport proprement sans bloquer les analyses encore possibles.
 - Toute synthèse financière doit afficher la devise et éviter un total multidevise.
-- Le Word est la restitution modifiable destinée à la Direction générale et contient `Transactions`; aucun export PDF n'est généré dans l'interface.
+- Le Word reste la restitution modifiable destinée à la Direction générale. L'Extrait client propose aussi un PDF natif CDF, USD ou ALL reprenant le même périmètre filtré, les mêmes comptes et la séparation stricte des devises. Les deux formats intègrent le logo officiel Bisou Bisou.
 - L'Excel écrit uniquement les feuilles explicitement demandées par l'appelant afin de réduire le temps et la taille de génération.

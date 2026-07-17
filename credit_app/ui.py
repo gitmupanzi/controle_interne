@@ -736,6 +736,184 @@ def render_panel_title(title: str) -> None:
     st.markdown(f"<div class='credit-panel-title'>{html.escape(str(title))}</div>", unsafe_allow_html=True)
 
 
+def render_professional_tab_navigation(
+    labels: list[str],
+    *,
+    key: str,
+    help_text: str | None = None,
+) -> str:
+    """Affiche une navigation type onglets sans calculer les vues inactives."""
+    css_key = "".join(
+        character if character.isalnum() or character in {"_", "-"} else "-"
+        for character in str(key)
+    )
+    st.markdown(
+        f"""
+        <style>
+        .st-key-{css_key} {{
+            margin: 0.35rem 0 1.15rem;
+        }}
+        .st-key-{css_key} div[role="radiogroup"] {{
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 0.35rem !important;
+            overflow-x: auto;
+            padding: 0.38rem 0.45rem 0;
+            border: 1px solid #d9e2ec;
+            border-radius: 0.7rem 0.7rem 0 0;
+            background: linear-gradient(180deg, #ffffff 0%, #f6f8fb 100%);
+            box-shadow: 0 3px 12px rgba(15, 47, 82, 0.07);
+            scrollbar-width: thin;
+        }}
+        .st-key-{css_key} label[data-baseweb="radio"] {{
+            position: relative;
+            flex: 0 0 auto;
+            min-height: 2.65rem;
+            min-width: max-content;
+            margin: 0 0.12rem 0 0 !important;
+            padding: 0.68rem 1rem 0.72rem !important;
+            border: 1px solid transparent;
+            border-bottom: 3px solid transparent;
+            border-radius: 0.42rem 0.42rem 0 0;
+            color: #334e68;
+            background: transparent;
+            transition: color 150ms ease, background-color 150ms ease,
+                        border-color 150ms ease, transform 150ms ease;
+            cursor: pointer;
+        }}
+        .st-key-{css_key} label[data-baseweb="radio"] > div:first-child {{
+            display: none !important;
+        }}
+        .st-key-{css_key} label[data-baseweb="radio"] p {{
+            margin: 0;
+            color: inherit;
+            font-size: 0.9rem;
+            font-weight: 560;
+            line-height: 1.15;
+            white-space: nowrap;
+        }}
+        .st-key-{css_key} label[data-baseweb="radio"]:hover {{
+            color: #123f73;
+            background: #eaf2fb;
+            border-color: #d5e5f5;
+            transform: translateY(-1px);
+        }}
+        .st-key-{css_key} label[data-baseweb="radio"]:has(input:checked) {{
+            color: #ffffff;
+            background: linear-gradient(135deg, #123f73 0%, #1f5f9f 100%);
+            border-color: #123f73;
+            border-bottom-color: #e94b5f;
+            box-shadow: 0 4px 10px rgba(18, 63, 115, 0.2);
+        }}
+        .st-key-{css_key} label[data-baseweb="radio"]:has(input:focus-visible) {{
+            outline: 3px solid rgba(51, 133, 214, 0.35);
+            outline-offset: 2px;
+        }}
+        @media (max-width: 900px) {{
+            .st-key-{css_key} label[data-baseweb="radio"] {{
+                padding-right: 0.72rem;
+                padding-left: 0.72rem;
+            }}
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    return str(
+        st.radio(
+            "Navigation",
+            labels,
+            horizontal=True,
+            key=key,
+            label_visibility="collapsed",
+            help=help_text,
+        )
+    )
+
+
+def format_professional_tab_labels(labels: list[str]) -> list[str]:
+    """Ajoute un espacement typographique que le theme Streamlit ne peut pas ecraser."""
+    return [f"\u2002{str(label).strip()}\u2002" for label in labels]
+
+
+def inject_professional_tabs_css(*, container_key: str) -> None:
+    """Habille des st.tabs existants sans modifier leur mode de calcul."""
+    css_key = "".join(
+        character if character.isalnum() or character in {"_", "-"} else "-"
+        for character in str(container_key)
+    )
+    st.markdown(
+        f"""
+        <style>
+        .st-key-{css_key} div[data-testid="stTabs"] [role="tablist"] {{
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 0.2rem;
+            overflow-x: auto;
+            padding: 0.38rem 0.45rem 0;
+            border: 1px solid #d9e2ec;
+            border-radius: 0.7rem 0.7rem 0 0;
+            background: linear-gradient(180deg, #ffffff 0%, #f6f8fb 100%);
+            box-shadow: 0 3px 12px rgba(15, 47, 82, 0.07);
+            scrollbar-width: thin;
+        }}
+        .st-key-{css_key} div[data-testid="stTabs"] button[role="tab"] {{
+            flex: 0 0 auto;
+            min-height: 2.65rem;
+            margin: 0;
+            padding: 0.68rem 0.9rem 0.72rem;
+            border: 1px solid transparent;
+            border-bottom: 3px solid transparent;
+            border-radius: 0.42rem 0.42rem 0 0;
+            color: #334e68;
+            background: transparent;
+            font-size: 0.9rem;
+            font-weight: 560;
+            line-height: 1.15;
+            white-space: nowrap;
+            transition: color 150ms ease, background-color 150ms ease,
+                        border-color 150ms ease, transform 150ms ease;
+        }}
+        .st-key-{css_key} div[data-testid="stTabs"] button[role="tab"] * {{
+            color: inherit !important;
+            font: inherit;
+        }}
+        .st-key-{css_key} div[data-testid="stTabs"] button[role="tab"]:hover {{
+            color: #123f73;
+            background: #eaf2fb;
+            border-color: #d5e5f5;
+            transform: translateY(-1px);
+        }}
+        .st-key-{css_key} div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {{
+            color: #ffffff !important;
+            background: linear-gradient(135deg, #123f73 0%, #1f5f9f 100%);
+            border-color: #123f73;
+            border-bottom-color: #e94b5f;
+            border-radius: 0.65rem !important;
+            box-shadow: 0 4px 10px rgba(18, 63, 115, 0.2);
+        }}
+        .st-key-{css_key} div[data-testid="stTabs"] button[role="tab"]:focus-visible {{
+            outline: 3px solid rgba(51, 133, 214, 0.35);
+            outline-offset: 2px;
+        }}
+        .st-key-{css_key} div[data-testid="stTabs"] [data-testid="stTabHighlight"],
+        .st-key-{css_key} div[data-testid="stTabs"] [data-baseweb="tab-highlight"] {{
+            height: 3px;
+            background-color: #e94b5f;
+        }}
+        @media (max-width: 900px) {{
+            .st-key-{css_key} div[data-testid="stTabs"] button[role="tab"] {{
+                margin-right: 0.08rem !important;
+                padding-right: 0.82rem !important;
+                padding-left: 0.82rem !important;
+            }}
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_dashboard_section(title: str, description: str, badge: str | None = None) -> None:
     badge_html = (
         f"<div class='credit-section-badge'>{html.escape(str(badge))}</div>"
