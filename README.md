@@ -345,28 +345,27 @@ Convention des libellés visibles : `[Turbo]` désigne une analyse issue de `Tra
 
 ### Fichiers acceptés
 
-Les fichiers sont chargés directement dans l’onglet :
+L'interface demande quatre sources Turbo principales, puis propose G2 et Perfect comme contrôles facultatifs :
 
 - `Transactions M-PESA Portal/Turbo`
   Fichier interne des écritures M-PESA, utile quand il contient notamment `customer_id`, `msisdn1`, `account_type`, `ref_no`, `description`, `dr`, `cr`, `bal_before`, `bal_after`, `currency_code` et `created_at`. Plusieurs lignes comptables peuvent appartenir à une seule opération G2.
-- `Transactions G2`
+- `Savings Account`
+  Source maître Turbo des comptes d’épargne avec notamment `savings_id`, `customer_id`, `msisdn1`, `product_name`, `product_description`, `balance`, `currency_code`, `status`, `date_approved`, `maturity_date`, `created_at` et `updated_at`. La solution en extrait les comptes courants (`Open Savings` / `Current account`) et tous les DAT actifs ou historiques (`Fixed Account`). Le même emplacement multiple accepte, à défaut, les deux fichiers résumés Current et Fixed chargés ensemble.
+- `Loans Account`
+  Fichier Turbo des crédits, avec au minimum `loan_id` et `customer_id`; les colonnes d'encours, d'échéance et de remboursement alimentent les analyses de crédit.
+- `Customers`
+  Fichier client Turbo avec `msisdn1` et `created_at`. Il sert à retrouver la date de création du compte à partir du numéro de téléphone.
+- `Transactions G2` (facultatif)
   Un ou plusieurs fichiers de transactions G2, avec au minimum `Receipt No`, `Currency` et `Opposite Party`. Les relevés d’entrées et de sorties peuvent être téléversés ensemble; ils sont unifiés en conservant le nom du fichier source, puis dédupliqués par `Receipt No`. `Completion Time`, `Transaction Status`, `Details`, `Reason Type` et `Balance` enrichissent l’analyse. Le montant peut être fourni dans `Transaction Amount` ou éclaté dans `Paid In` et `Withdrawn`.
-- `Comptes d’épargne courante`
-  Fichier Turbo des comptes courants, avec `customer_id`, `msisdn`, `currency_code`, `created_at`, `updated_at`.
-- `Comptes DAT / épargne bloquée`
-  Fichier Turbo des comptes DAT, avec `customer_id`, `msisdn`, `product_name`, `account_type`, `balance`, `currency_code`, `date_approved`, `maturity_date`.
-- `Clients_Turbo`
-  Fichier client Turbo, avec `msisdn1` et `created_at`. Il sert à retrouver la date de création du compte à partir du numéro de téléphone.
-- `Crédits`
-  Fichier facultatif pour enrichir l’extrait client et les diagnostics.
 - `Clients_Perfect (export 122)`
   Fichier facultatif de contrôle téléphonique avec `Phone_Prefixe`, les identifiants et le nom du client Perfect.
+
+Les deux synthèses `Customers with Current Savings Account` et `Customers with Fixed Savings Account` n'ont plus d'emplacements séparés. Elles peuvent être sélectionnées ensemble dans `Savings Account [Turbo]` comme solution de compatibilité. Ce mode couvre seulement les comptes à solde positif et ne reconstitue ni les comptes à solde nul ni l'historique exhaustif. Si le fichier complet et les synthèses sont chargés ensemble, le fichier complet est prioritaire et les synthèses sont ignorées pour éviter tout doublon.
 
 Tous les emplacements de téléversement M-PESA acceptent plusieurs fichiers. Le contrôle de chargement affiche le nombre et le nom des fichiers sources, puis les chevauchements sont éliminés selon la nature de la source :
 
 - Transactions Turbo : `id`, ou à défaut la combinaison référence, compte, client, devise, `dr`, `cr` et date;
-- épargne courante : client, devise, type de compte, produit et date de création, en conservant le `updated_at` le plus récent;
-- DAT : client, devise, type de compte, date d'approbation et échéance;
+- `Savings Account` : `savings_id`, puis client, devise, type de compte, produit et dates propres au type de compte, en conservant la version la plus récente; la source complète prime sur les vues Current/Fixed;
 - crédits : `loan_id`, avec priorité à la version la plus récente;
 - `Clients_Turbo` : `customer_id`, ou téléphone et date de création lorsque l'identifiant n'est pas fourni;
 - `Clients_Perfect` : `id_client`, puis les identifiants de repli documentés.
@@ -374,6 +373,10 @@ Tous les emplacements de téléversement M-PESA acceptent plusieurs fichiers. Le
 La logique des transactions Turbo reste comptable et distincte de G2 : sur la ligne `MPESA ACCOUNT`, `dr` représente une sortie M-PESA et `cr` une entrée M-PESA. Les lignes techniques partageant le même `ref_no` sont regroupées pour le rapprochement G2/DAT; elles ne sont pas interprétées avec les règles G2 `Paid In`/`Withdrawn`.
 
 Le fichier `Transactions M-PESA_G2` est facultatif pour ouvrir le sous-onglet `G2 / DAT`. En son absence, le mode `[Turbo]` reconstruit uniquement les opérations démontrables dans `Transactions M-PESA_Turbo` : dépôt normal, DAT et remboursement regroupés par `ref_no`, puis retraits `Retrait Vers M-Pesa` regroupés par `reference_id + created_at`. `created_at` fournit alors la date et l'heure. Le mode ne fabrique ni nom G2, ni statut G2, ni solde G2, ni date d'initiation/finalisation G2; les contrôles croisés G2/Turbo sont affichés comme `Non applicable - Turbo seul`. Dès qu'un fichier G2 est chargé, G2 redevient automatiquement la source principale.
+
+Les relevés G2 peuvent commencer directement par `Receipt No., Completion Time, Initiation Time, Details, Transaction Status, Currency, Paid In, Withdrawn, Balance, Reason Type, Opposite Party, Linked Transaction ID`. Les exports organisation bruts contenant cinq lignes descriptives avant ces en-têtes restent acceptés : la vraie ligne d'en-tête est détectée automatiquement par fichier avant l'unification des comptes 1441 et 15558.
+
+Avec les fichiers du 17 juillet 2026, `Savings Account` contient 80 791 lignes : 77 084 comptes courants et 3 707 DAT. Les 1 214 DAT à solde positif correspondent exactement aux 1 214 lignes de l'export DAT résumé; les 2 493 autres DAT, à solde nul, restent conservés comme historique au lieu d'être perdus.
 
 ### Règles de rapprochement
 
@@ -414,6 +417,8 @@ Pour les informations client :
 - `Compte créer` provient d’abord de `Clients.created_at`, puis de l’épargne courante et enfin du DAT.
 - `Phone_Prefixe` rapproche les clients transactionnels Turbo/G2 avec `Clients_Perfect`. La présence est contrôlée séparément dans G2, Turbo et `Clients_Perfect` afin de produire l'intersection stricte des trois systèmes. Un numéro partagé par plusieurs fiches est agrégé avant la jointure afin de ne pas multiplier les opérations.
 
+Au premier téléversement, tous les sous-onglets M-PESA sont construits afin de former un tableau de bord immédiatement disponible. Une modification des fichiers déclenche une reconstruction complète volontaire; les interactions suivantes restent locales au sous-onglet grâce aux fragments Streamlit. La lecture Excel rapide, la préparation, le rapprochement G2, l'extrait client et les analyses lourdes sont mis en cache avec une empreinte compacte du contenu des fichiers, de la période et du client. La solution ne bascule pas vers un calcul limité au seul onglet sélectionné.
+
 ### Restitutions disponibles
 
 Le sous-onglet `Comptabilité Turbo` construit les analyses financières observables directement dans Transactions M-PESA_Turbo :
@@ -431,6 +436,25 @@ Le sous-onglet `Comptabilité Turbo` construit les analyses financières observa
 
 Cette restitution est une balance observée des sous-registres Turbo. Sans plan comptable complet et soldes d'ouverture officiels, elle n'est pas présentée comme une balance générale certifiée, un bilan ou un compte de résultat officiel. CDF et USD ne sont jamais additionnés.
 
+#### Cas de validation comptable du 16 juillet 2026
+
+Le test de référence utilise les exports produits le 17 juillet pour la journée clôturée du 16 juillet 2026. Transactions M-PESA_Turbo reste l'unique source des mouvements; G2 enrichit les noms et vérifie les références. Le périmètre contient 549 écritures Turbo, 75 clients et 135 opérations regroupées.
+
+| Devise | Écritures | Clients | Opérations | Débits | Crédits | Symétriques | À revoir | Variations de solde conformes |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| CDF | 231 | 28 | 48 | 2 359 892,00 | 2 269 330,00 | 39 / 48 (81,25 %) | 9 | 98,2684 % |
+| USD | 318 | 50 | 87 | 9 318,68 | 9 258,01 | 67 / 87 (77,0115 %) | 20 | 96,2264 % |
+
+Avec les relevés G2 d'entrées 1441 et de sorties 15558, le contrôle comptable direct `Receipt No = ref_no` retrouve 35 références CDF sur 49 transactions G2 terminées (71,4286 %) et 50 références USD sur 83 (60,2410 %). Les sorties B2C peuvent en plus être rapprochées par téléphone, devise, montant et heure; elles ne sont pas comptées comme rapprochements directs. La couverture des noms clients Turbo est de 100 % en CDF et 98 % en USD. Les 29 opérations non symétriques et les 16 lignes dont la variation de solde est à revoir sont des signaux de contrôle : Turbo peut décrire plusieurs couches comptables d'une même opération, donc ces cas ne sont pas automatiquement des erreurs.
+
+Les instantanés de référence, distincts de la balance journalière, donnent 89 157 002,34 CDF de dépôts face à 77 461 721,46 CDF de crédits (86,8824 %) et 203 049,44 USD de dépôts face à 30 555,78 USD de crédits (15,0484 %). Les intérêts, pénalités, parts Bisou et parts Voda restent affichés séparément afin d'éviter un double comptage.
+
+Le sous-onglet `DAT` utilise `Savings Account` pour afficher immédiatement les comptes à solde positif déjà échus et ceux arrivant à terme dans les 30 prochains jours. L'horizon est réglable de 1 à 90 jours. La liste conserve le compte `savings_id`, le client, le téléphone, le produit, les dates, les jours restants, le capital, l'intérêt estimé et le capital plus intérêt. Le taux annuel DAT Bisou Bisou vaut 11 % par défaut dans la barre latérale; l'intérêt simple est estimé entre `date_approved` et `maturity_date`. Tous les montants restent séparés par devise et constituent une préparation au remboursement, pas une écriture comptable officielle.
+
+Le sous-onglet `Detail des credits` rapproche `Loans Account` avec les comptes courants de `Savings Account`. Il utilise d'abord `savings_account_id` contre `id` ou `savings_id`; lorsque cet identifiant est vide, il déduit `savings_id` uniquement si `customer_id + currency_code` identifie un compte courant unique. La vue consolidée présente, au grain client x devise, les prêts, remboursements, encours, principal, intérêts, pénalités, épargne courante et DAT positifs. Les absences, ambiguïtés et incohérences de téléphone, client ou devise sont conservées dans un tableau de contrôle et un export Excel à quatre feuilles. Les positions sont juxtaposées sans compensation comptable et l'épargne n'est pas assimilée à une garantie.
+
+Sur les fichiers du 17 juillet 2026, les 2 213 lignes de `Loans Account` ont toutes `savings_account_id` vide. Le repli client x devise rapproche 1 740 crédits CDF sur 1 740 et 472 crédits USD sur 473; un crédit USD sans compte courant correspondant reste à revoir. L'épargne courante et les DAT sont comptés une seule fois par client et devise, même lorsqu'un client possède plusieurs prêts.
+
 Le sous-onglet `Pilotage Turbo + G2` centralise les analyses operationnelles de la microfinance et indique la source de chaque bloc :
 
 - risque credit par devise : encours, retards, PAR 1/7/30 jours et taux de remboursement lorsque les colonnes Credits sont disponibles
@@ -442,13 +466,13 @@ Le sous-onglet `Pilotage Turbo + G2` centralise les analyses operationnelles de 
 - echeancier DAT : echus, 0-7, 8-30, 31-60, 61-90 et plus de 90 jours
 - adoption `Turbo + G2` des fiches `Clients_Perfect` : presentes, actives a 30/90 jours et jamais observees
 
-La date d'analyse correspond a la derniere date operationnelle chargee. Le PAR reste vide si l'encours ou les echeances necessaires ne sont pas fiables. Une alerte comportementale indique une transaction a revoir et ne constitue pas une preuve de fraude.
+La date d'analyse correspond à la dernière journée complète connue. Si l'extraction la plus récente s'arrête avant 18 h, la veille est proposée; l'utilisateur peut toujours choisir une autre date. Le PAR reste vide si l'encours ou les échéances nécessaires ne sont pas fiables. Une alerte comportementale indique une transaction à revoir et ne constitue pas une preuve de fraude.
 
 Le sous-onglet `G2 / DAT` produit, depuis G2 lorsqu'il est chargé ou depuis le mode de repli Turbo documenté ci-dessus :
 
 - une analyse des transactions terminees par date et sur les 24 heures, avec separation par devise et par sens; les jours et heures sans activite sont affiches a zero
 - les indicateurs de volume total, moyenne quotidienne, date la plus active, jour de semaine le plus actif (`Lundi` a `Dimanche`) et heure la plus active sur le perimetre filtre
-- un filtre combiné sur la date et l'heure de `Completion Time` en mode G2 ou `created_at` en mode Turbo seul, puis sur le sens : entrées, sorties ou tous les flux; les heures par défaut `00:00:00` et `23:59:59` conservent la journée complète
+- un filtre combiné sur la date et l'heure de `Completion Time` en mode G2 ou `created_at` en mode Turbo seul, puis sur le sens : entrées, sorties ou tous les flux; la dernière journée complète est proposée et les heures `00:00:00` / `23:59:59` la conservent en entier
 - une synthèse des entrées, sorties, volumes et soldes nets par devise
 - une répartition des statuts G2 par devise et fichier source lorsque G2 est disponible; en mode Turbo seul, les opérations sont explicitement libellées `Comptabilisee Turbo` sans inférer un statut G2
 - une ventilation par type d'opération incluant les paiements B2C et demandes de crédit
@@ -502,7 +526,7 @@ Dans `Perfect_client`, le classeur contient `Clients_Perfect_G2`, `Clients_Perfe
 
 Dans `Pilotage Turbo + G2`, l'Excel est genere seulement sur demande. Il conserve les feuilles utiles au suivi et leur nom indique aussi la source : credit et dossiers a risque `_Turbo`, liquidite `_G2`, activite clients `_Turbo_G2`, conversion epargne-DAT `_G2`, concentration et qualite `_G2`, echeances DAT `_Turbo` et adoption Perfect `_Turbo_G2`.
 
-Dans `Comptabilité Turbo`, l'Excel contient la synthèse, les balances clients et comptes, les positions auxiliaires, les journaux regroupé et brut, les contrôles, les flux M-PESA, les produits financiers observés, les positions de portefeuille et le contrôle G2. Chaque feuille porte le suffixe `_Turbo` ou `_G2_Turbo` selon sa source effective.
+Dans `Comptabilité Turbo`, l'Excel contient exactement `Compta_Synthese_Turbo`, `Balance_Clients_Turbo`, `Positions_Clients_Turbo`, `Balance_Comptes_Turbo`, `Journal_Operations_Turbo`, `Journal_Ecritures_Turbo`, `Controles_Operations_Turbo`, `Controles_Soldes_Turbo`, `Flux_MPESA_Turbo`, `Produits_Financiers_Turbo`, `Positions_Portefeuille_Turbo` et `Controle_G2_Turbo`. Les onze premières feuilles restent exclusivement Turbo; la dernière trace le contrôle secondaire G2.
 
 ## Cycle Suivi clients CRM
 

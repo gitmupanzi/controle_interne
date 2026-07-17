@@ -35,6 +35,9 @@ G2_TRANSACTION_REQUIRED_COLUMNS = set(G2_TRANSACTIONS_SCHEMA.required)
 CUSTOMERS_REQUIRED_COLUMNS = set(CUSTOMERS_SCHEMA.required)
 PERFECT_CLIENTS_REQUIRED_COLUMNS = set(PERFECT_CLIENTS_SCHEMA.required)
 
+DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT = 11.0
+DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS = 30
+
 CUSTOMER_STATEMENT_COLUMNS = [
     "date",
     "compte",
@@ -125,6 +128,7 @@ def build_customer_statement_filename(
 LOAN_USEFUL_COLUMNS = {
     "loan_id",
     "customer_id",
+    "savings_account_id",
     "Nom_client",
     "customer",
     "msisdn1",
@@ -240,6 +244,8 @@ class MpesaPreparedData:
     g2_transactions: pd.DataFrame = field(default_factory=pd.DataFrame)
     customers: pd.DataFrame = field(default_factory=pd.DataFrame)
     perfect_clients: pd.DataFrame = field(default_factory=pd.DataFrame)
+    cache_fingerprint: str = ""
+    fixed_savings_control: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def _is_empty_text(value: Any) -> bool:
@@ -547,19 +553,145 @@ def prepare_transactions(dataframe: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def prepare_current_savings(dataframe: pd.DataFrame | None) -> pd.DataFrame:
+def prepare_savings_accounts(dataframe: pd.DataFrame | None) -> pd.DataFrame:
+    """Prépare Savings Account ou, à défaut, les deux synthèses historiques.
+
+    La source complète est toujours prioritaire lorsqu'elle est chargée avec les
+    exports ``Customers with Current/Fixed Savings Account``. Cela évite de
+    recompter les mêmes comptes positifs et conserve les comptes à solde nul.
+    """
     frame = _normalize_common_columns(dataframe if dataframe is not None else pd.DataFrame())
+    if "msisdn" not in frame.columns and "msisdn1" in frame.columns:
+        frame["msisdn"] = normalize_phone(frame["msisdn1"])
+
+    # ``savings_id`` appartient à la source maître. Les deux exports résumés
+    # historiques n'en disposent pas. Si les deux familles sont téléversées
+    # ensemble, garder tous les enregistrements des fichiers maîtres et ignorer
+    # les synthèses qui reprendraient les mêmes soldes positifs.
+    savings_id_available = clean_text(
+        frame.get("savings_id", pd.Series("", index=frame.index))
+    ).ne("")
+    source_column = "fichier_source_epargne_turbo"
+    if source_column in frame.columns:
+        source_names = clean_text(frame[source_column])
+        master_source_names = set(source_names.loc[savings_id_available & source_names.ne("")])
+        master_rows = source_names.isin(master_source_names)
+        master_rows |= source_names.eq("") & savings_id_available
+    else:
+        master_rows = savings_id_available
+    source_complete_available = bool(master_rows.any())
+    if source_complete_available:
+        frame = frame.loc[master_rows].copy()
+    frame["source_savings_account_complete"] = source_complete_available
+
+    account_type = clean_text(
+        frame.get("account_type", pd.Series("", index=frame.index))
+    ).str.upper()
+    normalized_account_type = account_type.apply(normalize_label)
+    explicit_current = normalized_account_type.str.contains(
+        r"\bcurrent account\b|\bnormal savings\b",
+        regex=True,
+        na=False,
+    )
+    explicit_fixed = normalized_account_type.str.contains(
+        r"\bfixed account\b|\bfixed savings\b",
+        regex=True,
+        na=False,
+    )
+    product_text = (
+        clean_text(frame.get("product_name", pd.Series("", index=frame.index)))
+        + " "
+        + clean_text(
+            frame.get("product_description", pd.Series("", index=frame.index))
+        )
+    ).apply(normalize_label)
+    inferred_current = product_text.str.contains(
+        r"\bopen savings\b|\bcurrent account\b|\bnormal savings\b",
+        regex=True,
+        na=False,
+    )
+    inferred_fixed = product_text.str.contains(
+        r"\bfixed account\b|\bfixed savings\b",
+        regex=True,
+        na=False,
+    )
+    frame["account_type"] = np.select(
+        [explicit_current, explicit_fixed, account_type.ne(""), inferred_current, inferred_fixed],
+        ["NORMAL SAVINGS", "FIXED SAVINGS", account_type, "NORMAL SAVINGS", "FIXED SAVINGS"],
+        default="",
+    )
+    if "created_at" not in frame.columns:
+        frame["created_at"] = pd.NaT
+    if "date_approved" in frame.columns:
+        fixed_without_creation_date = (
+            frame["account_type"].eq("FIXED SAVINGS")
+            & frame["created_at"].isna()
+            & frame["date_approved"].notna()
+        )
+        frame.loc[fixed_without_creation_date, "created_at"] = frame.loc[
+            fixed_without_creation_date, "date_approved"
+        ]
     if "balance" in frame.columns:
         frame["balance"] = pd.to_numeric(frame["balance"], errors="coerce").fillna(0.0)
-    return _deduplicate_multi_file_snapshot(
-        frame,
-        source_column="fichier_source_epargne_turbo",
-        source_trace_column="fichiers_sources_epargne_turbo",
-        key_candidates=[
-            ["customer_id", "currency_code", "account_type", "product_name", "created_at"],
-        ],
-        recency_columns=["updated_at", "created_at"],
-    )
+
+    account_types = frame.get("account_type", pd.Series("", index=frame.index))
+    current = frame.loc[account_types.eq("NORMAL SAVINGS")].copy()
+    fixed = frame.loc[account_types.eq("FIXED SAVINGS")].copy()
+    other = frame.loc[~account_types.isin(["NORMAL SAVINGS", "FIXED SAVINGS"])].copy()
+
+    prepared_parts = [
+        _deduplicate_multi_file_snapshot(
+            current,
+            source_column=source_column,
+            source_trace_column="fichiers_sources_epargne_turbo",
+            key_candidates=[
+                ["savings_id"],
+                ["customer_id", "currency_code", "account_type", "product_name", "created_at"],
+            ],
+            recency_columns=["updated_at", "created_at"],
+        ),
+        _deduplicate_multi_file_snapshot(
+            fixed,
+            source_column=source_column,
+            source_trace_column="fichiers_sources_epargne_turbo",
+            key_candidates=[
+                ["savings_id"],
+                [
+                    "customer_id", "currency_code", "account_type", "product_name",
+                    "date_approved", "maturity_date",
+                ],
+            ],
+            recency_columns=["updated_at", "date_approved", "created_at"],
+        ),
+        _deduplicate_multi_file_snapshot(
+            other,
+            source_column=source_column,
+            source_trace_column="fichiers_sources_epargne_turbo",
+            key_candidates=[
+                ["savings_id"],
+                ["customer_id", "currency_code", "account_type", "product_name", "created_at"],
+            ],
+            recency_columns=["updated_at", "created_at"],
+        ),
+    ]
+    return concat_frames_stable(prepared_parts).reset_index(drop=True)
+
+
+def prepare_current_savings(dataframe: pd.DataFrame | None) -> pd.DataFrame:
+    frame = prepare_savings_accounts(dataframe)
+    # Une vue résumée ancienne peut ne pas porter de type reconnu. Dans ce cas,
+    # conserver son comportement historique; l'export complet, lui, est scindé.
+    if frame.get("account_type", pd.Series("", index=frame.index)).eq("NORMAL SAVINGS").any():
+        frame = frame.loc[frame["account_type"].eq("NORMAL SAVINGS")].copy()
+    return frame.reset_index(drop=True)
+
+
+def prepare_fixed_savings_from_accounts(dataframe: pd.DataFrame | None) -> pd.DataFrame:
+    """Extrait les DAT actifs ou historiques de la source Savings Account."""
+    frame = prepare_savings_accounts(dataframe)
+    if frame.empty or "account_type" not in frame.columns:
+        return pd.DataFrame()
+    return frame.loc[frame["account_type"].eq("FIXED SAVINGS")].reset_index(drop=True)
 
 
 def prepare_fixed_savings(dataframe: pd.DataFrame | None) -> pd.DataFrame:
@@ -577,6 +709,114 @@ def prepare_fixed_savings(dataframe: pd.DataFrame | None) -> pd.DataFrame:
         ],
         recency_columns=["date_approved"],
     )
+
+
+def build_savings_accounts_reconciliation(
+    prepared: MpesaPreparedData,
+) -> dict[str, pd.DataFrame]:
+    """Décrit Savings Account et rapproche un ancien export DAT s'il est fourni."""
+    master = prepared.fixed_savings.copy()
+    control = prepared.fixed_savings_control.copy()
+    empty = {"synthese": pd.DataFrame(), "ecarts": pd.DataFrame()}
+    if master.empty:
+        return empty
+
+    master["balance"] = numeric_column(master, "balance")
+    positive = master.loc[master["balance"].gt(0)].copy()
+    zero = master.loc[master["balance"].eq(0)].copy()
+    if "source_savings_account_complete" in master.columns:
+        source_complete_available = bool(
+            master["source_savings_account_complete"].fillna(False).astype(bool).any()
+        )
+    else:
+        # Compatibilité avec les objets préparés avant l'ajout du marqueur.
+        source_complete_available = "fichier_source_epargne_turbo" in master.columns
+
+    key_columns = [
+        "customer_id",
+        "currency_code",
+        "date_approved",
+        "maturity_date",
+        "balance",
+    ]
+
+    def comparison_keys(frame: pd.DataFrame) -> pd.Series:
+        if frame.empty or not set(key_columns).issubset(frame.columns):
+            return pd.Series(dtype="string")
+        work = frame[key_columns].copy()
+        work["customer_id"] = clean_identifier(work["customer_id"])
+        work["currency_code"] = clean_text(work["currency_code"]).str.upper()
+        for column in ["date_approved", "maturity_date"]:
+            work[column] = pd.to_datetime(work[column], errors="coerce").dt.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ).fillna("")
+        work["balance"] = pd.to_numeric(work["balance"], errors="coerce").round(2)
+        return work.astype("string").fillna("").agg("|".join, axis=1)
+
+    if control.empty:
+        summary = pd.DataFrame(
+            [
+                {
+                    "source_savings_account_complete_disponible": source_complete_available,
+                    "comptes_courants": int(len(prepared.current_savings)),
+                    "dat_total_source_complete": int(len(master)),
+                    "dat_solde_positif": int(len(positive)),
+                    "dat_solde_nul": int(len(zero)),
+                    "dat_export_resume": 0,
+                    "dat_export_retrouves": 0,
+                    "dat_export_absents_source_complete": 0,
+                    "dat_positifs_absents_export_resume": 0,
+                    "statut_rapprochement": (
+                        "Source autonome"
+                        if source_complete_available
+                        else "Syntheses positives de compatibilite"
+                    ),
+                }
+            ]
+        )
+        return {"synthese": summary, "ecarts": pd.DataFrame()}
+
+    positive_keys = comparison_keys(positive)
+    control_keys = comparison_keys(control)
+    control_key_set = set(control_keys.astype(str))
+    positive_key_set = set(positive_keys.astype(str))
+    positive_missing_mask = ~positive_keys.astype(str).isin(control_key_set)
+    control_missing_mask = ~control_keys.astype(str).isin(positive_key_set)
+    positive_missing = positive.loc[positive_missing_mask].copy()
+    control_missing = control.loc[control_missing_mask].copy()
+    ecarts = concat_frames_stable(
+        [
+            positive_missing.assign(
+                type_ecart="DAT positif de Savings Account absent de l'export DAT"
+            ),
+            control_missing.assign(
+                type_ecart="DAT de l'export résumé absent de Savings Account"
+            ),
+        ]
+    )
+    summary = pd.DataFrame(
+        [
+            {
+                "source_savings_account_complete_disponible": source_complete_available,
+                "comptes_courants": int(len(prepared.current_savings)),
+                "dat_total_source_complete": int(len(master)),
+                "dat_solde_positif": int(len(positive)),
+                "dat_solde_nul": int(len(zero)),
+                "dat_export_resume": int(len(control)),
+                "dat_export_retrouves": int((~control_missing_mask).sum()),
+                "dat_export_absents_source_complete": int(control_missing_mask.sum()),
+                "dat_positifs_absents_export_resume": int(positive_missing_mask.sum()),
+                "statut_rapprochement": (
+                    "Concordance exacte"
+                    if not control.empty
+                    and not positive_missing_mask.any()
+                    and not control_missing_mask.any()
+                    else "Ecarts a verifier"
+                ),
+            }
+        ]
+    )
+    return {"synthese": summary, "ecarts": ecarts.reset_index(drop=True)}
 
 
 def build_large_dat_summary(
@@ -1246,8 +1486,72 @@ def _extract_customer_name_from_opposite_party(series: pd.Series) -> pd.Series:
     return customer_name.replace({"": pd.NA})
 
 
+def promote_g2_statement_header(dataframe: pd.DataFrame | None) -> pd.DataFrame:
+    """Promouvoir l'en-tête métier des relevés organisation G2.
+
+    Les exports 1441/15558 commencent par cinq lignes d'identification du
+    compte. ``pandas.read_excel`` utilise alors la première ligne comme noms
+    de colonnes. Cette fonction retrouve la ligne contenant Receipt No.,
+    Currency et Opposite Party, y compris après concaténation de plusieurs
+    fichiers dont la deuxième colonne porte un nom d'organisation différent.
+    """
+    if dataframe is None or not isinstance(dataframe, pd.DataFrame) or dataframe.empty:
+        return pd.DataFrame()
+
+    required_header_keys = {"receipt_no", "currency", "opposite_party"}
+    provenance_columns = {
+        "fichier_source_g2",
+        "ordre_fichier_import",
+    }
+
+    def promote_block(block: pd.DataFrame) -> pd.DataFrame:
+        candidate = block.dropna(axis=1, how="all").copy()
+        available_keys = {
+            _normalize_business_column_key(column)
+            for column in candidate.columns
+            if column not in provenance_columns
+        }
+        if required_header_keys.issubset(available_keys):
+            return candidate.reset_index(drop=True)
+
+        business_columns = [
+            column for column in candidate.columns if column not in provenance_columns
+        ]
+        for position in range(min(20, len(candidate))):
+            header_values = candidate.iloc[position]
+            row_keys = {
+                _normalize_business_column_key(header_values[column])
+                for column in business_columns
+                if not _is_empty_text(header_values[column])
+            }
+            if not required_header_keys.issubset(row_keys):
+                continue
+            rename_map = {
+                column: _normalize_column_name(header_values[column])
+                for column in business_columns
+                if not _is_empty_text(header_values[column])
+            }
+            promoted = candidate.iloc[position + 1 :].copy().rename(columns=rename_map)
+            return promoted.reset_index(drop=True)
+        return candidate.reset_index(drop=True)
+
+    if "fichier_source_g2" not in dataframe.columns:
+        return promote_block(dataframe)
+
+    blocks = [
+        promote_block(group)
+        for _, group in dataframe.groupby(
+            "fichier_source_g2", dropna=False, sort=False
+        )
+    ]
+    return concat_frames_stable(blocks).reset_index(drop=True)
+
+
 def prepare_g2_transactions(dataframe: pd.DataFrame | None) -> pd.DataFrame:
-    frame = remove_export_index_columns(dataframe if dataframe is not None else pd.DataFrame())
+    frame = promote_g2_statement_header(
+        dataframe if dataframe is not None else pd.DataFrame()
+    )
+    frame = remove_export_index_columns(frame)
     if frame.empty:
         return frame
 
@@ -2010,11 +2314,112 @@ def _contains_pipe_value(values: object, expected: object) -> bool:
     return any(part.strip() == expected_text for part in str(values).split("|") if part.strip())
 
 
+def _scope_portal_transactions_for_g2(
+    g2: pd.DataFrame,
+    transactions: pd.DataFrame,
+) -> pd.DataFrame:
+    """Limite le rapprochement aux references et sorties candidates de G2.
+
+    Les controles directs n'ont besoin que des ``ref_no`` figurant dans G2.
+    Pour une sortie B2C sans ``ref_no``, conserver les lignes Turbo portant le
+    libelle de retrait et compatibles avec les telephones, devises et la plage
+    horaire G2. Cette reduction est sans incidence sur la tolerance appliquee
+    ensuite au candidat retenu.
+    """
+    if transactions.empty or g2.empty:
+        return transactions.copy()
+
+    tx = transactions.copy()
+    ref_no = clean_identifier(
+        tx.get("ref_no", pd.Series("", index=tx.index))
+    )
+    receipt_numbers = set(
+        clean_identifier(g2.get("receipt_no", pd.Series(dtype="string")))
+        .loc[lambda values: values.ne("")]
+        .astype(str)
+    )
+    direct_mask = ref_no.isin(receipt_numbers) if receipt_numbers else pd.Series(False, index=tx.index)
+
+    descriptions = clean_text(
+        tx.get("description", pd.Series("", index=tx.index))
+    ).str.strip().str.casefold()
+    output_candidate_mask = descriptions.eq("retrait vers m-pesa")
+    g2_directions = clean_text(
+        g2.get("sens_flux", pd.Series("", index=g2.index))
+    )
+    g2_outputs = g2.loc[g2_directions.eq("Sortie")].copy()
+    if g2_outputs.empty:
+        return tx.loc[direct_mask].copy()
+
+    output_candidates = tx.loc[output_candidate_mask].copy()
+    output_mask = pd.Series(True, index=output_candidates.index)
+
+    output_phones = set(
+        normalize_phone(
+            g2_outputs.get(
+                "phone_prefixe",
+                g2_outputs.get("phone", pd.Series("", index=g2_outputs.index)),
+            )
+        )
+        .dropna()
+        .astype(str)
+    )
+    if output_phones:
+        output_mask &= normalize_phone(
+            output_candidates.get(
+                "msisdn1", pd.Series("", index=output_candidates.index)
+            )
+        ).astype("string").isin(output_phones)
+
+    output_currencies = set(
+        clean_text(
+            g2_outputs.get("currency_code", pd.Series("", index=g2_outputs.index))
+        )
+        .str.upper()
+        .loc[lambda values: values.ne("")]
+        .astype(str)
+    )
+    if output_currencies:
+        output_mask &= clean_text(
+            output_candidates.get(
+                "currency_code", pd.Series("", index=output_candidates.index)
+            )
+        ).str.upper().isin(output_currencies)
+
+    initiation = pd.to_datetime(
+        g2_outputs.get("initiation_time", pd.Series(pd.NaT, index=g2_outputs.index)),
+        errors="coerce",
+    )
+    completion = pd.to_datetime(
+        g2_outputs.get("completion_time", pd.Series(pd.NaT, index=g2_outputs.index)),
+        errors="coerce",
+    )
+    output_dates = initiation.combine_first(completion).dropna()
+    if not output_dates.empty:
+        tolerance = pd.Timedelta(minutes=G2_TURBO_OUTPUT_MATCH_TOLERANCE_MINUTES)
+        transaction_dates = pd.to_datetime(
+            output_candidates.get(
+                "created_at", pd.Series(pd.NaT, index=output_candidates.index)
+            ),
+            errors="coerce",
+        )
+        output_mask &= transaction_dates.between(
+            output_dates.min() - tolerance,
+            output_dates.max() + tolerance,
+            inclusive="both",
+        )
+
+    selected_output = pd.Series(False, index=tx.index)
+    selected_output.loc[output_mask.index] = output_mask
+    return tx.loc[direct_mask | selected_output].copy()
+
+
 def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame) -> pd.DataFrame:
     output = _deduplicate_g2_transactions(g2)
     if output.empty:
         return output
-    portal = _build_portal_reference_controls(transactions)
+    scoped_transactions = _scope_portal_transactions_for_g2(output, transactions)
+    portal = _build_portal_reference_controls(scoped_transactions)
     if not portal.empty:
         output = output.merge(portal, left_on="receipt_no", right_on="ref_no_portal", how="left")
     else:
@@ -2053,7 +2458,7 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
     # Utiliser une clé secondaire stricte, uniquement quand la clé principale
     # est absente : téléphone + devise + montant + proximité horaire, sur une
     # opération Turbo explicitement libellée Retrait Vers M-Pesa.
-    output_candidates = _build_turbo_output_controls(transactions)
+    output_candidates = _build_turbo_output_controls(scoped_transactions)
     if not output_candidates.empty:
         g2_direction = clean_text(
             output.get("sens_flux", pd.Series("", index=output.index))
@@ -2111,6 +2516,30 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
             "account_type_cible",
             "operation_turbo_confirmee",
         ]
+        candidate_lookup: dict[tuple[str, str, int], list[object]] = {}
+        for candidate_index, candidate in output_candidates.iterrows():
+            amount = pd.to_numeric(
+                pd.Series([candidate.get("montant_portal_controle")]),
+                errors="coerce",
+            ).iloc[0]
+            if pd.isna(amount):
+                continue
+            phones = [
+                value.strip()
+                for value in str(candidate.get("telephones_portal", "")).split("|")
+                if value.strip()
+            ]
+            currencies = [
+                value.strip()
+                for value in str(candidate.get("devises_portal", "")).split("|")
+                if value.strip()
+            ]
+            amount_cents = int(round(float(amount) * 100))
+            for phone in phones:
+                for currency in currencies:
+                    candidate_lookup.setdefault(
+                        (phone, currency, amount_cents), []
+                    ).append(candidate_index)
         for index in output.index:
             if direct_reference.loc[index] or g2_direction.loc[index] != "Sortie":
                 continue
@@ -2129,24 +2558,30 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
                     .eq(linked_key_for_match.loc[index])
                 ].copy()
             else:
-                candidates = output_candidates.loc[
-                    output_candidates["telephones_portal"].apply(
-                        lambda values: _contains_pipe_value(
-                            values, g2_phone_for_match.loc[index]
+                amount_cents = int(round(float(g2_amount) * 100))
+                candidate_indexes: list[object] = []
+                for cents in range(amount_cents - 1, amount_cents + 2):
+                    candidate_indexes.extend(
+                        candidate_lookup.get(
+                            (
+                                str(g2_phone_for_match.loc[index]),
+                                str(g2_currency_for_match.loc[index]),
+                                cents,
+                            ),
+                            [],
                         )
                     )
-                    & output_candidates["devises_portal"].apply(
-                        lambda values: _contains_pipe_value(
-                            values, g2_currency_for_match.loc[index]
+                candidate_indexes = list(dict.fromkeys(candidate_indexes))
+                candidates = output_candidates.loc[candidate_indexes].copy()
+                if not candidates.empty:
+                    candidates = candidates.loc[
+                        pd.to_numeric(
+                            candidates["montant_portal_controle"], errors="coerce"
                         )
-                    )
-                    & pd.to_numeric(
-                        output_candidates["montant_portal_controle"], errors="coerce"
-                    )
-                    .sub(float(g2_amount))
-                    .abs()
-                    .le(0.01)
-                ].copy()
+                        .sub(float(g2_amount))
+                        .abs()
+                        .le(0.01)
+                    ].copy()
             candidates["__ecart_minutes"] = (
                 pd.to_datetime(candidates["date_portal_min"], errors="coerce")
                 - g2_date
@@ -2562,6 +2997,12 @@ def build_g2_dat_crosscheck(prepared: MpesaPreparedData, customer_id: str | None
     if not transactions.empty and "ref_no" in transactions.columns:
         tx = transactions.copy()
         tx["ref_no"] = clean_identifier(tx["ref_no"])
+        receipt_numbers = set(
+            clean_identifier(output.get("receipt_no", pd.Series(dtype="string")))
+            .loc[lambda values: values.ne("")]
+            .astype(str)
+        )
+        tx = tx.loc[tx["ref_no"].isin(receipt_numbers)].copy()
         tx["currency_code"] = clean_text(tx["currency_code"]).str.upper() if "currency_code" in tx.columns else ""
         tx["reference_dat_ligne"] = tx["reference_id"].apply(lambda value: extract_prefixed_reference(value, "FA")) if "reference_id" in tx.columns else ""
         tx_summary = (
@@ -3216,15 +3657,26 @@ def _build_daily_dat_assignments(g2: pd.DataFrame, fixed: pd.DataFrame) -> pd.Da
 
     assignment_by_receipt: dict[str, dict[str, object]] = {}
     group_columns = ["phone_prefixe", "currency_code", "jour"]
+    relevant_dat_keys = pd.MultiIndex.from_frame(
+        tx[group_columns].drop_duplicates()
+    )
+    dat_keys = pd.MultiIndex.from_frame(
+        dat[["phone_prefixe", "currency_code", "jour_creation"]]
+    )
+    dat = dat.loc[dat_keys.isin(relevant_dat_keys)].copy()
+    dat_groups = {
+        key: group.copy()
+        for key, group in dat.groupby(
+            ["phone_prefixe", "currency_code", "jour_creation"],
+            dropna=False,
+            sort=False,
+        )
+    }
     for group_key, group in tx.groupby(group_columns, dropna=False):
         phone, currency, day = group_key
         if _is_empty_text(phone) or _is_empty_text(currency) or pd.isna(day):
             continue
-        dat_group = dat.loc[
-            dat["phone_prefixe"].astype("string").eq(str(phone))
-            & dat["currency_code"].astype("string").eq(str(currency))
-            & dat["jour_creation"].eq(day)
-        ].copy()
+        dat_group = dat_groups.get((phone, currency, day), pd.DataFrame()).copy()
         if dat_group.empty:
             continue
 
@@ -4144,6 +4596,551 @@ def build_mpesa_credit_risk_analysis(
     return {"synthese": summary, "detail": detail}
 
 
+def build_loan_savings_reconciliation(
+    loans: pd.DataFrame | None,
+    current_savings: pd.DataFrame | None,
+    fixed_savings: pd.DataFrame | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Rapproche les credits avec l'epargne au grain client x devise.
+
+    ``savings_account_id`` fournit une liaison directe lorsqu'il correspond a
+    ``id`` ou ``savings_id`` du compte courant. A defaut, une correspondance
+    est deduite uniquement si ``customer_id + currency_code`` identifie un
+    compte courant unique. La vue consolidee juxtapose les positions sans
+    compenser comptablement l'epargne et le credit.
+    """
+    empty = {
+        "synthese": pd.DataFrame(),
+        "clients": pd.DataFrame(),
+        "detail": pd.DataFrame(),
+        "controles": pd.DataFrame(),
+        "sources": pd.DataFrame(),
+    }
+    loans_available = isinstance(loans, pd.DataFrame) and not loans.empty
+    current_available = isinstance(current_savings, pd.DataFrame) and not current_savings.empty
+    fixed_available = isinstance(fixed_savings, pd.DataFrame) and not fixed_savings.empty
+    if not loans_available:
+        return empty
+
+    credit = loans.copy()
+    credit["loan_id"] = clean_identifier(
+        credit.get("loan_id", pd.Series("", index=credit.index))
+    )
+    credit["customer_id"] = clean_identifier(
+        credit.get("customer_id", pd.Series("", index=credit.index))
+    )
+    credit["currency_code"] = clean_text(
+        credit.get("currency_code", pd.Series("", index=credit.index))
+    ).str.upper()
+    credit["telephone_credit"] = normalize_phone(
+        credit.get("msisdn1", pd.Series("", index=credit.index))
+    )
+    credit["savings_account_id_source"] = clean_identifier(
+        credit.get("savings_account_id", pd.Series("", index=credit.index))
+    )
+    for column in ["created_at", "updated_at"]:
+        credit[column] = pd.to_datetime(
+            credit.get(column, pd.Series(pd.NaT, index=credit.index)), errors="coerce"
+        )
+    sort_columns = [column for column in ["updated_at", "created_at"] if column in credit.columns]
+    if sort_columns:
+        credit = credit.sort_values(sort_columns, na_position="first")
+    credit = credit.loc[credit["loan_id"].ne("")].drop_duplicates("loan_id", keep="last").copy()
+    if credit.empty:
+        return empty
+
+    monetary_columns = [
+        "loan_amount",
+        "loan_balance",
+        "amount_paid",
+        "outstanding_principle",
+        "outstanding_setup_fees",
+        "outstanding_interest",
+        "outstanding_penalty_fees",
+    ]
+    source_presence = {column: column in loans.columns for column in monetary_columns}
+    for column in monetary_columns:
+        credit[column] = numeric_column(credit, column).clip(lower=0)
+    credit["encours_calcule"] = (
+        credit["outstanding_principle"]
+        + credit["outstanding_setup_fees"]
+        + credit["outstanding_interest"]
+        + credit["outstanding_penalty_fees"]
+    )
+    credit["encours_credit"] = (
+        credit["loan_balance"]
+        if source_presence["loan_balance"]
+        else credit["encours_calcule"]
+    )
+    for column in ["Nom_client", "customer", "status_name", "due_date", "last_repayment_date"]:
+        if column not in credit.columns:
+            credit[column] = pd.NA
+    credit["due_date"] = pd.to_datetime(credit["due_date"], errors="coerce")
+    credit["last_repayment_date"] = pd.to_datetime(
+        credit["last_repayment_date"], errors="coerce"
+    )
+
+    current = current_savings.copy() if current_available else pd.DataFrame()
+    if current_available:
+        current["__compte_row"] = np.arange(len(current))
+        current["customer_id"] = clean_identifier(
+            current.get("customer_id", pd.Series("", index=current.index))
+        )
+        current["currency_code"] = clean_text(
+            current.get("currency_code", pd.Series("", index=current.index))
+        ).str.upper()
+        current["id_compte_turbo"] = clean_identifier(
+            current.get("id", pd.Series("", index=current.index))
+        )
+        current["savings_id"] = clean_identifier(
+            current.get("savings_id", pd.Series("", index=current.index))
+        )
+        current["telephone_epargne"] = normalize_phone(
+            current.get(
+                "msisdn",
+                current.get("msisdn1", pd.Series("", index=current.index)),
+            )
+        )
+        current["solde_epargne_courante"] = numeric_column(current, "balance")
+        current["source_epargne_complete"] = (
+            current.get(
+                "source_savings_account_complete",
+                pd.Series(False, index=current.index),
+            )
+            .fillna(False)
+            .astype(bool)
+        )
+
+    valid_current = (
+        current.loc[
+            current["customer_id"].ne("") & current["currency_code"].ne("")
+        ].copy()
+        if current_available
+        else pd.DataFrame()
+    )
+    if valid_current.empty:
+        fallback_accounts = pd.DataFrame(
+            columns=[
+                "customer_id",
+                "currency_code",
+                "nb_comptes_courants_candidats",
+                "savings_id_deduit",
+                "id_compte_turbo_deduit",
+                "telephone_epargne_deduit",
+                "solde_epargne_courante_deduit",
+                "source_epargne_complete_deduite",
+            ]
+        )
+    else:
+        fallback_accounts = (
+            valid_current.groupby(["customer_id", "currency_code"], as_index=False, dropna=False)
+            .agg(
+                nb_comptes_courants_candidats=("__compte_row", "nunique"),
+                savings_id_deduit=("savings_id", concat_unique),
+                id_compte_turbo_deduit=("id_compte_turbo", concat_unique),
+                telephone_epargne_deduit=("telephone_epargne", concat_unique),
+                solde_epargne_courante_deduit=("solde_epargne_courante", "sum"),
+                source_epargne_complete_deduite=("source_epargne_complete", "max"),
+            )
+        )
+
+    direct_candidates = pd.DataFrame()
+    if current_available:
+        candidate_frames: list[pd.DataFrame] = []
+        direct_columns = [
+            "__compte_row",
+            "customer_id",
+            "currency_code",
+            "savings_id",
+            "id_compte_turbo",
+            "telephone_epargne",
+            "solde_epargne_courante",
+            "source_epargne_complete",
+        ]
+        for identifier_column in ["id_compte_turbo", "savings_id"]:
+            candidates = current.loc[current[identifier_column].ne(""), direct_columns].copy()
+            if candidates.empty:
+                continue
+            candidates["cle_compte_directe"] = candidates[identifier_column]
+            candidate_frames.append(candidates)
+        if candidate_frames:
+            direct_rows = concat_frames_stable(candidate_frames).drop_duplicates(
+                ["cle_compte_directe", "__compte_row"]
+            )
+            direct_candidates = (
+                direct_rows.groupby("cle_compte_directe", as_index=False, dropna=False)
+                .agg(
+                    nb_correspondances_identifiant=("__compte_row", "nunique"),
+                    customer_id_direct=("customer_id", concat_unique),
+                    currency_code_direct=("currency_code", concat_unique),
+                    savings_id_direct=("savings_id", concat_unique),
+                    id_compte_turbo_direct=("id_compte_turbo", concat_unique),
+                    telephone_epargne_direct=("telephone_epargne", concat_unique),
+                    solde_epargne_courante_direct=("solde_epargne_courante", "sum"),
+                    source_epargne_complete_direct=("source_epargne_complete", "max"),
+                )
+            )
+
+    detail = credit.merge(
+        fallback_accounts,
+        on=["customer_id", "currency_code"],
+        how="left",
+    )
+    if direct_candidates.empty:
+        detail["nb_correspondances_identifiant"] = 0
+        for column in [
+            "customer_id_direct",
+            "currency_code_direct",
+            "savings_id_direct",
+            "id_compte_turbo_direct",
+            "telephone_epargne_direct",
+        ]:
+            detail[column] = ""
+        detail["solde_epargne_courante_direct"] = 0.0
+        detail["source_epargne_complete_direct"] = False
+    else:
+        detail = detail.merge(
+            direct_candidates,
+            left_on="savings_account_id_source",
+            right_on="cle_compte_directe",
+            how="left",
+        )
+
+    for column in ["nb_comptes_courants_candidats", "nb_correspondances_identifiant"]:
+        detail[column] = pd.to_numeric(detail.get(column), errors="coerce").fillna(0).astype(int)
+    for column in [
+        "savings_id_deduit",
+        "id_compte_turbo_deduit",
+        "telephone_epargne_deduit",
+        "customer_id_direct",
+        "currency_code_direct",
+        "savings_id_direct",
+        "id_compte_turbo_direct",
+        "telephone_epargne_direct",
+    ]:
+        detail[column] = clean_text(detail.get(column, pd.Series("", index=detail.index)))
+    for column in ["solde_epargne_courante_deduit", "solde_epargne_courante_direct"]:
+        detail[column] = pd.to_numeric(detail.get(column), errors="coerce").fillna(0.0)
+    for column in ["source_epargne_complete_deduite", "source_epargne_complete_direct"]:
+        detail[column] = (
+            detail.get(column, pd.Series(False, index=detail.index))
+            .astype("boolean")
+            .fillna(False)
+            .astype(bool)
+        )
+
+    source_id_present = detail["savings_account_id_source"].ne("")
+    direct_unique = source_id_present & detail["nb_correspondances_identifiant"].eq(1)
+    direct_ambiguous = source_id_present & detail["nb_correspondances_identifiant"].gt(1)
+    fallback_unique = detail["nb_comptes_courants_candidats"].eq(1)
+    fallback_ambiguous = detail["nb_comptes_courants_candidats"].gt(1)
+    use_fallback = ~direct_unique & ~direct_ambiguous & fallback_unique
+
+    detail["methode_rapprochement_epargne"] = np.select(
+        [
+            direct_unique,
+            direct_ambiguous,
+            use_fallback & source_id_present,
+            use_fallback,
+            fallback_ambiguous,
+        ],
+        [
+            "Directe - savings_account_id",
+            "Ambigue - savings_account_id",
+            "Deduite - identifiant source non retrouve",
+            "Deduite - customer_id + devise",
+            "Ambigue - customer_id + devise",
+        ],
+        default="Non rapproche",
+    )
+    detail["savings_id_correspondant"] = detail["savings_id_direct"].where(
+        direct_unique, detail["savings_id_deduit"].where(use_fallback, "")
+    )
+    detail["id_compte_turbo_correspondant"] = detail["id_compte_turbo_direct"].where(
+        direct_unique, detail["id_compte_turbo_deduit"].where(use_fallback, "")
+    )
+    detail["telephone_epargne"] = detail["telephone_epargne_direct"].where(
+        direct_unique, detail["telephone_epargne_deduit"].where(use_fallback, "")
+    )
+    detail["solde_epargne_courante"] = detail["solde_epargne_courante_direct"].where(
+        direct_unique, detail["solde_epargne_courante_deduit"].where(use_fallback, 0.0)
+    )
+    detail["source_epargne_complete"] = detail["source_epargne_complete_direct"].where(
+        direct_unique,
+        detail["source_epargne_complete_deduite"].where(use_fallback, False),
+    )
+    detail["liaison_directe_source"] = direct_unique
+    detail["correspondance_deduite"] = use_fallback
+
+    loan_phone = detail["telephone_credit"].astype("string").fillna("")
+    savings_phone = detail["telephone_epargne"].astype("string").fillna("")
+    phone_comparable = loan_phone.ne("") & savings_phone.ne("") & (direct_unique | use_fallback)
+    phone_mismatch = phone_comparable & loan_phone.ne(savings_phone)
+    direct_customer_mismatch = direct_unique & detail["customer_id_direct"].ne(detail["customer_id"])
+    direct_currency_mismatch = direct_unique & detail["currency_code_direct"].ne(
+        detail["currency_code"]
+    )
+    source_id_not_found = source_id_present & detail["nb_correspondances_identifiant"].eq(0)
+
+    reasons: list[list[str]] = [[] for _ in range(len(detail))]
+
+    def add_reason(mask: pd.Series, label: str) -> None:
+        for position in np.flatnonzero(mask.to_numpy(dtype=bool)):
+            reasons[int(position)].append(label)
+
+    if not current_available:
+        add_reason(pd.Series(True, index=detail.index), "Savings Account non charge")
+    else:
+        add_reason(direct_ambiguous, "savings_account_id correspond a plusieurs comptes")
+        add_reason(source_id_not_found, "savings_account_id non retrouve dans Savings Account")
+        add_reason(
+            ~source_id_present & detail["nb_comptes_courants_candidats"].eq(0),
+            "Aucun compte courant pour le client et la devise",
+        )
+        add_reason(
+            ~direct_unique & fallback_ambiguous,
+            "Plusieurs comptes courants pour le client et la devise",
+        )
+        add_reason(direct_customer_mismatch, "Ecart de customer_id sur la liaison directe")
+        add_reason(direct_currency_mismatch, "Ecart de devise sur la liaison directe")
+        add_reason(phone_mismatch, "Ecart de telephone entre credit et epargne")
+    detail["motif_controle"] = [" | ".join(items) for items in reasons]
+    detail["statut_controle"] = np.select(
+        [
+            pd.Series(not current_available, index=detail.index),
+            detail["motif_controle"].ne(""),
+            direct_unique,
+            use_fallback,
+        ],
+        [
+            "Non calculable - Savings Account absent",
+            "A revoir",
+            "Conforme - correspondance directe",
+            "Conforme - correspondance deduite",
+        ],
+        default="A revoir",
+    )
+    detail["correspondance_reussie"] = detail["statut_controle"].str.startswith("Conforme")
+
+    fixed_positions = pd.DataFrame(
+        columns=["customer_id", "currency_code", "nb_dat_positifs", "solde_dat_positif"]
+    )
+    if fixed_available:
+        fixed = fixed_savings.copy()
+        fixed["customer_id"] = clean_identifier(
+            fixed.get("customer_id", pd.Series("", index=fixed.index))
+        )
+        fixed["currency_code"] = clean_text(
+            fixed.get("currency_code", pd.Series("", index=fixed.index))
+        ).str.upper()
+        fixed["balance"] = numeric_column(fixed, "balance")
+        fixed = fixed.loc[
+            fixed["customer_id"].ne("")
+            & fixed["currency_code"].ne("")
+            & fixed["balance"].gt(0)
+        ].copy()
+        if not fixed.empty:
+            fixed_positions = (
+                fixed.groupby(["customer_id", "currency_code"], as_index=False, dropna=False)
+                .agg(
+                    nb_dat_positifs=("balance", "size"),
+                    solde_dat_positif=("balance", "sum"),
+                )
+            )
+
+    def client_control_status(values: pd.Series) -> str:
+        statuses = clean_text(values)
+        if statuses.eq("Non calculable - Savings Account absent").all():
+            return "Non calculable - Savings Account absent"
+        if statuses.eq("A revoir").any():
+            return "A revoir"
+        if statuses.eq("Conforme - correspondance directe").all():
+            return "Conforme - correspondance directe"
+        if statuses.eq("Conforme - correspondance deduite").all():
+            return "Conforme - correspondance deduite"
+        return "Conforme - correspondance mixte"
+
+    fallback_client_positions = fallback_accounts[
+        [
+            "customer_id",
+            "currency_code",
+            "nb_comptes_courants_candidats",
+            "savings_id_deduit",
+            "telephone_epargne_deduit",
+            "solde_epargne_courante_deduit",
+            "source_epargne_complete_deduite",
+        ]
+    ].rename(
+        columns={
+            "savings_id_deduit": "savings_id_correspondant",
+            "telephone_epargne_deduit": "telephone_epargne",
+            "solde_epargne_courante_deduit": "solde_epargne_courante",
+            "source_epargne_complete_deduite": "source_epargne_complete",
+        }
+    )
+    clients = (
+        detail.groupby(["customer_id", "currency_code"], as_index=False, dropna=False)
+        .agg(
+            Nom_client=("Nom_client", concat_unique),
+            customer=("customer", concat_unique),
+            telephone_credit=("telephone_credit", concat_unique),
+            nombre_credits=("loan_id", "nunique"),
+            loan_ids=("loan_id", concat_unique),
+            statuts_credit=("status_name", concat_unique),
+            montant_credits=("loan_amount", "sum"),
+            montant_rembourse=("amount_paid", "sum"),
+            encours_credit=("encours_credit", "sum"),
+            principal_restant=("outstanding_principle", "sum"),
+            frais_mise_en_place_restants=("outstanding_setup_fees", "sum"),
+            interets_restants=("outstanding_interest", "sum"),
+            penalites_restantes=("outstanding_penalty_fees", "sum"),
+            statut_rapprochement=("statut_controle", client_control_status),
+            motifs_controle=("motif_controle", concat_unique),
+        )
+        .merge(
+            fallback_client_positions,
+            on=["customer_id", "currency_code"],
+            how="left",
+        )
+        .merge(fixed_positions, on=["customer_id", "currency_code"], how="left")
+    )
+    clients["savings_id_correspondant"] = clean_text(
+        clients.get("savings_id_correspondant", pd.Series("", index=clients.index))
+    )
+    clients["telephone_epargne"] = clean_text(
+        clients.get("telephone_epargne", pd.Series("", index=clients.index))
+    )
+    clients["nb_comptes_courants_candidats"] = pd.to_numeric(
+        clients.get("nb_comptes_courants_candidats"), errors="coerce"
+    ).fillna(0).astype(int)
+    clients["solde_epargne_courante"] = pd.to_numeric(
+        clients.get("solde_epargne_courante"), errors="coerce"
+    ).fillna(0.0)
+    clients["source_epargne_complete"] = (
+        clients.get("source_epargne_complete", pd.Series(False, index=clients.index))
+        .astype("boolean")
+        .fillna(False)
+        .astype(bool)
+    )
+    clients["nb_dat_positifs"] = pd.to_numeric(
+        clients.get("nb_dat_positifs"), errors="coerce"
+    ).fillna(0).astype(int)
+    clients["solde_dat_positif"] = pd.to_numeric(
+        clients.get("solde_dat_positif"), errors="coerce"
+    ).fillna(0.0)
+    clients["epargne_totale_observee"] = (
+        clients["solde_epargne_courante"] + clients["solde_dat_positif"]
+    )
+    clients["interpretation_position"] = (
+        "Montants juxtaposes - aucune compensation comptable credit/epargne"
+    )
+    clients = clients.sort_values(
+        ["currency_code", "encours_credit", "customer_id"],
+        ascending=[True, False, True],
+    ).reset_index(drop=True)
+
+    summary_credit = (
+        detail.groupby("currency_code", as_index=False, dropna=False)
+        .agg(
+            nombre_credits=("loan_id", "nunique"),
+            nombre_clients=("customer_id", lambda values: clean_identifier(values).replace("", pd.NA).nunique()),
+            montant_credits=("loan_amount", "sum"),
+            montant_rembourse=("amount_paid", "sum"),
+            encours_credit=("encours_credit", "sum"),
+            credits_rapproches=("correspondance_reussie", "sum"),
+            liaisons_directes=("liaison_directe_source", "sum"),
+            liaisons_deduites=("correspondance_deduite", "sum"),
+            credits_a_revoir=("statut_controle", lambda values: int(clean_text(values).eq("A revoir").sum())),
+            credits_non_calculables=(
+                "statut_controle",
+                lambda values: int(clean_text(values).str.startswith("Non calculable").sum()),
+            ),
+            savings_account_id_renseignes=(
+                "savings_account_id_source",
+                lambda values: int(clean_identifier(values).ne("").sum()),
+            ),
+        )
+    )
+    summary_positions = (
+        clients.groupby("currency_code", as_index=False, dropna=False)
+        .agg(
+            solde_epargne_courante_clients_credit=("solde_epargne_courante", "sum"),
+            solde_dat_clients_credit=("solde_dat_positif", "sum"),
+            epargne_totale_clients_credit=("epargne_totale_observee", "sum"),
+            clients_a_revoir=("statut_rapprochement", lambda values: int(clean_text(values).eq("A revoir").sum())),
+        )
+    )
+    summary = summary_credit.merge(summary_positions, on="currency_code", how="left")
+    summary["taux_rapprochement_pct"] = summary["credits_rapproches"].div(
+        summary["nombre_credits"].replace(0, pd.NA)
+    ).mul(100)
+    if not current_available:
+        summary["taux_rapprochement_pct"] = np.nan
+    summary["interpretation"] = (
+        "Vue de pilotage client; aucune compensation comptable entre epargne et credit"
+    )
+
+    detail_columns = [
+        "loan_id",
+        "customer_id",
+        "Nom_client",
+        "customer",
+        "telephone_credit",
+        "currency_code",
+        "loan_amount",
+        "amount_paid",
+        "encours_credit",
+        "outstanding_principle",
+        "outstanding_setup_fees",
+        "outstanding_interest",
+        "outstanding_penalty_fees",
+        "status_name",
+        "due_date",
+        "last_repayment_date",
+        "savings_account_id_source",
+        "savings_id_correspondant",
+        "id_compte_turbo_correspondant",
+        "telephone_epargne",
+        "solde_epargne_courante",
+        "nb_comptes_courants_candidats",
+        "nb_correspondances_identifiant",
+        "methode_rapprochement_epargne",
+        "liaison_directe_source",
+        "correspondance_deduite",
+        "source_epargne_complete",
+        "statut_controle",
+        "motif_controle",
+    ]
+    detail = detail[detail_columns].sort_values(
+        ["currency_code", "statut_controle", "encours_credit"],
+        ascending=[True, False, False],
+    ).reset_index(drop=True)
+    controls = detail.loc[detail["statut_controle"].eq("A revoir")].reset_index(drop=True)
+    source_complete_available = bool(
+        current.get("source_savings_account_complete", pd.Series(False)).fillna(False).astype(bool).any()
+    ) if current_available else False
+    sources = pd.DataFrame(
+        [
+            {
+                "loans_account_disponible": True,
+                "savings_account_courant_disponible": current_available,
+                "dat_disponible": fixed_available,
+                "source_savings_account_complete": source_complete_available,
+                "savings_account_id_renseignes": int(source_id_present.sum()),
+                "grain_vue_client": "customer_id x currency_code",
+                "regle_liaison_deduite": "customer_id + currency_code avec un compte courant unique",
+            }
+        ]
+    )
+    return {
+        "synthese": summary.reset_index(drop=True),
+        "clients": clients,
+        "detail": detail,
+        "controles": controls,
+        "sources": sources,
+    }
+
+
 def build_mpesa_liquidity_analysis(
     daily_detail: pd.DataFrame | None,
     *,
@@ -4592,7 +5589,8 @@ def build_mpesa_dat_maturity_analysis(
     fixed_savings: pd.DataFrame | None,
     *,
     as_of_date: Any | None = None,
-    annual_interest_rate_pct: float | None = None,
+    annual_interest_rate_pct: float | None = DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+    preparation_horizon_days: int = DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
 ) -> dict[str, pd.DataFrame]:
     empty = {"synthese": pd.DataFrame(), "detail": pd.DataFrame()}
     if not isinstance(fixed_savings, pd.DataFrame) or fixed_savings.empty:
@@ -4635,9 +5633,18 @@ def build_mpesa_dat_maturity_analysis(
         pd.Series([annual_interest_rate_pct]), errors="coerce"
     ).iloc[0]
     interest_enabled = pd.notna(interest_rate) and float(interest_rate) > 0
+    horizon_value = pd.to_numeric(
+        pd.Series([preparation_horizon_days]), errors="coerce"
+    ).iloc[0]
+    preparation_horizon = (
+        max(int(horizon_value), 0) if pd.notna(horizon_value) else 0
+    )
     frame["duree_contractuelle_jours"] = (
         frame["maturity_date"].dt.normalize() - frame["date_approved"].dt.normalize()
     ).dt.days
+    frame["duree_contractuelle_mois_estimee"] = (
+        frame["duree_contractuelle_jours"] / (365.0 / 12.0)
+    ).round(1)
     valid_interest_period = frame["duree_contractuelle_jours"].ge(0)
     frame["taux_interet_annuel_pct"] = float(interest_rate) if interest_enabled else np.nan
     frame["interet_estime_echeance"] = np.nan
@@ -4663,8 +5670,39 @@ def build_mpesa_dat_maturity_analysis(
         ["Date manquante", "Echu", "0 a 7 jours", "8 a 30 jours", "31 a 60 jours", "61 a 90 jours"],
         default="Plus de 90 jours",
     )
+    frame["a_preparer_remboursement"] = (
+        frame["maturity_date"].notna()
+        & frame["jours_avant_echeance"].le(preparation_horizon)
+    )
+    frame["statut_preparation_remboursement"] = np.select(
+        [
+            frame["maturity_date"].isna(),
+            frame["jours_avant_echeance"].lt(0),
+            frame["jours_avant_echeance"].eq(0),
+            frame["jours_avant_echeance"].le(preparation_horizon),
+        ],
+        [
+            "Date d'echeance manquante",
+            "Echu - remboursement a traiter",
+            "Echeance aujourd'hui",
+            f"A preparer sous {preparation_horizon} jours",
+        ],
+        default="Hors horizon de preparation",
+    )
+    frame["horizon_preparation_jours"] = preparation_horizon
+    frame["montant_estime_a_rembourser"] = frame["capital_plus_interet_estime"]
     frame["date_analyse"] = analysis_date
-    for column in ["customer_id", "Nom_client", "msisdn", "product_name", "account_type"]:
+    for column in [
+        "savings_id",
+        "customer_id",
+        "Nom_client",
+        "msisdn",
+        "product_name",
+        "product_description",
+        "account_type",
+        "status",
+        "fichier_source_epargne_turbo",
+    ]:
         if column not in frame.columns:
             frame[column] = pd.NA
     bucket_order = ["Echu", "0 a 7 jours", "8 a 30 jours", "31 a 60 jours", "61 a 90 jours", "Plus de 90 jours", "Date manquante"]
@@ -4683,10 +5721,13 @@ def build_mpesa_dat_maturity_analysis(
         .reset_index(drop=True)
     )
     detail_columns = [
-        "customer_id", "Nom_client", "msisdn", "currency_code", "product_name", "account_type",
-        "balance", "date_approved", "maturity_date", "controle_date_dat", "Observation",
-        "duree_contractuelle_jours", "taux_interet_annuel_pct", "interet_estime_echeance",
-        "capital_plus_interet_estime", "jours_avant_echeance", "tranche_echeance", "date_analyse",
+        "savings_id", "customer_id", "Nom_client", "msisdn", "currency_code", "product_name",
+        "product_description", "account_type", "status", "balance", "date_approved", "maturity_date",
+        "controle_date_dat", "Observation", "duree_contractuelle_jours",
+        "duree_contractuelle_mois_estimee", "taux_interet_annuel_pct", "interet_estime_echeance",
+        "capital_plus_interet_estime", "montant_estime_a_rembourser", "jours_avant_echeance",
+        "tranche_echeance", "a_preparer_remboursement", "statut_preparation_remboursement",
+        "horizon_preparation_jours", "date_analyse", "fichier_source_epargne_turbo",
     ]
     detail = frame.sort_values(["currency_code", "ordre_tranche", "maturity_date"])[detail_columns].reset_index(drop=True)
     return {"synthese": summary, "detail": detail}
@@ -5361,7 +6402,7 @@ def build_mpesa_management_dashboard(
     prepared: MpesaPreparedData,
     *,
     as_of_date: Any | None = None,
-    dat_annual_interest_rate_pct: float | None = None,
+    dat_annual_interest_rate_pct: float | None = DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
 ) -> dict[str, Any]:
     """Assemble le cockpit de pilotage sans melanger les devises ni les grains."""
     analysis_date = _mpesa_analysis_date(prepared, as_of_date)
@@ -8183,7 +9224,7 @@ def create_g2_dat_word(
 
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    footer_run = footer.add_run("Rapport de synthese")
+    footer_run = footer.add_run("Solution Bisou Bisou Digital ")
     footer_run.font.size = Pt(8)
     footer_run.font.color.rgb = RGBColor(110, 125, 140)
 
@@ -8244,6 +9285,10 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         ("clients_3_systemes", "Clients_Perfect_3_Systemes"),
         ("credit_synthese", "Pilotage_Credit_Turbo"),
         ("credit_detail", "Credits_Risque_Turbo"),
+        ("loan_savings_summary", "Credit_Epargne_Synthese"),
+        ("loan_savings_clients", "Credit_Epargne_Clients"),
+        ("loan_savings_detail", "Credit_Epargne_Detail"),
+        ("loan_savings_controls", "Controle_Credit_Epargne"),
         ("liquidite_synthese", "Liquidite_G2"),
         ("liquidite_journaliere", "Liquidite_Jour_G2"),
         ("activite_clients", "Activite_Turbo_G2"),

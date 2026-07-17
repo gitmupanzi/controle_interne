@@ -46,6 +46,14 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 - Améliorer les performances avec `st.cache_data` sur la lecture, la normalisation et les calculs déterministes coûteux. Invalider naturellement le cache lorsque le fichier, la feuille, les paramètres ou les filtres changent; ne pas mettre en cache un rendu Streamlit susceptible de devenir obsolète.
 - Vérifier après toute modification que l'ouverture initiale alimente tous les sous-onglets et que le passage d'un onglet déjà chargé à un autre ne déclenche pas un nouveau calcul Python.
 
+## Frontière avec la comptabilité Turbo
+
+- Considérer Perfect Vision comme le cœur métier microfinance et la source à interroger pour les comptes, prêts, échéanciers, remboursements, DAT et écritures officielles disponibles dans son schéma.
+- Considérer `Comptabilité Turbo` dans Solution M-PESA comme une restitution de contrôle des sous-registres opérationnels Turbo. Elle produit des balances et positions observées, mais ne remplace pas une balance générale, un bilan ou un compte de résultat validé dans Perfect Vision.
+- Utiliser G2 uniquement comme preuve secondaire du canal M-PESA, complément de nom et contrôle `Receipt No = ref_no`; ne jamais reprendre ses montants dans une balance Turbo ou Perfect.
+- En cas d'écart Turbo–Perfect Vision, rapprocher par client, téléphone normalisé, devise, référence, produit et date, puis documenter le sens comptable de chaque système avant de conclure. Ne jamais additionner CDF et USD.
+- Lire [references/sources.md](references/sources.md) pour la matrice de responsabilité entre Perfect Vision, Turbo et G2.
+
 ## Norme visuelle commune des onglets
 
 - Conserver une barre d'onglets sobre et professionnelle.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import time
+import hashlib
 from io import BytesIO
 from typing import Any
 
@@ -14,6 +15,8 @@ from credit_app.services.mpesa_analysis import (
     CUSTOMER_STATEMENT_FOCUS_OPERATION_TYPES,
     CUSTOMER_STATEMENT_COLUMNS,
     CUSTOMERS_REQUIRED_COLUMNS,
+    DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+    DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
     FIXED_SAVINGS_REQUIRED_COLUMNS,
     G2_CLASSIFIED_TRANSACTION_COLUMNS,
     G2_TRANSACTION_REQUIRED_COLUMNS,
@@ -30,8 +33,11 @@ from credit_app.services.mpesa_analysis import (
     build_turbo_only_g2_transactions,
     build_load_report,
     build_mpesa_accounting_analysis,
+    build_mpesa_dat_maturity_analysis,
+    build_loan_savings_reconciliation,
     build_mpesa_management_dashboard,
     build_mpesa_statement,
+    build_savings_accounts_reconciliation,
     build_customer_transaction_analysis,
     build_customer_statement_filename,
     build_customer_statement_view,
@@ -45,13 +51,13 @@ from credit_app.services.mpesa_analysis import (
     filter_g2_transactions_by_completion_time,
     filter_g2_transactions_by_direction,
     numeric_column,
-    prepare_current_savings,
     prepare_customers,
-    prepare_fixed_savings,
     prepare_g2_transactions,
     prepare_loans,
     prepare_perfect_clients,
+    prepare_savings_accounts,
     prepare_transactions,
+    promote_g2_statement_header,
     search_customers,
     validate_required_columns,
 )
@@ -96,14 +102,67 @@ def _format_percent(value: Any) -> str:
     return f"{number:.1f}%"
 
 
-@st.cache_data(show_spinner=False)
+def _prepared_data_cache_key(prepared: MpesaPreparedData) -> str:
+    return prepared.cache_fingerprint or f"session-object:{id(prepared)}"
+
+
+def _prepared_data_as_of(
+    prepared: MpesaPreparedData,
+    analysis_date: object,
+) -> MpesaPreparedData:
+    """Conserve l'historique disponible jusqu'a la date d'analyse incluse."""
+    period_end = pd.Timestamp(analysis_date).normalize() + pd.Timedelta(days=1)
+
+    def before(frame: pd.DataFrame, *date_columns: str) -> pd.DataFrame:
+        if frame.empty:
+            return frame
+        dates = pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
+        for column in date_columns:
+            if column in frame.columns:
+                dates = dates.combine_first(
+                    pd.to_datetime(frame[column], errors="coerce")
+                )
+        return frame.loc[dates.isna() | dates.lt(period_end)].copy()
+
+    return replace(
+        prepared,
+        transactions=before(prepared.transactions, "created_at"),
+        current_savings=before(prepared.current_savings, "created_at", "updated_at"),
+        fixed_savings=before(prepared.fixed_savings, "date_approved", "created_at"),
+        fixed_savings_control=before(
+            prepared.fixed_savings_control, "date_approved", "created_at"
+        ),
+        loans=before(prepared.loans, "created_at", "updated_at"),
+        g2_transactions=before(
+            prepared.g2_transactions, "completion_time", "initiation_time"
+        ),
+        customers=before(prepared.customers, "created_at"),
+        cache_fingerprint=(
+            f"{_prepared_data_cache_key(prepared)}|asof:"
+            f"{pd.Timestamp(analysis_date):%Y-%m-%d}"
+        ),
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=24)
 def _read_excel_bytes(file_bytes: bytes, file_name: str) -> pd.DataFrame:
     if not file_bytes:
         return pd.DataFrame()
     try:
-        return pd.read_excel(BytesIO(file_bytes))
-    except Exception as exc:
-        raise ValueError(f"Impossible de lire `{file_name}` : {exc}") from exc
+        return pd.read_excel(BytesIO(file_bytes), engine="calamine")
+    except ImportError:
+        try:
+            return pd.read_excel(BytesIO(file_bytes), engine="openpyxl")
+        except Exception as exc:
+            raise ValueError(f"Impossible de lire `{file_name}` : {exc}") from exc
+    except Exception as calamine_exc:
+        try:
+            return pd.read_excel(BytesIO(file_bytes), engine="openpyxl")
+        except Exception as openpyxl_exc:
+            raise ValueError(
+                f"Impossible de lire `{file_name}` : {openpyxl_exc} "
+                f"(lecture rapide : {calamine_exc})"
+            ) from openpyxl_exc
 
 
 def _uploaded_dataframe(uploaded_file: Any) -> pd.DataFrame:
@@ -134,15 +193,35 @@ def _uploaded_dataframes(
 
 
 def _uploaded_g2_dataframes(uploaded_files: Any) -> pd.DataFrame:
-    return _uploaded_dataframes(uploaded_files, source_column="fichier_source_g2")
+    raw = _uploaded_dataframes(uploaded_files, source_column="fichier_source_g2")
+    return promote_g2_statement_header(raw)
 
 
-@st.cache_data(show_spinner=False)
+def _uploaded_files_fingerprint(**sources: Any) -> str:
+    """Construire une clé de cache compacte sans hacher les DataFrames préparés."""
+    digest = hashlib.blake2b(digest_size=20)
+    for source_name, uploaded_files in sorted(sources.items()):
+        digest.update(source_name.encode("utf-8"))
+        files = (
+            uploaded_files
+            if isinstance(uploaded_files, (list, tuple))
+            else ([uploaded_files] if uploaded_files is not None else [])
+        )
+        for file_order, uploaded_file in enumerate(files):
+            payload = uploaded_file.getvalue()
+            digest.update(str(file_order).encode("ascii"))
+            digest.update(str(uploaded_file.name).encode("utf-8", errors="replace"))
+            digest.update(len(payload).to_bytes(8, "little", signed=False))
+            digest.update(payload)
+    return digest.hexdigest()
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
 def _create_excel_export_cached(export_report: dict[str, Any]) -> bytes:
     return create_excel_export(export_report)
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=12)
 def _create_g2_dat_word_cached(
     word_report: dict[str, Any],
     period_text: str,
@@ -155,7 +234,7 @@ def _create_g2_dat_word_cached(
     )
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=12)
 def _create_customer_statement_word_cached(
     statement: pd.DataFrame,
     analysis_report: dict[str, pd.DataFrame],
@@ -182,7 +261,7 @@ def _create_customer_statement_word_cached(
     )
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=12)
 def _create_customer_statement_pdf_cached(
     statement: pd.DataFrame,
     analysis_report: dict[str, pd.DataFrame],
@@ -209,7 +288,11 @@ def _create_customer_statement_pdf_cached(
     )
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(
+    show_spinner=False,
+    max_entries=24,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
 def _build_customer_transaction_analysis_cached(
     prepared: MpesaPreparedData,
     customer_id: str,
@@ -230,18 +313,91 @@ def _build_customer_transaction_analysis_cached(
     )
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(
+    show_spinner=False,
+    max_entries=12,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _build_mpesa_statement_cached(
+    prepared: MpesaPreparedData,
+    customer_id: str,
+    opening_balances: tuple[tuple[str, float | None], ...],
+) -> dict[str, Any]:
+    return build_mpesa_statement(
+        prepared,
+        customer_id,
+        opening_balances=dict(opening_balances),
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
+    max_entries=12,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _build_g2_daily_savings_report_cached(
+    prepared: MpesaPreparedData,
+) -> dict[str, pd.DataFrame]:
+    return build_g2_daily_savings_report(prepared)
+
+
+@st.cache_data(
+    show_spinner=False,
+    max_entries=8,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
 def _build_mpesa_management_dashboard_cached(
     prepared: MpesaPreparedData,
     dat_annual_interest_rate_pct: float,
+    analysis_date: object,
 ) -> dict[str, Any]:
+    scoped_prepared = _prepared_data_as_of(prepared, analysis_date)
     return build_mpesa_management_dashboard(
-        prepared,
+        scoped_prepared,
+        as_of_date=analysis_date,
         dat_annual_interest_rate_pct=dat_annual_interest_rate_pct,
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=12)
+@st.cache_data(
+    show_spinner=False,
+    max_entries=16,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _build_mpesa_dat_maturity_analysis_cached(
+    prepared: MpesaPreparedData,
+    analysis_date: object,
+    annual_interest_rate_pct: float,
+    preparation_horizon_days: int,
+) -> dict[str, pd.DataFrame]:
+    return build_mpesa_dat_maturity_analysis(
+        prepared.fixed_savings,
+        as_of_date=analysis_date,
+        annual_interest_rate_pct=annual_interest_rate_pct,
+        preparation_horizon_days=preparation_horizon_days,
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
+    max_entries=12,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _build_loan_savings_reconciliation_cached(
+    prepared: MpesaPreparedData,
+) -> dict[str, pd.DataFrame]:
+    return build_loan_savings_reconciliation(
+        prepared.loans,
+        prepared.current_savings,
+        prepared.fixed_savings,
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
+    max_entries=12,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
 def _build_mpesa_accounting_analysis_cached(
     prepared: MpesaPreparedData,
     date_start: object,
@@ -254,38 +410,43 @@ def _build_mpesa_accounting_analysis_cached(
     )
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=4)
 def _build_prepared_data(
-    transactions_raw: pd.DataFrame,
-    current_raw: pd.DataFrame,
-    fixed_raw: pd.DataFrame,
-    loans_raw: pd.DataFrame,
-    g2_raw: pd.DataFrame,
-    customers_raw: pd.DataFrame,
-    perfect_raw: pd.DataFrame,
+    upload_fingerprint: str,
+    _transactions_raw: pd.DataFrame,
+    _savings_raw: pd.DataFrame,
+    _loans_raw: pd.DataFrame,
+    _g2_raw: pd.DataFrame,
+    _customers_raw: pd.DataFrame,
+    _perfect_raw: pd.DataFrame,
 ) -> tuple[MpesaPreparedData, dict[str, list[str]]]:
+    transactions = prepare_transactions(_transactions_raw) if _transactions_raw is not None and not _transactions_raw.empty else pd.DataFrame()
+    savings_accounts = prepare_savings_accounts(_savings_raw)
+    account_types = savings_accounts.get(
+        "account_type", pd.Series("", index=savings_accounts.index)
+    )
+    current = savings_accounts.loc[account_types.eq("NORMAL SAVINGS")].copy()
+    fixed = savings_accounts.loc[account_types.eq("FIXED SAVINGS")].copy()
+    fixed_control = pd.DataFrame()
+    loans = prepare_loans(_loans_raw)
+    g2_transactions = prepare_g2_transactions(_g2_raw)
+    customers = prepare_customers(_customers_raw)
+    perfect_clients = prepare_perfect_clients(_perfect_raw)
     missing = {
-        "Transactions M-PESA_Turbo": validate_required_columns(transactions_raw, TRANSACTION_REQUIRED_COLUMNS, "Transactions M-PESA_Turbo")
-        if not transactions_raw.empty
+        "Transactions M-PESA_Turbo": validate_required_columns(transactions, TRANSACTION_REQUIRED_COLUMNS, "Transactions M-PESA_Turbo")
+        if not transactions.empty
         else sorted(TRANSACTION_REQUIRED_COLUMNS),
-        "Epargne courante_Turbo": validate_required_columns(current_raw, CURRENT_SAVINGS_REQUIRED_COLUMNS, "Epargne courante")
-        if not current_raw.empty
+        "Epargne courante_Turbo": validate_required_columns(current, CURRENT_SAVINGS_REQUIRED_COLUMNS, "Epargne courante")
+        if not current.empty
         else [],
-        "DAT_Turbo": validate_required_columns(fixed_raw, FIXED_SAVINGS_REQUIRED_COLUMNS, "DAT")
-        if not fixed_raw.empty
+        "DAT_Turbo": validate_required_columns(fixed, FIXED_SAVINGS_REQUIRED_COLUMNS, "DAT")
+        if not fixed.empty
         else [],
-        "Credits_Turbo": validate_required_columns(loans_raw, {"loan_id", "customer_id"}, "Credits") if not loans_raw.empty else [],
-        "Transactions M-PESA_G2": validate_required_columns(g2_raw, G2_TRANSACTION_REQUIRED_COLUMNS, "Transactions M-PESA_G2") if not g2_raw.empty else [],
-        "Clients_Turbo": validate_required_columns(customers_raw, CUSTOMERS_REQUIRED_COLUMNS, "Clients_Turbo") if not customers_raw.empty else [],
-        "Clients_Perfect": validate_required_columns(perfect_raw, PERFECT_CLIENTS_REQUIRED_COLUMNS, "Clients_Perfect") if not perfect_raw.empty else [],
+        "Credits_Turbo": validate_required_columns(loans, {"loan_id", "customer_id"}, "Credits") if not loans.empty else [],
+        "Transactions M-PESA_G2": validate_required_columns(g2_transactions, G2_TRANSACTION_REQUIRED_COLUMNS, "Transactions M-PESA_G2") if not g2_transactions.empty else [],
+        "Clients_Turbo": validate_required_columns(customers, CUSTOMERS_REQUIRED_COLUMNS, "Clients_Turbo") if not customers.empty else [],
+        "Clients_Perfect": validate_required_columns(perfect_clients, PERFECT_CLIENTS_REQUIRED_COLUMNS, "Clients_Perfect") if not perfect_clients.empty else [],
     }
-    transactions = prepare_transactions(transactions_raw) if transactions_raw is not None and not transactions_raw.empty else pd.DataFrame()
-    current = prepare_current_savings(current_raw)
-    fixed = prepare_fixed_savings(fixed_raw)
-    loans = prepare_loans(loans_raw)
-    g2_transactions = prepare_g2_transactions(g2_raw)
-    customers = prepare_customers(customers_raw)
-    perfect_clients = prepare_perfect_clients(perfect_raw)
     transactions = enrich_transactions_with_g2_customer_names(transactions, g2_transactions)
     current = enrich_turbo_with_g2_customer_names(current, g2_transactions, phone_column="msisdn")
     fixed = enrich_turbo_with_g2_customer_names(fixed, g2_transactions, phone_column="msisdn")
@@ -304,14 +465,16 @@ def _build_prepared_data(
         missing,
     )
     return MpesaPreparedData(
-        transactions,
-        current,
-        fixed,
-        loans,
-        load_report,
-        g2_transactions,
-        customers,
-        perfect_clients,
+        transactions=transactions,
+        current_savings=current,
+        fixed_savings=fixed,
+        loans=loans,
+        load_report=load_report,
+        g2_transactions=g2_transactions,
+        customers=customers,
+        perfect_clients=perfect_clients,
+        cache_fingerprint=upload_fingerprint,
+        fixed_savings_control=fixed_control,
     ), missing
 
 
@@ -421,6 +584,130 @@ def _render_import_tab(prepared: MpesaPreparedData, missing: dict[str, list[str]
                 ("Devises", currencies, "Codes detectes Turbo", "orange"),
             ]
         )
+    savings_frames = [prepared.current_savings, prepared.fixed_savings]
+    has_savings_data = any(not frame.empty for frame in savings_frames)
+    source_complete_available_in_data = any(
+        not frame.empty
+        and "source_savings_account_complete" in frame.columns
+        and bool(frame["source_savings_account_complete"].fillna(False).astype(bool).any())
+        for frame in savings_frames
+    )
+    if (
+        has_savings_data
+        and not source_complete_available_in_data
+        and (prepared.current_savings.empty or prepared.fixed_savings.empty)
+    ):
+        missing_summary = (
+            "Customers with Current Savings Account"
+            if prepared.current_savings.empty
+            else "Customers with Fixed Savings Account"
+        )
+        st.warning(
+            "Mode de compatibilite incomplet : chargez aussi "
+            f"{missing_summary} dans le meme emplacement Savings Account [Turbo]."
+        )
+
+    savings_reconciliation = build_savings_accounts_reconciliation(prepared)
+    savings_summary = savings_reconciliation.get("synthese", pd.DataFrame())
+    if not savings_summary.empty:
+        savings_row = savings_summary.iloc[0]
+        source_complete_available = bool(
+            savings_row.get("source_savings_account_complete_disponible", False)
+        )
+        has_dat_control = int(savings_row.get("dat_export_resume", 0)) > 0
+        render_panel_title(
+            "Rapprochement Savings Account / DAT"
+            if has_dat_control
+            else (
+                "Composition de Savings Account [Turbo]"
+                if source_complete_available
+                else "Compatibilite des syntheses d'epargne [Turbo]"
+            )
+        )
+        render_kpi_cards(
+            [
+                (
+                    (
+                        "Comptes courants [Savings Account]"
+                        if source_complete_available
+                        else "Comptes courants positifs [synthese]"
+                    ),
+                    _format_count(savings_row.get("comptes_courants", 0)),
+                    (
+                        "Produits Open Savings / Current account"
+                        if source_complete_available
+                        else "Vue Customers with Current Savings Account"
+                    ),
+                    "blue",
+                ),
+                (
+                    (
+                        "DAT historiques [Savings Account]"
+                        if source_complete_available
+                        else "DAT positifs [synthese]"
+                    ),
+                    _format_count(savings_row.get("dat_total_source_complete", 0)),
+                    (
+                        "Soldes positifs et soldes nuls conserves"
+                        if source_complete_available
+                        else "Vue Customers with Fixed Savings Account"
+                    ),
+                    "navy",
+                ),
+                (
+                    "DAT a solde positif",
+                    _format_count(savings_row.get("dat_solde_positif", 0)),
+                    "DAT avec encours observe",
+                    "green",
+                ),
+                (
+                    (
+                        "DAT soldes / historiques"
+                        if source_complete_available
+                        else "DAT a solde nul disponibles"
+                    ),
+                    _format_count(savings_row.get("dat_solde_nul", 0)),
+                    (
+                        "DAT a solde nul conserves"
+                        if source_complete_available
+                        else "Indisponibles dans les vues resumees"
+                    ),
+                    "orange",
+                ),
+            ]
+        )
+        reconciliation_status = str(savings_row.get("statut_rapprochement", ""))
+        if has_dat_control:
+            reconciliation_message = (
+                f"Export DAT resume : {_format_count(savings_row.get('dat_export_resume', 0))} ligne(s); "
+                f"retrouvees dans Savings Account : {_format_count(savings_row.get('dat_export_retrouves', 0))}. "
+                f"Statut : {reconciliation_status}."
+            )
+        else:
+            reconciliation_message = (
+                "Savings Account est la source Turbo autonome des comptes courants et des DAT; "
+                "aucun export Current Savings ou Fixed Savings supplementaire n'est requis."
+                if source_complete_available
+                else (
+                    "Mode de compatibilite actif : les syntheses Current Savings et Fixed Savings couvrent "
+                    "les comptes a solde positif, mais pas les comptes a solde nul ni tout l'historique; "
+                    "chargez Savings Account pour l'analyse exhaustive."
+                    if int(savings_row.get("comptes_courants", 0)) > 0
+                    else (
+                        "Mode de compatibilite incomplet : la synthese Fixed Savings est exploitee, mais la "
+                        "synthese Current Savings manque. Les comptes a solde nul et l'historique exhaustif "
+                        "restent indisponibles."
+                    )
+                )
+            )
+        if reconciliation_status in {"Concordance exacte", "Source autonome"}:
+            st.success(reconciliation_message)
+        else:
+            st.warning(reconciliation_message)
+        savings_gaps = savings_reconciliation.get("ecarts", pd.DataFrame())
+        if not savings_gaps.empty:
+            with st.expander("Afficher les ecarts Savings Account / DAT", expanded=False):
+                st.dataframe(savings_gaps, width="stretch", hide_index=True)
     unnamed_count = sum(
         int(frame.columns.astype(str).str.match(r"^Unnamed(:|$)", na=False).sum())
         for frame in [prepared.transactions, prepared.current_savings, prepared.fixed_savings, prepared.loans]
@@ -1017,7 +1304,11 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
                 opening_balances[currency] = value if use_value else None
 
     try:
-        report = build_mpesa_statement(prepared, selected_customer, opening_balances=opening_balances)
+        report = _build_mpesa_statement_cached(
+            prepared,
+            selected_customer,
+            tuple(sorted(opening_balances.items())),
+        )
     except ValueError as exc:
         st.warning(str(exc))
         return None
@@ -1328,6 +1619,214 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
     return filtered_report
 
 
+def _render_dat_repayment_schedule(prepared: MpesaPreparedData) -> None:
+    render_panel_title("Echeances et remboursements DAT [Turbo]")
+    if prepared.fixed_savings.empty:
+        st.info("Chargez Savings Account [Turbo] pour identifier les DAT echus ou proches de leur terme.")
+        return
+
+    controls = st.columns(2, gap="medium")
+    with controls[0]:
+        analysis_date = st.date_input(
+            "Date de situation DAT",
+            value=pd.Timestamp.now().date(),
+            key="mpesa_dat_repayment_analysis_date",
+            help="Les DAT deja echus et ceux arrivant a terme apres cette date sont classes separement.",
+        )
+    with controls[1]:
+        preparation_horizon_days = st.slider(
+            "Horizon de preparation du remboursement (jours)",
+            min_value=1,
+            max_value=90,
+            value=DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
+            step=1,
+            key="mpesa_dat_repayment_horizon_days",
+            help="30 jours permet de preparer les remboursements du mois a venir; les DAT deja echus sont toujours inclus.",
+        )
+
+    try:
+        annual_interest_rate_pct = float(
+            st.session_state.get(
+                "mpesa_dat_annual_interest_rate_pct",
+                DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+            )
+        )
+    except (TypeError, ValueError):
+        annual_interest_rate_pct = DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT
+
+    maturity_report = _build_mpesa_dat_maturity_analysis_cached(
+        prepared,
+        analysis_date,
+        annual_interest_rate_pct,
+        preparation_horizon_days,
+    )
+    detail = maturity_report.get("detail", pd.DataFrame())
+    if detail.empty:
+        st.info("Aucun DAT avec un solde positif et une echeance exploitable n'a ete trouve.")
+        return
+
+    actionable_mask = detail.get(
+        "a_preparer_remboursement", pd.Series(False, index=detail.index)
+    ).fillna(False).astype(bool)
+    actionable = detail.loc[actionable_mask].copy()
+    render_summary_box(
+        "Regle de preparation",
+        [
+            f"La liste inclut tous les DAT echus et ceux arrivant a terme dans les {preparation_horizon_days} prochains jours.",
+            f"L'interet simple est estime au taux annuel de {annual_interest_rate_pct:.2f}% defini dans la barre laterale.",
+            "Le solde DAT est utilise comme capital; le montant capital + interet reste une estimation de preparation et non une ecriture comptable officielle.",
+        ],
+    )
+
+    if actionable.empty:
+        st.success(
+            f"Aucun DAT echu ou arrivant a terme dans les {preparation_horizon_days} prochains jours."
+        )
+        return
+
+    for currency in sorted(
+        value
+        for value in actionable["currency_code"].dropna().astype(str).unique()
+        if value.strip()
+    ):
+        currency_data = actionable.loc[
+            actionable["currency_code"].astype(str).eq(currency)
+        ].copy()
+        days_to_maturity = pd.to_numeric(
+            currency_data["jours_avant_echeance"], errors="coerce"
+        )
+        expired = currency_data.loc[days_to_maturity.lt(0)]
+        upcoming = currency_data.loc[days_to_maturity.ge(0)]
+        estimated_interest = pd.to_numeric(
+            currency_data["interet_estime_echeance"], errors="coerce"
+        ).sum(min_count=1)
+        estimated_repayment = pd.to_numeric(
+            currency_data["montant_estime_a_rembourser"], errors="coerce"
+        ).sum(min_count=1)
+        render_panel_title(f"Remboursements DAT a preparer [Turbo] - {currency}")
+        render_kpi_cards(
+            [
+                (
+                    "DAT echus",
+                    _format_count(len(expired)),
+                    f"{_format_amount(pd.to_numeric(expired['balance'], errors='coerce').sum())} {currency} de capital",
+                    "orange",
+                ),
+                (
+                    "Echeances a venir",
+                    _format_count(len(upcoming)),
+                    f"Sous {preparation_horizon_days} jours",
+                    "blue",
+                ),
+                (
+                    "Capital a rembourser",
+                    _format_amount(pd.to_numeric(currency_data["balance"], errors="coerce").sum()),
+                    f"Devise {currency}",
+                    "navy",
+                ),
+                (
+                    "Interets estimes",
+                    _format_amount(estimated_interest),
+                    f"Taux annuel {annual_interest_rate_pct:.2f}%",
+                    "green",
+                ),
+                (
+                    "Capital + interets",
+                    _format_amount(estimated_repayment),
+                    f"Decaissement estime {currency}",
+                    "navy",
+                ),
+            ]
+        )
+
+    filtered_actionable = _apply_local_multiselect_filters(
+        actionable,
+        [
+            "currency_code",
+            "statut_preparation_remboursement",
+            "product_name",
+            "Nom_client",
+        ],
+        key_prefix="mpesa_dat_repayment_filter",
+    )
+    display_columns = [
+        "savings_id",
+        "customer_id",
+        "Nom_client",
+        "msisdn",
+        "currency_code",
+        "product_name",
+        "status",
+        "balance",
+        "date_approved",
+        "maturity_date",
+        "duree_contractuelle_mois_estimee",
+        "jours_avant_echeance",
+        "statut_preparation_remboursement",
+        "taux_interet_annuel_pct",
+        "interet_estime_echeance",
+        "montant_estime_a_rembourser",
+    ]
+    display_columns = [
+        column for column in display_columns if column in filtered_actionable.columns
+    ]
+    st.caption(
+        f"{len(filtered_actionable)} compte(s) DAT a preparer. Les montants restent separes par devise."
+    )
+    st.dataframe(
+        filtered_actionable[display_columns],
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "savings_id": st.column_config.TextColumn("Compte DAT", pinned=True),
+            "customer_id": st.column_config.TextColumn("Client"),
+            "Nom_client": st.column_config.TextColumn("Nom client"),
+            "msisdn": st.column_config.TextColumn("Telephone"),
+            "currency_code": st.column_config.TextColumn("Devise"),
+            "product_name": st.column_config.TextColumn("Produit / duree"),
+            "status": st.column_config.TextColumn("Statut Turbo"),
+            "balance": st.column_config.NumberColumn("Capital DAT", format="%.2f"),
+            "date_approved": st.column_config.DateColumn("Date d'approbation", format="DD/MM/YYYY"),
+            "maturity_date": st.column_config.DateColumn("Date d'echeance", format="DD/MM/YYYY"),
+            "duree_contractuelle_mois_estimee": st.column_config.NumberColumn(
+                "Duree estimee (mois)", format="%.1f"
+            ),
+            "jours_avant_echeance": st.column_config.NumberColumn(
+                "Jours avant echeance", format="%d"
+            ),
+            "statut_preparation_remboursement": st.column_config.TextColumn(
+                "Action remboursement"
+            ),
+            "taux_interet_annuel_pct": st.column_config.NumberColumn(
+                "Taux annuel", format="%.2f %%"
+            ),
+            "interet_estime_echeance": st.column_config.NumberColumn(
+                "Interet estime", format="%.2f"
+            ),
+            "montant_estime_a_rembourser": st.column_config.NumberColumn(
+                "Capital + interet estime", format="%.2f"
+            ),
+        },
+    )
+    export_bytes = _create_excel_export_cached(
+        {"dat_echeances_detail": filtered_actionable}
+    )
+    st.download_button(
+        "Telecharger les remboursements DAT a preparer [Turbo]",
+        data=export_bytes,
+        file_name=(
+            f"remboursements_dat_a_preparer_{pd.Timestamp(analysis_date):%Y%m%d}_"
+            f"{preparation_horizon_days}j.xlsx"
+        ),
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        width="stretch",
+        key=(
+            f"mpesa_dat_repayment_export_{pd.Timestamp(analysis_date):%Y%m%d}_"
+            f"{preparation_horizon_days}j"
+        ),
+    )
+
+
 def _render_large_dat_summary(prepared: MpesaPreparedData) -> None:
     if prepared.fixed_savings.empty:
         return
@@ -1451,6 +1950,7 @@ def _render_large_dat_summary(prepared: MpesaPreparedData) -> None:
 
 @st.fragment
 def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) -> None:
+    _render_dat_repayment_schedule(prepared)
     _render_large_dat_summary(prepared)
     if report is not None:
         render_panel_title("DAT final du client [Turbo]")
@@ -1478,8 +1978,10 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         st.caption(f"{len(dat_view)} ligne(s) DAT affichee(s).")
         st.dataframe(dat_view.head(500), width="stretch", hide_index=True)
     else:
-        st.info("Aucun fichier DAT charge.")
-    st.caption("La reconstruction du DAT total depend de la coherence entre le fichier Transactions et le fichier Fixed Savings.")
+        st.info("Aucun DAT trouve dans Savings Account [Turbo].")
+    st.caption(
+        "Les comptes DAT proviennent de Savings Account [Turbo]. Les interets et montants de remboursement affiches sont des estimations de preparation."
+    )
 
 
 def _render_g2_report_export(
@@ -1850,7 +2352,11 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             return
         source_label = "Turbo"
         source_date_label = "created_at"
-        analysis_prepared = replace(prepared, g2_transactions=turbo_proxy)
+        analysis_prepared = replace(
+            prepared,
+            g2_transactions=turbo_proxy,
+            cache_fingerprint=f"{_prepared_data_cache_key(prepared)}|g2:turbo-proxy",
+        )
         st.info(
             "Mode Turbo seul : le rapport est construit sans fichier Transactions M-PESA_G2. "
             "Les operations sont deduites de `ref_no`, `account_type`, `description`, `dr`, `cr` et `created_at`. "
@@ -1870,11 +2376,19 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     render_panel_title(f"1. Periode analysee ({source_date_label}) [{source_label}]")
     if not completion_times.empty:
         completion_key = f"{completion_times.min():%Y%m%d}_{completion_times.max():%Y%m%d}_{len(completion_times)}"
+        default_completion_date = completion_times.max().date()
+        if (
+            completion_times.min().date() < completion_times.max().date()
+            and completion_times.max().hour < 18
+        ):
+            default_completion_date = (
+                completion_times.max().normalize() - pd.Timedelta(days=1)
+            ).date()
         date_columns = st.columns(2)
         with date_columns[0]:
             date_start = st.date_input(
                 f"{source_date_label} - date de debut",
-                value=completion_times.min().date(),
+                value=default_completion_date,
                 min_value=completion_times.min().date(),
                 max_value=completion_times.max().date(),
                 key=f"mpesa_g2_completion_start_{completion_key}",
@@ -1888,7 +2402,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         with date_columns[1]:
             date_end = st.date_input(
                 f"{source_date_label} - date de fin",
-                value=completion_times.max().date(),
+                value=default_completion_date,
                 min_value=completion_times.min().date(),
                 max_value=completion_times.max().date(),
                 key=f"mpesa_g2_completion_end_{completion_key}",
@@ -1898,6 +2412,11 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                 value=time(23, 59, 59),
                 step=60,
                 key=f"mpesa_g2_completion_end_time_{completion_key}",
+            )
+        if default_completion_date < completion_times.max().date():
+            st.caption(
+                "La derniere journee complete est proposee; la journee la plus "
+                "recente semble encore partielle."
             )
         period_start = pd.Timestamp.combine(date_start, time_start)
         period_end = pd.Timestamp.combine(date_end, time_end)
@@ -1953,9 +2472,16 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             f"Aucune operation {source_label} ne correspond a la periode et au sens selectionnes."
         )
         return
-    filtered_prepared = replace(analysis_prepared, g2_transactions=filtered_g2)
+    filtered_prepared = replace(
+        analysis_prepared,
+        g2_transactions=filtered_g2,
+        cache_fingerprint=(
+            f"{_prepared_data_cache_key(analysis_prepared)}|g2-filter:"
+            f"{period_text}|{direction_suffix}|{len(filtered_g2)}"
+        ),
+    )
 
-    daily_report = build_g2_daily_savings_report(filtered_prepared)
+    daily_report = _build_g2_daily_savings_report_cached(filtered_prepared)
     daily_detail = daily_report.get("detail", pd.DataFrame())
     daily_pivot = daily_report.get("pivot", pd.DataFrame())
     daily_synthese = daily_report.get("synthese", pd.DataFrame())
@@ -2661,9 +3187,60 @@ def _filter_pilotage_currencies(report: dict[str, Any], currencies: list[str]) -
 
 @st.fragment
 def _render_management_dashboard(prepared: MpesaPreparedData) -> None:
-    dat_interest_rate = float(st.session_state.get("mpesa_dat_annual_interest_rate_pct", 0.0))
-    report = _build_mpesa_management_dashboard_cached(prepared, dat_interest_rate)
-    analysis_date = report.get("date_analyse")
+    operational_dates: list[pd.Series] = []
+    if not prepared.transactions.empty and "created_at" in prepared.transactions.columns:
+        operational_dates.append(
+            pd.to_datetime(prepared.transactions["created_at"], errors="coerce").dropna()
+        )
+    if not prepared.g2_transactions.empty:
+        g2_dates = pd.to_datetime(
+            prepared.g2_transactions.get(
+                "completion_time",
+                pd.Series(pd.NaT, index=prepared.g2_transactions.index),
+            ),
+            errors="coerce",
+        ).dropna()
+        if not g2_dates.empty:
+            operational_dates.append(g2_dates)
+    available_dates = (
+        pd.concat(operational_dates, ignore_index=True)
+        if operational_dates
+        else pd.Series(dtype="datetime64[ns]")
+    )
+    if available_dates.empty:
+        st.info("Chargez Transactions M-PESA_Turbo ou Transactions M-PESA_G2 pour construire le cockpit.")
+        return
+    minimum_date = available_dates.min().date()
+    maximum_date = available_dates.max().date()
+    default_date = maximum_date
+    if minimum_date < maximum_date and available_dates.max().hour < 18:
+        previous_date = (pd.Timestamp(maximum_date) - pd.Timedelta(days=1)).date()
+        if previous_date >= minimum_date:
+            default_date = previous_date
+    analysis_date = st.date_input(
+        "Date d'analyse du cockpit",
+        value=default_date,
+        min_value=minimum_date,
+        max_value=maximum_date,
+        key=(
+            f"mpesa_management_analysis_date_{minimum_date:%Y%m%d}_"
+            f"{maximum_date:%Y%m%d}_{len(available_dates)}"
+        ),
+        help=(
+            "La derniere journee complete est proposee lorsque la journee la plus "
+            "recente semble encore partielle. L'historique ulterieur est exclu."
+        ),
+    )
+    dat_interest_rate = float(
+        st.session_state.get(
+            "mpesa_dat_annual_interest_rate_pct",
+            DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+        )
+    )
+    report = _build_mpesa_management_dashboard_cached(
+        prepared, dat_interest_rate, analysis_date
+    )
+    report_analysis_date = report.get("date_analyse")
     render_summary_box(
         "Objectif du cockpit",
         [
@@ -2674,8 +3251,11 @@ def _render_management_dashboard(prepared: MpesaPreparedData) -> None:
             "La projection de liquidite a sept jours est mecanique et n'est affichee qu'avec un solde G2 et au moins sept jours d'historique.",
         ],
     )
-    if pd.notna(analysis_date):
-        st.caption(f"Date d'analyse retenue : {pd.Timestamp(analysis_date):%d/%m/%Y} (derniere date operationnelle chargee).")
+    if pd.notna(report_analysis_date):
+        st.caption(
+            f"Date d'analyse retenue : {pd.Timestamp(report_analysis_date):%d/%m/%Y}. "
+            "Les donnees ulterieures ne sont pas integrees au cockpit."
+        )
 
     currency_options: set[str] = set()
     for value in report.values():
@@ -2952,7 +3532,7 @@ def _render_management_dashboard(prepared: MpesaPreparedData) -> None:
         dat_summary = report_view.get("dat_echeances_synthese", pd.DataFrame())
         dat_detail = report_view.get("dat_echeances_detail", pd.DataFrame())
         if dat_summary.empty:
-            st.info("Chargez le fichier DAT Turbo avec maturity_date pour construire l'echeancier.")
+            st.info("Chargez Savings Account [Turbo] avec maturity_date pour construire l'echeancier.")
         else:
             if dat_interest_rate > 0:
                 st.caption(
@@ -2998,7 +3578,7 @@ def _render_management_dashboard(prepared: MpesaPreparedData) -> None:
         st.download_button(
             "Telecharger le cockpit Turbo + G2",
             data=export_bytes,
-            file_name=f"pilotage_turbo_g2_{pd.Timestamp(analysis_date):%Y%m%d}.xlsx" if pd.notna(analysis_date) else "pilotage_turbo_g2.xlsx",
+            file_name=f"pilotage_turbo_g2_{pd.Timestamp(report_analysis_date):%Y%m%d}.xlsx" if pd.notna(report_analysis_date) else "pilotage_turbo_g2.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             width="stretch",
         )
@@ -3019,8 +3599,298 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         )
         st.caption(f"{len(credits_view)} credit(s) affiche(s).")
         st.dataframe(credits_view, width="stretch", hide_index=True)
-    elif not prepared.loans.empty:
-        render_panel_title("Credits importes [Turbo]")
+        return
+    if prepared.loans.empty:
+        st.info("Le fichier Credits est facultatif. Chargez-le pour enrichir l'extrait avec les informations LN.")
+        return
+
+    reconciliation = _build_loan_savings_reconciliation_cached(prepared)
+    summary = reconciliation.get("synthese", pd.DataFrame())
+    clients = reconciliation.get("clients", pd.DataFrame())
+    loan_detail = reconciliation.get("detail", pd.DataFrame())
+    controls = reconciliation.get("controles", pd.DataFrame())
+    sources = reconciliation.get("sources", pd.DataFrame())
+    source_row = sources.iloc[0] if not sources.empty else pd.Series(dtype="object")
+    current_available = bool(source_row.get("savings_account_courant_disponible", False))
+    fixed_available = bool(source_row.get("dat_disponible", False))
+    source_complete = bool(source_row.get("source_savings_account_complete", False))
+
+    render_panel_title("Vue consolidee credit et epargne [Turbo]")
+    render_summary_box(
+        "Perimetre du rapprochement",
+        [
+            "Le grain de la vue est customer_id x devise; CDF et USD restent strictement separes.",
+            "Une liaison directe utilise savings_account_id lorsqu'il retrouve id ou savings_id dans le compte courant.",
+            "Sinon, savings_id est deduit seulement lorsqu'un compte courant unique partage le client et la devise.",
+            "Les positions d'epargne, de DAT et de credit sont juxtaposees; elles ne sont jamais compensees comptablement.",
+        ],
+    )
+    if not current_available:
+        st.info(
+            "Chargez Savings Account [Turbo] avec Loans Account [Turbo] pour rapprocher les credits "
+            "des comptes courants. Le fichier Loans reste exploitable ci-dessous sans ce controle."
+        )
+    else:
+        if not source_complete:
+            st.warning(
+                "Le rapprochement utilise les syntheses Current/Fixed en mode de compatibilite. "
+                "Les comptes a solde nul et l'historique exhaustif ne sont pas disponibles."
+            )
+        if not fixed_available:
+            st.info(
+                "Aucun DAT n'est disponible : la vue consolidee presente le credit et l'epargne "
+                "courante; les colonnes DAT restent a zero."
+            )
+        direct_ids = int(source_row.get("savings_account_id_renseignes", 0))
+        if direct_ids == 0:
+            st.caption(
+                "Dans Loans Account, savings_account_id n'est pas renseigne. Les correspondances conformes "
+                "affichees comme deduites reposent sur customer_id + devise et un compte courant unique."
+            )
+
+    currency_options = (
+        sorted(summary["currency_code"].dropna().astype(str).unique())
+        if not summary.empty and "currency_code" in summary.columns
+        else []
+    )
+    selected_currencies = st.multiselect(
+        "Devises affichees dans la vue consolidee",
+        options=currency_options,
+        default=currency_options,
+        key="mpesa_loan_savings_currencies",
+        help="Une selection vide conserve toutes les devises. Les montants ne sont jamais additionnes entre devises.",
+    )
+    active_currencies = selected_currencies or currency_options
+    summary_view = (
+        summary.loc[summary["currency_code"].astype(str).isin(active_currencies)].copy()
+        if active_currencies and not summary.empty
+        else summary.copy()
+    )
+    clients_view = (
+        clients.loc[clients["currency_code"].astype(str).isin(active_currencies)].copy()
+        if active_currencies and not clients.empty
+        else clients.copy()
+    )
+    controls_view = (
+        controls.loc[controls["currency_code"].astype(str).isin(active_currencies)].copy()
+        if active_currencies and not controls.empty
+        else controls.copy()
+    )
+    detail_view = (
+        loan_detail.loc[loan_detail["currency_code"].astype(str).isin(active_currencies)].copy()
+        if active_currencies and not loan_detail.empty
+        else loan_detail.copy()
+    )
+
+    if current_available and not summary_view.empty:
+        for _, row in summary_view.sort_values("currency_code").iterrows():
+            currency = str(row.get("currency_code", "")) or "NON RENSEIGNEE"
+            render_panel_title(f"Position consolidee {currency} [Turbo]")
+            match_rate = pd.to_numeric(
+                pd.Series([row.get("taux_rapprochement_pct")]), errors="coerce"
+            ).iloc[0]
+            render_kpi_cards(
+                [
+                    (
+                        "Credits rapproches [Turbo]",
+                        f"{_format_count(row.get('credits_rapproches', 0))} / {_format_count(row.get('nombre_credits', 0))}",
+                        "Correspondances directes ou deduites conformes",
+                        "green",
+                    ),
+                    (
+                        "Taux de rapprochement [Turbo]",
+                        f"{float(match_rate):.2f}%" if pd.notna(match_rate) else "Non calculable",
+                        "Denominateur : credits de la devise",
+                        "blue",
+                    ),
+                    (
+                        "Encours credit [Turbo]",
+                        f"{_format_amount(row.get('encours_credit', 0))} {currency}",
+                        "Loans Account",
+                        "navy",
+                    ),
+                    (
+                        "Epargne courante clients credites [Turbo]",
+                        f"{_format_amount(row.get('solde_epargne_courante_clients_credit', 0))} {currency}",
+                        "Comptee une fois par client et devise",
+                        "orange",
+                    ),
+                    (
+                        "DAT positifs clients credites [Turbo]",
+                        f"{_format_amount(row.get('solde_dat_clients_credit', 0))} {currency}",
+                        "Position observee, sans compensation",
+                        "red",
+                    ),
+                ]
+            )
+        st.dataframe(
+            summary_view,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                "taux_rapprochement_pct": st.column_config.NumberColumn(
+                    "Taux de rapprochement", format="%.2f%%"
+                ),
+                "montant_credits": st.column_config.NumberColumn(format="%.2f"),
+                "montant_rembourse": st.column_config.NumberColumn(format="%.2f"),
+                "encours_credit": st.column_config.NumberColumn(format="%.2f"),
+                "solde_epargne_courante_clients_credit": st.column_config.NumberColumn(format="%.2f"),
+                "solde_dat_clients_credit": st.column_config.NumberColumn(format="%.2f"),
+                "epargne_totale_clients_credit": st.column_config.NumberColumn(format="%.2f"),
+                "interpretation": None,
+            },
+        )
+
+        render_panel_title("Positions par client et devise [Turbo]")
+        filter_left, filter_right = st.columns([1, 2], gap="medium")
+        with filter_left:
+            status_options = sorted(
+                clients_view.get("statut_rapprochement", pd.Series(dtype="string"))
+                .dropna()
+                .astype(str)
+                .unique()
+            )
+            selected_statuses = st.multiselect(
+                "Statuts de rapprochement",
+                options=status_options,
+                default=status_options,
+                key="mpesa_loan_savings_statuses",
+            )
+        with filter_right:
+            client_query = st.text_input(
+                "Rechercher un client, telephone, nom ou savings_id",
+                key="mpesa_loan_savings_client_query",
+                placeholder="Ex. customer_id, 243..., nom ou SAV-...",
+            ).strip()
+        if selected_statuses:
+            clients_view = clients_view.loc[
+                clients_view["statut_rapprochement"].astype(str).isin(selected_statuses)
+            ].copy()
+        if client_query:
+            searchable_columns = [
+                column
+                for column in [
+                    "customer_id",
+                    "Nom_client",
+                    "customer",
+                    "telephone_credit",
+                    "telephone_epargne",
+                    "savings_id_correspondant",
+                    "loan_ids",
+                ]
+                if column in clients_view.columns
+            ]
+            search_mask = pd.Series(False, index=clients_view.index)
+            for column in searchable_columns:
+                search_mask |= clients_view[column].astype("string").str.contains(
+                    client_query, case=False, na=False, regex=False
+                )
+            clients_view = clients_view.loc[search_mask].copy()
+        client_columns = [
+            "customer_id",
+            "Nom_client",
+            "customer",
+            "telephone_credit",
+            "currency_code",
+            "nombre_credits",
+            "loan_ids",
+            "statuts_credit",
+            "montant_credits",
+            "montant_rembourse",
+            "encours_credit",
+            "principal_restant",
+            "interets_restants",
+            "penalites_restantes",
+            "savings_id_correspondant",
+            "solde_epargne_courante",
+            "nb_dat_positifs",
+            "solde_dat_positif",
+            "epargne_totale_observee",
+            "statut_rapprochement",
+            "motifs_controle",
+        ]
+        client_columns = [column for column in client_columns if column in clients_view.columns]
+        st.caption(
+            f"{len(clients_view)} position(s) client x devise affichee(s). "
+            "Epargne totale observee = epargne courante + DAT positifs de la meme devise."
+        )
+        st.dataframe(
+            clients_view[client_columns],
+            width="stretch",
+            height=500,
+            hide_index=True,
+            column_config={
+                "customer_id": st.column_config.TextColumn("Client", pinned=True),
+                "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                "montant_credits": st.column_config.NumberColumn(format="%.2f"),
+                "montant_rembourse": st.column_config.NumberColumn(format="%.2f"),
+                "encours_credit": st.column_config.NumberColumn(format="%.2f"),
+                "principal_restant": st.column_config.NumberColumn(format="%.2f"),
+                "interets_restants": st.column_config.NumberColumn(format="%.2f"),
+                "penalites_restantes": st.column_config.NumberColumn(format="%.2f"),
+                "solde_epargne_courante": st.column_config.NumberColumn(format="%.2f"),
+                "solde_dat_positif": st.column_config.NumberColumn(format="%.2f"),
+                "epargne_totale_observee": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+
+        render_panel_title("Controles credit / epargne [Turbo]")
+        if controls_view.empty:
+            st.success("Aucune correspondance credit / compte courant a revoir dans les devises affichees.")
+        else:
+            st.warning(
+                f"{len(controls_view)} credit(s) a revoir : absence ou ambiguite du compte courant, "
+                "identifiant direct non retrouve, ou ecart de telephone/client/devise."
+            )
+            control_columns = [
+                "loan_id",
+                "customer_id",
+                "telephone_credit",
+                "currency_code",
+                "encours_credit",
+                "savings_account_id_source",
+                "savings_id_correspondant",
+                "telephone_epargne",
+                "nb_comptes_courants_candidats",
+                "methode_rapprochement_epargne",
+                "motif_controle",
+            ]
+            control_columns = [column for column in control_columns if column in controls_view.columns]
+            st.dataframe(
+                controls_view[control_columns],
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "loan_id": st.column_config.TextColumn("Credit", pinned=True),
+                    "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                    "encours_credit": st.column_config.NumberColumn(format="%.2f"),
+                },
+            )
+
+        export_report = {
+            "loan_savings_summary": summary_view,
+            "loan_savings_clients": clients_view,
+            "loan_savings_detail": detail_view,
+            "loan_savings_controls": controls_view,
+        }
+        if st.button(
+            "Preparer l'export credit / epargne",
+            key="mpesa_prepare_loan_savings_export",
+            width="content",
+        ):
+            with st.spinner("Preparation des positions et controles..."):
+                export_bytes = _create_excel_export_cached(export_report)
+            st.download_button(
+                "Telecharger le controle credit / epargne",
+                data=export_bytes,
+                file_name="controle_credit_epargne_turbo.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="mpesa_download_loan_savings_export",
+                width="content",
+            )
+
+    with st.expander("Afficher les credits importes [Turbo]", expanded=not current_available):
         columns = [column for column in LOAN_USEFUL_COLUMNS if column in prepared.loans.columns]
         loans_base = prepared.loans[columns] if columns else prepared.loans
         loans_view = _apply_local_multiselect_filters(
@@ -3028,10 +3898,8 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             ["currency_code", "status_name", "customer_id"],
             key_prefix="mpesa_import_loans_filter",
         )
-        st.caption(f"{len(loans_view)} credit(s) affiche(s).")
+        st.caption(f"{len(loans_view)} credit(s) affiche(s); le tableau est limite aux 500 premieres lignes.")
         st.dataframe(loans_view.head(500), width="stretch", hide_index=True)
-    else:
-        st.info("Le fichier Credits est facultatif. Chargez-le pour enrichir l'extrait avec les informations LN.")
 
 
 @st.fragment
@@ -3333,83 +4201,109 @@ def render_solution_mpesa_tab() -> None:
         ],
     )
 
-    transactions_column, savings_column, customers_column = st.columns(3, gap="small")
-    with transactions_column:
-        st.markdown("**Transactions**")
-        transactions_file = st.file_uploader(
-            "Transactions M-PESA_Turbo",
-            type=["xlsx", "xls"],
-            key="mpesa_transactions_file",
-            accept_multiple_files=True,
-            help="Vous pouvez charger plusieurs périodes Turbo. Les écritures sont dédupliquées par id; les colonnes dr et cr conservent leur logique comptable.",
-        )
-        g2_file = st.file_uploader(
-            "Transactions M-PESA_G2",
-            type=["xlsx", "xls"],
-            key="mpesa_g2_file",
-            accept_multiple_files=True,
-            help=(
-                "Fichier facultatif pour G2 / DAT : sans G2, le sous-onglet utilise les operations "
-                "demonstrables dans Transactions M-PESA_Turbo. Si vous chargez G2, les releves "
-                "d'entrees et de sorties sont unifies sans double comptage par Receipt No."
-            ),
-        )
-    with savings_column:
-        st.markdown("**Epargne et DAT**")
-        current_file = st.file_uploader(
-            "Epargne courante_Turbo (Current Savings)",
-            type=["xlsx", "xls"],
-            key="mpesa_current_file",
-            accept_multiple_files=True,
-            help="Plusieurs instantanés peuvent être chargés; la version la plus récente d'un même compte est conservée.",
-        )
-        fixed_file = st.file_uploader(
-            "DAT_Turbo (Fixed Savings)",
-            type=["xlsx", "xls"],
-            key="mpesa_fixed_file",
-            accept_multiple_files=True,
-            help="Plusieurs instantanés DAT peuvent être chargés sans doubler les comptes présents dans plusieurs fichiers.",
-        )
-    with customers_column:
-        st.markdown("**Clients et credits**")
-        loans_file = st.file_uploader(
-            "Credits_Turbo (Loans)",
-            type=["xlsx", "xls"],
-            key="mpesa_loans_file",
-            accept_multiple_files=True,
-            help="Les fichiers sont unifiés par loan_id et la version la plus récente du crédit est conservée.",
-        )
-        customers_file = st.file_uploader(
-            "Clients_Turbo",
-            type=["xlsx", "xls"],
-            key="mpesa_customers_file",
-            accept_multiple_files=True,
-            help="Les exports clients peuvent être cumulés sans répéter les mêmes fiches.",
-        )
-        perfect_file = st.file_uploader(
-            "Clients_Perfect",
-            type=["xlsx", "xls"],
-            key="mpesa_perfect_clients_file",
-            accept_multiple_files=True,
-            help="Plusieurs exports Perfect peuvent être chargés. La colonne Phone_Prefixe sert au rapprochement et les fiches sont dédupliquées par identifiant client.",
-        )
+    render_panel_title("Sources Turbo principales (4)")
+    st.caption(
+        "Transactions, Savings Account, Loans Account et Customers suffisent au parcours Turbo. "
+        "Tous les emplacements acceptent plusieurs fichiers."
+    )
+    turbo_left, turbo_right = st.columns(2, gap="medium")
+    with turbo_left:
+        with st.container(border=True):
+            transactions_file = st.file_uploader(
+                "Transactions [Turbo]",
+                type=["xlsx", "xls"],
+                key="mpesa_transactions_file",
+                accept_multiple_files=True,
+                help="Chargez une ou plusieurs périodes. Les écritures sont dédupliquées par id; dr et cr conservent leur logique comptable Turbo.",
+            )
+        with st.container(border=True):
+            savings_file = st.file_uploader(
+                "Savings Account [Turbo]",
+                type=["xlsx", "xls"],
+                key="mpesa_savings_file",
+                accept_multiple_files=True,
+                help=(
+                    "Chargez de préférence le fichier complet Savings Account : les comptes NORMAL SAVINGS "
+                    "et FIXED SAVINGS sont séparés automatiquement, soldes positifs ou nuls. À défaut, "
+                    "sélectionnez ensemble Customers with Current Savings Account et Customers with Fixed "
+                    "Savings Account; ce mode reste limité aux soldes positifs. Si les synthèses et la source "
+                    "complète sont chargées ensemble, Savings Account est prioritaire."
+                ),
+            )
+    with turbo_right:
+        with st.container(border=True):
+            loans_file = st.file_uploader(
+                "Loans Account [Turbo]",
+                type=["xlsx", "xls"],
+                key="mpesa_loans_file",
+                accept_multiple_files=True,
+                help=(
+                    "Les fichiers sont unifiés par loan_id et la version la plus récente du crédit est "
+                    "conservée. savings_account_id est utilisé pour la liaison directe avec Savings Account; "
+                    "s'il est vide, le contrôle utilise customer_id + devise avec un compte courant unique."
+                ),
+            )
+        with st.container(border=True):
+            customers_file = st.file_uploader(
+                "Customers [Turbo]",
+                type=["xlsx", "xls"],
+                key="mpesa_customers_file",
+                accept_multiple_files=True,
+                help="Les exports clients sont cumulés sans répéter les mêmes fiches.",
+            )
+
+    render_panel_title("Sources facultatives de contrôle")
+    optional_left, optional_right = st.columns(2, gap="medium")
+    with optional_left:
+        with st.container(border=True):
+            g2_file = st.file_uploader(
+                "Transactions [G2] (facultatif)",
+                type=["xlsx", "xls"],
+                key="mpesa_g2_file",
+                accept_multiple_files=True,
+                help=(
+                    "Chargez ensemble les relevés d'entrées 1441 et de sorties 15558. Sans G2, "
+                    "les analyses encore démontrables utilisent uniquement Transactions Turbo."
+                ),
+            )
+    with optional_right:
+        with st.container(border=True):
+            perfect_file = st.file_uploader(
+                "Clients_Perfect (facultatif)",
+                type=["xlsx", "xls"],
+                key="mpesa_perfect_clients_file",
+                accept_multiple_files=True,
+                help="La colonne Phone_Prefixe sert au rapprochement; les fiches sont dédupliquées par identifiant client.",
+            )
 
     with st.expander("Voir les colonnes attendues pour les fichiers", expanded=False):
         expected_transactions, expected_savings, expected_customers = st.columns(3, gap="small")
         with expected_transactions:
-            st.markdown("**Transactions M-PESA_Turbo**")
+            st.markdown("**Transactions [Turbo]**")
             st.code(", ".join(sorted(TRANSACTION_REQUIRED_COLUMNS)), language="text")
-            st.markdown("**Transactions M-PESA_G2**")
+            st.markdown("**Transactions [G2] (facultatif)**")
             st.code(", ".join(sorted(G2_TRANSACTION_REQUIRED_COLUMNS)), language="text")
         with expected_savings:
-            st.markdown("**Epargne courante_Turbo (Current Savings)**")
-            st.code(", ".join(sorted(CURRENT_SAVINGS_REQUIRED_COLUMNS)), language="text")
-            st.markdown("**DAT_Turbo (Fixed Savings)**")
-            st.code(", ".join(sorted(FIXED_SAVINGS_REQUIRED_COLUMNS)), language="text")
+            st.markdown("**Savings Account [Turbo]**")
+            st.code(
+                "savings_id, customer_id, msisdn1, product_name, product_description, "
+                "balance, currency_code, date_approved, maturity_date, created_at, updated_at",
+                language="text",
+            )
+            st.caption(
+                "Alternative compatible : sélectionner ensemble les exports résumés Customers with Current "
+                "Savings Account et Customers with Fixed Savings Account. Cette alternative ne contient que "
+                "les comptes à solde positif."
+            )
         with expected_customers:
-            st.markdown("**Credits_Turbo (Loans)**")
-            st.code("customer_id, loan_id", language="text")
-            st.markdown("**Clients_Turbo**")
+            st.markdown("**Loans Account [Turbo]**")
+            st.code(
+                "customer_id, loan_id, savings_account_id, msisdn1, currency_code, loan_amount, "
+                "loan_balance, amount_paid, outstanding_principle, outstanding_interest, "
+                "outstanding_penalty_fees, status_name, due_date",
+                language="text",
+            )
+            st.markdown("**Customers [Turbo]**")
             st.code(", ".join(sorted(CUSTOMERS_REQUIRED_COLUMNS)), language="text")
             st.markdown("**Clients_Perfect**")
             st.code(", ".join(sorted(PERFECT_CLIENTS_REQUIRED_COLUMNS)), language="text")
@@ -3418,11 +4312,8 @@ def render_solution_mpesa_tab() -> None:
         transactions_raw = _uploaded_dataframes(
             transactions_file, source_column="fichier_source_transactions_turbo"
         )
-        current_raw = _uploaded_dataframes(
-            current_file, source_column="fichier_source_epargne_turbo"
-        )
-        fixed_raw = _uploaded_dataframes(
-            fixed_file, source_column="fichier_source_dat_turbo"
+        savings_raw = _uploaded_dataframes(
+            savings_file, source_column="fichier_source_epargne_turbo"
         )
         customers_raw = _uploaded_dataframes(
             customers_file, source_column="fichier_source_clients_turbo"
@@ -3438,10 +4329,18 @@ def render_solution_mpesa_tab() -> None:
         st.error(str(exc))
         return
 
+    upload_fingerprint = _uploaded_files_fingerprint(
+        transactions=transactions_file,
+        savings_accounts=savings_file,
+        loans=loans_file,
+        g2=g2_file,
+        customers=customers_file,
+        perfect=perfect_file,
+    )
     prepared, missing = _build_prepared_data(
+        upload_fingerprint,
         transactions_raw,
-        current_raw,
-        fixed_raw,
+        savings_raw,
         loans_raw,
         g2_raw,
         customers_raw,

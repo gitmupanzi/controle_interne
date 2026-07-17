@@ -22,6 +22,16 @@ Résoudre ces chemins depuis la racine du dépôt. Depuis ce skill, la racine es
 
 Cette liste facilite la recherche mais ne remplace pas la vérification du schéma.
 
+## Responsabilité comptable des systèmes
+
+| Système | Rôle de référence | Usage autorisé dans les rapprochements | Limite |
+|---|---|---|---|
+| Perfect Vision | Cœur métier microfinance : clients, comptes, produits, opérations, DAT, prêts, échéanciers et remboursements | Rechercher la position ou l'écriture officielle disponible dans le schéma et expliquer ses jointures | Ne pas inventer une écriture absente du schéma ou d'une requête validée |
+| Transactions M-PESA_Turbo | Sous-registres opérationnels du portail : écritures, `dr`, `cr`, soldes observés, `ref_no`, comptes techniques et produits | Construire une balance auxiliaire observée, des journaux et des contrôles de mouvement | Ne pas présenter cette restitution comme une balance générale certifiée ou un compte de résultat officiel |
+| Transactions M-PESA_G2 | Preuve secondaire Vodacom, statut, téléphone/nom, dates d'initiation et de finalisation | Vérifier `Receipt No = ref_no`, la devise, le montant et l'identité | Ne jamais remplacer les mouvements Turbo ou les écritures Perfect Vision par les montants G2 |
+
+Pour analyser un écart, conserver la séparation par devise puis comparer dans cet ordre : client/téléphone, référence, produit ou compte, date, montant, statut et sens comptable. Une absence de rapprochement reste un résultat de contrôle tant que la source, le grain et le sens n'ont pas été confirmés.
+
 ## Catalogue des requêtes
 
 Chaque contrôle de `requetes.sql` possède normalement un numéro, un nom d'export, un objectif, une lecture et un niveau d'importance. Rechercher par concept métier, table, colonne ou nom d'export. Conserver les déclarations de paramètres nécessaires à la requête sélectionnée.

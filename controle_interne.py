@@ -92,6 +92,7 @@ from credit_app.domain import (
 )
 from credit_app.components.preparation import render_preparation_status
 from credit_app.services.data_pipeline import build_preparation_summary, prepare_payload_from_dataframe
+from credit_app.services.mpesa_analysis import DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT
 from credit_app.tabs.audit_control import render_analyste_credit_tab
 from credit_app.tabs.crm_clients import render_crm_clients_tab
 from credit_app.tabs.export import render_export_tab
@@ -652,7 +653,7 @@ def main() -> None:
             "Taux d'intérêt annuel DAT (%)",
             min_value=0.0,
             max_value=100.0,
-            value=float(st.session_state.get("mpesa_dat_annual_interest_rate_pct", 0.0)),
+            value=DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
             step=0.25,
             format="%.2f",
             key="mpesa_dat_annual_interest_rate_pct",

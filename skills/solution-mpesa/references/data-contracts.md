@@ -2,13 +2,31 @@
 
 La source de vérité exécutable reste `credit_app/data_schema.py`. Les règles de calcul et d'export se trouvent dans `credit_app/services/mpesa_analysis.py`.
 
+## Sommaire
+
+- [Sources](#sources)
+- [Chargement de plusieurs fichiers](#chargement-de-plusieurs-fichiers)
+- [Formats G2 acceptés](#formats-g2-acceptés)
+- [Source maître Savings Account et contrôle DAT](#source-maître-savings-account-et-contrôle-dat)
+- [Interface refactorisée des téléversements](#interface-refactorisée-des-téléversements)
+- [Grain, clés et rapprochement](#grain-et-clés)
+- [Classification, statuts et anomalies](#classification-des-opérations)
+- [Client, extrait et rapprochement Perfect](#client-nom-et-compte-créé)
+- [Filtres et fidélisation](#filtres-et-fidélisation)
+- [Rapprochement crédits et épargne](#rapprochement-crédits-et-épargne)
+- [Échéances et remboursements DAT](#échéances-et-remboursements-dat)
+- [Balance et analyses comptables Turbo](#balance-et-analyses-comptables-turbo)
+- [Fonctions à privilégier](#fonctions-à-privilégier)
+- [Conditions d'interprétation](#conditions-dinterprétation)
+
 ## Sources
 
 | Source | Colonnes obligatoires principales | Rôle |
 |---|---|---|
 | Transactions M-PESA Portal/Turbo | `id`, `customer_id`, `msisdn1`, `account_type`, `reference_id`, `currency_code`, `dr`, `cr`, `bal_before`, `bal_after`, `ref_no`, `description`, `created_at` | Mouvements, extrait client, classification et contrôle G2 |
-| Épargne courante | `customer_id`, `msisdn`, `product_name`, `account_type`, `balance`, `currency_code`, `created_at`, `updated_at` | Solde d'épargne courant et date de création de repli |
-| DAT | `customer_id`, `msisdn`, `product_name`, `account_type`, `balance`, `currency_code`, `date_approved`, `maturity_date`; `created_at` facultatif | Dépôts à terme, durée, création et échéance |
+| `Savings Account` complet | `savings_id`, `customer_id`, `msisdn1`, `product_name`, `product_description`, `balance`, `currency_code`; dates et statut selon l'export | Source maître scindée en épargne courante et DAT actifs/historiques |
+| Épargne courante résumée (historique) | `customer_id`, `msisdn`, `product_name`, `account_type`, `balance`, `currency_code`, `created_at`, `updated_at` | Repli partiel avec le résumé DAT dans l'emplacement multiple `Savings Account`; comptes positifs uniquement |
+| DAT résumé (historique) | `customer_id`, `msisdn`, `product_name`, `account_type`, `balance`, `currency_code`, `date_approved`, `maturity_date`; `created_at` facultatif | Repli partiel avec le résumé Current dans l'emplacement multiple `Savings Account`; DAT positifs uniquement |
 | Crédits | `loan_id`, `customer_id` | Crédits rattachés au client et enrichissement du nom G2 |
 | Transactions G2 | `Receipt No`, `Currency`, `Opposite Party` | Entrées, sorties, client, référence et rapport journalier |
 | `Clients_Turbo` | `msisdn1`, `created_at` | Date de création du compte et recherche client |
@@ -23,7 +41,7 @@ Chaque source peut recevoir plusieurs exports. Ajouter le nom du fichier source 
 | Source | Clé de déduplication prioritaire | Version conservée |
 |---|---|---|
 | Transactions Turbo | `id`; sinon référence × compte × client × devise × `dr` × `cr` × date | écriture la plus récente |
-| Épargne courante | client × devise × compte × produit × création | `updated_at` le plus récent |
+| `Savings Account` | `savings_id`; sinon client × devise × compte × produit × création | `updated_at` le plus récent |
 | DAT | client × devise × compte × approbation × échéance | dernier fichier chargé en cas de même compte |
 | Crédits | `loan_id`, puis `id` | `updated_at` le plus récent |
 | `Clients_Turbo` | `customer_id`, puis téléphone × création | version la plus récente |
@@ -38,6 +56,35 @@ Accepter les deux structures suivantes sans modifier le fichier source. Plusieur
 
 1. Format avec `Transaction Amount`, éventuellement accompagné de `Details`, `Reason Type`, `Transaction Status`, `Completion Time` et `Balance`.
 2. Format relevé organisation avec montant éclaté dans `Paid In` et `Withdrawn`, solde dans `Balance` et nature dans `Details`.
+
+Le relevé peut commencer directement par `Receipt No., Completion Time, Initiation Time, Details, Transaction Status, Currency, Paid In, Withdrawn, Balance, Reason Type, Opposite Party, Linked Transaction ID`. Si cinq lignes descriptives précèdent ces colonnes, détecter et promouvoir la vraie ligne d'en-tête par `fichier_source_g2`; ne jamais demander une suppression manuelle comme prérequis.
+
+## Source maître Savings Account et contrôle DAT
+
+- Normaliser `msisdn1` vers `msisdn` sans perdre la colonne source.
+- Classer `Open Savings` / `Current account` en `NORMAL SAVINGS`.
+- Classer tout produit ou description `Fixed Account` en `FIXED SAVINGS`.
+- Conserver les comptes courants et les DAT à solde positif ou nul dans la source maître; les analyses d'encours et d'échéance peuvent ensuite limiter explicitement leur périmètre aux soldes positifs.
+- Le téléversement multiple `Savings Account` accepte aussi les deux vues résumées Current et Fixed ensemble. Marquer ce repli comme partiel : il ne permet pas de reconstruire les comptes à solde nul ni tout l'historique.
+- Lorsque la source maître et une ou deux vues résumées sont chargées ensemble, conserver uniquement les fichiers contenant `savings_id`; la source complète est prioritaire et les synthèses ne doivent pas être recomptées.
+- Si l'export Current Savings résumé est chargé, le rapprocher avec les comptes courants positifs de la source maître sur `customer_id`, téléphone, produit, devise, solde, `created_at` et `updated_at`.
+- Si l'export DAT résumé est chargé, le rapprocher avec les DAT positifs de la source maître sur `customer_id`, `currency_code`, `date_approved`, `maturity_date` et `balance`.
+- Cas réel du 17 juillet 2026 : 80 791 comptes dans la source maître, dont 77 084 courants et 3 707 fixes. Les 862 comptes courants positifs correspondent exactement aux 862 lignes du résumé Current Savings; les 76 222 autres comptes courants ont un solde nul. Les 1 214 DAT positifs correspondent exactement aux 1 214 lignes du résumé Fixed Savings; les 2 493 autres DAT ont un solde nul.
+
+## Interface refactorisée des téléversements
+
+L'interface Streamlit utilise désormais ce parcours :
+
+| Niveau | Téléversement | Rôle |
+|---|---|---|
+| Turbo principal | `Transactions` | Journal des écritures et mouvements |
+| Turbo principal | `Savings Account` | Source maître de l'épargne courante et des DAT |
+| Turbo principal | `Loans Account` | Crédits, encours, échéances et remboursements |
+| Turbo principal | `Customers` | Téléphone et date de création client |
+| Facultatif | `Transactions G2` multiple | Entrées 1441, sorties 15558, noms et contrôle indépendant |
+| Facultatif | `Clients_Perfect` | Contrôle et adoption intersystèmes |
+
+`Customers with Current Savings Account` et `Customers with Fixed Savings Account` n'ont pas de widgets séparés. Ils peuvent être sélectionnés ensemble dans l'emplacement multiple `Savings Account` lorsque la source complète n'est pas disponible. L'interface doit alors avertir que seuls les soldes positifs sont couverts. Si le fichier complet est aussi présent, il est seul retenu. Les quatre emplacements Turbo principaux doivent produire les mêmes comptes, soldes, devises, statuts et dates que la source maître validée lorsque celle-ci est fournie.
 
 Règles de montant et de sens :
 
@@ -207,6 +254,25 @@ Le bloc Word `Synthese des flux G2 par devise` utilise `rapport_journalier_pivot
 - Laisser les taux M+1 ou 90 jours vides tant que la fenêtre complète n'est pas observable.
 - Exclure de la fidélisation les opérations internes, téléphones invalides et statuts en échec/annulés/inversés.
 
+## Rapprochement crédits et épargne
+
+- `Loans Account` reste la source de vérité pour `loan_id`, le montant accordé, l'encours, les remboursements, le principal, les intérêts, les frais, les pénalités, l'échéance et le statut. Ces données ne sont pas reconstructibles depuis `Savings Account`.
+- Tenter d'abord la liaison directe `Loans.savings_account_id = Savings Account.id` ou `Savings Account.savings_id`. Exiger une seule correspondance et contrôler ensuite client, devise et téléphone.
+- Lorsque l'identifiant direct est vide, autoriser uniquement le repli `customer_id + currency_code` si un seul compte `NORMAL SAVINGS` est candidat. Conserver `savings_id_correspondant`, `methode_rapprochement_epargne`, `statut_controle` et `motif_controle`.
+- Un identifiant direct introuvable, aucun compte courant, plusieurs comptes candidats ou un écart de client, devise ou téléphone produit `A revoir`. L'absence totale de Savings Account produit `Non calculable`, pas une anomalie opérationnelle.
+- Construire la restitution consolidée au grain `customer_id x currency_code`. Agréger les prêts, puis joindre une seule fois la position du ou des comptes courants et les DAT à solde positif du client afin de ne pas multiplier l'épargne lorsqu'il existe plusieurs prêts.
+- Afficher séparément montant accordé, montant remboursé, encours, principal, intérêts, pénalités, épargne courante et DAT. `epargne_totale_observee` additionne uniquement l'épargne courante et les DAT de la même devise; elle ne compense jamais l'encours et ne prouve pas une garantie.
+- Cas réel du 17 juillet 2026 : 2 213 crédits, 594 clients et aucun `savings_account_id` renseigné. Le repli unique client x devise rapproche 1 740 / 1 740 crédits CDF et 472 / 473 crédits USD; le crédit USD restant n'a pas de compte courant correspondant.
+
+## Échéances et remboursements DAT
+
+- Utiliser les DAT `FIXED SAVINGS` de `Savings Account` dont le solde est strictement positif.
+- Classer les comptes selon `maturity_date - date_analyse` : échu, aujourd'hui, 0–7, 8–30, 31–60, 61–90 ou plus de 90 jours. Inclure tous les échus et les échéances comprises dans l'horizon de préparation, fixé à 30 jours par défaut et réglable jusqu'à 90 jours.
+- Utiliser 11 % comme taux annuel DAT Bisou Bisou par défaut. Autoriser la modification du taux dans la barre latérale et la valeur 0 pour désactiver l'estimation.
+- Estimer l'intérêt simple à l'échéance par `balance × taux / 100 × durée_contractuelle_jours / 365`, avec `durée_contractuelle_jours = maturity_date - date_approved`.
+- Afficher `savings_id`, client, nom G2 disponible, téléphone, devise, produit, statut, capital, approbation, échéance, durée estimée, jours restants, action de remboursement, intérêt estimé et capital plus intérêt.
+- Calculer les indicateurs et montants séparément par devise. Ne jamais additionner CDF et USD et ne jamais présenter l'estimation comme une écriture officielle.
+
 ## Balance et analyses comptables Turbo
 
 - La source des mouvements est exclusivement Transactions M-PESA_Turbo. G2 ne fournit que le nom client et le contrôle direct `Receipt No = ref_no`.
@@ -219,12 +285,37 @@ Le bloc Word `Synthese des flux G2 par devise` utilise `rapport_journalier_pivot
 - Sans plan comptable complet et soldes d'ouverture officiels, employer `balance observée`, `position observée` et `solde de mouvement`; ne jamais annoncer une balance générale certifiée, un bilan ou un compte de résultat officiel.
 - Toutes les colonnes monétaires, tous les ratios et tous les contrôles sont calculés par devise.
 
+### Cas de référence clôturé du 16 juillet 2026
+
+Utiliser ce cas comme test de non-régression lorsque les mêmes exports sont disponibles. Il décrit le résultat observé dans les fichiers du 17 juillet portant sur les opérations du 16 juillet; il ne définit ni un seuil de performance ni une balance officielle.
+
+Périmètre Turbo attendu : 549 écritures, 75 clients, 135 opérations regroupées et deux devises.
+
+| Devise | Écritures | Clients | Opérations | Débits | Crédits | Opérations symétriques | Opérations à revoir | Variations de solde conformes |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| CDF | 231 | 28 | 48 | 2 359 892,00 | 2 269 330,00 | 39 / 48 (81,25 %) | 9 | 98,2684 % |
+| USD | 318 | 50 | 87 | 9 318,68 | 9 258,01 | 67 / 87 (77,0115 %) | 20 | 96,2264 % |
+
+Avec les fichiers G2 d'entrées 1441 et de sorties 15558, le contrôle direct attend 35 références CDF retrouvées sur 49 transactions G2 terminées (71,4286 %) et 50 références USD sur 83 (60,2410 %). Les sorties B2C rapprochées par téléphone, devise, montant et heure restent distinctes de ce taux direct. La couverture des noms clients Turbo attend 100 % en CDF et 98 % en USD. G2 ne modifie aucun débit, crédit ou solde Turbo.
+
+Les instantanés de portefeuille de référence sont affichés à part :
+
+| Devise | Épargne courante | DAT | Dépôts | Crédits | Crédits / dépôts |
+|---|---:|---:|---:|---:|---:|
+| CDF | 14 588 636,60 | 74 568 365,74 | 89 157 002,34 | 77 461 721,46 | 86,8824 % |
+| USD | 46 463,25 | 156 586,19 | 203 049,44 | 30 555,78 | 15,0484 % |
+
+Les produits financiers observés restent séparés : CDF — intérêts 8 554, pénalités 4 200, part Bisou 64 082, part Voda 27 422; USD — intérêts 6,93, pénalités 0,72, part Bisou 50,01, part Voda 20,31. Ne pas les sommer comme revenu sans preuve supplémentaire.
+
+L'export comptable de référence contient exactement les 12 feuilles suivantes : `Compta_Synthese_Turbo`, `Balance_Clients_Turbo`, `Positions_Clients_Turbo`, `Balance_Comptes_Turbo`, `Journal_Operations_Turbo`, `Journal_Ecritures_Turbo`, `Controles_Operations_Turbo`, `Controles_Soldes_Turbo`, `Flux_MPESA_Turbo`, `Produits_Financiers_Turbo`, `Positions_Portefeuille_Turbo` et `Controle_G2_Turbo`.
+
 ## Fonctions à privilégier
 
-- Préparation : `prepare_transactions`, `prepare_current_savings`, `prepare_fixed_savings`, `prepare_loans`, `prepare_g2_transactions`, `prepare_customers`, `prepare_perfect_clients`.
+- Préparation : `prepare_transactions`, `prepare_savings_accounts`, `prepare_current_savings`, `prepare_fixed_savings_from_accounts`, `prepare_fixed_savings`, `prepare_loans`, `prepare_g2_transactions`, `prepare_customers`, `prepare_perfect_clients`.
+- Contrôle épargne/DAT : `build_savings_accounts_reconciliation`.
 - Extrait : `build_mpesa_statement`, `build_customer_summary`, `build_diagnostics`.
 - G2/DAT : `build_g2_dat_crosscheck`, `build_g2_entry_report`, `build_g2_daily_savings_report`, `build_g2_transaction_time_analysis`, `build_g2_retention_report`.
-- Pilotage : `build_mpesa_management_dashboard`, `build_mpesa_credit_risk_analysis`, `build_mpesa_liquidity_analysis`, `build_mpesa_client_activity_analysis`, `build_mpesa_savings_conversion_analysis`, `build_mpesa_transaction_concentration_analysis`, `build_mpesa_transaction_quality_analysis`, `build_mpesa_dat_maturity_analysis`, `build_mpesa_perfect_adoption_analysis`.
+- Pilotage : `build_mpesa_management_dashboard`, `build_mpesa_credit_risk_analysis`, `build_loan_savings_reconciliation`, `build_mpesa_liquidity_analysis`, `build_mpesa_client_activity_analysis`, `build_mpesa_savings_conversion_analysis`, `build_mpesa_transaction_concentration_analysis`, `build_mpesa_transaction_quality_analysis`, `build_mpesa_dat_maturity_analysis`, `build_mpesa_perfect_adoption_analysis`.
 - Comptabilité : `build_mpesa_accounting_analysis`.
 - Perfect : `build_perfect_client_crosscheck`.
 - Recherche : `search_customers`, `resolve_customer_id`.

@@ -23,6 +23,21 @@ Tous les téléversements de Solution M-PESA peuvent recevoir plusieurs fichiers
 
 Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou `[Turbo + G2]` selon la source effective. Réserver `Solution M-PESA` au nom global du module; ne jamais utiliser `M-PESA` seul comme source d'un indicateur. Exception : le Word officiel de l'Extrait client ne contient aucun suffixe `[Turbo]`, car il constitue un relevé client et non un écran de traçabilité technique.
 
+## Décision de refactoring des téléversements
+
+État : refactoring Streamlit implémenté. Le parcours principal affiche quatre sources Turbo et deux compléments facultatifs.
+
+- Réduire le parcours principal Turbo à quatre téléversements : `Transactions`, `Savings Account`, `Loans Account` et `Customers`.
+- Traiter `Savings Account` comme l'unique téléversement principal pour l'épargne courante et les DAT. En déduire deux jeux internes : tous les `NORMAL SAVINGS` et tous les `FIXED SAVINGS`, soldes positifs ou nuls.
+- Ne plus exiger deux téléversements distincts pour `Customers with Current Savings Account` et `Customers with Fixed Savings Account`. Ce sont des vues filtrées à solde positif de `Savings Account`, pas des sources exhaustives.
+- Ne pas afficher deux widgets séparés pour les vues résumées. Le téléversement multiple unique `Savings Account` accepte soit la source complète recommandée, soit les deux fichiers `Customers with Current Savings Account` et `Customers with Fixed Savings Account` chargés ensemble en mode de compatibilité.
+- Si la source complète et les vues résumées sont chargées ensemble, donner la priorité à la source complète et ignorer les lignes résumées afin d'éviter les doublons. Si seules les synthèses sont présentes, signaler que les comptes à solde nul et l'historique exhaustif sont indisponibles.
+- Conserver un seul téléversement multiple G2 facultatif pour réunir les entrées 1441 et les sorties 15558, puis un téléversement `Clients_Perfect` facultatif.
+- Interface en production : quatre emplacements Turbo principaux, plus G2 et Perfect comme compléments facultatifs. L'emplacement `Savings Account` porte aussi le repli compatible Current + Fixed sans créer de nouveaux widgets. Ne pas dupliquer une donnée déjà démontrable depuis la source complète.
+- Maintenir les tests de parité sur les comptes, soldes, devises, statuts et dates. Tous les sous-onglets doivent fonctionner avec les quatre sources Turbo principales, sans fichiers résumés.
+
+Cas réel de référence du 17 juillet 2026 : `Savings Account` contient 77 084 comptes courants, dont 862 à solde positif, et 3 707 DAT, dont 1 214 à solde positif. Le résumé Current Savings correspond exactement aux 862 comptes courants positifs; le résumé Fixed Savings correspond exactement aux 1 214 DAT positifs.
+
 ## Invariants G2/DAT
 
 - Autoriser G2/DAT sans fichier G2 lorsque Transactions M-PESA_Turbo est disponible. Dans ce mode, construire une ligne analytique par `ref_no` pour les dépôts/DAT/remboursements et par `reference_id + created_at` pour `Retrait Vers M-Pesa`; utiliser `created_at` comme date d'analyse et tracer `source_analytique = Turbo seul`.
@@ -60,18 +75,34 @@ Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou
 - Réduire proprement le rapport lorsqu'une source facultative manque; ne jamais provoquer un `KeyError` en indexant une source absente.
 - Présenter un cumul relatif, et non un solde réel, si le solde d'ouverture M-PESA n'est pas fourni.
 - Ne jamais modifier les fichiers Excel sources pendant l'analyse.
+- Traiter l'export détaillé `Savings Account` comme source maître lorsqu'il est fourni. Déduire `NORMAL SAVINGS` de `Open Savings` / `Current account` et `FIXED SAVINGS` des produits `Fixed Account`; conserver les DAT à solde nul comme historique.
+- Utiliser l'export `Customers with Current Savings Account` comme vue des comptes courants à solde positif; il ne représente pas les comptes courants à solde nul. Sans source maître, l'accepter seulement avec le résumé Fixed dans le téléversement unique et afficher le mode partiel.
+- Utiliser l'export `Customers with Fixed Savings Account` comme vue des DAT à solde positif. Sans source maître, l'accepter avec le résumé Current et alimenter les analyses DAT disponibles en signalant l'absence des DAT à solde nul; avec la source maître, ne pas le recompter.
+- Accepter les relevés G2 commençant directement par `Receipt No.` et les exports organisation bruts contenant cinq lignes descriptives. Promouvoir automatiquement la vraie ligne d'en-tête séparément pour chaque fichier 1441/15558.
 
 ## Invariants Pilotage Turbo + G2
 
 - Pour Transactions Turbo, conserver la sémantique comptable : `dr` = sortie du compte M-PESA et `cr` = entrée. Ne jamais appliquer les règles G2 `Paid In`/`Withdrawn` aux fichiers Turbo.
 - Dédupliquer les transactions Turbo par `id`, les crédits par `loan_id`, les clients par identifiant ou téléphone/date, les comptes d'épargne et DAT par leur clé de compte; conserver la version la plus récente et la liste des fichiers sources.
-- Utiliser la derniere date operationnelle chargee comme date d'analyse par defaut; ne pas utiliser une echeance future comme date de fraicheur.
+- Utiliser la dernière journée opérationnelle complète comme date d'analyse par défaut. Si la date maximale est extraite avant 18 h et qu'une veille existe, proposer la veille sans empêcher l'utilisateur de sélectionner la journée partielle; ne pas utiliser une échéance future comme date de fraîcheur.
 - Calculer le PAR 1/7/30 uniquement depuis `due_date` et un encours credit disponible. Laisser le taux vide si un encours actif n'a pas d'echeance.
 - Dedupliquer les credits par `loan_id` et les operations G2/Turbo par reference, avec priorite au recu G2 canonique.
 - Classer l'activite client au grain telephone x devise : actif 30 jours, dormant 31-60 jours, dormant 61-90 jours ou inactif au-dela de 90 jours.
 - Presenter la conversion Depot normal vers DAT comme une conversion observee dans la periode, jamais comme une affectation comptable certaine.
 - Traiter les montants eleves, horaires rares et rafales d'operations comme des alertes de revue et non comme des preuves de fraude.
 - Produire l'echeancier DAT par tranche et devise. Mesurer l'adoption Perfect uniquement sur les `Phone_Prefixe` valides.
+- Dans le sous-onglet DAT, lister en priorité les comptes à solde positif déjà échus et ceux arrivant à terme dans un horizon réglable, fixé à 30 jours par défaut. Conserver `savings_id`, client, téléphone, produit, statut, approbation, échéance, jours restants, capital, intérêt estimé et capital plus intérêt.
+- Utiliser 11 % comme taux d'intérêt annuel DAT Bisou Bisou par défaut dans la barre latérale. Autoriser sa modification et calculer l'intérêt simple estimé par `capital × taux annuel × durée contractuelle en jours / 365`, de `date_approved` à `maturity_date`.
+- Présenter le capital, l'intérêt et le remboursement estimé séparément par devise. Qualifier ces montants d'estimations de préparation et non d'écritures comptables officielles.
+
+## Invariants crédit et épargne
+
+- Conserver `Loans Account` comme source obligatoire des prêts, encours, remboursements, intérêts, frais, échéances et statuts. `Savings Account` seul ne permet jamais de reconstruire un crédit.
+- Rapprocher d'abord `Loans.savings_account_id` avec `Savings Account.id` ou `Savings Account.savings_id` lorsqu'il est renseigné et unique. Sinon, déduire le compte courant uniquement lorsque `customer_id + currency_code` identifie exactement un `NORMAL SAVINGS`.
+- Conserver dans le contrôle les identifiants directs introuvables, les absences de compte courant, les correspondances multiples et les écarts de client, devise ou téléphone. Qualifier la liaison de `directe` ou `déduite`; ne jamais présenter une liaison déduite comme contractuelle.
+- Construire la vue consolidée au grain `customer_id x devise`. Compter l'épargne courante et les DAT une seule fois par client et devise, même si le client possède plusieurs prêts.
+- Juxtaposer montant du crédit, remboursements, encours, épargne courante et DAT positifs. Ne jamais compenser comptablement l'épargne avec le crédit, assimiler l'épargne à une garantie ou additionner CDF et USD.
+- Cas réel du 17 juillet 2026 : `savings_account_id` est vide sur les 2 213 crédits. Le repli client x devise rapproche 2 212 crédits; un crédit USD sans compte courant correspondant reste à revoir.
 
 ## Invariants Comptabilité Turbo
 
@@ -83,6 +114,7 @@ Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou
 - Présenter séparément les intérêts, pénalités, parts Bisou et parts Voda observées. Ne pas les additionner automatiquement, car ces lignes peuvent constituer plusieurs ventilations d'un même produit financier.
 - Afficher les positions des instantanés Current Savings, Fixed Savings et Loans à part de la balance journalière : leur date d'extraction peut être postérieure à la période comptable filtrée.
 - Calculer et exporter toutes les synthèses par devise. Ne jamais compenser ou totaliser CDF et USD.
+- Pour contrôler une évolution de la comptabilité Turbo, relire le cas de référence clôturé du 16 juillet 2026 dans [references/data-contracts.md](references/data-contracts.md). Comparer le grain, les contrôles et les montants par devise; ne pas transformer ces valeurs historiques en seuils métier permanents.
 
 ## Architecture Streamlit des sous-onglets
 
@@ -90,6 +122,8 @@ Dans tous les libellés destinés aux utilisateurs, ajouter `[Turbo]`, `[G2]` ou
 - Isoler chaque fonction de rendu avec `st.fragment`. Après le chargement initial, une interaction locale doit recalculer uniquement le sous-onglet concerné.
 - Garder les téléversements et la préparation partagée en dehors des fragments : toute modification des fichiers sources déclenche volontairement une reconstruction complète des sous-onglets.
 - Mettre en cache avec `st.cache_data` la lecture, la normalisation et les calculs déterministes lourds. Laisser les widgets et le rendu Streamlit hors du cache.
+- Ne pas faire hacher les grands DataFrames préparés à chaque interaction. Utiliser une empreinte compacte du contenu des fichiers comme clé de préparation, puis ajouter la période, le client ou le filtre aux clés des rapports dérivés. Borner `max_entries` pour éviter une croissance mémoire sans limite.
+- Pour G2/Turbo, agréger uniquement les `ref_no` réellement présents dans G2 et les retraits B2C candidats situés dans la fenêtre utile. Le filtrage de performance ne doit jamais élargir ni réduire la tolérance métier de 60 minutes.
 - Conserver le contexte client dans `Extrait client`. Alimenter DAT, G2/DAT, crédits et diagnostics depuis les données globales préparées afin qu'un fragment ne dépende pas de l'état local d'un autre sous-onglet.
 - Exiger Streamlit 1.59 ou une version ultérieure compatible avec les fragments écrivant dans les conteneurs `st.tabs` créés à l'extérieur du fragment.
 
@@ -140,3 +174,5 @@ Exécuter au minimum avec l'environnement Python du projet :
 ```
 
 Pour un changement G2/DAT, Word ou PDF, tester aussi un fichier réel sans l'écrire dans le dépôt et vérifier le nombre de reçus, l'ordre des colonnes, les devises, les totaux, le logo et les anomalies. Vérifier également que chaque Excel contient seulement les feuilles prévues. Pour `Perfect_client`, vérifier les trois populations inclusives et leurs trois feuilles Excel avec un export 122 réel.
+
+Pour un changement `Comptabilité Turbo`, tester la journée de référence du 16 juillet 2026 lorsqu'elle est disponible, vérifier les 12 feuilles comptables, le rapprochement G2 direct, la séparation CDF/USD et la concordance entre synthèse, balances, journaux et contrôles. Une opération non symétrique ou une variation de solde à revoir est un signal de contrôle; ne jamais la qualifier automatiquement d'erreur comptable.

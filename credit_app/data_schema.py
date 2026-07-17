@@ -118,6 +118,10 @@ MPESA_TRANSACTIONS_SCHEMA = schema(
 CURRENT_SAVINGS_SCHEMA = schema(
     "Épargne courante",
     {"customer_id", "msisdn", "product_name", "account_type", "balance", "currency_code", "created_at", "updated_at"},
+    {"product_description", "savings_id", "msisdn1"},
+    {
+        "msisdn": ("msisdn1",),
+    },
 )
 FIXED_SAVINGS_SCHEMA = schema(
     "DAT",
@@ -153,7 +157,40 @@ PERFECT_CLIENTS_SCHEMA = schema(
     },
 )
 CUSTOMERS_SCHEMA = schema("Clients", {"msisdn1", "created_at"})
-LOANS_SCHEMA = schema("Crédits", {"loan_id", "customer_id"})
+LOANS_SCHEMA = schema(
+    "Crédits",
+    {"loan_id", "customer_id"},
+    {
+        "id",
+        "customer",
+        "currency_code",
+        "loan_product_id",
+        "savings_account_id",
+        "repayment_installments",
+        "repayment_period",
+        "repayment_period_unit",
+        "loan_amount",
+        "loan_balance",
+        "amount_paid",
+        "outstanding_principle",
+        "outstanding_principal",
+        "outstanding_setup_fees",
+        "outstanding_interest",
+        "outstanding_penalty_fees",
+        "interest_earned",
+        "status_name",
+        "defaulted",
+        "interest_calculated",
+        "is_rollover",
+        "is_grace_period",
+        "due_date",
+        "last_repayment_date",
+        "last_interest_calc_date",
+        "created_at",
+        "updated_at",
+        "msisdn1",
+    },
+)
 
 
 SQL_OPERATIONS_SCHEMA = schema(
