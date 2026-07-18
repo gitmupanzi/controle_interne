@@ -13,6 +13,7 @@ from credit_app.services.mpesa_analysis import (
     G2_CLASSIFIED_TRANSACTION_COLUMNS,
     build_customer_statement_view,
     build_customer_statement_filename,
+    build_customer_matured_dat_interest_entries,
     build_customer_transaction_analysis,
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
@@ -1385,6 +1386,23 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(int(credit["remboursements_avec_penalite"]), 1)
         self.assertEqual(float(credit["penalite_observee"]), 5.0)
 
+        repayments = analysis["remboursements_turbo_synthese_client"].iloc[0]
+        self.assertEqual(repayments["customer_id"], "CLIENT-ANALYSE")
+        self.assertEqual(int(repayments["nombre_remboursements"]), 1)
+        self.assertEqual(float(repayments["montant_paye_observe"]), 40.0)
+        self.assertEqual(float(repayments["principal_rembourse"]), 40.0)
+        self.assertEqual(float(repayments["penalite_observee"]), 5.0)
+        self.assertEqual(
+            analysis["remboursements_turbo_detail_client"]["event_reference"].tolist(),
+            ["TURBO-20260704080000000000"],
+        )
+
+        active_dat = analysis["dat_en_cours_client"].iloc[0]
+        self.assertEqual(active_dat["customer_id"], "CLIENT-ANALYSE")
+        self.assertEqual(float(active_dat["balance"]), 30.0)
+        self.assertEqual(float(active_dat["taux_interet_annuel_pct"]), 11.0)
+        self.assertEqual(active_dat["situation_dat_client"], "En cours")
+
         internal = analysis["mouvements_internes_turbo"]
         self.assertEqual(len(internal), 1)
         self.assertEqual(internal.iloc[0]["type_operation"], "Transfert DAT vers epargne courante")
@@ -1418,6 +1436,8 @@ class MpesaAnalysisTests(unittest.TestCase):
             "Sortie M-PESA_Turbo vers DAT",
         )
         self.assertTrue(analysis["credit_turbo_detail_client"].empty)
+        self.assertTrue(analysis["remboursements_turbo_detail_client"].empty)
+        self.assertEqual(len(analysis["dat_en_cours_client"]), 1)
         self.assertEqual(analysis["jalons_turbo"]["nombre_operations"].tolist(), [1])
         self.assertTrue(
             analysis["positions_turbo"]["statut_rapprochement_solde"]
@@ -1473,7 +1493,7 @@ class MpesaAnalysisTests(unittest.TestCase):
                         "Details": "BisouBisouC2B",
                         "Transaction Status": "Completed",
                         "Currency": "CDF",
-                        "Paid In": 100,
+                        "Paid In": 999,
                         "Opposite Party": "0811111111 - CLIENT UN",
                     },
                     {
@@ -1501,11 +1521,17 @@ class MpesaAnalysisTests(unittest.TestCase):
 
         report = build_mpesa_statement(prepared, "1001", {"CDF": None})
 
-        self.assertEqual(report["mode_source_extrait"], "Turbo + verification G2")
+        self.assertEqual(report["mode_source_extrait"], "Turbo principal + verification G2")
         self.assertTrue(report["controle_g2_disponible"])
         self.assertTrue(report["nom_client_enrichi_g2"])
         self.assertEqual(report["extrait"]["Nom_client"].dropna().unique().tolist(), ["CLIENT UN"])
         self.assertEqual(report["g2_dat"]["receipt_no"].tolist(), ["G2-1001"])
+        self.assertEqual(float(report["extrait"].iloc[0]["debit_mpesa"]), 100.0)
+        self.assertEqual(
+            float(report["g2_dat"].iloc[0]["transaction_amount_numeric"]),
+            999.0,
+        )
+        self.assertEqual(report["g2_dat"].iloc[0]["controle_montant"], "Ecart")
         official_view = build_customer_statement_view(report["extrait"], account_number="1441")
         official_description = official_view["transactions"].iloc[0]["description"]
         self.assertIn("M-Pesa Compte", official_description)
@@ -1717,6 +1743,262 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Extrait de compte - 243812345678 - CDF", relative_text)
         self.assertNotIn("Extrait de compte - 243812345678 - NON DISPONIBLE - CDF", relative_text)
 
+    def test_customer_matured_dat_interest_entries_are_separate_and_traceable(self) -> None:
+        fixed = prepare_savings_accounts(
+            pd.DataFrame(
+                [
+                    {
+                        "savings_id": "FA-ECHU-SANS-ECRITURE",
+                        "customer_id": "DAT-CLIENT",
+                        "msisdn1": "243814445054",
+                        "product_name": "1 Month",
+                        "product_description": "1 Month Fixed Account",
+                        "currency_code": "USD",
+                        "balance": 0,
+                        "status": "Withdrawal",
+                        "date_approved": "2026-06-16 21:53:03",
+                        "maturity_date": "2026-07-16 21:53:03",
+                        "interest_earned": "22.60",
+                        "voda_interest": "6.16",
+                        "created_at": "2026-06-16 21:53:03",
+                        "updated_at": "2026-07-16 00:00:02",
+                    },
+                    {
+                        "savings_id": "FA-ECHU-TRACE",
+                        "customer_id": "DAT-CLIENT",
+                        "msisdn1": "243814445054",
+                        "product_name": "1 Month",
+                        "product_description": "1 Month Fixed Account",
+                        "currency_code": "USD",
+                        "balance": 0,
+                        "status": "Withdrawal",
+                        "date_approved": "2026-06-16 08:00:00",
+                        "maturity_date": "2026-07-16 08:00:00",
+                        "interest_earned": 10.0,
+                        "voda_interest": 2.73,
+                        "created_at": "2026-06-16 08:00:00",
+                        "updated_at": "2026-07-16 08:05:00",
+                    },
+                    {
+                        "savings_id": "FA-ECHU-ACTIF",
+                        "customer_id": "DAT-CLIENT",
+                        "msisdn1": "243814445054",
+                        "product_name": "1 Month",
+                        "product_description": "1 Month Fixed Account",
+                        "currency_code": "USD",
+                        "balance": 500,
+                        "status": "Active",
+                        "date_approved": "2026-06-16",
+                        "maturity_date": "2026-07-16",
+                        "interest_earned": 4.52,
+                        "voda_interest": 1.23,
+                        "created_at": "2026-06-16",
+                        "updated_at": "2026-07-16",
+                    },
+                ]
+            )
+        )
+        transactions = prepare_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "id": "1",
+                        "customer_id": "DAT-CLIENT",
+                        "msisdn1": "243814445054",
+                        "account_type": "FIXED SAVINGS",
+                        "reference_id": "FA-ECHU-SANS-ECRITURE",
+                        "currency_code": "USD",
+                        "dr": 0,
+                        "cr": 2500,
+                        "bal_before": 0,
+                        "bal_after": 2500,
+                        "ref_no": "DEPOT-1",
+                        "description": "Depot Bloque",
+                        "created_at": "2026-06-16 21:53:03",
+                    },
+                    {
+                        "id": "2",
+                        "customer_id": "DAT-CLIENT",
+                        "msisdn1": "243814445054",
+                        "account_type": "FIXED SAVINGS",
+                        "reference_id": "FA-ECHU-TRACE",
+                        "currency_code": "USD",
+                        "dr": 0,
+                        "cr": 1000,
+                        "bal_before": 0,
+                        "bal_after": 1000,
+                        "ref_no": "DEPOT-2",
+                        "description": "Depot Bloque",
+                        "created_at": "2026-06-16 08:00:00",
+                    },
+                    {
+                        "id": "3",
+                        "customer_id": "DAT-CLIENT",
+                        "msisdn1": "243814445054",
+                        "account_type": "FIXED SAVINGS",
+                        "reference_id": "FA-ECHU-TRACE",
+                        "currency_code": "USD",
+                        "dr": 1000,
+                        "cr": 0,
+                        "bal_before": 1000,
+                        "bal_after": 0,
+                        "ref_no": "RETRAIT-2",
+                        "description": "Retrait Compte Bloque",
+                        "created_at": "2026-07-16 08:00:00",
+                    },
+                ]
+            )
+        )
+
+        entries = build_customer_matured_dat_interest_entries(
+            fixed,
+            transactions,
+            "DAT-CLIENT",
+            date_start="2026-07-16",
+            date_end="2026-07-16",
+            currency="USD",
+        )
+
+        self.assertEqual(entries["savings_id"].tolist(), ["FA-ECHU-TRACE", "FA-ECHU-SANS-ECRITURE"])
+        self.assertAlmostEqual(float(entries["interet_client_constate"].sum()), 32.60)
+        self.assertEqual(int(entries["date_ecriture_turbo"].notna().sum()), 1)
+        traced = entries.loc[entries["savings_id"].eq("FA-ECHU-TRACE")].iloc[0]
+        untraced = entries.loc[entries["savings_id"].eq("FA-ECHU-SANS-ECRITURE")].iloc[0]
+        self.assertEqual(float(traced["capital_place"]), 1000.0)
+        self.assertEqual(traced["reference_transaction_turbo"], "RETRAIT-2")
+        self.assertIn("Comptabilise et trace", traced["statut_tracabilite"])
+        self.assertEqual(float(untraced["montant_echeance_client"]), 2522.60)
+        self.assertIn("ecriture detaillee absente", untraced["statut_tracabilite"])
+
+    def test_customer_statement_word_and_pdf_include_active_dat_and_repayments_only(self) -> None:
+        from docx import Document
+        from pypdf import PdfReader
+
+        prepared = _sample_prepared_data()
+        statement = build_mpesa_statement(prepared, "1001", {"CDF": None})["extrait"]
+        active_dat = pd.DataFrame(
+            [
+                {
+                    "date_situation": pd.Timestamp("2026-07-17"),
+                    "savings_id": "FA9T2OLVUC",
+                    "customer_id": "1001",
+                    "msisdn": "243812345678",
+                    "currency_code": "CDF",
+                    "product_name": "6 Months",
+                    "date_approved": pd.Timestamp("2026-06-16"),
+                    "maturity_date": pd.Timestamp("2026-12-16"),
+                    "jours_avant_echeance": 152,
+                    "balance": 20_000.0,
+                    "taux_interet_annuel_pct": 11.0,
+                    "interet_estime_echeance": 1_103.01,
+                    "capital_plus_interet_estime": 21_103.01,
+                    "situation_dat_client": "En cours",
+                    "status": "Active",
+                }
+            ]
+        )
+        foreign_dat = active_dat.iloc[[0]].copy()
+        foreign_dat["customer_id"] = "OTHER-CUSTOMER"
+        foreign_dat["savings_id"] = "FOREIGN-DAT"
+        active_dat = pd.concat([active_dat, foreign_dat], ignore_index=True)
+        repayments = pd.DataFrame(
+            [
+                {
+                    "customer_id": "1001",
+                    "created_at": pd.Timestamp("2026-07-16 10:30:00"),
+                    "event_reference": "REM-CLIENT",
+                    "currency_code": "CDF",
+                    "montant_paye_observe": 50_500.0,
+                    "principal_rembourse": 50_000.0,
+                    "interet_observe": 0.0,
+                    "penalite_observee": 500.0,
+                    "mode_remboursement_observe": "M-PESA_Turbo + Penalite",
+                }
+            ]
+        )
+        foreign_repayment = repayments.iloc[[0]].copy()
+        foreign_repayment["customer_id"] = "OTHER-CUSTOMER"
+        foreign_repayment["event_reference"] = "FOREIGN-REPAYMENT"
+        repayments = pd.concat([repayments, foreign_repayment], ignore_index=True)
+        analysis = {
+            "dat_en_cours_client": active_dat,
+            "remboursements_turbo_detail_client": repayments,
+        }
+
+        word = create_customer_statement_word(
+            statement,
+            analysis_report=analysis,
+            customer_id="1001",
+            customer_name="CLIENT TEST",
+            telephone="243812345678",
+            currency="CDF",
+        )
+        document = Document(BytesIO(word))
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        dat_table = next(
+            table
+            for table in document.tables
+            if [cell.text for cell in table.rows[0].cells]
+            == [
+                "DAT",
+                "Durée",
+                "Souscription",
+                "Échéance",
+                "Jours restants",
+                "Devise",
+                "Capital bloqué",
+                "Taux annuel",
+                "Intérêt estimé",
+                "Capital + intérêt estimé",
+                "Situation",
+            ]
+        )
+        repayment_table = next(
+            table
+            for table in document.tables
+            if [cell.text for cell in table.rows[0].cells]
+            == [
+                "Date",
+                "Référence",
+                "Devise",
+                "Montant payé",
+                "Principal remboursé",
+                "Intérêts",
+                "Pénalités",
+                "Mode observé",
+            ]
+        )
+        self.assertIn("DAT en cours - situation au 17/07/2026", text)
+        self.assertIn("Remboursements observés", text)
+        self.assertNotIn("Intérêts des DAT échus", text)
+        self.assertNotIn("Crédit et remboursements observés", text)
+        self.assertNotIn("Montant reçu", text)
+        self.assertEqual(len(dat_table.rows), 2)
+        self.assertEqual(len(repayment_table.rows), 2)
+        self.assertEqual(dat_table.rows[1].cells[0].text, "FA9T2OLVUC")
+        self.assertEqual(repayment_table.rows[1].cells[1].text, "REM-CLIENT")
+
+        pdf = create_customer_statement_pdf(
+            statement,
+            analysis_report=analysis,
+            customer_id="1001",
+            customer_name="CLIENT TEST",
+            telephone="243812345678",
+            currency="CDF",
+        )
+        self.assertTrue(pdf.startswith(b"%PDF-"))
+        self.assertGreater(len(pdf), 5_000)
+        pdf_text = "\n".join(
+            page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
+        )
+        self.assertIn("DAT en cours - situation au 17/07/2026", pdf_text)
+        self.assertIn("Remboursements observés", pdf_text)
+        self.assertNotIn("Intérêts des DAT échus", pdf_text)
+        self.assertNotIn("Crédit et remboursements observés", pdf_text)
+        self.assertNotIn("Montant reçu", pdf_text)
+        self.assertNotIn("FOREIGN-DAT", pdf_text)
+        self.assertNotIn("FOREIGN-REPAYMENT", pdf_text)
+
     def test_customer_statement_pdf_contains_logo_and_keeps_currency_totals_separate(self) -> None:
         prepared = _sample_prepared_data()
         cdf_statement = build_mpesa_statement(prepared, "1001", {"CDF": None})["extrait"]
@@ -1766,7 +2048,9 @@ class MpesaAnalysisTests(unittest.TestCase):
             for paragraph in section.footer.paragraphs
         )
         self.assertNotIn("Synthese du comportement observe", text)
-        self.assertIn("Credit et remboursements observes", text)
+        self.assertIn("DAT en cours", text)
+        self.assertIn("Remboursements observés", text)
+        self.assertNotIn("Crédit et remboursements observés", text)
         self.assertNotIn("Positions observees et rapprochement des soldes", text)
         self.assertNotIn("Jalons du parcours financier", text)
         self.assertIn("Mouvements internes epargne / DAT", text)
@@ -1854,31 +2138,58 @@ class MpesaAnalysisTests(unittest.TestCase):
         report = build_mpesa_statement(prepared, "1001", {"CDF": None})
         filtered_report = dict(report)
         filtered_report["extrait"] = report["extrait"].iloc[[0]].copy()
+        customer_export = {
+            key: filtered_report.get(key, pd.DataFrame())
+            for key in [
+                "synthese",
+                "extrait",
+                "parcours_turbo",
+                "dat_en_cours_client",
+                "remboursements_turbo_detail_client",
+                "comportement_turbo",
+                "mouvements_internes_turbo",
+                "controles_client_turbo",
+                "dat_final",
+                "mouvements_dat",
+                "mouvements_epargne",
+                "g2_dat",
+                "diagnostics",
+            ]
+        }
+        customer_export["synthese"] = customer_export["synthese"].drop(
+            columns=["nombre_credits", "solde_credit_total"],
+            errors="ignore",
+        )
 
-        export = create_excel_export(filtered_report)
+        export = create_excel_export(customer_export)
         workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
         required_sheets = {
             "Synthese",
             "Extrait_Turbo",
             "Parcours_Turbo",
-            "Credit_Client_Turbo",
-            "Positions_Turbo",
+            "DAT_En_Cours",
+            "Remboursements_Turbo",
             "Comportement_Turbo",
             "Mouvements_Internes",
             "Controles_Client_Turbo",
             "DAT_Final",
             "Mouvements_DAT",
             "Mouvements_Epargne",
-            "Credits",
             "G2_DAT",
             "Diagnostics",
         }
 
         self.assertTrue(required_sheets.issubset(workbook.sheet_names))
+        self.assertNotIn("Credit_Client_Turbo", workbook.sheet_names)
+        self.assertNotIn("Positions_Turbo", workbook.sheet_names)
+        self.assertNotIn("Interets_DAT_Echus", workbook.sheet_names)
+        self.assertNotIn("Credits", workbook.sheet_names)
         exported_statement = pd.read_excel(workbook, sheet_name="Extrait_Turbo")
         exported_summary = pd.read_excel(workbook, sheet_name="Synthese")
         self.assertEqual(len(exported_statement), 1)
         self.assertEqual(len(exported_summary), len(report["synthese"]))
+        self.assertNotIn("nombre_credits", exported_summary.columns)
+        self.assertNotIn("solde_credit_total", exported_summary.columns)
         self.assertIn("operation_reference", exported_statement.columns)
         self.assertIn("Nom_client", exported_statement.columns)
         self.assertIn("mouvement_net_mpesa", exported_statement.columns)

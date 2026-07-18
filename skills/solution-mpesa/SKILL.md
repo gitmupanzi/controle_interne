@@ -41,7 +41,7 @@ Cas réel de référence du 17 juillet 2026 : `Savings Account` contient 77 084 
 ## Invariants G2/DAT
 
 - Autoriser G2/DAT sans fichier G2 lorsque Transactions M-PESA_Turbo est disponible. Dans ce mode, construire une ligne analytique par `ref_no` pour les dépôts/DAT/remboursements et par `reference_id + created_at` pour `Retrait Vers M-Pesa`; utiliser `created_at` comme date d'analyse et tracer `source_analytique = Turbo seul`.
-- En mode Turbo seul, ne jamais inventer `Opposite Party`, nom, statut, solde, `Initiation Time` ou `Completion Time` G2. Marquer les contrôles indépendants G2/Turbo et le rapprochement comme `Non applicable - Turbo seul`. Si G2 est chargé, conserver G2 comme source principale et ne pas ajouter les opérations proxy Turbo.
+- En mode Turbo seul, ne jamais inventer `Opposite Party`, nom, statut, solde, `Initiation Time` ou `Completion Time` G2. Marquer les contrôles indépendants G2/Turbo et le rapprochement comme `Non applicable - Turbo seul`. Si G2 est chargé, le conserver comme source de son propre relevé de contrôle et ne pas ajouter les opérations proxy Turbo; Portal Turbo reste la source financière principale de la solution.
 - Conserver une ligne analytique canonique par `Receipt No.`; signaler tout reçu dupliqué et ne pas le compter deux fois.
 - Accepter plusieurs relevés G2 simultanément, notamment les fichiers d'entrées et de sorties; conserver le fichier source avant de les unifier.
 - Compter les transactions terminees par date, jour de semaine et heure de `Completion Time`, sur des grilles completes de lundi a dimanche et de 00h a 23h; conserver la separation par devise et par sens et afficher les periodes sans activite a zero.
@@ -57,9 +57,11 @@ Cas réel de référence du 17 juillet 2026 : `Savings Account` contient 77 084 
 
 ## Règles client et sources facultatives
 
-- Considérer Transactions M-PESA Turbo comme la source minimale de l'extrait client.
+Turbo constitue la source opérationnelle principale de la Solution M_PESA. G2 enrichit l’identité du client et fournit une preuve de rapprochement des écritures, sans intervenir dans le calcul des montants, des soldes, des DAT ou des remboursements.
+
+- Considérer Portal Turbo comme la source financière principale de l'Extrait client. Transactions fournit les mouvements et remboursements; `Savings Account` fournit les DAT en cours.
 - Construire la recherche, l'extrait, la synthèse et les exports depuis Turbo même si G2 est absent; afficher alors explicitement `Turbo seul` et réduire le contrôle G2 sans bloquer le client.
-- Utiliser G2 comme source facultative de vérification et de complément du nom : enrichir Turbo par téléphone normalisé et, quand disponible, par `Receipt No = ref_no`. Ne jamais remplacer les montants ou mouvements Turbo de l'extrait par les montants G2.
+- Utiliser G2 uniquement comme source facultative de vérification et de complément du nom : enrichir Turbo par téléphone normalisé et, quand disponible, par `Receipt No = ref_no`. Ne jamais remplacer les montants, dates, soldes ou mouvements Turbo de l'extrait par G2; une divergence reste un résultat de contrôle.
 - Construire la colonne `Description` de l'extrait officiel depuis les valeurs brutes `description` de Transactions M-PESA_Turbo, agrégées au grain de l'opération. Ajouter éventuellement téléphone et nom G2 après le libellé Turbo; ne jamais substituer `Details` ou `Reason Type` G2 à la description Turbo.
 - Présenter les flux de l'extrait du point de vue de Bisou Bisou : le débit du compte `MPESA ACCOUNT` Turbo devient une entrée et le crédit devient une sortie. Affecter le compte `1441` aux entrées et `15558` aux sorties dans le Word et l'aperçu.
 - Remplacer `Compte :` par `Devise :` dans les critères de l'en-tête Word. Conserver la colonne `Compte` dans le tableau transactionnel pour montrer 1441 ou 15558 ligne par ligne.
@@ -74,6 +76,10 @@ Cas réel de référence du 17 juillet 2026 : `Savings Account` contient 77 084 
 - Produire trois populations inclusives : `clients_perfect_dans_mpesa` pour Perfect∩G2, `clients_perfect_dans_turbo` pour Perfect∩Turbo et `clients_perfect_dans_turbo_et_mpesa` pour Perfect∩Turbo∩G2.
 - Réduire proprement le rapport lorsqu'une source facultative manque; ne jamais provoquer un `KeyError` en indexant une source absente.
 - Présenter un cumul relatif, et non un solde réel, si le solde d'ouverture M-PESA n'est pas fourni.
+- Dans l'Extrait client, construire `dat_en_cours_client` depuis les `FIXED SAVINGS` à solde strictement positif de `Savings Account`, au grain `savings_id`, filtrés par client et devise. Ne pas appliquer la période transactionnelle à cette position courante.
+- Dater la situation depuis `updated_at` ou `date_locked` de `Savings Account`; à défaut, utiliser la dernière transaction Turbo du client, puis les dates du DAT. Ne jamais utiliser une date G2 pour la situation DAT.
+- Calculer l'intérêt simple estimé au taux DAT paramétré, 11 % par défaut, entre `date_approved` et `maturity_date`. Qualifier chaque DAT `En cours`, `Échéance proche`, `Échéance aujourd'hui` ou `Échu à rembourser`. Ne jamais présenter l'estimation comme une écriture comptable.
+- Construire `remboursements_turbo_synthese_client` et `remboursements_turbo_detail_client` uniquement depuis les événements de remboursement de Transactions M-PESA_Turbo. Exclure les décaissements, la dette créée et les positions de crédit de la restitution Extrait client.
 - Ne jamais modifier les fichiers Excel sources pendant l'analyse.
 - Traiter l'export détaillé `Savings Account` comme source maître lorsqu'il est fourni. Déduire `NORMAL SAVINGS` de `Open Savings` / `Current account` et `FIXED SAVINGS` des produits `Fixed Account`; conserver les DAT à solde nul comme historique.
 - Utiliser l'export `Customers with Current Savings Account` comme vue des comptes courants à solde positif; il ne représente pas les comptes courants à solde nul. Sans source maître, l'accepter seulement avec le résumé Fixed dans le téléversement unique et afficher le mode partiel.
@@ -145,6 +151,9 @@ Cas réel de référence du 17 juillet 2026 : `Savings Account` contient 77 084 
 - Vérifier qu'un export client reprend les filtres de l'extrait sans perdre les feuilles contextuelles du client.
 - Pour le Word client, vérifier les trois sorties CDF, USD et ALL, les comptes 1441/15558, l'en-tête `Devise` et les synthèses multidevises séparées.
 - Proposer le PDF client en CDF, USD et ALL avec le même périmètre filtré et les mêmes règles de séparation des devises que le Word. Générer le PDF nativement avec ReportLab afin de fonctionner sur Streamlit en ligne sans navigateur système.
+- Dans les Word et PDF client, placer `DAT en cours` avant `Détail des transactions`, avec la date de situation Turbo, le `savings_id`, la durée, la souscription, l'échéance, les jours restants, la devise, le capital bloqué, le taux, l'intérêt estimé, capital + intérêt estimé et la situation. Ne plus afficher `Intérêts des DAT échus`.
+- Dans les Word et PDF client, placer `Remboursements observés` avant `Détail des transactions`, avec la date, la référence Turbo, la devise, le montant payé, le principal remboursé, les intérêts, les pénalités et le mode observé. Ne pas afficher les décaissements ni une section crédit.
+- Dans l'Excel client, utiliser `DAT_En_Cours` et `Remboursements_Turbo`; ne pas exporter `Interets_DAT_Echus`, `Credit_Client_Turbo`, `Positions_Turbo` ou `Credits`.
 - Intégrer le logo officiel `skills/logo Bisou Bisou.PNG` dans les exports Word et PDF de l'Extrait client; conserver un libellé texte de repli si l'image est absente ou illisible.
 - Nommer le Word Turbo seul `extrait_compte_<customer_id>_<telephone>_<devise>_<debut>_<fin>.docx`. Si G2 est chargé, insérer le nom G2 entre l'identifiant et le téléphone. Conserver les espaces du nom, supprimer uniquement les caractères interdits des noms de fichiers et ne jamais utiliser G2 pour recalculer les montants.
 - Dans le Word client, retirer tous les suffixes `[Turbo]`. Si le solde d'ouverture n'est pas renseigné, conserver l'intitulé `Cumul net` mais ne plus imprimer l'ancien avertissement relatif au solde d'ouverture.

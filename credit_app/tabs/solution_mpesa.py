@@ -301,6 +301,7 @@ def _build_customer_transaction_analysis_cached(
     date_start: object | None,
     date_end: object | None,
     reference_query: str,
+    annual_interest_rate_pct: float,
 ) -> dict[str, pd.DataFrame]:
     return build_customer_transaction_analysis(
         prepared,
@@ -310,6 +311,7 @@ def _build_customer_transaction_analysis_cached(
         date_start=date_start,
         date_end=date_end,
         reference_query=reference_query,
+        annual_interest_rate_pct=annual_interest_rate_pct,
     )
 
 
@@ -815,7 +817,6 @@ def _render_customer_kpis(summary: pd.DataFrame) -> None:
                 ),
                 ("Epargne finale", _format_amount(row.get("epargne_courante_finale")), f"Devise {currency}", "green"),
                 ("DAT final", _format_amount(row.get("dat_final")), f"Devise {currency}", "navy"),
-                ("Credits", _format_count(row.get("nombre_credits")), f"Solde {_format_amount(row.get('solde_credit_total'))}", "red"),
             ]
         )
 
@@ -956,95 +957,84 @@ def _render_customer_journey_analysis(analysis: dict[str, pd.DataFrame]) -> None
             )
 
 
-def _render_customer_credit_and_positions(analysis: dict[str, pd.DataFrame]) -> None:
-    credit_summary = analysis.get("credit_turbo_synthese_client", pd.DataFrame())
-    credit_detail = analysis.get("credit_turbo_detail_client", pd.DataFrame())
-    positions = analysis.get("positions_turbo", pd.DataFrame())
-    internal = analysis.get("mouvements_internes_turbo", pd.DataFrame())
+def _render_customer_repayments(analysis: dict[str, pd.DataFrame]) -> None:
+    repayment_summary = analysis.get("remboursements_turbo_synthese_client", pd.DataFrame())
+    repayment_detail = analysis.get("remboursements_turbo_detail_client", pd.DataFrame())
 
-    if credit_summary.empty:
-        st.info("Aucun decaissement ou remboursement de credit ne correspond aux filtres actifs.")
-    else:
-        st.caption(
-            "Les interets et penalites ci-dessous sont des montants comptabilises observes dans Transactions M-PESA_Turbo. "
-            "Ils ne constituent ni un taux annuel contractuel ni une rentabilite nette du client."
-        )
-        for _, row in credit_summary.iterrows():
-            currency = str(row.get("currency_code", ""))
-            render_panel_title(f"Credit et remboursements observes [Turbo] - {currency}")
-            render_kpi_cards(
-                [
-                    (
-                        "Decaissements",
-                        _format_count(row.get("nombre_decaissements")),
-                        f"Verse au client : {_format_amount(row.get('montant_decaisse_client'))} {currency}",
-                        "blue",
-                    ),
-                    (
-                        "Dette creee observee",
-                        _format_amount(row.get("dette_creee_observee")),
-                        currency,
-                        "navy",
-                    ),
-                    (
-                        "Interet observe",
-                        _format_amount(row.get("interet_observe")),
-                        f"Ratio / decaissement : {_format_percent(row.get('ratio_interet_decaissement_pct'))}",
-                        "green",
-                    ),
-                    (
-                        "Remboursements",
-                        _format_count(row.get("nombre_remboursements")),
-                        f"Principal : {_format_amount(row.get('principal_rembourse'))} {currency}",
-                        "orange",
-                    ),
-                    (
-                        "Avec penalite",
-                        _format_count(row.get("remboursements_avec_penalite")),
-                        f"Penalite observee : {_format_amount(row.get('penalite_observee'))} {currency}",
-                        "red",
-                    ),
-                    (
-                        "Avec epargne / DAT",
-                        _format_count(row.get("remboursements_avec_epargne_dat")),
-                        "Ecritures associees observees",
-                        "slate",
-                    ),
-                ]
-            )
-        if not credit_detail.empty:
-            with st.expander("Afficher la ventilation des operations de credit [Turbo]", expanded=False):
-                st.dataframe(
-                    _format_customer_analysis_dates(credit_detail),
-                    width="stretch",
-                    hide_index=True,
-                )
+    if repayment_summary.empty:
+        st.info("Aucun remboursement ne correspond aux mouvements Turbo et aux filtres actifs.")
+        return
 
-    render_panel_title("Positions observees par produit [Turbo]")
-    if positions.empty:
-        st.info("Aucun solde de produit n'est disponible pour ce client et ce perimetre.")
-    else:
-        st.caption(
-            "`solde_transactions_observe` est le dernier `bal_after` exploitable dans Transactions M-PESA_Turbo. "
-            "Il n'est qualifie de conforme que lorsqu'un fichier Epargne, DAT ou Credits_Turbo charge confirme le meme montant."
-        )
-        st.dataframe(
-            _format_customer_analysis_dates(positions),
-            width="stretch",
-            hide_index=True,
+    st.caption(
+        "Les montants ci-dessous proviennent exclusivement des écritures de remboursement observées "
+        "dans Transactions M-PESA_Turbo. Les décaissements et les positions de crédit ne sont pas affichés."
+    )
+    for _, row in repayment_summary.iterrows():
+        currency = str(row.get("currency_code", ""))
+        render_panel_title(f"Remboursements observés [Turbo] - {currency}")
+        render_kpi_cards(
+            [
+                (
+                    "Remboursements",
+                    _format_count(row.get("nombre_remboursements")),
+                    f"Devise {currency}",
+                    "blue",
+                ),
+                (
+                    "Montant payé",
+                    _format_amount(row.get("montant_paye_observe")),
+                    currency,
+                    "navy",
+                ),
+                (
+                    "Principal remboursé",
+                    _format_amount(row.get("principal_rembourse")),
+                    currency,
+                    "green",
+                ),
+                (
+                    "Intérêts observés",
+                    _format_amount(row.get("interet_observe")),
+                    currency,
+                    "orange",
+                ),
+                (
+                    "Pénalités observées",
+                    _format_amount(row.get("penalite_observee")),
+                    currency,
+                    "red",
+                ),
+            ]
         )
 
-    if not internal.empty:
-        with st.expander("Afficher les mouvements internes epargne / DAT [Turbo]", expanded=False):
-            st.caption(
-                "Ces transferts n'ont pas toujours de ligne `MPESA ACCOUNT`. Ils sont presentes separement et ne sont pas "
-                "ajoutes aux entrees ou sorties M-PESA de l'extrait officiel."
-            )
-            st.dataframe(
-                _format_customer_analysis_dates(internal),
-                width="stretch",
-                hide_index=True,
-            )
+    if repayment_detail.empty:
+        return
+    display_columns = [
+        "created_at",
+        "event_reference",
+        "currency_code",
+        "montant_paye_observe",
+        "principal_rembourse",
+        "interet_observe",
+        "penalite_observee",
+        "mode_remboursement_observe",
+    ]
+    display_columns = [column for column in display_columns if column in repayment_detail.columns]
+    st.dataframe(
+        repayment_detail[display_columns],
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "created_at": st.column_config.DatetimeColumn("Date", format="DD/MM/YYYY HH:mm"),
+            "event_reference": st.column_config.TextColumn("Référence", pinned=True),
+            "currency_code": st.column_config.TextColumn("Devise"),
+            "montant_paye_observe": st.column_config.NumberColumn("Montant payé"),
+            "principal_rembourse": st.column_config.NumberColumn("Principal remboursé"),
+            "interet_observe": st.column_config.NumberColumn("Intérêts"),
+            "penalite_observee": st.column_config.NumberColumn("Pénalités"),
+            "mode_remboursement_observe": st.column_config.TextColumn("Mode observé"),
+        },
+    )
 
 
 def _render_customer_turbo_controls(analysis: dict[str, pd.DataFrame]) -> None:
@@ -1173,6 +1163,95 @@ def _render_customer_statement_preview(
     return previews
 
 
+def _render_customer_active_dat_positions(analysis_report: dict[str, pd.DataFrame]) -> None:
+    active_dat = analysis_report.get("dat_en_cours_client", pd.DataFrame())
+    if not isinstance(active_dat, pd.DataFrame) or active_dat.empty:
+        st.info("Aucun DAT à solde positif n'est disponible pour ce client dans Savings Account [Turbo].")
+        return
+
+    situation_dates = pd.to_datetime(active_dat.get("date_situation"), errors="coerce").dropna()
+    situation_label = (
+        f"Situation Turbo au {situation_dates.max():%d/%m/%Y}. "
+        if not situation_dates.empty
+        else "Situation Turbo à la date disponible. "
+    )
+    st.caption(
+        situation_label
+        + "Les intérêts sont des estimations de préparation calculées au taux DAT paramétré; "
+        "ils ne constituent pas encore une écriture comptable."
+    )
+    for currency, currency_entries in active_dat.groupby(
+        "currency_code", sort=True, dropna=False
+    ):
+        currency_text = str(currency or "SANS DEVISE")
+        capital = pd.to_numeric(currency_entries["balance"], errors="coerce").sum()
+        estimated_interest = pd.to_numeric(
+            currency_entries["interet_estime_echeance"], errors="coerce"
+        ).sum(min_count=1)
+        estimated_total = pd.to_numeric(
+            currency_entries["capital_plus_interet_estime"], errors="coerce"
+        ).sum(min_count=1)
+        urgent_count = int(
+            currency_entries["situation_dat_client"]
+            .isin(["Échu à rembourser", "Échéance aujourd'hui", "Échéance proche"])
+            .sum()
+        )
+        render_kpi_cards(
+            [
+                ("DAT en cours [Turbo]", _format_count(len(currency_entries)), currency_text, "blue"),
+                ("Capital bloqué", _format_amount(capital), currency_text, "navy"),
+                ("Intérêt estimé", _format_amount(estimated_interest), currency_text, "green"),
+                ("Capital + intérêt estimé", _format_amount(estimated_total), currency_text, "orange"),
+                ("À préparer", _format_count(urgent_count), "Échu ou à 30 jours", "red"),
+            ]
+        )
+        display_columns = [
+            "savings_id",
+            "product_name",
+            "date_approved",
+            "maturity_date",
+            "jours_avant_echeance",
+            "currency_code",
+            "balance",
+            "taux_interet_annuel_pct",
+            "interet_estime_echeance",
+            "capital_plus_interet_estime",
+            "situation_dat_client",
+        ]
+        display_columns = [
+            column for column in display_columns if column in currency_entries.columns
+        ]
+        number_format = "%.0f" if currency_text == "CDF" else "%.2f"
+        st.dataframe(
+            currency_entries[display_columns],
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "savings_id": st.column_config.TextColumn("DAT", pinned=True),
+                "product_name": st.column_config.TextColumn("Durée"),
+                "date_approved": st.column_config.DateColumn("Souscription", format="DD/MM/YYYY"),
+                "maturity_date": st.column_config.DatetimeColumn(
+                    "Échéance", format="DD/MM/YYYY"
+                ),
+                "jours_avant_echeance": st.column_config.NumberColumn("Jours restants", format="%d"),
+                "currency_code": st.column_config.TextColumn("Devise"),
+                "balance": st.column_config.NumberColumn(
+                    "Capital bloqué", format=number_format
+                ),
+                "taux_interet_annuel_pct": st.column_config.NumberColumn(
+                    "Taux annuel", format="%.1f%%"
+                ),
+                "interet_estime_echeance": st.column_config.NumberColumn(
+                    "Intérêt estimé", format=number_format
+                ),
+                "capital_plus_interet_estime": st.column_config.NumberColumn(
+                    "Capital + intérêt estimé", format=number_format
+                ),
+                "situation_dat_client": st.column_config.TextColumn("Situation"),
+            },
+        )
+
+
 @st.fragment
 def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | None:
     if prepared.transactions.empty:
@@ -1181,13 +1260,13 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
 
     if prepared.g2_transactions.empty:
         st.info(
-            "Mode Turbo seul : l'extrait client, la recherche, les soldes reconstruits et les exports "
-            "fonctionnent sans Transactions M-PESA_G2. Le nom G2 et le controle croise restent simplement indisponibles."
+            "Source financière : Portal Turbo. L'extrait client, la recherche, les soldes reconstruits et les exports "
+            "fonctionnent sans G2; seuls le nom enrichi et le contrôle externe sont alors indisponibles."
         )
     else:
-        st.caption(
-            "Transactions M-PESA_Turbo reste la source des mouvements de l'extrait. "
-            "Transactions M-PESA_G2 sert uniquement a completer le nom du client et a verifier les operations rapprochees."
+        st.info(
+            "Source financière principale : Portal Turbo. G2 complète uniquement le nom du client et vérifie les écritures "
+            "rapprochées; ses montants, dates et soldes ne remplacent jamais ceux de Turbo."
         )
 
     has_g2_names = (
@@ -1272,13 +1351,13 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         "Compte des entrees",
         value="1441",
         key=f"mpesa_statement_entry_account_{selected_customer}",
-        help="Compte G2 des entrees : depots et remboursements de credit.",
+        help="Compte de restitution des entrées, notamment les dépôts et remboursements observés dans Turbo.",
     ).strip()
     output_account_number = account_columns[1].text_input(
         "Compte des sorties",
         value="15558",
         key=f"mpesa_statement_output_account_{selected_customer}",
-        help="Compte G2 des sorties : decaissements de credit et autres sorties retenues.",
+        help="Compte de restitution des sorties observées dans Turbo.",
     ).strip()
 
     currencies = _currency_options(prepared.transactions.loc[prepared.transactions["customer_id"].astype(str).eq(selected_customer)])
@@ -1333,6 +1412,12 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
     filtered_report = dict(report)
     filtered_report["extrait"] = filtered_statement
     filtered_report["synthese"] = report["synthese"]
+    dat_interest_rate = float(
+        st.session_state.get(
+            "mpesa_dat_annual_interest_rate_pct",
+            DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+        )
+    )
     filtered_analysis = _build_customer_transaction_analysis_cached(
         prepared,
         selected_customer,
@@ -1341,6 +1426,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         filter_context.get("date_start"),
         filter_context.get("date_end"),
         str(filter_context.get("reference_query", "")),
+        dat_interest_rate,
     )
     filtered_report.update(filtered_analysis)
 
@@ -1357,13 +1443,16 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         filter_context=filter_context,
     )
 
-    render_panel_title("6. Parcours financier du client [Turbo]")
+    render_panel_title("6. DAT en cours et échéances à venir [Turbo]")
+    _render_customer_active_dat_positions(filtered_analysis)
+
+    render_panel_title("7. Parcours financier du client [Turbo]")
     _render_customer_journey_analysis(filtered_analysis)
 
-    render_panel_title("7. Credit, remboursements et positions observees [Turbo]")
-    _render_customer_credit_and_positions(filtered_analysis)
+    render_panel_title("8. Remboursements observés [Turbo]")
+    _render_customer_repayments(filtered_analysis)
 
-    render_panel_title("8. Analyses et controles complementaires")
+    render_panel_title("9. Analyses et controles complementaires")
     with st.expander("Afficher les graphiques", expanded=False):
         _render_statement_charts(filtered_statement)
     with st.expander("Afficher les controles metier [Turbo]", expanded=False):
@@ -1471,11 +1560,13 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         )
         st.dataframe(full_display, width="stretch", hide_index=True)
 
-    render_panel_title("9. Export")
+    render_panel_title("10. Export")
     st.caption(
-        "Les exports Word et PDF reprennent exactement le client, la periode, la devise, les types d'operation et les references filtres. "
+        "Le détail transactionnel des exports Word et PDF reprend exactement le client, la période, la devise, les types d'opération et les références filtrés. "
         "Les boutons CDF et USD produisent un document par devise; ALL les reunit dans un seul document "
-        "avec des totaux et cumuls toujours separes par devise."
+        "avec des totaux et cumuls toujours separes par devise. Les DAT en cours reprennent la dernière situation "
+        "disponible dans Savings Account [Turbo], indépendamment de la période transactionnelle. Les remboursements "
+        "reprennent uniquement les écritures Turbo correspondant aux filtres actifs."
     )
     if previews:
         export_targets = list(previews)
@@ -1588,25 +1679,28 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
 
     st.caption(
         "La feuille `Extrait_Turbo` reprend les filtres appliques a l'etape 4. "
-        "Le classeur ajoute uniquement les analyses client utiles : parcours, credit, positions, comportement et controles Turbo."
+        "Le classeur ajoute les DAT en cours, les remboursements observés, le parcours et les contrôles Turbo utiles."
+    )
+    export_summary = filtered_report.get("synthese", pd.DataFrame()).drop(
+        columns=["nombre_credits", "solde_credit_total"],
+        errors="ignore",
     )
     customer_export = {
         key: filtered_report.get(key, pd.DataFrame())
         for key in [
-            "synthese",
             "extrait",
             "parcours_turbo",
-            "credit_turbo_detail_client",
-            "positions_turbo",
+            "dat_en_cours_client",
+            "remboursements_turbo_detail_client",
             "comportement_turbo",
             "mouvements_internes_turbo",
             "controles_client_turbo",
             "dat_final",
-            "credits",
             "g2_dat",
             "diagnostics",
         ]
     }
+    customer_export = {"synthese": export_summary, **customer_export}
     export_bytes = _create_excel_export_cached(customer_export)
     excel_column = st.columns(3)[0]
     excel_column.download_button(

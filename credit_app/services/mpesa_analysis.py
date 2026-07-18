@@ -49,6 +49,45 @@ CUSTOMER_STATEMENT_COLUMNS = [
     "solde",
 ]
 
+CUSTOMER_DAT_INTEREST_COLUMNS = [
+    "maturity_date",
+    "savings_id",
+    "customer_id",
+    "msisdn",
+    "currency_code",
+    "product_name",
+    "capital_place",
+    "taux_interet_annuel_pct",
+    "interet_client_constate",
+    "voda_interest",
+    "montant_echeance_client",
+    "status",
+    "reference_transaction_turbo",
+    "date_ecriture_turbo",
+    "statut_tracabilite",
+    "source_interet",
+    "impact_solde_mpesa",
+]
+
+CUSTOMER_ACTIVE_DAT_COLUMNS = [
+    "date_situation",
+    "savings_id",
+    "customer_id",
+    "msisdn",
+    "currency_code",
+    "product_name",
+    "date_approved",
+    "maturity_date",
+    "duree_contractuelle_mois_estimee",
+    "jours_avant_echeance",
+    "balance",
+    "taux_interet_annuel_pct",
+    "interet_estime_echeance",
+    "capital_plus_interet_estime",
+    "situation_dat_client",
+    "status",
+]
+
 CUSTOMER_STATEMENT_FOCUS_OPERATION_TYPES = frozenset(
     {
         "Sortie M-PESA_Turbo vers epargne",
@@ -184,6 +223,8 @@ NUMERIC_COLUMNS = [
     "outstanding_setup_fees",
     "outstanding_interest",
     "outstanding_penalty_fees",
+    "interest_earned",
+    "voda_interest",
 ]
 
 KNOWN_ACCOUNT_TYPES = {
@@ -7051,6 +7092,335 @@ def _build_customer_behavior(events: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
+def build_customer_matured_dat_interest_entries(
+    fixed_savings: pd.DataFrame | None,
+    transactions: pd.DataFrame | None,
+    customer_id: object,
+    *,
+    as_of_date: object | None = None,
+    date_start: object | None = None,
+    date_end: object | None = None,
+    currency: object | None = None,
+    reference_query: object = "",
+    annual_interest_rate_pct: float = DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+) -> pd.DataFrame:
+    """Restitue les interets constates des DAT echus sans modifier le solde M-PESA.
+
+    ``interest_earned`` provient de la position ``Savings Account``. Une ligne
+    n'est retenue que si le DAT est arrive a echeance, porte un interet positif
+    et presente un statut de denouement. La presence d'une ecriture de sortie
+    portant le meme ``savings_id`` sert uniquement a qualifier la tracabilite.
+    """
+    empty = pd.DataFrame(columns=CUSTOMER_DAT_INTEREST_COLUMNS)
+    if not isinstance(fixed_savings, pd.DataFrame) or fixed_savings.empty:
+        return empty
+    if "customer_id" not in fixed_savings.columns:
+        return empty
+
+    customer_key = str(customer_id).strip()
+    frame = fixed_savings.loc[
+        clean_identifier(fixed_savings["customer_id"]).eq(customer_key)
+    ].copy()
+    if frame.empty:
+        return empty
+
+    for column in [
+        "savings_id",
+        "msisdn",
+        "msisdn1",
+        "currency_code",
+        "product_name",
+        "status",
+        "balance",
+        "date_approved",
+        "maturity_date",
+        "interest_earned",
+        "voda_interest",
+    ]:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+    frame["savings_id"] = clean_identifier(frame["savings_id"])
+    frame["customer_id"] = clean_identifier(frame["customer_id"])
+    frame["currency_code"] = clean_text(frame["currency_code"]).str.upper()
+    frame["msisdn"] = normalize_phone(frame["msisdn"].where(frame["msisdn"].notna(), frame["msisdn1"]))
+    frame["date_approved"] = pd.to_datetime(frame["date_approved"], errors="coerce")
+    frame["maturity_date"] = pd.to_datetime(frame["maturity_date"], errors="coerce")
+    frame["balance"] = pd.to_numeric(frame["balance"], errors="coerce").fillna(0.0)
+    frame["interest_earned"] = pd.to_numeric(frame["interest_earned"], errors="coerce").fillna(0.0)
+    frame["voda_interest"] = pd.to_numeric(frame["voda_interest"], errors="coerce").fillna(0.0)
+
+    transaction_dates = pd.Series(dtype="datetime64[ns]")
+    if isinstance(transactions, pd.DataFrame) and not transactions.empty and "created_at" in transactions.columns:
+        transaction_dates = pd.to_datetime(transactions["created_at"], errors="coerce").dropna()
+    effective_end = pd.to_datetime(
+        date_end if date_end is not None else as_of_date,
+        errors="coerce",
+    )
+    if pd.isna(effective_end):
+        effective_end = transaction_dates.max() if not transaction_dates.empty else pd.Timestamp.now()
+    if pd.Timestamp(effective_end) == pd.Timestamp(effective_end).normalize():
+        effective_end = _timestamp_plus(effective_end, days=1, microseconds=-1)
+
+    normalized_status = frame["status"].apply(normalize_label)
+    settled_status = normalized_status.str.contains(
+        r"withdraw|mature|closed|clotur|retir",
+        regex=True,
+        na=False,
+    )
+    legacy_settled = normalized_status.eq("") & frame["balance"].le(0)
+    frame = frame.loc[
+        frame["maturity_date"].notna()
+        & frame["maturity_date"].le(effective_end)
+        & frame["interest_earned"].gt(0)
+        & (settled_status | legacy_settled)
+    ].copy()
+    if frame.empty:
+        return empty
+
+    start = pd.to_datetime(date_start, errors="coerce") if date_start is not None else pd.NaT
+    if pd.notna(start):
+        frame = frame.loc[frame["maturity_date"].ge(start)].copy()
+    end = pd.to_datetime(date_end, errors="coerce") if date_end is not None else pd.NaT
+    if pd.notna(end):
+        if pd.Timestamp(end) == pd.Timestamp(end).normalize():
+            end = _timestamp_plus(end, days=1, microseconds=-1)
+        frame = frame.loc[frame["maturity_date"].le(end)].copy()
+    currency_text = str(currency).strip().upper() if currency is not None else ""
+    if currency_text and currency_text not in {"TOUTES", "ALL"}:
+        frame = frame.loc[frame["currency_code"].eq(currency_text)].copy()
+    if frame.empty:
+        return empty
+
+    transaction_summary = pd.DataFrame(
+        columns=[
+            "savings_id",
+            "capital_place",
+            "reference_transaction_turbo",
+            "date_ecriture_turbo",
+        ]
+    )
+    if isinstance(transactions, pd.DataFrame) and not transactions.empty:
+        if "customer_id" in transactions.columns:
+            tx = transactions.loc[
+                clean_identifier(transactions["customer_id"]).eq(customer_key)
+            ].copy()
+        else:
+            tx = pd.DataFrame()
+        for column in [
+            "customer_id",
+            "currency_code",
+            "account_type",
+            "reference_id",
+            "ref_no",
+            "description",
+            "created_at",
+            "dr",
+            "cr",
+        ]:
+            if column not in tx.columns:
+                tx[column] = pd.NA
+        tx["customer_id"] = clean_identifier(tx["customer_id"])
+        tx["currency_code"] = clean_text(tx["currency_code"]).str.upper()
+        tx["account_type"] = clean_text(tx["account_type"]).str.upper()
+        tx["reference_id"] = clean_identifier(tx["reference_id"])
+        tx["ref_no"] = clean_identifier(tx["ref_no"])
+        tx["created_at"] = pd.to_datetime(tx["created_at"], errors="coerce")
+        tx["dr"] = pd.to_numeric(tx["dr"], errors="coerce").fillna(0.0)
+        tx["cr"] = pd.to_numeric(tx["cr"], errors="coerce").fillna(0.0)
+        savings_ids = set(frame["savings_id"].loc[frame["savings_id"].ne("")].tolist())
+        fixed_tx = tx.loc[
+            tx["customer_id"].eq(customer_key)
+            & tx["account_type"].eq("FIXED SAVINGS")
+            & tx["reference_id"].isin(savings_ids)
+            & (tx["created_at"].isna() | tx["created_at"].le(effective_end))
+        ].copy()
+        if not fixed_tx.empty:
+            capital = (
+                fixed_tx.groupby("reference_id", as_index=False, dropna=False)["cr"]
+                .sum()
+                .rename(columns={"reference_id": "savings_id", "cr": "capital_place"})
+            )
+            settlement_description = fixed_tx["description"].apply(normalize_label)
+            settlement = fixed_tx.loc[
+                fixed_tx["dr"].gt(0)
+                & settlement_description.str.contains(
+                    r"retrait|withdraw|remboursement.*compte|fixed savings",
+                    regex=True,
+                    na=False,
+                )
+            ].copy()
+            if not settlement.empty:
+                settlement["reference_transaction_turbo"] = settlement["ref_no"].where(
+                    settlement["ref_no"].ne(""), settlement["reference_id"]
+                )
+                traced = settlement.groupby("reference_id", as_index=False, dropna=False).agg(
+                    reference_transaction_turbo=("reference_transaction_turbo", concat_unique),
+                    date_ecriture_turbo=("created_at", "max"),
+                ).rename(columns={"reference_id": "savings_id"})
+                transaction_summary = capital.merge(traced, on="savings_id", how="left")
+            else:
+                transaction_summary = capital
+                transaction_summary["reference_transaction_turbo"] = ""
+                transaction_summary["date_ecriture_turbo"] = pd.NaT
+
+    frame = frame.merge(transaction_summary, on="savings_id", how="left")
+    frame["capital_place"] = pd.to_numeric(frame["capital_place"], errors="coerce")
+    frame.loc[frame["capital_place"].le(0), "capital_place"] = np.nan
+    frame["taux_interet_annuel_pct"] = float(annual_interest_rate_pct)
+    frame["interet_client_constate"] = frame["interest_earned"]
+    frame["montant_echeance_client"] = frame["capital_place"] + frame["interet_client_constate"]
+    frame["reference_transaction_turbo"] = clean_text(
+        frame.get("reference_transaction_turbo", pd.Series("", index=frame.index))
+    )
+    frame["date_ecriture_turbo"] = pd.to_datetime(
+        frame.get("date_ecriture_turbo", pd.Series(pd.NaT, index=frame.index)),
+        errors="coerce",
+    )
+    traced = frame["date_ecriture_turbo"].notna()
+    frame["statut_tracabilite"] = np.where(
+        traced,
+        "Comptabilise et trace dans Transactions M-PESA_Turbo",
+        "Constate dans Savings Account - ecriture detaillee absente",
+    )
+    frame["source_interet"] = "Savings Account [Turbo] - interest_earned"
+    frame["impact_solde_mpesa"] = "Hors solde M-PESA - versement en epargne courante"
+
+    query = str(reference_query).strip()
+    if query:
+        query_mask = pd.Series(False, index=frame.index)
+        for column in ["savings_id", "reference_transaction_turbo"]:
+            query_mask |= frame[column].astype("string").str.contains(
+                query, case=False, regex=False, na=False
+            )
+        frame = frame.loc[query_mask].copy()
+    if frame.empty:
+        return empty
+    return (
+        frame[CUSTOMER_DAT_INTEREST_COLUMNS]
+        .sort_values(["maturity_date", "currency_code", "savings_id"])
+        .reset_index(drop=True)
+    )
+
+
+def build_customer_active_dat_positions(
+    fixed_savings: pd.DataFrame | None,
+    transactions: pd.DataFrame | None,
+    customer_id: object,
+    *,
+    currency: object | None = None,
+    annual_interest_rate_pct: float = DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+) -> pd.DataFrame:
+    """Construit la position courante des DAT positifs d'un client depuis Turbo.
+
+    La date de situation vient d'abord de ``Savings Account`` puis, à défaut,
+    de la dernière transaction Turbo du client. G2 n'intervient ni dans le
+    périmètre, ni dans les montants, ni dans l'estimation des intérêts.
+    """
+    empty = pd.DataFrame(columns=CUSTOMER_ACTIVE_DAT_COLUMNS)
+    if not isinstance(fixed_savings, pd.DataFrame) or fixed_savings.empty:
+        return empty
+    if "customer_id" not in fixed_savings.columns:
+        return empty
+
+    customer_key = clean_identifier(pd.Series([customer_id])).iloc[0]
+    customer_dat = fixed_savings.loc[
+        clean_identifier(fixed_savings["customer_id"]).eq(customer_key)
+    ].copy()
+    if customer_dat.empty:
+        return empty
+
+    snapshot_candidates: list[pd.Series] = []
+    for column in ["updated_at", "date_locked"]:
+        if column in customer_dat.columns:
+            values = pd.to_datetime(customer_dat[column], errors="coerce").dropna()
+            if not values.empty:
+                snapshot_candidates.append(values)
+                break
+    if (
+        not snapshot_candidates
+        and isinstance(transactions, pd.DataFrame)
+        and not transactions.empty
+        and {"customer_id", "created_at"}.issubset(transactions.columns)
+    ):
+        tx_dates = pd.to_datetime(
+            transactions.loc[
+                clean_identifier(transactions["customer_id"]).eq(customer_key),
+                "created_at",
+            ],
+            errors="coerce",
+        ).dropna()
+        if not tx_dates.empty:
+            snapshot_candidates.append(tx_dates)
+    if not snapshot_candidates:
+        for column in ["created_at", "date_approved"]:
+            if column in customer_dat.columns:
+                values = pd.to_datetime(customer_dat[column], errors="coerce").dropna()
+                if not values.empty:
+                    snapshot_candidates.append(values)
+                    break
+    situation_date = (
+        pd.Timestamp(pd.concat(snapshot_candidates, ignore_index=True).max()).normalize()
+        if snapshot_candidates
+        else pd.Timestamp.now().normalize()
+    )
+
+    maturity = build_mpesa_dat_maturity_analysis(
+        customer_dat,
+        as_of_date=situation_date,
+        annual_interest_rate_pct=annual_interest_rate_pct,
+        preparation_horizon_days=DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
+    )
+    detail = maturity.get("detail", pd.DataFrame()).copy()
+    if detail.empty:
+        return empty
+
+    currency_text = str(currency).strip().upper() if currency is not None else ""
+    if currency_text and currency_text not in {"TOUTES", "ALL"}:
+        detail = detail.loc[detail["currency_code"].eq(currency_text)].copy()
+    if detail.empty:
+        return empty
+
+    days = pd.to_numeric(detail["jours_avant_echeance"], errors="coerce")
+    detail["situation_dat_client"] = np.select(
+        [
+            days.isna(),
+            days.lt(0),
+            days.eq(0),
+            days.le(DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS),
+        ],
+        [
+            "Date d'échéance à compléter",
+            "Échu à rembourser",
+            "Échéance aujourd'hui",
+            "Échéance proche",
+        ],
+        default="En cours",
+    )
+    detail["date_situation"] = situation_date
+    detail["savings_id"] = clean_identifier(detail["savings_id"])
+    detail["customer_id"] = clean_identifier(detail["customer_id"])
+    detail["msisdn"] = normalize_phone(detail["msisdn"])
+    detail["balance"] = pd.to_numeric(detail["balance"], errors="coerce")
+    detail["interet_estime_echeance"] = pd.to_numeric(
+        detail["interet_estime_echeance"], errors="coerce"
+    )
+    detail["capital_plus_interet_estime"] = pd.to_numeric(
+        detail["capital_plus_interet_estime"], errors="coerce"
+    )
+    detail["__ordre_situation"] = np.select(
+        [days.lt(0), days.eq(0), days.le(DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS)],
+        [0, 1, 2],
+        default=3,
+    )
+    return (
+        detail.sort_values(
+            ["currency_code", "__ordre_situation", "maturity_date", "savings_id"],
+            na_position="last",
+        )[CUSTOMER_ACTIVE_DAT_COLUMNS]
+        .reset_index(drop=True)
+    )
+
+
 def build_customer_transaction_analysis(
     prepared: MpesaPreparedData,
     customer_id: object,
@@ -7060,6 +7430,7 @@ def build_customer_transaction_analysis(
     date_start: object | None = None,
     date_end: object | None = None,
     reference_query: object = "",
+    annual_interest_rate_pct: float = DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
 ) -> dict[str, pd.DataFrame]:
     """Construit les analyses client disponibles dans Transactions M-PESA_Turbo."""
     empty = {
@@ -7067,10 +7438,19 @@ def build_customer_transaction_analysis(
         "jalons_turbo": pd.DataFrame(),
         "credit_turbo_synthese_client": pd.DataFrame(),
         "credit_turbo_detail_client": pd.DataFrame(),
+        "remboursements_turbo_synthese_client": pd.DataFrame(),
+        "remboursements_turbo_detail_client": pd.DataFrame(),
         "positions_turbo": pd.DataFrame(),
         "comportement_turbo": pd.DataFrame(),
         "mouvements_internes_turbo": pd.DataFrame(),
         "controles_client_turbo": pd.DataFrame(),
+        "dat_en_cours_client": build_customer_active_dat_positions(
+            prepared.fixed_savings,
+            prepared.transactions,
+            customer_id,
+            currency=currency,
+            annual_interest_rate_pct=annual_interest_rate_pct,
+        ),
     }
     events, lines = _build_customer_turbo_events(prepared.transactions, customer_id)
     if events.empty:
@@ -7147,6 +7527,8 @@ def build_customer_transaction_analysis(
     )
     credit_detail = scoped.loc[credit_mask].copy()
     credit_summary = pd.DataFrame()
+    repayment_detail = pd.DataFrame()
+    repayment_summary = pd.DataFrame()
     if not credit_detail.empty:
         credit_detail["est_decaissement"] = credit_detail["type_operation"].eq("Decaissement de credit")
         credit_detail["est_remboursement"] = credit_detail["type_operation"].isin(
@@ -7174,6 +7556,28 @@ def build_customer_transaction_analysis(
             .div(credit_summary["montant_decaisse_client"].replace(0, pd.NA))
             .mul(100)
         )
+        repayment_detail = credit_detail.loc[credit_detail["est_remboursement"]].copy()
+        if not repayment_detail.empty:
+            repayment_detail["montant_paye_observe"] = repayment_detail[
+                "remboursement_mpesa"
+            ].where(
+                repayment_detail["remboursement_mpesa"].gt(0),
+                repayment_detail["montant_operation"],
+            )
+            repayment_summary = (
+                repayment_detail.groupby(
+                    ["customer_id", "currency_code"],
+                    as_index=False,
+                    dropna=False,
+                )
+                .agg(
+                    nombre_remboursements=("event_key", "nunique"),
+                    montant_paye_observe=("montant_paye_observe", "sum"),
+                    principal_rembourse=("principal_rembourse", "sum"),
+                    interet_observe=("interet_observe", "sum"),
+                    penalite_observee=("penalite_observee", "sum"),
+                )
+            )
 
     path_columns = [
         "created_at", "currency_code", "event_reference", "ref_no", "type_operation", "sens_metier",
@@ -7185,6 +7589,11 @@ def build_customer_transaction_analysis(
         "dette_creee_observee", "interet_observe", "remboursement_mpesa", "principal_rembourse",
         "penalite_observee", "epargne_dat_remboursement", "mode_remboursement_observe",
         "statut_controle_turbo", "observation_controle_turbo",
+    ]
+    repayment_columns = [
+        "customer_id", "created_at", "event_reference", "ref_no", "currency_code",
+        "montant_paye_observe", "principal_rembourse", "interet_observe",
+        "penalite_observee", "mode_remboursement_observe",
     ]
     control_columns = [
         "created_at", "currency_code", "event_reference", "type_operation", "montant_operation",
@@ -7203,10 +7612,17 @@ def build_customer_transaction_analysis(
         "jalons_turbo": milestones,
         "credit_turbo_synthese_client": credit_summary,
         "credit_turbo_detail_client": credit_detail[credit_columns].sort_values("created_at").reset_index(drop=True),
+        "remboursements_turbo_synthese_client": repayment_summary,
+        "remboursements_turbo_detail_client": (
+            repayment_detail[repayment_columns].sort_values("created_at").reset_index(drop=True)
+            if not repayment_detail.empty
+            else pd.DataFrame(columns=repayment_columns)
+        ),
         "positions_turbo": positions,
         "comportement_turbo": behavior,
         "mouvements_internes_turbo": internal[internal_columns].sort_values("created_at").reset_index(drop=True),
         "controles_client_turbo": scoped[control_columns].sort_values("created_at").reset_index(drop=True),
+        "dat_en_cours_client": empty["dat_en_cours_client"],
     }
 
 
@@ -7370,6 +7786,13 @@ def build_mpesa_statement(
     diagnostics = build_diagnostics(prepared, str(customer_id), statement)
     g2_dat = build_g2_dat_crosscheck(prepared, str(customer_id))
     customer_transaction_analysis = build_customer_transaction_analysis(prepared, str(customer_id))
+    client_visible_analysis = dict(customer_transaction_analysis)
+    for internal_credit_key in [
+        "credit_turbo_synthese_client",
+        "credit_turbo_detail_client",
+        "positions_turbo",
+    ]:
+        client_visible_analysis.pop(internal_credit_key, None)
     g2_available = not prepared.g2_transactions.empty
     name_enriched_by_g2 = bool(
         "Nom_client" in statement.columns
@@ -7378,7 +7801,7 @@ def build_mpesa_statement(
     )
     return {
         "customer_id": str(customer_id),
-        "mode_source_extrait": "Turbo + verification G2" if g2_available else "Turbo seul",
+        "mode_source_extrait": "Turbo principal + verification G2" if g2_available else "Turbo seul",
         "controle_g2_disponible": g2_available,
         "nom_client_enrichi_g2": name_enriched_by_g2,
         "extrait": format_statement_columns(statement),
@@ -7389,7 +7812,7 @@ def build_mpesa_statement(
         "credits": loans_client,
         "g2_dat": g2_dat,
         "diagnostics": diagnostics,
-        **customer_transaction_analysis,
+        **client_visible_analysis,
     }
 
 
@@ -8573,6 +8996,11 @@ def create_customer_statement_word(
         if not isinstance(source, pd.DataFrame) or source.empty:
             return pd.DataFrame()
         scoped = source.copy()
+        customer_scope = clean_identifier(pd.Series([customer_id_text])).iloc[0]
+        if customer_scope and "customer_id" in scoped.columns:
+            scoped = scoped.loc[
+                clean_identifier(scoped["customer_id"]).eq(customer_scope)
+            ].copy()
         if not all_currencies and "currency_code" in scoped.columns:
             scoped = scoped.loc[
                 clean_text(scoped["currency_code"]).str.upper().eq(currency_text)
@@ -8615,20 +9043,29 @@ def create_customer_statement_word(
             row_decimals = 0 if row_currency == "CDF" else 2
             for index, column in enumerate(present):
                 value = analysis_row.get(column)
-                if column in {"created_at", "premiere_operation", "derniere_operation", "date_derniere_ecriture"}:
+                if column in {
+                    "created_at",
+                    "premiere_operation",
+                    "derniere_operation",
+                    "date_derniere_ecriture",
+                    "date_approved",
+                    "maturity_date",
+                    "date_situation",
+                    "date_ecriture_turbo",
+                }:
                     parsed = pd.to_datetime(value, errors="coerce")
                     text = f"{parsed:%d/%m/%Y %H:%M}" if pd.notna(parsed) else "-"
+                elif column.endswith("_pct"):
+                    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+                    text = f"{numeric_value:.1f}%" if pd.notna(numeric_value) else "-"
                 elif any(
                     token in column
                     for token in [
-                        "montant", "solde", "ecart", "interet", "principal",
+                        "montant", "solde", "balance", "ecart", "interet", "principal",
                         "penalite", "dette", "revenu", "intervalle", "inactivite",
                     ]
                 ):
                     text = _pdf_number(value, decimals=row_decimals)
-                elif column.endswith("_pct"):
-                    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-                    text = f"{numeric_value:.1f}%" if pd.notna(numeric_value) else "-"
                 else:
                     text = "-" if _is_empty_text(value) else str(value)
                 cells[index].text = text
@@ -8637,33 +9074,68 @@ def create_customer_statement_word(
                     paragraph.paragraph_format.space_after = Pt(0)
                     if any(
                         token in column
-                        for token in ["montant", "solde", "ecart", "interet", "principal", "penalite", "dette", "revenu"]
+                        for token in ["montant", "solde", "balance", "ecart", "interet", "principal", "penalite", "dette", "revenu"]
                     ):
                         paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
                     for run in paragraph.runs:
                         run.font.size = Pt(6.8)
 
-    credit_summary = analysis_frame("credit_turbo_synthese_client")
-    if not credit_summary.empty:
-        add_analysis_title("Credit et remboursements observes")
+    active_dat = analysis_frame("dat_en_cours_client")
+    if not active_dat.empty:
+        situation_dates = pd.to_datetime(active_dat.get("date_situation"), errors="coerce").dropna()
+        dat_title = "DAT en cours"
+        if not situation_dates.empty:
+            dat_title += f" - situation au {situation_dates.max():%d/%m/%Y}"
+        add_analysis_title(dat_title)
         add_analysis_table(
-            credit_summary,
+            active_dat,
             [
-                "currency_code", "nombre_decaissements", "montant_decaisse_client", "dette_creee_observee",
-                "interet_observe", "nombre_remboursements", "principal_rembourse",
-                "remboursements_avec_penalite", "penalite_observee", "remboursements_avec_epargne_dat",
+                "savings_id",
+                "product_name",
+                "date_approved",
+                "maturity_date",
+                "jours_avant_echeance",
+                "currency_code",
+                "balance",
+                "taux_interet_annuel_pct",
+                "interet_estime_echeance",
+                "capital_plus_interet_estime",
+                "situation_dat_client",
             ],
             {
+                "savings_id": "DAT",
+                "product_name": "Durée",
+                "date_approved": "Souscription",
+                "maturity_date": "Échéance",
+                "jours_avant_echeance": "Jours restants",
                 "currency_code": "Devise",
-                "nombre_decaissements": "Nb decaissements",
-                "montant_decaisse_client": "Verse au client",
-                "dette_creee_observee": "Dette creee observee",
-                "interet_observe": "Interet observe",
-                "nombre_remboursements": "Nb remboursements",
-                "principal_rembourse": "Principal rembourse",
-                "remboursements_avec_penalite": "Avec penalite",
-                "penalite_observee": "Penalite observee",
-                "remboursements_avec_epargne_dat": "Avec epargne / DAT",
+                "balance": "Capital bloqué",
+                "taux_interet_annuel_pct": "Taux annuel",
+                "interet_estime_echeance": "Intérêt estimé",
+                "capital_plus_interet_estime": "Capital + intérêt estimé",
+                "situation_dat_client": "Situation",
+            },
+        )
+
+    repayments = analysis_frame("remboursements_turbo_detail_client")
+    if not repayments.empty:
+        add_analysis_title("Remboursements observés")
+        add_analysis_table(
+            repayments,
+            [
+                "created_at", "event_reference", "currency_code", "montant_paye_observe",
+                "principal_rembourse", "interet_observe", "penalite_observee",
+                "mode_remboursement_observe",
+            ],
+            {
+                "created_at": "Date",
+                "event_reference": "Référence",
+                "currency_code": "Devise",
+                "montant_paye_observe": "Montant payé",
+                "principal_rembourse": "Principal remboursé",
+                "interet_observe": "Intérêts",
+                "penalite_observee": "Pénalités",
+                "mode_remboursement_observe": "Mode observé",
             },
         )
 
@@ -8927,7 +9399,160 @@ def create_customer_statement_pdf(
         ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CBD5E1")),
         ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
-    story.extend([summary_table, Paragraph("Détail des transactions", section_style)])
+    story.append(summary_table)
+
+    analysis_report = analysis_report or {}
+
+    def analysis_frame(key: str) -> pd.DataFrame:
+        source = analysis_report.get(key, pd.DataFrame())
+        if not isinstance(source, pd.DataFrame) or source.empty:
+            return pd.DataFrame()
+        scoped = source.copy()
+        customer_scope = clean_identifier(pd.Series([customer_id_text])).iloc[0]
+        if customer_scope and "customer_id" in scoped.columns:
+            scoped = scoped.loc[
+                clean_identifier(scoped["customer_id"]).eq(customer_scope)
+            ].copy()
+        if not all_currencies and "currency_code" in scoped.columns:
+            scoped = scoped.loc[
+                clean_text(scoped["currency_code"]).str.upper().eq(currency_text)
+            ].copy()
+        return scoped
+
+    active_dat = analysis_frame("dat_en_cours_client")
+    if not active_dat.empty:
+        situation_dates = pd.to_datetime(active_dat.get("date_situation"), errors="coerce").dropna()
+        dat_title = "DAT en cours"
+        if not situation_dates.empty:
+            dat_title += f" - situation au {situation_dates.max():%d/%m/%Y}"
+        story.append(Paragraph(dat_title, section_style))
+        dat_headers = [
+            "DAT",
+            "Durée",
+            "Souscription",
+            "Échéance",
+            "Jours",
+            "Devise",
+            "Capital bloqué",
+            "Taux",
+            "Intérêt estimé",
+            "Capital + intérêt estimé",
+            "Situation",
+        ]
+        dat_rows: list[list[Any]] = [
+            [Paragraph(label, header_style) for label in dat_headers]
+        ]
+        for _, dat_row in active_dat.iterrows():
+            row_currency = str(dat_row.get("currency_code", currency_text)).upper()
+            row_decimals = 0 if row_currency == "CDF" else 2
+            approved = pd.to_datetime(dat_row.get("date_approved"), errors="coerce")
+            maturity = pd.to_datetime(dat_row.get("maturity_date"), errors="coerce")
+            values = [
+                dat_row.get("savings_id", "-"),
+                dat_row.get("product_name", "-"),
+                f"{approved:%d/%m/%Y}" if pd.notna(approved) else "-",
+                f"{maturity:%d/%m/%Y}" if pd.notna(maturity) else "-",
+                _pdf_number(dat_row.get("jours_avant_echeance"), decimals=0),
+                row_currency,
+                _pdf_number(dat_row.get("balance"), decimals=row_decimals),
+                (
+                    f"{float(dat_row.get('taux_interet_annuel_pct')):.1f}%"
+                    if pd.notna(dat_row.get("taux_interet_annuel_pct"))
+                    else "-"
+                ),
+                _pdf_number(dat_row.get("interet_estime_echeance"), decimals=row_decimals),
+                _pdf_number(dat_row.get("capital_plus_interet_estime"), decimals=row_decimals),
+                dat_row.get("situation_dat_client", "-"),
+            ]
+            dat_rows.append(
+                [
+                    Paragraph(escape("-" if _is_empty_text(value) else str(value)), body_style)
+                    for value in values
+                ]
+            )
+        dat_table = Table(
+            dat_rows,
+            colWidths=[
+                2.2 * cm,
+                1.8 * cm,
+                2.0 * cm,
+                2.0 * cm,
+                1.3 * cm,
+                1.2 * cm,
+                2.3 * cm,
+                1.3 * cm,
+                2.3 * cm,
+                2.5 * cm,
+                3.0 * cm,
+            ],
+            repeatRows=1,
+        )
+        dat_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2937")),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B7C1CC")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (4, 1), (9, -1), "RIGHT"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2.2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2.2),
+            ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+        ]))
+        story.append(dat_table)
+
+    repayments = analysis_frame("remboursements_turbo_detail_client")
+    if not repayments.empty:
+        story.append(Paragraph("Remboursements observés", section_style))
+        repayment_headers = [
+            "Date",
+            "Référence",
+            "Devise",
+            "Montant payé",
+            "Principal remboursé",
+            "Intérêts",
+            "Pénalités",
+            "Mode observé",
+        ]
+        repayment_rows: list[list[Any]] = [
+            [Paragraph(label, header_style) for label in repayment_headers]
+        ]
+        for _, repayment_row in repayments.iterrows():
+            row_currency = str(repayment_row.get("currency_code", currency_text)).upper()
+            row_decimals = 0 if row_currency == "CDF" else 2
+            repayment_date = pd.to_datetime(repayment_row.get("created_at"), errors="coerce")
+            values = [
+                f"{repayment_date:%d/%m/%Y %H:%M}" if pd.notna(repayment_date) else "-",
+                repayment_row.get("event_reference", "-"),
+                row_currency,
+                _pdf_number(repayment_row.get("montant_paye_observe"), decimals=row_decimals),
+                _pdf_number(repayment_row.get("principal_rembourse"), decimals=row_decimals),
+                _pdf_number(repayment_row.get("interet_observe"), decimals=row_decimals),
+                _pdf_number(repayment_row.get("penalite_observee"), decimals=row_decimals),
+                repayment_row.get("mode_remboursement_observe", "-"),
+            ]
+            repayment_rows.append(
+                [
+                    Paragraph(escape("-" if _is_empty_text(value) else str(value)), body_style)
+                    for value in values
+                ]
+            )
+        repayment_table = Table(
+            repayment_rows,
+            colWidths=[2.2 * cm, 3.5 * cm, 1.4 * cm, 3.0 * cm, 3.0 * cm, 2.7 * cm, 2.7 * cm, 5.0 * cm],
+            repeatRows=1,
+        )
+        repayment_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2937")),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B7C1CC")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("ALIGN", (3, 1), (6, -1), "RIGHT"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2.2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2.2),
+            ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+        ]))
+        story.append(repayment_table)
+
+    story.append(Paragraph("Détail des transactions", section_style))
 
     labels = ["Date", "Compte", "Receipt No", "Devise", "Description", "Entrée", "Sortie", view["balance_label"]]
     detail_rows: list[list[Any]] = [[Paragraph(label, header_style) for label in labels]]
@@ -9242,11 +9867,14 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
         ("synthese", "Synthese"),
         ("extrait", "Extrait_Turbo"),
         ("parcours_turbo", "Parcours_Turbo"),
+        ("dat_en_cours_client", "DAT_En_Cours"),
+        ("remboursements_turbo_detail_client", "Remboursements_Turbo"),
         ("credit_turbo_detail_client", "Credit_Client_Turbo"),
         ("positions_turbo", "Positions_Turbo"),
         ("comportement_turbo", "Comportement_Turbo"),
         ("mouvements_internes_turbo", "Mouvements_Internes"),
         ("controles_client_turbo", "Controles_Client_Turbo"),
+        ("interets_dat_echus", "Interets_DAT_Echus"),
         ("dat_final", "DAT_Final"),
         ("forts_dat", "Forts_DAT"),
         ("portefeuille_dat", "Portefeuille_DAT"),

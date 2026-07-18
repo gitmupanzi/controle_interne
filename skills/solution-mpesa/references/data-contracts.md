@@ -175,7 +175,7 @@ Une sortie B2C confirmée par Turbo conserve `Paiement client B2C` comme classif
 - Normaliser les numéros vers le format `243...` avant toute comparaison.
 - Construire l'extrait client depuis Transactions M-PESA_Turbo sans exiger G2. Le mode `Turbo seul` conserve la recherche par `customer_id` ou téléphone, les filtres, la synthèse et les exports.
 - Extraire le téléphone et le nom G2 depuis `Opposite Party`.
-- Considérer G2 comme une vérification facultative et un complément de nom. Enrichir les rapports Turbo avec `Nom_client` par téléphone; utiliser la référence G2/Portal lorsqu'elle est disponible et pertinente, sans substituer les mouvements G2 aux mouvements Turbo.
+- Considérer Portal Turbo comme source financière principale et G2 comme vérification facultative et complément de nom. Enrichir les rapports Turbo avec `Nom_client` par téléphone; utiliser la référence G2/Portal lorsqu'elle est disponible et pertinente, sans substituer les montants, dates, soldes ou mouvements G2 aux données Turbo.
 - Dans l'extrait officiel écran/Word, alimenter `Description` avec toutes les valeurs distinctes de `description` Turbo partageant `customer_id + devise + created_at + operation_reference`. Conserver l'ordre Turbo, puis ajouter le téléphone et `Nom_client` s'ils sont disponibles. `Details`, `Reason Type` et les autres libellés G2 restent des colonnes de contrôle et ne remplacent jamais cette description.
 - Inverser le sens comptable Turbo uniquement dans la restitution officielle client : `dr`/`sortie_mpesa` correspond à une entrée Bisou Bisou et `cr`/`entree_mpesa` à une sortie Bisou Bisou. Ne pas modifier les colonnes techniques Turbo sources.
 - Affecter `compte = 1441` aux entrées et `compte = 15558` aux sorties. Conserver `devise` dans chaque ligne de l'extrait.
@@ -186,6 +186,10 @@ Une sortie B2C confirmée par Turbo conserve `Paiement client B2C` comme classif
 - Le Word client exclut `Synthese du comportement observe`, `Positions observees et rapprochement des soldes` et `Jalons du parcours financier`. Il conserve `Detail des transactions` et utilise `Solution Bisou Bisou Digital` dans son pied de page.
 - Le titre Word inclut le nom seulement lorsqu'il est réellement disponible. Sans nom, il suit `Extrait de compte - <telephone> - <devise>` et n'affiche ni `NON DISPONIBLE` ni un séparateur vide.
 - Dans l'Extrait client, filtrer `g2_dat` sur le `customer_id` sélectionné avant affichage et export, même sans fichier DAT.
+- Construire `dat_en_cours_client` depuis les `FIXED SAVINGS` à solde positif du client dans `Savings Account`. Cette position est filtrée par client et devise, mais pas par la période ni la référence des transactions.
+- Fixer `date_situation` depuis `updated_at` ou `date_locked`, à défaut depuis la dernière transaction Turbo du client, puis depuis `created_at` ou `date_approved`. Ne jamais utiliser G2 pour dater ou valoriser un DAT.
+- Estimer l'intérêt par `balance × taux / 100 × durée_contractuelle_jours / 365`, avec 11 % par défaut. Restituer `savings_id`, produit, approbation, échéance, jours restants, devise, capital, taux, intérêt estimé, capital avec intérêt estimé et situation client. L'estimation n'est pas une écriture comptable.
+- Construire la synthèse et le détail des remboursements depuis les seuls événements Turbo `Remboursement de credit` et `Remboursement avec penalite`. Restituer date, référence, devise, montant payé, principal, intérêts, pénalités et mode observé. Exclure les décaissements, la dette créée et les positions de crédit de l'Extrait client.
 - Rechercher `compte_cree` dans cet ordre : `Clients.created_at`, épargne courante `created_at`, DAT `created_at` ou `date_approved`.
 - Résoudre vers `customer_id` avant de construire l'extrait client.
 - Permettre la recherche de l'extrait par `customer_id`, téléphone et nom G2 lorsque le fichier G2 est chargé.
@@ -272,6 +276,7 @@ Le bloc Word `Synthese des flux G2 par devise` utilise `rapport_journalier_pivot
 - Estimer l'intérêt simple à l'échéance par `balance × taux / 100 × durée_contractuelle_jours / 365`, avec `durée_contractuelle_jours = maturity_date - date_approved`.
 - Afficher `savings_id`, client, nom G2 disponible, téléphone, devise, produit, statut, capital, approbation, échéance, durée estimée, jours restants, action de remboursement, intérêt estimé et capital plus intérêt.
 - Calculer les indicateurs et montants séparément par devise. Ne jamais additionner CDF et USD et ne jamais présenter l'estimation comme une écriture officielle.
+- Distinguer l'échéancier prévisionnel des écritures d'intérêts échus : le premier estime à 11 % les DAT positifs à préparer; les secondes utilisent exclusivement `interest_earned` sur les DAT dénoués et restent hors du solde M-PESA.
 
 ## Balance et analyses comptables Turbo
 
@@ -328,4 +333,5 @@ L'export comptable de référence contient exactement les 12 feuilles suivantes 
 - Un fichier facultatif absent doit réduire le rapport proprement sans bloquer les analyses encore possibles.
 - Toute synthèse financière doit afficher la devise et éviter un total multidevise.
 - Le Word reste la restitution modifiable destinée à la Direction générale. L'Extrait client propose aussi un PDF natif CDF, USD ou ALL reprenant le même périmètre filtré, les mêmes comptes et la séparation stricte des devises. Les deux formats intègrent le logo officiel Bisou Bisou.
+- Le Word et le PDF de l'Extrait client ajoutent avant le détail transactionnel `DAT en cours` et `Remboursements observés`. L'Excel client utilise `DAT_En_Cours` et `Remboursements_Turbo` et n'exporte plus les feuilles d'intérêts DAT échus ou de crédit.
 - L'Excel écrit uniquement les feuilles explicitement demandées par l'appelant afin de réduire le temps et la taille de génération.
