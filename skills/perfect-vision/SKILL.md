@@ -53,6 +53,8 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 - Utiliser G2 uniquement comme preuve secondaire du canal M-PESA, complément de nom et contrôle `Receipt No = ref_no`; ne jamais reprendre ses montants dans une balance Turbo ou Perfect.
 - En cas d'écart Turbo–Perfect Vision, rapprocher par client, téléphone normalisé, devise, référence, produit et date, puis documenter le sens comptable de chaque système avant de conclure. Ne jamais additionner CDF et USD.
 - Lire [references/sources.md](references/sources.md) pour la matrice de responsabilité entre Perfect Vision, Turbo et G2.
+- Pour transposer une requête Perfect Vision de niveau 9 ou 10 vers `Pilotage financier Turbo`, vérifier d'abord que les quatre exports Turbo portent le grain et les champs nécessaires. Adapter les remboursements, évolutions dépôts/crédits, nouveaux crédits, encours, concentration, PAR simplifié, dépôts fréquents, tranches de dépôts, comptes inactifs, DAT sans crédit actif et crédit–épargne disponible. Ne pas copier comme exacts les échéanciers, provisions, garanties ou retards de versement lorsqu'un plan d'amortissement ou un champ métier manque.
+- Dans cette transposition, Transactions M-PESA_Turbo fournit les flux, Loans Account les positions de crédit, Savings Account les positions d'épargne/DAT et Customers le référentiel. G2 reste hors des calculs et sert seulement à l'identité et au rapprochement secondaire.
 
 ## Norme visuelle commune des onglets
 

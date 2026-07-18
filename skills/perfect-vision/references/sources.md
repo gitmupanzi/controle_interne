@@ -36,6 +36,17 @@ Pour analyser un écart, conserver la séparation par devise puis comparer dans 
 
 Chaque contrôle de `requetes.sql` possède normalement un numéro, un nom d'export, un objectif, une lecture et un niveau d'importance. Rechercher par concept métier, table, colonne ou nom d'export. Conserver les déclarations de paramètres nécessaires à la requête sélectionnée.
 
+### Contrôles prioritaires transposables au pilotage Turbo
+
+| Famille Perfect Vision | Adaptation Turbo | Limite à afficher |
+|---|---|---|
+| Remboursements, nouveaux crédits, évolution dépôts/crédits | Événements Transactions Turbo regroupés par `ref_no`, puis client + devise + horodatage | Les écritures sont observées; l'affectation à une échéance exige un plan d'amortissement |
+| Encours, top expositions, concentration et PAR | Instantané Loans Account, `loan_balance`, `due_date`, client et devise | Le PAR est simplifié depuis l'échéance finale si aucun tableau d'amortissement n'est fourni |
+| Dépôts fréquents, tranches, fractionnement et activité inhabituelle | Dépôts/événements Turbo sur une période, seuils propres à CDF et USD, historique de 90 jours | Une alerte est un signal de revue, pas une preuve de fraude |
+| Mouvements sur comptes inactifs | Références Transactions Turbo rapprochées de `id`/`savings_id`, statut et `date_closed` de Savings Account | Un mouvement sans référence de compte ne peut pas être attribué automatiquement |
+| DAT sans crédit actif et crédit avec épargne disponible | Positions Savings Account rapprochées des encours Loans Account au grain client x devise | Juxtaposer les positions sans compensation comptable ni assimilation à une garantie |
+| Échéanciers détaillés, provisions, garanties et retards de versement | Non transposable exactement avec les quatre exports actuels | Demander le tableau d'amortissement ou les champs métier manquants |
+
 Le catalogue utilise une présentation métier/export épurée :
 
 - les CTE, sous-requêtes, jointures, filtres, agrégations et `ORDER BY` peuvent conserver des colonnes techniques non affichées;

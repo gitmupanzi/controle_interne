@@ -36,6 +36,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_dat_maturity_analysis,
     build_loan_savings_reconciliation,
     build_mpesa_management_dashboard,
+    build_turbo_operation_events,
     build_mpesa_statement,
     build_savings_accounts_reconciliation,
     build_customer_transaction_analysis,
@@ -345,19 +346,44 @@ def _build_g2_daily_savings_report_cached(
 
 @st.cache_data(
     show_spinner=False,
+    max_entries=4,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _build_turbo_operation_events_cached(
+    prepared: MpesaPreparedData,
+) -> dict[str, pd.DataFrame]:
+    """Consolide le fichier Turbo une seule fois par jeu de televersements."""
+    return build_turbo_operation_events(prepared.transactions)
+
+
+@st.cache_data(
+    show_spinner=False,
     max_entries=8,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_management_dashboard_cached(
     prepared: MpesaPreparedData,
     dat_annual_interest_rate_pct: float,
-    analysis_date: object,
+    date_start: object,
+    date_end: object,
+    frequency: str,
+    fractionation_cdf: float,
+    fractionation_usd: float,
+    important_cdf: float,
+    important_usd: float,
 ) -> dict[str, Any]:
-    scoped_prepared = _prepared_data_as_of(prepared, analysis_date)
+    operation_journal = _build_turbo_operation_events_cached(prepared)
+    scoped_prepared = _prepared_data_as_of(prepared, date_end)
     return build_mpesa_management_dashboard(
         scoped_prepared,
-        as_of_date=analysis_date,
+        date_start=date_start,
+        as_of_date=date_end,
+        frequency=frequency,
         dat_annual_interest_rate_pct=dat_annual_interest_rate_pct,
+        fractionation_thresholds={"CDF": fractionation_cdf, "USD": fractionation_usd},
+        large_transaction_thresholds={"CDF": important_cdf, "USD": important_usd},
+        turbo_events=operation_journal["events"],
+        turbo_transaction_lines=operation_journal["lines"],
     )
 
 
@@ -2273,8 +2299,17 @@ def _render_g2_transaction_time_analysis(
     st_plot(hourly_chart, key="mpesa_g2_transactions_hourly", height=400)
 
     with st.expander("Afficher les tableaux de volumes par jour et par heure", expanded=False):
-        daily_tab, weekday_tab, hourly_tab, day_hour_tab = st.tabs(
-            ["Par jour", "Par jour de semaine", "Par heure", "Jour x heure"]
+        temporal_tab_labels = [
+            "Par jour",
+            "Par jour de semaine",
+            "Par heure",
+            "Jour x heure",
+        ]
+        temporal_tabs_key = "mpesa_g2_temporal_detail_tabs"
+        inject_professional_tabs_css(container_key=temporal_tabs_key)
+        temporal_tabs_container = st.container(key=temporal_tabs_key)
+        daily_tab, weekday_tab, hourly_tab, day_hour_tab = temporal_tabs_container.tabs(
+            format_professional_tab_labels(temporal_tab_labels)
         )
         with daily_tab:
             st.dataframe(par_jour, width="stretch", hide_index=True)
@@ -3103,8 +3138,16 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
         "derniere_operation",
         "statut_presence_systemes",
     ]
-    cohort_tabs = st.tabs(
-        ["Clients_Perfect x G2", "Clients_Perfect x Turbo", "Clients_Perfect x Turbo x G2"]
+    cohort_tab_labels = [
+        "Clients_Perfect x G2",
+        "Clients_Perfect x Turbo",
+        "Clients_Perfect x Turbo x G2",
+    ]
+    cohort_tabs_key = "mpesa_perfect_client_cohort_tabs"
+    inject_professional_tabs_css(container_key=cohort_tabs_key)
+    cohort_tabs_container = st.container(key=cohort_tabs_key)
+    cohort_tabs = cohort_tabs_container.tabs(
+        format_professional_tab_labels(cohort_tab_labels)
     )
     cohorts = [
         (
@@ -3280,7 +3323,7 @@ def _filter_pilotage_currencies(report: dict[str, Any], currencies: list[str]) -
 
 
 @st.fragment
-def _render_management_dashboard(prepared: MpesaPreparedData) -> None:
+def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
     operational_dates: list[pd.Series] = []
     if not prepared.transactions.empty and "created_at" in prepared.transactions.columns:
         operational_dates.append(
@@ -3379,8 +3422,17 @@ def _render_management_dashboard(prepared: MpesaPreparedData) -> None:
                 + ". Consultez Importation pour le detail technique."
             )
 
-    overview_tab, credit_tab, clients_tab, risk_tab = st.tabs(
-        ["Vue direction", "Credit et liquidite", "Clients et epargne", "Risques et qualite"]
+    legacy_dashboard_tab_labels = [
+        "Vue direction",
+        "Credit et liquidite",
+        "Clients et epargne",
+        "Risques et qualite",
+    ]
+    legacy_dashboard_tabs_key = "mpesa_legacy_dashboard_inner_tabs"
+    inject_professional_tabs_css(container_key=legacy_dashboard_tabs_key)
+    legacy_dashboard_tabs_container = st.container(key=legacy_dashboard_tabs_key)
+    overview_tab, credit_tab, clients_tab, risk_tab = legacy_dashboard_tabs_container.tabs(
+        format_professional_tab_labels(legacy_dashboard_tab_labels)
     )
 
     with overview_tab:
@@ -3997,6 +4049,519 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
 
 
 @st.fragment
+def _render_management_dashboard(prepared: MpesaPreparedData) -> None:
+    """Affiche le cockpit financier calcule exclusivement depuis Turbo."""
+    if prepared.transactions.empty or "created_at" not in prepared.transactions.columns:
+        st.info(
+            "Chargez Transactions M-PESA_Turbo pour construire le pilotage financier. "
+            "G2 ne remplace jamais cette source."
+        )
+        return
+
+    transaction_dates = pd.to_datetime(
+        prepared.transactions["created_at"], errors="coerce"
+    ).dropna()
+    if transaction_dates.empty:
+        st.warning("Aucune date Turbo exploitable pour definir la periode d'analyse.")
+        return
+
+    minimum_date = transaction_dates.min().date()
+    maximum_date = transaction_dates.max().date()
+    default_end = maximum_date
+    latest_timestamp = transaction_dates.max()
+    if minimum_date < maximum_date and latest_timestamp.hour < 18:
+        previous_date = (pd.Timestamp(maximum_date) - pd.Timedelta(days=1)).date()
+        if previous_date >= minimum_date:
+            default_end = previous_date
+    default_start = max(
+        minimum_date,
+        (pd.Timestamp(default_end) - pd.Timedelta(days=30)).date(),
+    )
+
+    render_summary_box(
+        "Pilotage financier Turbo",
+        [
+            "Turbo constitue la source operationnelle principale de la Solution M_PESA.",
+            "G2 enrichit l'identite du client et fournit une preuve de rapprochement des ecritures, sans intervenir dans le calcul des montants, des soldes, des DAT ou des remboursements.",
+            "Les flux sont calcules au grain de l'evenement Turbo consolide; les positions Credits, Epargne et DAT sont des instantanes du portail Turbo.",
+            "CDF et USD restent toujours separes. Aucun total monetaire multidevise n'est produit.",
+            "Tous les volets ci-dessous sont calcules une fois et conserves en cache; changer d'onglet ne relance pas l'analyse.",
+        ],
+    )
+
+    with st.form("mpesa_turbo_financial_filters"):
+        date_col, frequency_col = st.columns([2.2, 1.0])
+        with date_col:
+            selected_period = st.date_input(
+                "Periode Turbo",
+                value=(default_start, default_end),
+                min_value=minimum_date,
+                max_value=maximum_date,
+                key=(
+                    f"mpesa_turbo_financial_period_{minimum_date:%Y%m%d}_"
+                    f"{maximum_date:%Y%m%d}_{len(transaction_dates)}"
+                ),
+                help="Les deux bornes sont incluses. La derniere journee complete est proposee par defaut.",
+            )
+        with frequency_col:
+            frequency = st.selectbox(
+                "Frequence d'evolution",
+                ["Jour", "Semaine", "Mois"],
+                key="mpesa_turbo_financial_frequency",
+            )
+        st.caption(
+            "Seuils de controle proposes depuis les analyses prioritaires Perfect Vision; ils restent propres a chaque devise."
+        )
+        threshold_columns = st.columns(4)
+        fractionation_cdf = threshold_columns[0].number_input(
+            "Fractionnement CDF",
+            min_value=0.0,
+            value=14_000_000.0,
+            step=100_000.0,
+            key="mpesa_fractionation_cdf",
+        )
+        fractionation_usd = threshold_columns[1].number_input(
+            "Fractionnement USD",
+            min_value=0.0,
+            value=5_000.0,
+            step=100.0,
+            key="mpesa_fractionation_usd",
+        )
+        important_cdf = threshold_columns[2].number_input(
+            "Transaction importante CDF",
+            min_value=0.0,
+            value=28_000_000.0,
+            step=100_000.0,
+            key="mpesa_important_cdf",
+        )
+        important_usd = threshold_columns[3].number_input(
+            "Transaction importante USD",
+            min_value=0.0,
+            value=10_000.0,
+            step=100.0,
+            key="mpesa_important_usd",
+        )
+        st.form_submit_button("Actualiser l'analyse Turbo", type="primary")
+
+    if isinstance(selected_period, (tuple, list)) and len(selected_period) == 2:
+        date_start, date_end = selected_period
+    elif isinstance(selected_period, (tuple, list)) and len(selected_period) == 1:
+        date_start = date_end = selected_period[0]
+    elif isinstance(selected_period, (tuple, list)):
+        date_start, date_end = default_start, default_end
+    else:
+        date_start = date_end = selected_period
+
+    dat_interest_rate = float(
+        st.session_state.get(
+            "mpesa_dat_annual_interest_rate_pct",
+            DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+        )
+    )
+    with st.spinner("Consolidation des evenements et analyses financieres Turbo..."):
+        report = _build_mpesa_management_dashboard_cached(
+            prepared,
+            dat_interest_rate,
+            date_start,
+            date_end,
+            frequency,
+            float(fractionation_cdf),
+            float(fractionation_usd),
+            float(important_cdf),
+            float(important_usd),
+        )
+
+    currency_options: set[str] = set()
+    for value in report.values():
+        if isinstance(value, pd.DataFrame) and not value.empty and "currency_code" in value.columns:
+            currency_options.update(
+                item
+                for item in value["currency_code"].dropna().astype(str).unique()
+                if item.strip()
+            )
+    currency_options_sorted = sorted(currency_options)
+    selected_currencies = st.multiselect(
+        "Devises affichees",
+        options=currency_options_sorted,
+        default=currency_options_sorted,
+        key="mpesa_turbo_financial_currencies",
+        help="Une selection vide conserve toutes les devises.",
+    )
+    report_view = _filter_pilotage_currencies(report, selected_currencies)
+
+    st.caption(
+        f"Periode analysee : {pd.Timestamp(date_start):%d/%m/%Y} au "
+        f"{pd.Timestamp(date_end):%d/%m/%Y} | Frequence : {frequency}. "
+        "Les positions de portefeuille restent des instantanes Turbo."
+    )
+    sources = report_view.get("sources", pd.DataFrame())
+    if not sources.empty:
+        missing_main_sources = sources.loc[
+            sources["source"].isin(
+                [
+                    "Transactions M-PESA_Turbo",
+                    "Savings Account_Turbo",
+                    "Loans Account_Turbo",
+                    "Customers_Turbo",
+                ]
+            )
+            & ~sources["disponible"].astype("boolean").fillna(False).astype(bool),
+            "source",
+        ].astype(str).tolist()
+        if missing_main_sources:
+            st.warning(
+                "Sources Turbo principales non chargees : " + ", ".join(missing_main_sources)
+            )
+
+    financial_tab_labels = [
+        "Vue direction",
+        "Flux Turbo",
+        "Crédit",
+        "Épargne et DAT",
+        "Risques et contrôles",
+        "Export",
+    ]
+    financial_tabs_key = "mpesa_turbo_financial_inner_tabs"
+    inject_professional_tabs_css(container_key=financial_tabs_key)
+    financial_tabs_container = st.container(key=financial_tabs_key)
+    overview_tab, flows_tab, credit_tab, savings_tab, risks_tab, export_tab = (
+        financial_tabs_container.tabs(
+            format_professional_tab_labels(financial_tab_labels)
+        )
+    )
+
+    with overview_tab:
+        flow_summary = report_view.get("flux_synthese", pd.DataFrame())
+        credit_summary = report_view.get("credit_synthese", pd.DataFrame())
+        alerts = report_view.get("alertes_transactions", pd.DataFrame())
+        dat_detail = report_view.get("dat_echeances_detail", pd.DataFrame())
+        currencies = sorted(
+            set(flow_summary.get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
+            | set(credit_summary.get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
+        )
+        if not currencies:
+            st.info("Aucun indicateur monetaire Turbo n'est calculable sur la periode.")
+        for currency in currencies:
+            st.markdown(f"#### {currency}")
+            flow_row = flow_summary.loc[flow_summary["currency_code"].eq(currency)]
+            credit_row = credit_summary.loc[credit_summary["currency_code"].eq(currency)]
+            entries = float(flow_row.iloc[0].get("montant_entrees", 0)) if not flow_row.empty else 0.0
+            exits = float(flow_row.iloc[0].get("montant_sorties", 0)) if not flow_row.empty else 0.0
+            repayments = float(flow_row.iloc[0].get("remboursements_observes", 0)) if not flow_row.empty else 0.0
+            new_credit = float(flow_row.iloc[0].get("nouveaux_credits_decaissements", 0)) if not flow_row.empty else 0.0
+            outstanding = float(credit_row.iloc[0].get("encours_total", 0)) if not credit_row.empty else 0.0
+            par_30 = credit_row.iloc[0].get("par_30j_pct", pd.NA) if not credit_row.empty else pd.NA
+            render_kpi_cards(
+                [
+                    (f"Entrees [{currency}]", _format_amount(entries), "Depots et remboursements", "green"),
+                    (f"Sorties [{currency}]", _format_amount(exits), "Retraits et decaissements", "orange"),
+                    (f"Remboursements [{currency}]", _format_amount(repayments), "Observes dans Transactions Turbo", "blue"),
+                    (f"Nouveaux credits [{currency}]", _format_amount(new_credit), "Decaissements observes", "navy"),
+                    (f"Encours / PAR30 [{currency}]", f"{_format_amount(outstanding)} / {_format_percent(par_30)}", "Position Loans Account", "red"),
+                ]
+            )
+
+        render_panel_title("Priorites de suivi")
+        priority_rows: list[dict[str, Any]] = []
+        if not alerts.empty:
+            for (currency, alert_type), group in alerts.groupby(["currency_code", "alerte"]):
+                priority_rows.append(
+                    {
+                        "priorite": alert_type,
+                        "currency_code": currency,
+                        "dossiers": len(group),
+                        "montant_concerne": group["montant"].sum(),
+                    }
+                )
+        if not dat_detail.empty and "tranche_echeance" in dat_detail.columns:
+            due_mask = dat_detail["tranche_echeance"].isin(
+                ["Echu", "0 a 7 jours", "8 a 30 jours"]
+            )
+            for currency, group in dat_detail.loc[due_mask].groupby("currency_code"):
+                priority_rows.append(
+                    {
+                        "priorite": "DAT echus ou a echeance sous 30 jours",
+                        "currency_code": currency,
+                        "dossiers": len(group),
+                        "montant_concerne": group["balance"].sum(),
+                    }
+                )
+        if priority_rows:
+            st.dataframe(pd.DataFrame(priority_rows), width="stretch", hide_index=True)
+        else:
+            st.success("Aucune priorite Turbo calculee sur la periode selectionnee.")
+
+    with flows_tab:
+        render_panel_title("Evolution des depots, retraits, credits et remboursements [Turbo]")
+        evolution = report_view.get("flux_evolution", pd.DataFrame())
+        if evolution.empty:
+            st.info("Aucun evenement Turbo dans la periode selectionnee.")
+        else:
+            chart_columns = [
+                "depots_epargne_courante",
+                "depots_dat",
+                "retraits_epargne",
+                "nouveaux_credits_decaissements",
+                "remboursements_observes",
+            ]
+            chart_data = evolution.melt(
+                id_vars=["periode_analyse", "currency_code"],
+                value_vars=chart_columns,
+                var_name="flux",
+                value_name="montant",
+            )
+            chart_data["flux"] = chart_data["flux"].map(
+                {
+                    "depots_epargne_courante": "Depots epargne",
+                    "depots_dat": "Depots DAT",
+                    "retraits_epargne": "Retraits epargne",
+                    "nouveaux_credits_decaissements": "Nouveaux credits",
+                    "remboursements_observes": "Remboursements",
+                }
+            )
+            fig = px.line(
+                chart_data,
+                x="periode_analyse",
+                y="montant",
+                color="flux",
+                facet_col="currency_code",
+                facet_col_wrap=2,
+                markers=True,
+                labels={
+                    "periode_analyse": "Periode",
+                    "montant": "Montant",
+                    "flux": "Flux",
+                    "currency_code": "Devise",
+                },
+            )
+            style_standard_line(fig, height=430, tickangle=-20)
+            st_plot(fig, key="mpesa_turbo_financial_evolution", height=430)
+            st.dataframe(evolution, width="stretch", hide_index=True)
+
+        render_panel_title("Remboursements de credit observes [Turbo]")
+        repayments_summary = report_view.get("remboursements_synthese", pd.DataFrame())
+        repayments_detail = report_view.get("remboursements_detail", pd.DataFrame())
+        if repayments_summary.empty:
+            st.info("Aucun remboursement Turbo classe dans la periode.")
+        else:
+            st.dataframe(repayments_summary, width="stretch", hide_index=True)
+            with st.expander("Afficher le detail des remboursements", expanded=False):
+                repayment_view = _apply_local_multiselect_filters(
+                    repayments_detail,
+                    ["currency_code", "mode_remboursement_observe", "statut_controle_turbo"],
+                    key_prefix="mpesa_turbo_repayment_filter",
+                )
+                st.dataframe(repayment_view.head(1000), width="stretch", hide_index=True)
+
+    with credit_tab:
+        render_panel_title("Nouveaux credits et decaissements de la periode [Turbo]")
+        new_credit_summary = report_view.get("nouveaux_credits_synthese", pd.DataFrame())
+        if new_credit_summary.empty:
+            st.info("Aucun nouveau compte ou decaissement de credit Turbo dans la periode.")
+        else:
+            st.dataframe(new_credit_summary, width="stretch", hide_index=True)
+            st.caption(
+                "L'ecart rapproche les decaissements observes dans Transactions Turbo et les comptes crees dans Loans Account. "
+                "Il s'agit d'un controle global par devise, pas d'une preuve d'affectation ligne a ligne."
+            )
+
+        render_panel_title("Encours, retards et PAR [Loans Account_Turbo]")
+        credit_summary = report_view.get("credit_synthese", pd.DataFrame())
+        credit_detail = report_view.get("credit_detail", pd.DataFrame())
+        if credit_summary.empty:
+            st.info("Chargez Loans Account_Turbo pour calculer l'encours et le PAR.")
+        else:
+            st.dataframe(credit_summary, width="stretch", hide_index=True)
+            if not credit_detail.empty:
+                risk_chart = (
+                    credit_detail.groupby(["currency_code", "statut_risque"], as_index=False)
+                    .agg(nombre_credits=("loan_id", "nunique"), encours_total=("encours_total", "sum"))
+                )
+                fig = px.bar(
+                    risk_chart,
+                    x="statut_risque",
+                    y="encours_total",
+                    color="statut_risque",
+                    facet_col="currency_code",
+                    facet_col_wrap=2,
+                    labels={"statut_risque": "Risque", "encours_total": "Encours", "currency_code": "Devise"},
+                )
+                style_standard_vertical_bar(fig, height=400, tickangle=-25)
+                st_plot(fig, key="mpesa_turbo_credit_risk", height=400)
+
+        concentration = report_view.get("concentration_credit_synthese", pd.DataFrame())
+        par_bands = report_view.get("par_tranches_montant", pd.DataFrame())
+        render_panel_title("Concentration du portefeuille et PAR par tranche [Turbo]")
+        if not concentration.empty:
+            st.dataframe(concentration, width="stretch", hide_index=True)
+        if not par_bands.empty:
+            st.dataframe(par_bands, width="stretch", hide_index=True)
+        with st.expander("Afficher les credits a suivre", expanded=False):
+            credit_view = _apply_local_multiselect_filters(
+                credit_detail,
+                ["currency_code", "statut_risque", "status_name", "customer_id"],
+                key_prefix="mpesa_turbo_credit_filter",
+            ) if not credit_detail.empty else credit_detail
+            st.dataframe(credit_view.head(1000), width="stretch", hide_index=True)
+
+    with savings_tab:
+        render_panel_title("Activite d'epargne par client [Transactions Turbo]")
+        savings_activity = report_view.get("activite_epargne_clients", pd.DataFrame())
+        if savings_activity.empty:
+            st.info("Aucun depot, retrait ou mouvement DAT Turbo dans la periode.")
+        else:
+            top_savings = (
+                savings_activity.sort_values("flux_net_epargne", ascending=False)
+                .groupby("currency_code", as_index=False, group_keys=False)
+                .head(15)
+            )
+            fig = px.bar(
+                top_savings.sort_values("flux_net_epargne"),
+                x="flux_net_epargne",
+                y="customer_id",
+                color="currency_code",
+                facet_col="currency_code",
+                facet_col_wrap=2,
+                labels={"flux_net_epargne": "Flux net epargne", "customer_id": "Client", "currency_code": "Devise"},
+            )
+            style_standard_horizontal_bar(fig, height=430)
+            st_plot(fig, key="mpesa_turbo_savings_clients", height=430)
+            with st.expander("Afficher l'activite epargne client", expanded=False):
+                st.dataframe(savings_activity.head(1000), width="stretch", hide_index=True)
+
+        frequent = report_view.get("depots_frequents_hebdo", pd.DataFrame())
+        deposit_bands = report_view.get("tranches_depots", pd.DataFrame())
+        render_panel_title("Frequence et tranches de depots [Turbo]")
+        if not deposit_bands.empty:
+            st.dataframe(deposit_bands, width="stretch", hide_index=True)
+        if not frequent.empty:
+            frequent_only = frequent.loc[frequent["deposant_frequent_3_plus"]].copy()
+            with st.expander("Afficher les clients avec au moins trois depots par semaine", expanded=False):
+                st.dataframe(frequent_only.head(1000), width="stretch", hide_index=True)
+
+        render_panel_title("DAT a preparer et DAT sans credit actif [Turbo]")
+        dat_summary = report_view.get("dat_echeances_synthese", pd.DataFrame())
+        dat_without_credit = report_view.get("dat_sans_credit_actif", pd.DataFrame())
+        if not dat_summary.empty:
+            st.dataframe(dat_summary, width="stretch", hide_index=True)
+        with st.expander("Afficher les DAT positifs sans credit actif dans la meme devise", expanded=False):
+            st.dataframe(dat_without_credit.head(1000), width="stretch", hide_index=True)
+
+        render_panel_title("Credits et epargne disponible, sans compensation [Turbo]")
+        credit_savings = report_view.get("credits_epargne_disponible", pd.DataFrame())
+        if credit_savings.empty:
+            st.info("Aucune position credit/epargne consolidable.")
+        else:
+            st.dataframe(credit_savings.head(1000), width="stretch", hide_index=True)
+
+    with risks_tab:
+        render_panel_title("Concentration des transactions [Turbo]")
+        concentration_summary = report_view.get(
+            "concentration_transactions_synthese", pd.DataFrame()
+        )
+        concentration_clients = report_view.get(
+            "concentration_transactions_clients", pd.DataFrame()
+        )
+        if concentration_summary.empty:
+            st.info("Aucune operation Turbo dans la periode.")
+        else:
+            st.dataframe(concentration_summary, width="stretch", hide_index=True)
+            top_clients = concentration_clients.loc[
+                concentration_clients["rang_volume"].le(10)
+            ].copy()
+            if not top_clients.empty:
+                fig = px.bar(
+                    top_clients.sort_values("volume_total"),
+                    x="volume_total",
+                    y="customer_id",
+                    color="currency_code",
+                    facet_col="currency_code",
+                    facet_col_wrap=2,
+                    labels={"volume_total": "Volume", "customer_id": "Client", "currency_code": "Devise"},
+                )
+                style_standard_horizontal_bar(fig, height=420)
+                st_plot(fig, key="mpesa_turbo_transaction_concentration", height=420)
+
+        render_panel_title("Alertes et controles prioritaires [Turbo]")
+        alerts = report_view.get("alertes_transactions", pd.DataFrame())
+        if alerts.empty:
+            st.success("Aucune alerte Turbo calculee avec les seuils selectionnes.")
+        else:
+            alert_view = _apply_local_multiselect_filters(
+                alerts,
+                ["currency_code", "alerte", "customer_id"],
+                key_prefix="mpesa_turbo_alert_filter",
+            )
+            st.dataframe(alert_view.head(1500), width="stretch", hide_index=True)
+
+        inactive = report_view.get("mouvements_comptes_inactifs", pd.DataFrame())
+        client_quality = report_view.get("qualite_clients_synthese", pd.DataFrame())
+        render_panel_title("Mouvements sur comptes inactifs et qualite clients [Turbo]")
+        if inactive.empty:
+            st.success("Aucun mouvement rattache a un compte epargne/DAT inactif sur la periode.")
+        else:
+            st.dataframe(inactive.head(1000), width="stretch", hide_index=True)
+        if not client_quality.empty:
+            st.dataframe(client_quality, width="stretch", hide_index=True)
+
+    with export_tab:
+        render_panel_title("Export cible du pilotage financier Turbo")
+        st.caption(
+            "Le classeur reprend uniquement les analyses du cockpit. G2 n'y fournit aucun montant."
+        )
+        export_keys = [
+            "flux_synthese",
+            "flux_evolution",
+            "remboursements_synthese",
+            "remboursements_detail",
+            "nouveaux_credits_synthese",
+            "nouveaux_credits_detail",
+            "credit_synthese",
+            "credit_detail",
+            "par_tranches_montant",
+            "concentration_credit_synthese",
+            "activite_epargne_clients",
+            "depots_frequents_hebdo",
+            "tranches_depots",
+            "concentration_transactions_synthese",
+            "alertes_transactions",
+            "mouvements_comptes_inactifs",
+            "dat_sans_credit_actif",
+            "credits_epargne_disponible",
+            "dat_echeances_detail",
+            "qualite_clients_detail",
+            "definitions",
+            "sources",
+        ]
+        export_report = {
+            key: report_view[key]
+            for key in export_keys
+            if key in report_view and isinstance(report_view[key], pd.DataFrame)
+        }
+        if st.button(
+            "Preparer l'export Pilotage Turbo",
+            key="mpesa_prepare_turbo_financial_export",
+            width="content",
+        ):
+            with st.spinner("Preparation du classeur Turbo..."):
+                export_bytes = _create_excel_export_cached(export_report)
+            st.download_button(
+                "Telecharger le pilotage financier Turbo",
+                data=export_bytes,
+                file_name=(
+                    f"pilotage_financier_turbo_{pd.Timestamp(date_start):%Y%m%d}_"
+                    f"{pd.Timestamp(date_end):%Y%m%d}.xlsx"
+                ),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="mpesa_download_turbo_financial_export",
+                width="content",
+            )
+        with st.expander("Sources et definitions des indicateurs", expanded=False):
+            st.dataframe(sources, width="stretch", hide_index=True)
+            st.dataframe(report_view.get("definitions", pd.DataFrame()), width="stretch", hide_index=True)
+
+
+@st.fragment
 def _render_accounting_tab(prepared: MpesaPreparedData) -> None:
     if prepared.transactions.empty or "created_at" not in prepared.transactions.columns:
         st.info(
@@ -4442,7 +5007,7 @@ def render_solution_mpesa_tab() -> None:
     )
     sub_tab_names = [
         "Importation",
-        "Pilotage Turbo + G2",
+        "Pilotage financier Turbo",
         "Comptabilité Turbo",
         "Extrait client",
         "DAT",

@@ -15,6 +15,7 @@ La source de vérité exécutable reste `credit_app/data_schema.py`. Les règles
 - [Filtres et fidélisation](#filtres-et-fidélisation)
 - [Rapprochement crédits et épargne](#rapprochement-crédits-et-épargne)
 - [Échéances et remboursements DAT](#échéances-et-remboursements-dat)
+- [Pilotage financier Turbo sur une période](#pilotage-financier-turbo-sur-une-période)
 - [Balance et analyses comptables Turbo](#balance-et-analyses-comptables-turbo)
 - [Fonctions à privilégier](#fonctions-à-privilégier)
 - [Conditions d'interprétation](#conditions-dinterprétation)
@@ -278,6 +279,23 @@ Le bloc Word `Synthese des flux G2 par devise` utilise `rapport_journalier_pivot
 - Calculer les indicateurs et montants séparément par devise. Ne jamais additionner CDF et USD et ne jamais présenter l'estimation comme une écriture officielle.
 - Distinguer l'échéancier prévisionnel des écritures d'intérêts échus : le premier estime à 11 % les DAT positifs à préparer; les secondes utilisent exclusivement `interest_earned` sur les DAT dénoués et restent hors du solde M-PESA.
 
+## Pilotage financier Turbo sur une période
+
+- Utiliser `build_turbo_operation_events` pour consolider une seule fois Transactions M-PESA_Turbo au grain événement. La clé prioritaire est `ref_no`; sans référence, utiliser `customer_id + currency_code + created_at` et conserver les ventilations techniques dans le même événement.
+- Utiliser `build_mpesa_turbo_financial_analysis` ou `build_mpesa_management_dashboard` avec `date_start`, `date_end` et `frequency`. Les deux bornes sont incluses; `frequency` accepte le jour, la semaine ou le mois.
+- Ne jamais lire les montants G2 pour le pilotage. La ligne de source G2 doit porter `intervient_dans_les_montants = False` et le rôle `Identité et preuve de rapprochement uniquement`.
+- Construire `flux_synthese` et `flux_evolution` depuis `montant_entree_bisou`, `montant_sortie_bisou`, les dépôts d'épargne, les dépôts DAT, les retraits, les décaissements et les remboursements observés.
+- Construire `remboursements_synthese` et `remboursements_detail` uniquement avec `Remboursement de credit` et `Remboursement avec penalite`. Conserver principal, intérêt, pénalité, mode observé et contrôle des écritures miroir.
+- Construire `nouveaux_credits_synthese` depuis les décaissements Transactions Turbo et les comptes `Loans Account` créés dans la période. Rapprocher les totaux par devise sans prétendre à une affectation ligne à ligne.
+- Utiliser `credit_synthese`, `credit_detail`, `par_tranches_montant`, `concentration_credit_synthese` et `concentration_credit_clients` pour l'encours, le PAR simplifié, les tranches et les concentrations. La source reste l'instantané Loans Account.
+- Utiliser `activite_epargne_clients`, `depots_frequents_hebdo`, `tranches_depots`, `dat_echeances_detail`, `dat_sans_credit_actif` et `credits_epargne_disponible` pour les analyses d'épargne et de DAT. Ne jamais compenser comptablement l'épargne et le crédit.
+- Produire `concentration_transactions_synthese`, `alertes_transactions`, `controles_operations` et `mouvements_comptes_inactifs`. Les alertes couvrent les contrôles Turbo, transactions importantes, fractionnement potentiel et activité inhabituelle comparée aux 90 jours précédents; elles sont des signaux de revue.
+- Valeurs par défaut des seuils : fractionnement à 14 000 000 CDF ou 5 000 USD; transaction importante à 28 000 000 CDF ou 10 000 USD. Autoriser leur modification dans le formulaire du cockpit.
+- Adapter les requêtes Perfect Vision de niveau 9 ou 10 seulement lorsque les quatre sources Turbo démontrent les champs requis. Sans plan d'amortissement détaillé, calculer un PAR simplifié depuis `due_date` mais ne pas reproduire les échéanciers, provisions ou retards de versement exacts.
+- Conserver le journal d'événements en cache par empreinte des fichiers, puis le rapport par période et seuils. Tous les onglets internes du cockpit sont construits lors du premier calcul; changer d'onglet ne relance pas le moteur.
+
+Cas réel du 16 juillet 2026 avec les exports du 17 juillet : 135 événements, dont 48 CDF et 87 USD. Les remboursements observés sont 284 910 CDF et 194,54 USD; les nouveaux crédits décaissés sont 122 200 CDF et 99 USD. Les décaissements et les comptes de crédit créés se rapprochent exactement dans les deux devises pour ce cas.
+
 ## Balance et analyses comptables Turbo
 
 - La source des mouvements est exclusivement Transactions M-PESA_Turbo. G2 ne fournit que le nom client et le contrôle direct `Receipt No = ref_no`.
@@ -320,7 +338,7 @@ L'export comptable de référence contient exactement les 12 feuilles suivantes 
 - Contrôle épargne/DAT : `build_savings_accounts_reconciliation`.
 - Extrait : `build_mpesa_statement`, `build_customer_summary`, `build_diagnostics`.
 - G2/DAT : `build_g2_dat_crosscheck`, `build_g2_entry_report`, `build_g2_daily_savings_report`, `build_g2_transaction_time_analysis`, `build_g2_retention_report`.
-- Pilotage : `build_mpesa_management_dashboard`, `build_mpesa_credit_risk_analysis`, `build_loan_savings_reconciliation`, `build_mpesa_liquidity_analysis`, `build_mpesa_client_activity_analysis`, `build_mpesa_savings_conversion_analysis`, `build_mpesa_transaction_concentration_analysis`, `build_mpesa_transaction_quality_analysis`, `build_mpesa_dat_maturity_analysis`, `build_mpesa_perfect_adoption_analysis`.
+- Pilotage : `build_turbo_operation_events`, `build_mpesa_turbo_financial_analysis`, `build_mpesa_management_dashboard`, `build_mpesa_credit_risk_analysis`, `build_loan_savings_reconciliation`, `build_mpesa_dat_maturity_analysis`.
 - Comptabilité : `build_mpesa_accounting_analysis`.
 - Perfect : `build_perfect_client_crosscheck`.
 - Recherche : `search_customers`, `resolve_customer_id`.

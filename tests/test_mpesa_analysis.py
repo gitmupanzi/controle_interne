@@ -23,6 +23,8 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_dat_maturity_analysis,
     build_mpesa_accounting_analysis,
     build_mpesa_management_dashboard,
+    build_mpesa_turbo_financial_analysis,
+    build_turbo_operation_events,
     build_loan_savings_reconciliation,
     build_g2_dat_pdf_html,
     create_g2_dat_word,
@@ -3559,43 +3561,26 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(credit_cdf["par_30j_pct"]), 100.0)
         self.assertEqual(int(credit_cdf["credits_retard_30j"]), 1)
 
-        client_a = report["activite_clients"].loc[
-            report["activite_clients"]["phone_prefixe"].astype("string").eq("243811111111")
-        ].iloc[0]
-        self.assertTrue(bool(client_a["est_reactive_30j"]))
-        self.assertEqual(client_a["statut_activite"], "Actif 30 jours")
-
-        conversion_a = report["conversion_clients"].loc[
-            report["conversion_clients"]["phone_prefixe"].astype("string").eq("243811111111")
-        ].iloc[0]
-        self.assertTrue(bool(conversion_a["conversion_observee"]))
-
         maturity_buckets = set(report["dat_echeances_synthese"]["tranche_echeance"])
         self.assertIn("Echu", maturity_buckets)
         self.assertIn("0 a 7 jours", maturity_buckets)
         self.assertTrue(report["dat_echeances_detail"]["taux_interet_annuel_pct"].eq(12.0).all())
         self.assertTrue(report["dat_echeances_detail"]["interet_estime_echeance"].notna().all())
 
-        perfect_summary = report["perfect_adoption_synthese"].iloc[0]
-        self.assertEqual(int(perfect_summary["telephones_perfect_valides"]), 3)
-        self.assertEqual(int(perfect_summary["clients_perfect_dans_mpesa"]), 2)
-        self.assertEqual(int(perfect_summary["clients_perfect_jamais_observes"]), 1)
-        self.assertEqual(set(report["liquidite_synthese"]["currency_code"]), {"CDF", "USD"})
-        self.assertFalse(report["concentration_clients"].empty)
-        self.assertFalse(report["qualite_synthese"].empty)
+        # G2 ne doit alimenter aucun montant, meme lorsqu'il est charge.
+        self.assertTrue(report["flux_synthese"].empty)
+        self.assertTrue(report["activite_clients"].empty)
+        self.assertTrue(report["alertes_transactions"].empty)
+        self.assertTrue(report["perfect_adoption_synthese"].empty)
+        g2_source = report["sources"].loc[
+            report["sources"]["source"].eq("Transactions M-PESA_G2")
+        ].iloc[0]
+        self.assertFalse(bool(g2_source["intervient_dans_les_montants"]))
 
         export_keys = [
             "credit_synthese",
             "credit_detail",
-            "liquidite_synthese",
-            "liquidite_journaliere",
-            "activite_clients",
-            "conversion_clients",
-            "concentration_clients",
-            "qualite_synthese",
-            "alertes_transactions",
             "dat_echeances_detail",
-            "perfect_adoption_detail",
         ]
         export = create_excel_export({key: report[key] for key in export_keys if not report[key].empty})
         workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
@@ -3604,15 +3589,84 @@ class MpesaAnalysisTests(unittest.TestCase):
             [
                 "Pilotage_Credit_Turbo",
                 "Credits_Risque_Turbo",
-                "Liquidite_G2",
-                "Liquidite_Jour_G2",
-                "Activite_Turbo_G2",
-                "Conversion_DAT_G2",
-                "Concentration_G2",
-                "Qualite_G2",
-                "Alertes_G2",
                 "Echeances_DAT_Turbo",
-                "Adoption_Turbo_G2",
+            ],
+        )
+
+    def test_turbo_financial_analysis_uses_one_event_grain_and_never_g2_amounts(self) -> None:
+        prepared = _sample_customer_transaction_analysis_data()
+        prepared = MpesaPreparedData(
+            transactions=prepared.transactions,
+            current_savings=prepared.current_savings,
+            fixed_savings=prepared.fixed_savings,
+            loans=prepared.loans,
+            load_report=prepared.load_report,
+            g2_transactions=prepare_g2_transactions(
+                pd.DataFrame(
+                    [
+                        {
+                            "Receipt No.": "G2-IGNORED",
+                            "Completion Time": "2026-07-03 08:00:00",
+                            "Opposite Party": "0812345678 - CLIENT TEST",
+                            "Currency": "CDF",
+                            "Paid In": 9_999_999,
+                            "Withdrawn": 0,
+                            "Balance": 9_999_999,
+                            "Transaction Status": "Completed",
+                            "Details": "BisouBisouC2B",
+                        }
+                    ]
+                )
+            ),
+        )
+        journal = build_turbo_operation_events(prepared.transactions)
+
+        report = build_mpesa_turbo_financial_analysis(
+            prepared,
+            date_start="2026-07-01",
+            date_end="2026-07-05",
+            turbo_events=journal["events"],
+            turbo_transaction_lines=journal["lines"],
+        )
+
+        self.assertEqual(len(report["operations_turbo"]), 5)
+        flow = report["flux_synthese"].iloc[0]
+        self.assertEqual(flow["currency_code"], "CDF")
+        self.assertEqual(float(flow["montant_entrees"]), 190.0)
+        self.assertEqual(float(flow["montant_sorties"]), 100.0)
+        self.assertEqual(float(flow["remboursements_observes"]), 40.0)
+        self.assertEqual(float(flow["nouveaux_credits_decaissements"]), 100.0)
+        new_credit = report["nouveaux_credits_synthese"].iloc[0]
+        self.assertEqual(float(new_credit["montant_decaisse_turbo"]), 100.0)
+        self.assertEqual(float(new_credit["montant_initial_comptes"]), 100.0)
+        self.assertEqual(new_credit["statut_rapprochement"], "Conforme")
+        self.assertEqual(float(report["remboursements_synthese"].iloc[0]["montant_rembourse"]), 40.0)
+        self.assertTrue(report["dat_sans_credit_actif"].empty)
+        self.assertNotIn(9_999_999, report["flux_synthese"].select_dtypes("number").to_numpy())
+
+        export = create_excel_export(
+            {
+                key: report[key]
+                for key in [
+                    "flux_synthese",
+                    "remboursements_detail",
+                    "nouveaux_credits_synthese",
+                    "par_tranches_montant",
+                    "definitions",
+                    "sources",
+                ]
+            }
+        )
+        workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
+        self.assertEqual(
+            workbook.sheet_names,
+            [
+                "Flux_Synthese_Turbo",
+                "Remboursements_Pilotage",
+                "Nouveaux_Credits_Synthese",
+                "PAR_Tranches_Turbo",
+                "Definitions_Pilotage",
+                "Sources_Pilotage",
             ],
         )
 
@@ -3631,9 +3685,9 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertTrue(report["liquidite_synthese"].empty)
         self.assertTrue(report["activite_clients"].empty)
         self.assertTrue(report["perfect_adoption_detail"].empty)
-        self.assertEqual(len(report["sources"]), 7)
-        self.assertIn("Clients_Turbo", report["sources"]["source"].tolist())
-        self.assertIn("Clients_Perfect", report["sources"]["source"].tolist())
+        self.assertEqual(len(report["sources"]), 5)
+        self.assertIn("Customers_Turbo", report["sources"]["source"].tolist())
+        self.assertIn("Transactions M-PESA_G2", report["sources"]["source"].tolist())
 
     def test_dat_maturity_interest_is_estimated_only_with_a_positive_rate(self) -> None:
         fixed = prepare_fixed_savings(

@@ -1,6 +1,6 @@
 ---
 name: solution-mpesa
-description: Importer, normaliser, contrôler et rapprocher les fichiers Excel M-PESA de G2, Turbo et Perfect; construire les sous-onglets Pilotage Turbo + G2, Comptabilité Turbo, G2/DAT, Extrait client, Crédits et Perfect_client, produire la balance auxiliaire client, mesurer risque crédit, liquidité, activité client, conversion DAT, concentration, qualité et adoption, détecter les anomalies et produire les exports Excel ciblés, Word et PDF sans mélanger les devises. Utiliser pour toute question ou modification liée à Solution M-PESA, Bisou Bisou Digital, Portal/Turbo, G2, Perfect, Phone_Prefixe, Receipt No/ref_no, DAT, épargne, crédit, comptabilité, balance, fidélisation, rapprochement client ou rapport M-PESA du projet Streamlit.
+description: Importer, normaliser, contrôler et rapprocher les fichiers Excel M-PESA de Turbo, G2 et Perfect; construire les sous-onglets Pilotage financier Turbo, Comptabilité Turbo, G2/DAT, Extrait client, Crédits et Perfect_client, produire la balance auxiliaire client, mesurer les flux, remboursements, nouveaux crédits, encours, PAR, épargne, DAT, concentration et risques, détecter les anomalies et produire les exports Excel ciblés, Word et PDF sans mélanger les devises. Utiliser pour toute question ou modification liée à Solution M-PESA, Bisou Bisou Digital, Portal/Turbo, G2, Perfect, Phone_Prefixe, Receipt No/ref_no, DAT, épargne, crédit, comptabilité, balance, fidélisation, rapprochement client ou rapport M-PESA du projet Streamlit.
 ---
 
 # Solution M-PESA
@@ -86,17 +86,20 @@ Turbo constitue la source opérationnelle principale de la Solution M_PESA. G2 e
 - Utiliser l'export `Customers with Fixed Savings Account` comme vue des DAT à solde positif. Sans source maître, l'accepter avec le résumé Current et alimenter les analyses DAT disponibles en signalant l'absence des DAT à solde nul; avec la source maître, ne pas le recompter.
 - Accepter les relevés G2 commençant directement par `Receipt No.` et les exports organisation bruts contenant cinq lignes descriptives. Promouvoir automatiquement la vraie ligne d'en-tête séparément pour chaque fichier 1441/15558.
 
-## Invariants Pilotage Turbo + G2
+## Invariants Pilotage financier Turbo
 
 - Pour Transactions Turbo, conserver la sémantique comptable : `dr` = sortie du compte M-PESA et `cr` = entrée. Ne jamais appliquer les règles G2 `Paid In`/`Withdrawn` aux fichiers Turbo.
 - Dédupliquer les transactions Turbo par `id`, les crédits par `loan_id`, les clients par identifiant ou téléphone/date, les comptes d'épargne et DAT par leur clé de compte; conserver la version la plus récente et la liste des fichiers sources.
-- Utiliser la dernière journée opérationnelle complète comme date d'analyse par défaut. Si la date maximale est extraite avant 18 h et qu'une veille existe, proposer la veille sans empêcher l'utilisateur de sélectionner la journée partielle; ne pas utiliser une échéance future comme date de fraîcheur.
-- Calculer le PAR 1/7/30 uniquement depuis `due_date` et un encours credit disponible. Laisser le taux vide si un encours actif n'a pas d'echeance.
-- Dedupliquer les credits par `loan_id` et les operations G2/Turbo par reference, avec priorite au recu G2 canonique.
-- Classer l'activite client au grain telephone x devise : actif 30 jours, dormant 31-60 jours, dormant 61-90 jours ou inactif au-dela de 90 jours.
-- Presenter la conversion Depot normal vers DAT comme une conversion observee dans la periode, jamais comme une affectation comptable certaine.
-- Traiter les montants eleves, horaires rares et rafales d'operations comme des alertes de revue et non comme des preuves de fraude.
-- Produire l'echeancier DAT par tranche et devise. Mesurer l'adoption Perfect uniquement sur les `Phone_Prefixe` valides.
+- Construire chaque événement métier par `ref_no`; quand il manque, regrouper `customer_id + devise + created_at`. Ne jamais compter les écritures miroir comme plusieurs opérations.
+- Utiliser une période inclusive `date début - date fin` et proposer la dernière journée opérationnelle complète. Permettre les évolutions par jour, semaine ou mois.
+- Calculer exclusivement depuis Transactions M-PESA_Turbo les dépôts, retraits, remboursements observés, décaissements de nouveaux crédits, flux nets, activité d'épargne, concentration des transactions, transactions importantes, activité inhabituelle et fractionnement potentiel.
+- Utiliser Loans Account_Turbo pour l'encours, les positions de crédit et le PAR 1/7/30 simplifié depuis `due_date`. Laisser le PAR vide si l'encours ou l'échéance nécessaire manque; ne jamais prétendre disposer d'un plan d'amortissement détaillé.
+- Rapprocher globalement les décaissements Turbo des comptes de crédit créés dans la période, par devise. Présenter l'écart comme un contrôle global et non comme une affectation ligne à ligne.
+- Adapter les contrôles Perfect Vision prioritaires réellement démontrables : remboursements, évolution dépôts/crédits, nouveaux crédits, concentration crédit/transactions, PAR par tranche, dépôts fréquents, tranches de dépôts, comptes inactifs, DAT sans crédit actif et crédit avec épargne disponible. Signaler les analyses non reproductibles faute de plan d'amortissement, provision, garantie ou plan comptable complet.
+- Conserver G2 hors de tous ces calculs. Il peut enrichir un nom et prouver un rapprochement ailleurs dans la solution, mais ne modifie aucun montant, solde, DAT, encours, remboursement, seuil ou alerte du cockpit.
+- Calculer toutes les analyses du cockpit une fois au premier chargement et les conserver en cache. Mettre en cache séparément le journal d'événements Turbo et le rapprochement crédit-épargne; une modification de période doit réutiliser la consolidation initiale. Ne jamais basculer vers un calcul limité au seul onglet interne sélectionné.
+- Traiter les alertes comme des signaux de revue et non comme des preuves de fraude ou d'erreur.
+- Produire l'échéancier DAT par tranche et devise.
 - Dans le sous-onglet DAT, lister en priorité les comptes à solde positif déjà échus et ceux arrivant à terme dans un horizon réglable, fixé à 30 jours par défaut. Conserver `savings_id`, client, téléphone, produit, statut, approbation, échéance, jours restants, capital, intérêt estimé et capital plus intérêt.
 - Utiliser 11 % comme taux d'intérêt annuel DAT Bisou Bisou par défaut dans la barre latérale. Autoriser sa modification et calculer l'intérêt simple estimé par `capital × taux annuel × durée contractuelle en jours / 365`, de `date_approved` à `maturity_date`.
 - Présenter le capital, l'intérêt et le remboursement estimé séparément par devise. Qualifier ces montants d'estimations de préparation et non d'écritures comptables officielles.
@@ -135,10 +138,15 @@ Turbo constitue la source opérationnelle principale de la Solution M_PESA. G2 e
 
 ## Norme visuelle commune des onglets
 
-- Conserver une barre d'onglets sobre et professionnelle.
-- Afficher l'onglet actif en bleu avec un soulignement rouge.
-- Appliquer un survol discret et rendre la navigation au clavier clairement visible.
-- Permettre le défilement horizontal des onglets sur les petits écrans.
+- Appliquer cette norme à tous les niveaux de navigation de Solution M-PESA : sous-onglets principaux, sous-sous-onglets de `Pilotage financier Turbo`, `Perfect_client`, `G2 / DAT` et tout futur bloc `st.tabs`.
+- Conserver une barre d'onglets sobre et professionnelle, avec des espacements réguliers entre les libellés.
+- Afficher l'onglet actif en bleu, avec des coins arrondis et un soulignement rouge.
+- Appliquer un survol discret et rendre la navigation au clavier clairement visible avec `:focus-visible`.
+- Permettre le défilement horizontal des onglets sur les petits écrans, sans retour à la ligne.
+- Encapsuler chaque barre `st.tabs` dans un `st.container(key=...)` doté d'une clé CSS unique. Ne jamais créer directement un sous-sous-onglet avec `st.tabs` hors d'un conteneur ciblé.
+- Appeler `inject_professional_tabs_css(container_key=...)`, puis `format_professional_tab_labels(...)`, afin de réutiliser la norme commune de `credit_app/ui.py`. Ne pas dupliquer ce CSS dans `solution_mpesa.py`.
+- Choisir des clés stables et propres au contexte, par exemple `mpesa_solution_tabs`, `mpesa_turbo_financial_inner_tabs`, `mpesa_perfect_client_cohort_tabs` et `mpesa_g2_temporal_detail_tabs`, afin d'éviter les collisions et les débordements de style entre niveaux.
+- Préserver le mode de calcul défini dans la section précédente : l'habillage visuel ne doit jamais transformer les onglets en calcul conditionnel limité au seul onglet sélectionné.
 
 ## Exports
 
@@ -160,7 +168,7 @@ Turbo constitue la source opérationnelle principale de la Solution M_PESA. G2 e
 - Dans le Word client, ne pas inclure les tableaux `Synthese du comportement observe`, `Positions observees et rapprochement des soldes` et `Jalons du parcours financier`. Conserver obligatoirement `Detail des transactions`. Le pied de page porte `Solution Bisou Bisou Digital`.
 - Dans le titre du Word client, omettre entièrement le segment du nom lorsque celui-ci est vide, `Non disponible` ou `Nom non disponible`; produire alors `Extrait de compte - <telephone> - <devise>` sans séparateur vide.
 - Exporter les trois populations `Clients_Perfect` dans `Clients_Perfect_G2`, `Clients_Perfect_Turbo` et `Clients_Perfect_Turbo_G2`.
-- Dans l'export de pilotage mixte, suffixer aussi chaque feuille par sa source : `_Turbo`, `_G2` ou `_Turbo_G2`.
+- Dans l'export `Pilotage financier Turbo`, n'inclure que les synthèses et listes d'action Turbo demandées : flux, remboursements, nouveaux crédits, encours/PAR, épargne, DAT, concentrations, alertes, contrôles et définitions. Ne produire aucune feuille de montant G2.
 - Generer l'Excel du cockpit uniquement sur demande et limiter ses feuilles aux syntheses et listes d'action utiles.
 - Pour `Comptabilité Turbo`, exporter uniquement les feuilles demandées parmi `Compta_Synthese_Turbo`, `Balance_Clients_Turbo`, `Positions_Clients_Turbo`, `Balance_Comptes_Turbo`, `Journal_Operations_Turbo`, `Journal_Ecritures_Turbo`, `Controles_Operations_Turbo`, `Controles_Soldes_Turbo`, `Flux_MPESA_Turbo`, `Produits_Financiers_Turbo`, `Positions_Portefeuille_Turbo` et `Controle_G2_Turbo`.
 
@@ -185,3 +193,5 @@ Exécuter au minimum avec l'environnement Python du projet :
 Pour un changement G2/DAT, Word ou PDF, tester aussi un fichier réel sans l'écrire dans le dépôt et vérifier le nombre de reçus, l'ordre des colonnes, les devises, les totaux, le logo et les anomalies. Vérifier également que chaque Excel contient seulement les feuilles prévues. Pour `Perfect_client`, vérifier les trois populations inclusives et leurs trois feuilles Excel avec un export 122 réel.
 
 Pour un changement `Comptabilité Turbo`, tester la journée de référence du 16 juillet 2026 lorsqu'elle est disponible, vérifier les 12 feuilles comptables, le rapprochement G2 direct, la séparation CDF/USD et la concordance entre synthèse, balances, journaux et contrôles. Une opération non symétrique ou une variation de solde à revoir est un signal de contrôle; ne jamais la qualifier automatiquement d'erreur comptable.
+
+Pour un changement `Pilotage financier Turbo`, tester également le 16 juillet 2026 : attendre 135 événements consolidés, 48 CDF et 87 USD; vérifier 284 910 CDF et 194,54 USD de remboursements observés, 122 200 CDF et 99 USD de nouveaux crédits décaissés, la séparation stricte des devises et l'absence totale des montants G2. Mesurer la consolidation et le rapprochement crédit-épargne sur les fichiers réels afin de prévenir toute régression de performance.
