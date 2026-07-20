@@ -4,7 +4,12 @@ from io import BytesIO
 
 import pandas as pd
 
-from credit_app.tabs.solution_mpesa import _build_prepared_data, _uploaded_dataframes
+from credit_app.tabs.solution_mpesa import (
+    MPESA_FINANCE_TURBO_TAB_LABELS,
+    MPESA_SOLUTION_TAB_LABELS,
+    _build_prepared_data,
+    _uploaded_dataframes,
+)
 
 
 class _UploadedExcel:
@@ -16,6 +21,27 @@ class _UploadedExcel:
 
     def getvalue(self) -> bytes:
         return self._content
+
+
+def test_finance_turbo_replaces_the_two_previous_main_tabs() -> None:
+    assert MPESA_SOLUTION_TAB_LABELS == (
+        "Importation",
+        "Finance Turbo",
+        "Extrait client",
+        "DAT",
+        "G2 / DAT",
+        "Perfect_client",
+        "Detail des credits",
+        "Controle des donnees",
+    )
+    assert MPESA_FINANCE_TURBO_TAB_LABELS == (
+        "Vue direction",
+        "Flux et activité",
+        "Crédit, épargne et DAT",
+        "Balances et journaux",
+        "Risques et contrôles",
+        "Export",
+    )
 
 
 def test_uploaded_dataframes_unifies_files_and_preserves_provenance() -> None:

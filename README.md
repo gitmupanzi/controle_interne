@@ -420,11 +420,11 @@ Pour les informations client :
 
 Au premier téléversement, tous les sous-onglets M-PESA sont construits afin de former un tableau de bord immédiatement disponible. Une modification des fichiers déclenche une reconstruction complète volontaire; les interactions suivantes restent locales au sous-onglet grâce aux fragments Streamlit. La lecture Excel rapide, la préparation, le rapprochement G2, l'extrait client et les analyses lourdes sont mis en cache avec une empreinte compacte du contenu des fichiers, de la période et du client. La solution ne bascule pas vers un calcul limité au seul onglet sélectionné.
 
-La norme visuelle de navigation s'applique aussi aux sous-sous-onglets de `Pilotage financier Turbo`, `Perfect_client` et `G2 / DAT` : barre sobre avec espacement régulier, onglet actif bleu arrondi et souligné en rouge, survol discret, focus clavier visible et défilement horizontal sur petit écran. Chaque barre imbriquée utilise un conteneur Streamlit identifié afin que son style reste indépendant de la barre principale.
+La norme visuelle de navigation s'applique aussi aux sous-sous-onglets de `Finance Turbo`, `Perfect_client` et `G2 / DAT` : barre sobre avec espacement régulier, onglet actif bleu arrondi et souligné en rouge, survol discret, focus clavier visible et défilement horizontal sur petit écran. Chaque barre imbriquée utilise un conteneur Streamlit identifié afin que son style reste indépendant de la barre principale.
 
 ### Restitutions disponibles
 
-Le sous-onglet `Comptabilité Turbo` construit les analyses financières observables directement dans Transactions M-PESA_Turbo :
+Le sous-onglet principal `Finance Turbo` réunit le pilotage financier et la comptabilité observée avec une période et un filtre de devises communs. Ses six volets sont `Vue direction`, `Flux et activité`, `Crédit, épargne et DAT`, `Balances et journaux`, `Risques et contrôles` et `Export`. Le volet `Balances et journaux` construit notamment les analyses financières observables directement dans Transactions M-PESA_Turbo :
 
 - une synthèse séparée par devise avec écritures, clients, opérations, débits, crédits et taux de symétrie
 - une balance par client enrichie du nom G2 sans reprendre les montants G2
@@ -460,7 +460,7 @@ Le sous-onglet `Detail des credits` rapproche `Loans Account` avec les comptes c
 
 Sur les fichiers du 17 juillet 2026, les 2 213 lignes de `Loans Account` ont toutes `savings_account_id` vide. Le repli client x devise rapproche 1 740 crédits CDF sur 1 740 et 472 crédits USD sur 473; un crédit USD sans compte courant correspondant reste à revoir. L'épargne courante et les DAT sont comptés une seule fois par client et devise, même lorsqu'un client possède plusieurs prêts.
 
-Le sous-onglet `Pilotage financier Turbo` centralise sur une période les analyses de microfinance et de contrôle démontrables depuis le portail Turbo :
+Les volets de pilotage de `Finance Turbo` centralisent sur une période les analyses de microfinance et de contrôle démontrables depuis le portail Turbo :
 
 - flux d'entrées et sorties, dépôts d'épargne, dépôts DAT, retraits, remboursements et décaissements, avec évolution par jour, semaine ou mois;
 - remboursements observés avec principal, intérêts, pénalités, mode et contrôle des écritures miroir;
@@ -475,7 +475,7 @@ La période utilise deux bornes inclusives. La dernière journée complète est 
 
 Le moteur adapte les contrôles Perfect Vision prioritaires qui sont réellement transposables à Turbo : remboursement des crédits, évolution dépôts/crédits, nouveaux crédits, encours, concentration, PAR par tranche, dépôts fréquents, comptes inactifs et couverture crédit–épargne. Les contrôles exigeant un tableau d'amortissement, des garanties, des provisions ou un plan comptable complet ne sont pas présentés comme calculés.
 
-Les 96 188 lignes de l'export réel sont consolidées une seule fois en événements métier, d'abord par `ref_no`, puis par `customer_id + devise + created_at` lorsque la référence manque. Le journal consolidé et le rapprochement crédit–épargne sont mis en cache séparément; tous les onglets internes du cockpit se chargent une fois et un changement d'onglet ne relance pas l'analyse.
+Les 96 188 lignes de l'export réel sont consolidées une seule fois en événements métier, d'abord par `ref_no`, puis par `customer_id + devise + created_at` lorsque la référence manque. Le journal consolidé, le rapport de pilotage, la comptabilité observée et le rapprochement crédit–épargne sont mis en cache séparément; les six volets de `Finance Turbo` sont tous construits au chargement et un changement de volet ne relance pas l'analyse.
 
 Test de référence du 16 juillet 2026 : 135 événements consolidés, dont 48 CDF et 87 USD. Les remboursements observés valent 284 910 CDF et 194,54 USD; les nouveaux crédits décaissés valent 122 200 CDF et 99 USD. Les décaissements se rapprochent exactement des comptes de crédit créés dans la période pour les deux devises. Ces résultats proviennent uniquement de Turbo.
 
@@ -535,9 +535,9 @@ Le classeur G2/DAT ajoute `Transactions_Jour`, `Transactions_Jour_Semaine`, `Tra
 
 Dans `Perfect_client`, le classeur contient `Clients_Perfect_G2`, `Clients_Perfect_Turbo` et `Clients_Perfect_Turbo_G2`. L'export des forts DAT conserve uniquement `Forts_DAT` et `Portefeuille_DAT`.
 
-Dans `Pilotage financier Turbo`, l'Excel est généré seulement sur demande. Il contient les feuilles utiles parmi `Flux_Synthese_Turbo`, `Flux_Evolution_Turbo`, `Remboursements_Synthese`, `Remboursements_Pilotage`, `Nouveaux_Credits_Synthese`, `Nouveaux_Credits_Turbo`, `Pilotage_Credit_Turbo`, `Credits_Risque_Turbo`, `PAR_Tranches_Turbo`, `Concentration_Credit`, `Activite_Epargne_Clients`, `Depots_Frequents_Hebdo`, `Tranches_Depots_Turbo`, `Concentration_Transactions`, `Alertes_Turbo`, `Mouvements_Comptes_Inactifs`, `DAT_Sans_Credit_Actif`, `Credit_Epargne_Disponible`, `Echeances_DAT_Turbo`, `Qualite_Clients_Turbo`, `Definitions_Pilotage` et `Sources_Pilotage`. Aucune feuille G2 ne fournit de montant.
+Dans le volet `Export` de `Finance Turbo`, l'Excel de pilotage est généré seulement sur demande. Il contient les feuilles utiles parmi `Flux_Synthese_Turbo`, `Flux_Evolution_Turbo`, `Remboursements_Synthese`, `Remboursements_Pilotage`, `Nouveaux_Credits_Synthese`, `Nouveaux_Credits_Turbo`, `Pilotage_Credit_Turbo`, `Credits_Risque_Turbo`, `PAR_Tranches_Turbo`, `Concentration_Credit`, `Activite_Epargne_Clients`, `Depots_Frequents_Hebdo`, `Tranches_Depots_Turbo`, `Concentration_Transactions`, `Alertes_Turbo`, `Mouvements_Comptes_Inactifs`, `DAT_Sans_Credit_Actif`, `Credit_Epargne_Disponible`, `Echeances_DAT_Turbo`, `Qualite_Clients_Turbo`, `Definitions_Pilotage` et `Sources_Pilotage`. Aucune feuille G2 ne fournit de montant.
 
-Dans `Comptabilité Turbo`, l'Excel contient exactement `Compta_Synthese_Turbo`, `Balance_Clients_Turbo`, `Positions_Clients_Turbo`, `Balance_Comptes_Turbo`, `Journal_Operations_Turbo`, `Journal_Ecritures_Turbo`, `Controles_Operations_Turbo`, `Controles_Soldes_Turbo`, `Flux_MPESA_Turbo`, `Produits_Financiers_Turbo`, `Positions_Portefeuille_Turbo` et `Controle_G2_Turbo`. Les onze premières feuilles restent exclusivement Turbo; la dernière trace le contrôle secondaire G2.
+Dans le même volet `Export`, l'Excel comptable reste un téléchargement distinct et contient exactement `Compta_Synthese_Turbo`, `Balance_Clients_Turbo`, `Positions_Clients_Turbo`, `Balance_Comptes_Turbo`, `Journal_Operations_Turbo`, `Journal_Ecritures_Turbo`, `Controles_Operations_Turbo`, `Controles_Soldes_Turbo`, `Flux_MPESA_Turbo`, `Produits_Financiers_Turbo`, `Positions_Portefeuille_Turbo` et `Controle_G2_Turbo`. Les onze premières feuilles restent exclusivement Turbo; la dernière trace le contrôle secondaire G2.
 
 ## Cycle Suivi clients CRM
 

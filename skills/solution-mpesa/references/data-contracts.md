@@ -15,7 +15,7 @@ La source de vérité exécutable reste `credit_app/data_schema.py`. Les règles
 - [Filtres et fidélisation](#filtres-et-fidélisation)
 - [Rapprochement crédits et épargne](#rapprochement-crédits-et-épargne)
 - [Échéances et remboursements DAT](#échéances-et-remboursements-dat)
-- [Pilotage financier Turbo sur une période](#pilotage-financier-turbo-sur-une-période)
+- [Finance Turbo sur une période](#finance-turbo-sur-une-période)
 - [Balance et analyses comptables Turbo](#balance-et-analyses-comptables-turbo)
 - [Fonctions à privilégier](#fonctions-à-privilégier)
 - [Conditions d'interprétation](#conditions-dinterprétation)
@@ -279,7 +279,9 @@ Le bloc Word `Synthese des flux G2 par devise` utilise `rapport_journalier_pivot
 - Calculer les indicateurs et montants séparément par devise. Ne jamais additionner CDF et USD et ne jamais présenter l'estimation comme une écriture officielle.
 - Distinguer l'échéancier prévisionnel des écritures d'intérêts échus : le premier estime à 11 % les DAT positifs à préparer; les secondes utilisent exclusivement `interest_earned` sur les DAT dénoués et restent hors du solde M-PESA.
 
-## Pilotage financier Turbo sur une période
+## Finance Turbo sur une période
+
+L'interface réunit le pilotage financier et la comptabilité observée dans un seul sous-onglet principal `Finance Turbo`. Une période et une sélection de devises alimentent les six volets `Vue direction`, `Flux et activité`, `Crédit, épargne et DAT`, `Balances et journaux`, `Risques et contrôles` et `Export`. Les deux rapports sont construits avant le rendu des volets et mis en cache; les exports de pilotage et de comptabilité conservent des contrats séparés.
 
 - Utiliser `build_turbo_operation_events` pour consolider une seule fois Transactions M-PESA_Turbo au grain événement. La clé prioritaire est `ref_no`; sans référence, utiliser `customer_id + currency_code + created_at` et conserver les ventilations techniques dans le même événement.
 - Utiliser `build_mpesa_turbo_financial_analysis` ou `build_mpesa_management_dashboard` avec `date_start`, `date_end` et `frequency`. Les deux bornes sont incluses; `frequency` accepte le jour, la semaine ou le mois.

@@ -1,6 +1,6 @@
 ---
 name: solution-mpesa
-description: Importer, normaliser, contrôler et rapprocher les fichiers Excel M-PESA de Turbo, G2 et Perfect; construire les sous-onglets Pilotage financier Turbo, Comptabilité Turbo, G2/DAT, Extrait client, Crédits et Perfect_client, produire la balance auxiliaire client, mesurer les flux, remboursements, nouveaux crédits, encours, PAR, épargne, DAT, concentration et risques, détecter les anomalies et produire les exports Excel ciblés, Word et PDF sans mélanger les devises. Utiliser pour toute question ou modification liée à Solution M-PESA, Bisou Bisou Digital, Portal/Turbo, G2, Perfect, Phone_Prefixe, Receipt No/ref_no, DAT, épargne, crédit, comptabilité, balance, fidélisation, rapprochement client ou rapport M-PESA du projet Streamlit.
+description: Importer, normaliser, contrôler et rapprocher les fichiers Excel M-PESA de Turbo, G2 et Perfect; construire le sous-onglet Finance Turbo réunissant pilotage et comptabilité observée, ainsi que G2/DAT, Extrait client, Crédits et Perfect_client; produire la balance auxiliaire client, mesurer les flux, remboursements, nouveaux crédits, encours, PAR, épargne, DAT, concentration et risques, détecter les anomalies et produire les exports Excel ciblés, Word et PDF sans mélanger les devises. Utiliser pour toute question ou modification liée à Solution M-PESA, Bisou Bisou Digital, Portal/Turbo, G2, Perfect, Phone_Prefixe, Receipt No/ref_no, DAT, épargne, crédit, comptabilité, balance, fidélisation, rapprochement client ou rapport M-PESA du projet Streamlit.
 ---
 
 # Solution M-PESA
@@ -86,7 +86,7 @@ Turbo constitue la source opérationnelle principale de la Solution M_PESA. G2 e
 - Utiliser l'export `Customers with Fixed Savings Account` comme vue des DAT à solde positif. Sans source maître, l'accepter avec le résumé Current et alimenter les analyses DAT disponibles en signalant l'absence des DAT à solde nul; avec la source maître, ne pas le recompter.
 - Accepter les relevés G2 commençant directement par `Receipt No.` et les exports organisation bruts contenant cinq lignes descriptives. Promouvoir automatiquement la vraie ligne d'en-tête séparément pour chaque fichier 1441/15558.
 
-## Invariants Pilotage financier Turbo
+## Invariants Finance Turbo — pilotage financier
 
 - Pour Transactions Turbo, conserver la sémantique comptable : `dr` = sortie du compte M-PESA et `cr` = entrée. Ne jamais appliquer les règles G2 `Paid In`/`Withdrawn` aux fichiers Turbo.
 - Dédupliquer les transactions Turbo par `id`, les crédits par `loan_id`, les clients par identifiant ou téléphone/date, les comptes d'épargne et DAT par leur clé de compte; conserver la version la plus récente et la liste des fichiers sources.
@@ -113,7 +113,7 @@ Turbo constitue la source opérationnelle principale de la Solution M_PESA. G2 e
 - Juxtaposer montant du crédit, remboursements, encours, épargne courante et DAT positifs. Ne jamais compenser comptablement l'épargne avec le crédit, assimiler l'épargne à une garantie ou additionner CDF et USD.
 - Cas réel du 17 juillet 2026 : `savings_account_id` est vide sur les 2 213 crédits. Le repli client x devise rapproche 2 212 crédits; un crédit USD sans compte courant correspondant reste à revoir.
 
-## Invariants Comptabilité Turbo
+## Invariants Finance Turbo — comptabilité observée
 
 - Utiliser exclusivement Transactions M-PESA_Turbo pour les écritures, les débits, les crédits, les soldes observés et les journaux comptables. G2 sert seulement à compléter le nom du client et à mesurer le rapprochement `Receipt No = ref_no`; ses montants ne remplacent jamais Turbo.
 - Construire la balance auxiliaire client sur les comptes produits `NORMAL SAVINGS`, `FIXED SAVINGS` et `PRINCIPLE`, au grain `customer_id x devise x famille de position`. Résoudre une référence absente uniquement lorsqu'un seul compte connu du même type existe pour le client; sinon conserver `Reference compte ambigue ou absente`.
@@ -128,6 +128,9 @@ Turbo constitue la source opérationnelle principale de la Solution M_PESA. G2 e
 ## Architecture Streamlit des sous-onglets
 
 - Construire tous les sous-onglets avec `st.tabs` au premier chargement de Solution M-PESA afin qu'ils soient immédiatement disponibles après l'importation.
+- Réunir le pilotage financier et la comptabilité observée dans un seul sous-onglet principal `Finance Turbo`. Utiliser une période et une sélection de devises communes, puis six volets internes : `Vue direction`, `Flux et activité`, `Crédit, épargne et DAT`, `Balances et journaux`, `Risques et contrôles` et `Export`.
+- Construire le rapport de pilotage et le rapport comptable avant les six volets, puis réutiliser leurs résultats mis en cache. Ne jamais réintroduire deux périodes concurrentes ni un calcul conditionné par le volet sélectionné.
+- Conserver deux contrats d'export séparés dans le volet `Export` : le classeur ciblé de pilotage et le classeur comptable à douze feuilles.
 - Isoler chaque fonction de rendu avec `st.fragment`. Après le chargement initial, une interaction locale doit recalculer uniquement le sous-onglet concerné.
 - Garder les téléversements et la préparation partagée en dehors des fragments : toute modification des fichiers sources déclenche volontairement une reconstruction complète des sous-onglets.
 - Mettre en cache avec `st.cache_data` la lecture, la normalisation et les calculs déterministes lourds. Laisser les widgets et le rendu Streamlit hors du cache.
@@ -138,14 +141,14 @@ Turbo constitue la source opérationnelle principale de la Solution M_PESA. G2 e
 
 ## Norme visuelle commune des onglets
 
-- Appliquer cette norme à tous les niveaux de navigation de Solution M-PESA : sous-onglets principaux, sous-sous-onglets de `Pilotage financier Turbo`, `Perfect_client`, `G2 / DAT` et tout futur bloc `st.tabs`.
+- Appliquer cette norme à tous les niveaux de navigation de Solution M-PESA : sous-onglets principaux, sous-sous-onglets de `Finance Turbo`, `Perfect_client`, `G2 / DAT` et tout futur bloc `st.tabs`.
 - Conserver une barre d'onglets sobre et professionnelle, avec des espacements réguliers entre les libellés.
 - Afficher l'onglet actif en bleu, avec des coins arrondis et un soulignement rouge.
 - Appliquer un survol discret et rendre la navigation au clavier clairement visible avec `:focus-visible`.
 - Permettre le défilement horizontal des onglets sur les petits écrans, sans retour à la ligne.
 - Encapsuler chaque barre `st.tabs` dans un `st.container(key=...)` doté d'une clé CSS unique. Ne jamais créer directement un sous-sous-onglet avec `st.tabs` hors d'un conteneur ciblé.
 - Appeler `inject_professional_tabs_css(container_key=...)`, puis `format_professional_tab_labels(...)`, afin de réutiliser la norme commune de `credit_app/ui.py`. Ne pas dupliquer ce CSS dans `solution_mpesa.py`.
-- Choisir des clés stables et propres au contexte, par exemple `mpesa_solution_tabs`, `mpesa_turbo_financial_inner_tabs`, `mpesa_perfect_client_cohort_tabs` et `mpesa_g2_temporal_detail_tabs`, afin d'éviter les collisions et les débordements de style entre niveaux.
+- Choisir des clés stables et propres au contexte, par exemple `mpesa_solution_tabs`, `mpesa_finance_turbo_inner_tabs`, `mpesa_perfect_client_cohort_tabs` et `mpesa_g2_temporal_detail_tabs`, afin d'éviter les collisions et les débordements de style entre niveaux.
 - Préserver le mode de calcul défini dans la section précédente : l'habillage visuel ne doit jamais transformer les onglets en calcul conditionnel limité au seul onglet sélectionné.
 
 ## Exports
@@ -168,9 +171,9 @@ Turbo constitue la source opérationnelle principale de la Solution M_PESA. G2 e
 - Dans le Word client, ne pas inclure les tableaux `Synthese du comportement observe`, `Positions observees et rapprochement des soldes` et `Jalons du parcours financier`. Conserver obligatoirement `Detail des transactions`. Le pied de page porte `Solution Bisou Bisou Digital`.
 - Dans le titre du Word client, omettre entièrement le segment du nom lorsque celui-ci est vide, `Non disponible` ou `Nom non disponible`; produire alors `Extrait de compte - <telephone> - <devise>` sans séparateur vide.
 - Exporter les trois populations `Clients_Perfect` dans `Clients_Perfect_G2`, `Clients_Perfect_Turbo` et `Clients_Perfect_Turbo_G2`.
-- Dans l'export `Pilotage financier Turbo`, n'inclure que les synthèses et listes d'action Turbo demandées : flux, remboursements, nouveaux crédits, encours/PAR, épargne, DAT, concentrations, alertes, contrôles et définitions. Ne produire aucune feuille de montant G2.
+- Dans l'export de pilotage du volet `Finance Turbo > Export`, n'inclure que les synthèses et listes d'action Turbo demandées : flux, remboursements, nouveaux crédits, encours/PAR, épargne, DAT, concentrations, alertes, contrôles et définitions. Ne produire aucune feuille de montant G2.
 - Generer l'Excel du cockpit uniquement sur demande et limiter ses feuilles aux syntheses et listes d'action utiles.
-- Pour `Comptabilité Turbo`, exporter uniquement les feuilles demandées parmi `Compta_Synthese_Turbo`, `Balance_Clients_Turbo`, `Positions_Clients_Turbo`, `Balance_Comptes_Turbo`, `Journal_Operations_Turbo`, `Journal_Ecritures_Turbo`, `Controles_Operations_Turbo`, `Controles_Soldes_Turbo`, `Flux_MPESA_Turbo`, `Produits_Financiers_Turbo`, `Positions_Portefeuille_Turbo` et `Controle_G2_Turbo`.
+- Pour l'export comptable distinct de `Finance Turbo > Export`, exporter uniquement les feuilles demandées parmi `Compta_Synthese_Turbo`, `Balance_Clients_Turbo`, `Positions_Clients_Turbo`, `Balance_Comptes_Turbo`, `Journal_Operations_Turbo`, `Journal_Ecritures_Turbo`, `Controles_Operations_Turbo`, `Controles_Soldes_Turbo`, `Flux_MPESA_Turbo`, `Produits_Financiers_Turbo`, `Positions_Portefeuille_Turbo` et `Controle_G2_Turbo`.
 
 ## Architecture à respecter
 
@@ -192,6 +195,6 @@ Exécuter au minimum avec l'environnement Python du projet :
 
 Pour un changement G2/DAT, Word ou PDF, tester aussi un fichier réel sans l'écrire dans le dépôt et vérifier le nombre de reçus, l'ordre des colonnes, les devises, les totaux, le logo et les anomalies. Vérifier également que chaque Excel contient seulement les feuilles prévues. Pour `Perfect_client`, vérifier les trois populations inclusives et leurs trois feuilles Excel avec un export 122 réel.
 
-Pour un changement `Comptabilité Turbo`, tester la journée de référence du 16 juillet 2026 lorsqu'elle est disponible, vérifier les 12 feuilles comptables, le rapprochement G2 direct, la séparation CDF/USD et la concordance entre synthèse, balances, journaux et contrôles. Une opération non symétrique ou une variation de solde à revoir est un signal de contrôle; ne jamais la qualifier automatiquement d'erreur comptable.
+Pour un changement du volet comptable de `Finance Turbo`, tester la journée de référence du 16 juillet 2026 lorsqu'elle est disponible, vérifier les 12 feuilles comptables, le rapprochement G2 direct, la séparation CDF/USD et la concordance entre synthèse, balances, journaux et contrôles. Une opération non symétrique ou une variation de solde à revoir est un signal de contrôle; ne jamais la qualifier automatiquement d'erreur comptable.
 
-Pour un changement `Pilotage financier Turbo`, tester également le 16 juillet 2026 : attendre 135 événements consolidés, 48 CDF et 87 USD; vérifier 284 910 CDF et 194,54 USD de remboursements observés, 122 200 CDF et 99 USD de nouveaux crédits décaissés, la séparation stricte des devises et l'absence totale des montants G2. Mesurer la consolidation et le rapprochement crédit-épargne sur les fichiers réels afin de prévenir toute régression de performance.
+Pour un changement du volet pilotage de `Finance Turbo`, tester également le 16 juillet 2026 : attendre 135 événements consolidés, 48 CDF et 87 USD; vérifier 284 910 CDF et 194,54 USD de remboursements observés, 122 200 CDF et 99 USD de nouveaux crédits décaissés, la séparation stricte des devises et l'absence totale des montants G2. Mesurer la consolidation et le rapprochement crédit-épargne sur les fichiers réels afin de prévenir toute régression de performance.
