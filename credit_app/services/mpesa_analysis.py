@@ -4493,7 +4493,26 @@ def build_mpesa_credit_risk_analysis(
     as_of_date: Any | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Construit les indicateurs de remboursement et de retard par devise."""
-    empty = {"synthese": pd.DataFrame(), "detail": pd.DataFrame()}
+    summary_columns = [
+        "currency_code", "nombre_credits", "nombre_clients", "montant_credits",
+        "montant_rembourse", "encours_total", "encours_retard_1j",
+        "encours_retard_7j", "encours_retard_30j", "encours_sans_echeance",
+        "credits_retard_1j", "credits_retard_30j", "echeances_renseignees",
+        "incoherences_encours", "par_1j_pct", "par_7j_pct", "par_30j_pct",
+        "taux_remboursement_pct", "date_analyse",
+    ]
+    detail_columns = [
+        "loan_id", "customer_id", "Nom_client", "customer", "msisdn1", "currency_code",
+        "loan_amount", "amount_paid", "encours_total", "outstanding_principle",
+        "outstanding_setup_fees", "outstanding_interest", "outstanding_penalty_fees",
+        "status_name", "created_at", "due_date", "last_repayment_date", "jours_retard",
+        "statut_risque", "date_analyse", "ecart_encours_sources",
+        "encours_sources_incoherents",
+    ]
+    empty = {
+        "synthese": pd.DataFrame(columns=summary_columns),
+        "detail": pd.DataFrame(columns=detail_columns),
+    }
     if not isinstance(loans, pd.DataFrame) or loans.empty or "loan_id" not in loans.columns:
         return empty
 
@@ -4626,13 +4645,6 @@ def build_mpesa_credit_risk_analysis(
     ] = np.nan
     summary["date_analyse"] = analysis_date
 
-    detail_columns = [
-        "loan_id", "customer_id", "Nom_client", "customer", "msisdn1", "currency_code",
-        "loan_amount", "amount_paid", "encours_total", "outstanding_principle", "outstanding_setup_fees",
-        "outstanding_interest", "outstanding_penalty_fees", "status_name", "created_at",
-        "due_date", "last_repayment_date", "jours_retard", "statut_risque", "date_analyse",
-        "ecart_encours_sources", "encours_sources_incoherents",
-    ]
     detail = frame[detail_columns].sort_values(
         ["currency_code", "jours_retard", "encours_total"], ascending=[True, False, False]
     ).reset_index(drop=True)

@@ -3670,6 +3670,29 @@ class MpesaAnalysisTests(unittest.TestCase):
             ],
         )
 
+    def test_turbo_financial_analysis_keeps_credit_schema_without_loans(self) -> None:
+        prepared_with_loans = _sample_customer_transaction_analysis_data()
+        prepared = MpesaPreparedData(
+            transactions=prepared_with_loans.transactions,
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=prepared_with_loans.load_report,
+        )
+
+        report = build_mpesa_turbo_financial_analysis(
+            prepared,
+            date_start="2026-07-01",
+            date_end="2026-07-05",
+        )
+
+        self.assertFalse(report["flux_synthese"].empty)
+        self.assertTrue(report["credit_synthese"].empty)
+        self.assertIn("currency_code", report["credit_synthese"].columns)
+        self.assertIn("encours_total", report["credit_synthese"].columns)
+        self.assertIn("par_30j_pct", report["credit_synthese"].columns)
+        self.assertIn("currency_code", report["credit_detail"].columns)
+
     def test_mpesa_management_dashboard_degrades_cleanly_without_optional_sources(self) -> None:
         prepared = MpesaPreparedData(
             transactions=pd.DataFrame(),

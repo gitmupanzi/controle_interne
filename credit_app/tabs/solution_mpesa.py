@@ -4243,8 +4243,16 @@ def _render_management_dashboard(prepared: MpesaPreparedData) -> None:
             st.info("Aucun indicateur monetaire Turbo n'est calculable sur la periode.")
         for currency in currencies:
             st.markdown(f"#### {currency}")
-            flow_row = flow_summary.loc[flow_summary["currency_code"].eq(currency)]
-            credit_row = credit_summary.loc[credit_summary["currency_code"].eq(currency)]
+            flow_row = (
+                flow_summary.loc[flow_summary["currency_code"].eq(currency)]
+                if "currency_code" in flow_summary.columns
+                else pd.DataFrame()
+            )
+            credit_row = (
+                credit_summary.loc[credit_summary["currency_code"].eq(currency)]
+                if "currency_code" in credit_summary.columns
+                else pd.DataFrame()
+            )
             entries = float(flow_row.iloc[0].get("montant_entrees", 0)) if not flow_row.empty else 0.0
             exits = float(flow_row.iloc[0].get("montant_sorties", 0)) if not flow_row.empty else 0.0
             repayments = float(flow_row.iloc[0].get("remboursements_observes", 0)) if not flow_row.empty else 0.0
