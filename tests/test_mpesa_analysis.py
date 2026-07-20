@@ -35,6 +35,7 @@ from credit_app.services.mpesa_analysis import (
     build_entry_pivot,
     build_large_dat_summary,
     build_diagnostics,
+    build_transaction_anomalies,
     build_load_report,
     build_savings_accounts_reconciliation,
     build_savings_final,
@@ -4435,6 +4436,192 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertFalse(diagnostics.empty)
         self.assertIn("Mouvements dr = 0 et cr = 0", diagnostics["controle"].tolist())
 
+    def test_transaction_anomalies_explain_every_flagged_turbo_row(self) -> None:
+        transactions = pd.DataFrame(
+            [
+                {
+                    "id": "MISSING-CUSTOMER",
+                    "customer_id": "",
+                    "reference_id": "REF-1",
+                    "currency_code": "CDF",
+                    "account_type": "MPESA ACCOUNT",
+                    "dr": 10,
+                    "cr": 0,
+                    "bal_before": 100,
+                    "bal_after": 90,
+                    "created_at": "2026-07-16 08:00:00",
+                },
+                {
+                    "id": "MISSING-CURRENCY-ZERO",
+                    "customer_id": "CLIENT-1",
+                    "reference_id": "REF-2",
+                    "currency_code": "",
+                    "account_type": "NORMAL SAVINGS",
+                    "dr": 0,
+                    "cr": 0,
+                    "bal_before": 100,
+                    "bal_after": 100,
+                    "created_at": "2026-07-16 09:00:00",
+                },
+                {
+                    "id": "BOTH-SIDES",
+                    "customer_id": "CLIENT-2",
+                    "reference_id": "REF-3",
+                    "currency_code": "USD",
+                    "account_type": "MPESA ACCOUNT",
+                    "dr": 5,
+                    "cr": 7,
+                    "bal_before": 100,
+                    "bal_after": 102,
+                    "created_at": "2026-07-16 10:00:00",
+                },
+                {
+                    "id": "VALID",
+                    "customer_id": "CLIENT-3",
+                    "reference_id": "REF-4",
+                    "currency_code": "CDF",
+                    "account_type": "FIXED SAVINGS",
+                    "dr": 0,
+                    "cr": 25,
+                    "bal_before": 100,
+                    "bal_after": 125,
+                    "created_at": "2026-07-16 11:00:00",
+                },
+            ]
+        )
+
+        anomalies = build_transaction_anomalies(transactions).set_index("id")
+
+        self.assertEqual(
+            anomalies.index.tolist(),
+            ["MISSING-CUSTOMER", "MISSING-CURRENCY-ZERO", "BOTH-SIDES"],
+        )
+        self.assertEqual(
+            anomalies.loc["MISSING-CUSTOMER", "raison_anomalie"],
+            "customer_id manquant",
+        )
+        self.assertEqual(
+            anomalies.loc["MISSING-CURRENCY-ZERO", "raison_anomalie"],
+            "currency_code manquant | Mouvement nul : dr = 0 et cr = 0",
+        )
+        self.assertEqual(
+            anomalies.loc["BOTH-SIDES", "raison_anomalie"],
+            "Incoherence de sens : dr > 0 et cr > 0",
+        )
+
+        zero_movement_only = build_transaction_anomalies(
+            transactions,
+            selected_controls={"Mouvements dr = 0 et cr = 0"},
+        )
+        self.assertEqual(
+            zero_movement_only["id"].tolist(),
+            ["MISSING-CURRENCY-ZERO"],
+        )
+        self.assertEqual(
+            zero_movement_only["raison_anomalie"].tolist(),
+            ["Mouvement nul : dr = 0 et cr = 0"],
+        )
+
+        no_matching_control = build_transaction_anomalies(
+            transactions,
+            selected_controls={"Lignes sans reference_id"},
+        )
+        self.assertTrue(no_matching_control.empty)
+
+    def test_transaction_anomalies_cover_detailed_diagnostic_controls(self) -> None:
+        transactions = pd.DataFrame(
+            [
+                {
+                    "id": "MISSING-REFERENCE",
+                    "customer_id": "CLIENT-1",
+                    "reference_id": "",
+                    "currency_code": "CDF",
+                    "account_type": "MPESA ACCOUNT",
+                    "dr": 10,
+                    "cr": 0,
+                    "bal_before": 100,
+                    "bal_after": 90,
+                    "created_at": "2026-07-16 08:00:00",
+                },
+                {
+                    "id": "INVALID-DATE-AND-BALANCE",
+                    "customer_id": "CLIENT-2",
+                    "reference_id": "REF-2",
+                    "currency_code": "USD",
+                    "account_type": "UNKNOWN PRODUCT",
+                    "dr": 0,
+                    "cr": 5,
+                    "bal_before": -5,
+                    "bal_after": 0,
+                    "created_at": "date-invalide",
+                },
+            ]
+        )
+
+        anomalies = build_transaction_anomalies(transactions).set_index("id")
+
+        self.assertEqual(
+            anomalies.loc["MISSING-REFERENCE", "raison_anomalie"],
+            "reference_id manquant",
+        )
+        combined_reason = anomalies.loc[
+            "INVALID-DATE-AND-BALANCE",
+            "raison_anomalie",
+        ]
+        self.assertIn("Date created_at invalide ou manquante", combined_reason)
+        self.assertIn("Solde bal_before ou bal_after negatif", combined_reason)
+        self.assertIn("account_type non reference", combined_reason)
+
+        reference_only = build_transaction_anomalies(
+            transactions,
+            selected_controls={"Lignes sans reference_id"},
+        )
+        self.assertEqual(reference_only["id"].tolist(), ["MISSING-REFERENCE"])
+
+    def test_repeated_transaction_control_counts_the_detailed_rows(self) -> None:
+        transactions = pd.DataFrame(
+            [
+                {
+                    "id": transaction_id,
+                    "customer_id": "CLIENT-1",
+                    "reference_id": "REF-1",
+                    "ref_no": "G2-1",
+                    "currency_code": "CDF",
+                    "account_type": "MPESA ACCOUNT",
+                    "dr": 10,
+                    "cr": 0,
+                    "bal_before": 100,
+                    "bal_after": 90,
+                    "created_at": "2026-07-16 08:00:00",
+                }
+                for transaction_id in ("TX-1", "TX-2")
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=transactions,
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+        )
+
+        diagnostics = build_diagnostics(prepared).set_index("controle")
+        repeated = diagnostics.loc[
+            "Lignes dans des groupes d'ecritures repetees"
+        ]
+        self.assertEqual(int(repeated["valeur"]), 2)
+        self.assertIn("1 groupe(s)", repeated["detail"])
+
+        anomalies = build_transaction_anomalies(
+            transactions,
+            selected_controls={"Lignes dans des groupes d'ecritures repetees"},
+        )
+        self.assertEqual(anomalies["id"].tolist(), ["TX-1", "TX-2"])
+        self.assertEqual(
+            anomalies["raison_anomalie"].unique().tolist(),
+            ["Groupe d'ecritures repetees avec le meme type de compte"],
+        )
+
     def test_diagnostics_separates_linked_entries_and_monitors_dat_dates(self) -> None:
         transactions = pd.DataFrame(
             [
@@ -4497,7 +4684,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(int(diagnostics.loc["Doublons exacts", "valeur"]), 0)
         self.assertEqual(int(diagnostics.loc["Ecritures comptables liees", "valeur"]), 1)
         self.assertEqual(diagnostics.loc["Ecritures comptables liees", "statut"], "Information")
-        self.assertEqual(int(diagnostics.loc["Groupes d'ecritures repetees a verifier", "valeur"]), 0)
+        self.assertEqual(int(diagnostics.loc["Lignes dans des groupes d'ecritures repetees", "valeur"]), 0)
         self.assertEqual(int(diagnostics.loc["DAT - echeance anterieure a l'approbation", "valeur"]), 1)
         self.assertEqual(diagnostics.loc["DAT - echeance anterieure a l'approbation", "statut"], "A surveiller")
         self.assertEqual(int(diagnostics.loc["DAT echus avec solde positif", "valeur"]), 1)

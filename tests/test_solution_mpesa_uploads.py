@@ -8,6 +8,7 @@ from credit_app.tabs.solution_mpesa import (
     MPESA_FINANCE_TURBO_TAB_LABELS,
     MPESA_SOLUTION_TAB_LABELS,
     _build_prepared_data,
+    _render_alert_banner,
     _uploaded_dataframes,
 )
 
@@ -42,6 +43,22 @@ def test_finance_turbo_replaces_the_two_previous_main_tabs() -> None:
         "Risques et contrôles",
         "Export",
     )
+
+
+def test_alert_banner_uses_the_red_streamlit_callout(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_error(message: str, *, icon: str) -> None:
+        captured.update(message=message, icon=icon)
+
+    monkeypatch.setattr("credit_app.tabs.solution_mpesa.st.error", fake_error)
+
+    _render_alert_banner("6 operations necessitent une verification.")
+
+    assert captured == {
+        "message": "6 operations necessitent une verification.",
+        "icon": ":material/error:",
+    }
 
 
 def test_uploaded_dataframes_unifies_files_and_preserves_provenance() -> None:

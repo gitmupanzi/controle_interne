@@ -8816,6 +8816,184 @@ def build_customer_summary(statement: pd.DataFrame, dat_client: pd.DataFrame, lo
     return pd.DataFrame(rows)
 
 
+TRANSACTION_ANOMALY_CONTROL_NAMES = (
+    "Lignes sans customer_id",
+    "Lignes sans reference_id",
+    "Dates invalides",
+    "Mouvements dr = 0 et cr = 0",
+    "Lignes avec dr > 0 et cr > 0",
+    "Soldes bal_before/bal_after negatifs",
+    "currency_code vide",
+    "account_type vide",
+    "Types de comptes a classifier",
+    "Doublons exacts",
+    "Lignes dans des groupes d'ecritures repetees",
+)
+
+
+def build_transaction_anomalies(
+    transactions: pd.DataFrame | None,
+    selected_controls: Iterable[str] | None = None,
+) -> pd.DataFrame:
+    """Retourne les lignes Turbo anormales avec un motif explicite par ligne."""
+    if not isinstance(transactions, pd.DataFrame):
+        return pd.DataFrame(columns=["raison_anomalie"])
+
+    work = transactions.copy()
+    if "raison_anomalie" in work.columns:
+        work = work.drop(columns=["raison_anomalie"])
+    rule_masks: dict[str, pd.Series] = {}
+    rule_labels: dict[str, str] = {}
+
+    def append_reason(mask: pd.Series, label: str, control: str) -> None:
+        condition = pd.Series(mask, index=work.index).fillna(False).astype(bool)
+        rule_masks[control] = condition
+        rule_labels[control] = label
+
+    missing_customer = (
+        work["customer_id"].apply(_is_empty_text)
+        if "customer_id" in work.columns
+        else pd.Series(True, index=work.index)
+    )
+    append_reason(
+        missing_customer,
+        "customer_id manquant",
+        "Lignes sans customer_id",
+    )
+
+    missing_reference = (
+        work["reference_id"].apply(_is_empty_text)
+        if "reference_id" in work.columns
+        else pd.Series(True, index=work.index)
+    )
+    append_reason(
+        missing_reference,
+        "reference_id manquant",
+        "Lignes sans reference_id",
+    )
+
+    invalid_dates = (
+        pd.to_datetime(work["created_at"], errors="coerce").isna()
+        if "created_at" in work.columns
+        else pd.Series(True, index=work.index)
+    )
+    append_reason(
+        invalid_dates,
+        "Date created_at invalide ou manquante",
+        "Dates invalides",
+    )
+
+    missing_currency = (
+        work["currency_code"].apply(_is_empty_text)
+        if "currency_code" in work.columns
+        else pd.Series(True, index=work.index)
+    )
+    append_reason(
+        missing_currency,
+        "currency_code manquant",
+        "currency_code vide",
+    )
+
+    if {"dr", "cr"}.issubset(work.columns):
+        dr_values = numeric_column(work, "dr")
+        cr_values = numeric_column(work, "cr")
+        append_reason(
+            dr_values.eq(0) & cr_values.eq(0),
+            "Mouvement nul : dr = 0 et cr = 0",
+            "Mouvements dr = 0 et cr = 0",
+        )
+        append_reason(
+            dr_values.gt(0) & cr_values.gt(0),
+            "Incoherence de sens : dr > 0 et cr > 0",
+            "Lignes avec dr > 0 et cr > 0",
+        )
+
+    negative_balance = numeric_column(work, "bal_before").lt(0) | numeric_column(
+        work,
+        "bal_after",
+    ).lt(0)
+    append_reason(
+        negative_balance,
+        "Solde bal_before ou bal_after negatif",
+        "Soldes bal_before/bal_after negatifs",
+    )
+
+    if "account_type" in work.columns:
+        account_types = clean_text(work["account_type"]).str.upper()
+        empty_account = account_types.eq("")
+        unknown_account = account_types.ne("") & ~account_types.isin(KNOWN_ACCOUNT_TYPES)
+    else:
+        account_types = pd.Series("", index=work.index, dtype="string")
+        empty_account = pd.Series(True, index=work.index)
+        unknown_account = pd.Series(False, index=work.index)
+    append_reason(
+        empty_account,
+        "account_type manquant",
+        "account_type vide",
+    )
+    append_reason(
+        unknown_account,
+        "account_type non reference",
+        "Types de comptes a classifier",
+    )
+
+    append_reason(
+        work.duplicated(),
+        "Doublon exact d'une ligne precedente",
+        "Doublons exacts",
+    )
+
+    duplicate_key_columns = [
+        column
+        for column in ["customer_id", "created_at", "ref_no", "reference_id", "dr", "cr"]
+        if column in work.columns
+    ]
+    repeated_group_rows = pd.Series(False, index=work.index)
+    if duplicate_key_columns:
+        duplicate_work = work.copy()
+        duplicate_work["__account_type_control"] = account_types
+        grouped = duplicate_work.groupby(
+            duplicate_key_columns,
+            dropna=False,
+            sort=False,
+        )["__account_type_control"]
+        repeated_group_rows = grouped.transform("size").gt(1) & grouped.transform(
+            "nunique"
+        ).le(1)
+    append_reason(
+        repeated_group_rows,
+        "Groupe d'ecritures repetees avec le meme type de compte",
+        "Lignes dans des groupes d'ecritures repetees",
+    )
+
+    if selected_controls is None:
+        active_controls = list(rule_masks)
+    else:
+        selected = {
+            str(control).strip()
+            for control in selected_controls
+            if str(control).strip()
+        }
+        active_controls = [control for control in rule_masks if control in selected]
+
+    reasons = pd.Series("", index=work.index, dtype="string")
+    for control in active_controls:
+        condition = rule_masks[control]
+        label = rule_labels[control]
+        updated = reasons.where(reasons.eq(""), reasons + " | ") + label
+        reasons = reasons.mask(condition, updated)
+    anomaly_mask = reasons.ne("")
+
+    anomaly_mask_array = anomaly_mask.to_numpy()
+    anomalies = work.iloc[anomaly_mask_array].copy()
+    anomalies.insert(
+        0,
+        "raison_anomalie",
+        reasons.iloc[anomaly_mask_array].to_numpy(),
+    )
+    return anomalies
+
+
 def build_diagnostics(prepared: MpesaPreparedData, customer_id: str | None = None, statement: pd.DataFrame | None = None) -> pd.DataFrame:
     tx = prepared.transactions
     diagnostics: list[dict[str, object]] = []
@@ -8915,6 +9093,7 @@ def build_diagnostics(prepared: MpesaPreparedData, customer_id: str | None = Non
     linked_groups = 0
     linked_rows = 0
     repeated_to_review = 0
+    repeated_rows_to_review = 0
     if duplicate_key_columns:
         duplicate_work = tx.copy()
         duplicate_work["__account_type_control"] = clean_text(
@@ -8936,6 +9115,9 @@ def build_diagnostics(prepared: MpesaPreparedData, customer_id: str | None = Non
         linked_groups = int(linked.sum())
         linked_rows = int(duplicate_groups.loc[linked, "nombre_lignes"].sum())
         repeated_to_review = int((repeated & ~linked).sum())
+        repeated_rows_to_review = int(
+            duplicate_groups.loc[repeated & ~linked, "nombre_lignes"].sum()
+        )
     add(
         "Ecritures comptables liees",
         linked_groups,
@@ -8943,10 +9125,14 @@ def build_diagnostics(prepared: MpesaPreparedData, customer_id: str | None = Non
         f"{linked_rows} lignes reparties dans {linked_groups} groupe(s) multi-comptes; elles ne sont pas des doublons.",
     )
     add(
-        "Groupes d'ecritures repetees a verifier",
-        repeated_to_review,
-        "OK" if repeated_to_review == 0 else "A verifier",
-        "Memes attributs de controle sans changement de type de compte.",
+        "Lignes dans des groupes d'ecritures repetees",
+        repeated_rows_to_review,
+        "OK" if repeated_rows_to_review == 0 else "A verifier",
+        (
+            f"{repeated_rows_to_review} ligne(s) repartie(s) dans "
+            f"{repeated_to_review} groupe(s), avec les memes attributs de controle "
+            "sans changement de type de compte."
+        ),
     )
     add_dat_controls()
     if not prepared.g2_transactions.empty:

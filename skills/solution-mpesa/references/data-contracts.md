@@ -350,6 +350,7 @@ L'export comptable de référence contient exactement les 12 feuilles suivantes 
 
 - Sans solde d'ouverture, le mouvement cumulé M-PESA n'est pas un solde réel.
 - Une absence de correspondance est un résultat de contrôle, pas une ligne à supprimer.
+- Le tableau `Anomalies Transactions [Turbo]` conserve la ligne Turbo source et ajoute `raison_anomalie`. Détailler les contrôles transactionnels en alerte pour `customer_id` ou `reference_id` manquant, date invalide, `dr = cr = 0`, `dr > 0` et `cr > 0`, solde négatif, devise ou type de compte manquant/inconnu, doublon exact et groupe répété. Appliquer les filtres `statut` et `controle` à la synthèse comme à la liste. La valeur d'un contrôle correspond au nombre de lignes Turbo détaillables; pour les répétitions, le nombre de groupes figure dans `detail`. Avec un filtre `controle`, `raison_anomalie` ne contient que les motifs sélectionnés; sans ce filtre, elle concatène les motifs d'une même ligne.
 - Un fichier facultatif absent doit réduire le rapport proprement sans bloquer les analyses encore possibles.
 - Toute synthèse financière doit afficher la devise et éviter un total multidevise.
 - Le Word reste la restitution modifiable destinée à la Direction générale. L'Extrait client propose aussi un PDF natif CDF, USD ou ALL reprenant le même périmètre filtré, les mêmes comptes et la séparation stricte des devises. Les deux formats intègrent le logo officiel Bisou Bisou.

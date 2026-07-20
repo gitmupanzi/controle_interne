@@ -142,6 +142,9 @@ Turbo constitue la source opérationnelle principale de la Solution M_PESA. G2 e
 ## Norme visuelle commune des onglets
 
 - Appliquer cette norme à tous les niveaux de navigation de Solution M-PESA : sous-onglets principaux, sous-sous-onglets de `Finance Turbo`, `Perfect_client`, `G2 / DAT` et tout futur bloc `st.tabs`.
+- Lorsqu'un tableau d'anomalies, d'alertes, d'écarts ou d'éléments à vérifier n'est pas vide, afficher immédiatement au-dessus une bannière rouge native `st.error` indiquant le nombre de signaux et l'action attendue. Si le tableau est vide, conserver une confirmation verte `st.success`.
+- Conserver le tableau lui-même sobre et sans coloration rouge; la bannière porte seule la surbrillance afin d'attirer l'attention sans réduire la lisibilité des données.
+- Dans `Contrôle des données`, construire `Anomalies Transactions [Turbo]` avec une colonne `raison_anomalie` visible en première position et épinglée. Détailler tous les contrôles transactionnels au statut d'alerte : identifiants manquants, date invalide, mouvement nul, `dr` et `cr` simultanément positifs, solde négatif, devise ou type de compte manquant/inconnu, doublon exact et groupe répété. Appliquer les mêmes filtres `statut` et `controle` à la synthèse et à la liste. Faire correspondre la valeur de chaque contrôle au nombre de lignes Turbo détaillables; pour les répétitions, compter les lignes et conserver le nombre de groupes dans `detail`. Lorsque `controle` est filtré, limiter `raison_anomalie` aux seuls motifs sélectionnés; sans filtre, concaténer les motifs lorsqu'une ligne cumule plusieurs anomalies.
 - Conserver une barre d'onglets sobre et professionnelle, avec des espacements réguliers entre les libellés.
 - Afficher l'onglet actif en bleu, avec des coins arrondis et un soulignement rouge.
 - Appliquer un survol discret et rendre la navigation au clavier clairement visible avec `:focus-visible`.

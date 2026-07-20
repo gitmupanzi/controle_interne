@@ -23,8 +23,10 @@ from credit_app.services.mpesa_analysis import (
     LOAN_USEFUL_COLUMNS,
     PERFECT_CLIENTS_REQUIRED_COLUMNS,
     TRANSACTION_REQUIRED_COLUMNS,
+    TRANSACTION_ANOMALY_CONTROL_NAMES,
     MpesaPreparedData,
     build_diagnostics,
+    build_transaction_anomalies,
     build_large_dat_summary,
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
@@ -122,6 +124,11 @@ def _format_percent(value: Any) -> str:
     if pd.isna(number):
         return "-"
     return f"{number:.1f}%"
+
+
+def _render_alert_banner(message: str) -> None:
+    """Affiche un signal rouge natif et accessible au-dessus d'un tableau de revue."""
+    st.error(message, icon=":material/error:")
 
 
 def _prepared_data_cache_key(prepared: MpesaPreparedData) -> str:
@@ -752,11 +759,15 @@ def _render_import_tab(prepared: MpesaPreparedData, missing: dict[str, list[str]
         if reconciliation_status in {"Concordance exacte", "Source autonome"}:
             st.success(reconciliation_message)
         else:
-            st.warning(reconciliation_message)
+            _render_alert_banner(reconciliation_message)
         savings_gaps = savings_reconciliation.get("ecarts", pd.DataFrame())
         if not savings_gaps.empty:
             with st.expander("Afficher les ecarts Savings Account / DAT", expanded=False):
-                st.dataframe(savings_gaps, width="stretch", hide_index=True)
+                st.dataframe(
+                    savings_gaps,
+                    width="stretch",
+                    hide_index=True,
+                )
     unnamed_count = sum(
         int(frame.columns.astype(str).str.match(r"^Unnamed(:|$)", na=False).sum())
         for frame in [prepared.transactions, prepared.current_savings, prepared.fixed_savings, prepared.loans]
@@ -1103,7 +1114,7 @@ def _render_customer_turbo_controls(analysis: dict[str, pd.DataFrame]) -> None:
     if review.empty:
         st.success("Aucun ecart metier Turbo n'a ete detecte dans les operations filtrees.")
     else:
-        st.warning(
+        _render_alert_banner(
             "Les lignes ci-dessous sont des points de revue. Elles ne constituent pas automatiquement une erreur ou une fraude."
         )
         st.dataframe(
@@ -1534,6 +1545,10 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
                     ("Anomalies [G2]", _format_count(anomaly_count), "Dont ecarts de date > 60 minutes", "orange"),
                 ]
             )
+            if anomaly_count:
+                _render_alert_banner(
+                    f"{anomaly_count} anomalie(s) G2 necessitent une verification."
+                )
             verification_columns = [
                 "receipt_no",
                 "initiation_time",
@@ -2814,7 +2829,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         else:
             st.success("Aucune anomalie de rapprochement detectee dans le perimetre analyse.")
     else:
-        st.warning(
+        _render_alert_banner(
             f"{len(daily_anomalies)} operation(s) necessitent une verification. "
             f"Elles sont conservees dans le detail et dans l'onglet Anomalies_{source_label} de l'export Excel."
         )
@@ -2855,7 +2870,11 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                 "motif_anomalie",
             ]
             anomaly_columns = [column for column in anomaly_columns if column in daily_anomalies.columns]
-            st.dataframe(daily_anomalies[anomaly_columns], width="stretch", hide_index=True)
+            st.dataframe(
+                daily_anomalies[anomaly_columns],
+                width="stretch",
+                hide_index=True,
+            )
 
     turbo_only = source_label == "Turbo"
     render_panel_title(
@@ -3048,7 +3067,11 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         control_columns = [column for column in control_columns if column in filtered.columns]
         filtered_display = filtered[control_columns].copy() if control_columns else filtered
         st.caption(f"{len(filtered)} ligne(s) de controle affichee(s).")
-        st.dataframe(filtered_display, width="stretch", hide_index=True)
+        st.dataframe(
+            filtered_display,
+            width="stretch",
+            hide_index=True,
+        )
 
     _render_g2_report_export(
         daily_pivot=daily_pivot,
@@ -3507,7 +3530,15 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
                     {"priorite": "DAT echus ou a echeance sous 30 jours", "devise": currency, "dossiers": len(group), "montant": group["balance"].sum()}
                 )
         if priority_rows:
-            st.dataframe(pd.DataFrame(priority_rows), width="stretch", hide_index=True)
+            priority_table = pd.DataFrame(priority_rows)
+            _render_alert_banner(
+                f"{len(priority_table)} priorite(s) necessitent l'attention du lecteur."
+            )
+            st.dataframe(
+                priority_table,
+                width="stretch",
+                hide_index=True,
+            )
         else:
             st.success("Aucune priorite credit/DAT calculable dans les fichiers charges.")
 
@@ -3692,8 +3723,15 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
                 f"Afficher les {len(behavioral_alerts)} signal(aux) comportemental(aux)",
                 expanded=False,
             ):
-                st.caption("Une alerte comportementale est un signal de revue, pas une preuve de fraude.")
-                st.dataframe(behavioral_alerts, width="stretch", hide_index=True)
+                if not behavioral_alerts.empty:
+                    _render_alert_banner(
+                        "Une alerte comportementale est un signal de revue, pas une preuve de fraude."
+                    )
+                st.dataframe(
+                    behavioral_alerts,
+                    width="stretch",
+                    hide_index=True,
+                )
 
         render_panel_title("3. Echeancier DAT - risque d'echeance [Turbo]")
         dat_summary = report_view.get("dat_echeances_synthese", pd.DataFrame())
@@ -4006,7 +4044,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         if controls_view.empty:
             st.success("Aucune correspondance credit / compte courant a revoir dans les devises affichees.")
         else:
-            st.warning(
+            _render_alert_banner(
                 f"{len(controls_view)} credit(s) a revoir : absence ou ambiguite du compte courant, "
                 "identifiant direct non retrouve, ou ecart de telephone/client/devise."
             )
@@ -4318,7 +4356,11 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
                     }
                 )
         if priority_rows:
-            st.dataframe(pd.DataFrame(priority_rows), width="stretch", hide_index=True)
+            priority_table = pd.DataFrame(priority_rows)
+            _render_alert_banner(
+                f"{len(priority_table)} priorite(s) necessitent l'attention du lecteur."
+            )
+            st.dataframe(priority_table, width="stretch", hide_index=True)
         else:
             st.success("Aucune priorite Turbo calculee sur la periode selectionnee.")
 
@@ -4532,7 +4574,14 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
                 ["currency_code", "alerte", "customer_id"],
                 key_prefix="mpesa_turbo_alert_filter",
             )
-            st.dataframe(alert_view.head(1500), width="stretch", hide_index=True)
+            _render_alert_banner(
+                f"{len(alert_view)} alerte(s) Turbo necessitent une verification."
+            )
+            st.dataframe(
+                alert_view.head(1500),
+                width="stretch",
+                hide_index=True,
+            )
 
         inactive = report_view.get("mouvements_comptes_inactifs", pd.DataFrame())
         client_quality = report_view.get("qualite_clients_synthese", pd.DataFrame())
@@ -4540,9 +4589,20 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         if inactive.empty:
             st.success("Aucun mouvement rattache a un compte epargne/DAT inactif sur la periode.")
         else:
-            st.dataframe(inactive.head(1000), width="stretch", hide_index=True)
+            _render_alert_banner(
+                f"{len(inactive)} mouvement(s) sur compte inactif necessitent une verification."
+            )
+            st.dataframe(
+                inactive.head(1000),
+                width="stretch",
+                hide_index=True,
+            )
         if not client_quality.empty:
-            st.dataframe(client_quality, width="stretch", hide_index=True)
+            st.dataframe(
+                client_quality,
+                width="stretch",
+                hide_index=True,
+            )
 
         _render_accounting_controls(prepared, accounting_view)
 
@@ -4806,7 +4866,11 @@ def _render_accounting_controls(
             "Le taux de rapprochement compare uniquement les transactions G2 terminees de la periode "
             "avec ref_no Turbo. Un fichier G2 limite au compte 1441 ne couvre pas les sorties 15558."
         )
-        st.dataframe(g2_control, width="stretch", hide_index=True)
+        st.dataframe(
+            g2_control,
+            width="stretch",
+            hide_index=True,
+        )
 
     render_panel_title("Controles comptables observes [Turbo]")
     operation_controls = report.get("controles_operations", pd.DataFrame())
@@ -4819,10 +4883,22 @@ def _render_accounting_controls(
             ("Total signaux", _format_count(control_count), "Signaux de revue, pas preuves d'erreur", "slate"),
         ]
     )
+    if control_count:
+        _render_alert_banner(
+            f"{control_count} signal(aux) comptable(s) necessitent une verification."
+        )
     with st.expander("Afficher les operations a verifier [Turbo]", expanded=False):
-        st.dataframe(operation_controls, width="stretch", hide_index=True)
+        st.dataframe(
+            operation_controls,
+            width="stretch",
+            hide_index=True,
+        )
     with st.expander("Afficher les variations de solde a verifier [Turbo]", expanded=False):
-        st.dataframe(balance_controls, width="stretch", hide_index=True)
+        st.dataframe(
+            balance_controls,
+            width="stretch",
+            hide_index=True,
+        )
 
 
 def _render_accounting_export(
@@ -4877,26 +4953,70 @@ def _render_diagnostics_tab(prepared: MpesaPreparedData, report: dict[str, Any] 
         ["statut", "controle"],
         key_prefix="mpesa_diagnostics_filter",
     )
-    st.dataframe(diagnostics_view, width="stretch", hide_index=True)
+    diagnostic_status = diagnostics_view.get(
+        "statut", pd.Series("", index=diagnostics_view.index)
+    ).astype("string").fillna("")
+    diagnostic_alert_mask = ~diagnostic_status.str.lower().isin(
+        {"", "ok", "conforme", "disponible", "information"}
+    )
+    diagnostic_alert_count = int(diagnostic_alert_mask.sum())
+    if diagnostic_alert_count:
+        _render_alert_banner(
+            f"{diagnostic_alert_count} type(s) de controle de donnees necessitent une verification."
+        )
+    st.dataframe(
+        diagnostics_view,
+        width="stretch",
+        hide_index=True,
+    )
     if not prepared.transactions.empty:
-        tx = prepared.transactions
-        anomaly_mask = pd.Series(False, index=tx.index)
-        if "customer_id" in tx.columns:
-            anomaly_mask = anomaly_mask | tx["customer_id"].astype("string").fillna("").eq("")
-        if "currency_code" in tx.columns:
-            anomaly_mask = anomaly_mask | tx["currency_code"].astype("string").fillna("").eq("")
-        if {"dr", "cr"}.issubset(tx.columns):
-            anomaly_mask = anomaly_mask | (
-                pd.to_numeric(tx["dr"], errors="coerce").fillna(0).eq(0)
-                & pd.to_numeric(tx["cr"], errors="coerce").fillna(0).eq(0)
+        selected_diagnostic_controls = diagnostics_view.loc[
+            diagnostic_alert_mask,
+            "controle",
+        ] if "controle" in diagnostics_view.columns else pd.Series(dtype="string")
+        selected_diagnostic_controls = selected_diagnostic_controls.astype(
+            "string"
+        ).dropna().tolist()
+        detailed_control_count = len(
+            set(selected_diagnostic_controls).intersection(
+                TRANSACTION_ANOMALY_CONTROL_NAMES
             )
-            anomaly_mask = anomaly_mask | (
-                pd.to_numeric(tx["dr"], errors="coerce").fillna(0).gt(0)
-                & pd.to_numeric(tx["cr"], errors="coerce").fillna(0).gt(0)
-            )
-        anomalies = tx.loc[anomaly_mask].head(1000)
+        )
+        anomalies = build_transaction_anomalies(
+            prepared.transactions,
+            selected_controls=selected_diagnostic_controls,
+        )
         render_panel_title("Anomalies Transactions [Turbo]")
-        st.dataframe(anomalies, width="stretch", hide_index=True)
+        if anomalies.empty:
+            st.success(
+                "Aucune anomalie Transactions Turbo ne correspond aux filtres statut et controle."
+            )
+        else:
+            _render_alert_banner(
+                f"{len(anomalies)} ligne(s) Transactions Turbo distincte(s) necessitent une verification "
+                f"pour {detailed_control_count} controle(s) transactionnel(s) filtre(s)."
+            )
+            st.caption(
+                "La banniere de synthese compte les types de controles. La valeur de chaque controle "
+                "correspond aux lignes detaillees; la liste fusionne les lignes Turbo communes. "
+                "Sans filtre de controle, une meme ligne peut cumuler plusieurs raisons d'anomalie."
+            )
+            st.dataframe(
+                anomalies.head(1000),
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "raison_anomalie": st.column_config.TextColumn(
+                        "Raison de l'anomalie",
+                        pinned=True,
+                    ),
+                },
+            )
+            if len(anomalies) > 1000:
+                st.caption(
+                    "Le tableau est limite aux 1 000 premieres anomalies; "
+                    f"{len(anomalies) - 1000} ligne(s) supplementaire(s) ne sont pas affichees."
+                )
 
 
 def render_solution_mpesa_tab() -> None:

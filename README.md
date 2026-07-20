@@ -422,6 +422,10 @@ Au premier téléversement, tous les sous-onglets M-PESA sont construits afin de
 
 La norme visuelle de navigation s'applique aussi aux sous-sous-onglets de `Finance Turbo`, `Perfect_client` et `G2 / DAT` : barre sobre avec espacement régulier, onglet actif bleu arrondi et souligné en rouge, survol discret, focus clavier visible et défilement horizontal sur petit écran. Chaque barre imbriquée utilise un conteneur Streamlit identifié afin que son style reste indépendant de la barre principale.
 
+Dans tous les sous-onglets de Solution M-PESA, un tableau non vide d'anomalies, d'alertes, d'écarts ou d'éléments à vérifier est précédé d'une bannière rouge. Le tableau reste volontairement sans coloration afin de préserver sa lisibilité; l'absence de signal est confirmée en vert.
+
+Dans `Contrôle des données`, le tableau `Anomalies Transactions [Turbo]` affiche en première position une colonne épinglée `Raison de l'anomalie`. Elle précise chaque règle déclenchée et réunit les motifs lorsqu'une même écriture cumule plusieurs anomalies. Les filtres `statut` et `controle` s'appliquent à la synthèse et à cette liste; lorsque `controle` est filtré, seuls les motifs sélectionnés restent affichés. La valeur de chaque contrôle correspond au nombre de lignes Turbo détaillables. Pour les écritures répétées, le nombre de groupes reste indiqué dans la colonne `detail`.
+
 ### Restitutions disponibles
 
 Le sous-onglet principal `Finance Turbo` réunit le pilotage financier et la comptabilité observée avec une période et un filtre de devises communs. Ses six volets sont `Vue direction`, `Flux et activité`, `Crédit, épargne et DAT`, `Balances et journaux`, `Risques et contrôles` et `Export`. Le volet `Balances et journaux` construit notamment les analyses financières observables directement dans Transactions M-PESA_Turbo :
