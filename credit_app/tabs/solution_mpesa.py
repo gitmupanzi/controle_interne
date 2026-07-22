@@ -49,6 +49,8 @@ from credit_app.services.mpesa_analysis import (
     create_customer_statement_pdf,
     create_customer_statement_word,
     create_g2_dat_word,
+    create_turbo_balance_pdf,
+    create_turbo_balance_word,
     enrich_transactions_with_g2_customer_names,
     enrich_turbo_with_g2_customer_names,
     filter_g2_transactions_by_completion_time,
@@ -312,6 +314,32 @@ def _create_customer_statement_pdf_cached(
         currency=currency,
         entry_account_number=entry_account_number,
         output_account_number=output_account_number,
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def _create_turbo_balance_word_cached(
+    report: dict[str, pd.DataFrame],
+    period_start: object | None,
+    period_end: object | None,
+) -> bytes:
+    return create_turbo_balance_word(
+        report,
+        period_start=period_start,
+        period_end=period_end,
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def _create_turbo_balance_pdf_cached(
+    report: dict[str, pd.DataFrame],
+    period_start: object | None,
+    period_end: object | None,
+) -> bytes:
+    return create_turbo_balance_pdf(
+        report,
         period_start=period_start,
         period_end=period_end,
     )
@@ -824,24 +852,40 @@ def _filter_statement(
         dates = pd.to_datetime(filtered["created_at"], errors="coerce").dropna()
         if not dates.empty:
             date_key = f"{key_prefix}_{selected_currency}_{dates.min():%Y%m%d}_{dates.max():%Y%m%d}"
-            date_range = first_row.date_input(
-                "Periode",
-                value=(dates.min().date(), dates.max().date()),
+            start_column, end_column = st.columns(2)
+            start = start_column.date_input(
+                "Date de début",
+                value=dates.min().date(),
                 min_value=dates.min().date(),
                 max_value=dates.max().date(),
-                key=f"{date_key}_dates",
+                key=f"{date_key}_start_date",
+                format="DD/MM/YYYY",
+                help="Première journée incluse dans l'extrait client.",
             )
-            if isinstance(date_range, tuple) and len(date_range) == 2:
-                start, end = date_range
-                context["date_start"] = start
-                context["date_end"] = end
-                filtered = filtered.loc[
-                    pd.to_datetime(filtered["created_at"], errors="coerce").between(
-                        pd.Timestamp(start),
-                        pd.Timestamp(end) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1),
-                    )
-                ]
-    ref_query = second_row.text_input("Reference M-PESA_Turbo, DAT ou credit", key=f"{key_prefix}_reference").strip()
+            end = end_column.date_input(
+                "Date de fin",
+                value=dates.max().date(),
+                min_value=dates.min().date(),
+                max_value=dates.max().date(),
+                key=f"{date_key}_end_date",
+                format="DD/MM/YYYY",
+                help="Dernière journée incluse dans l'extrait client.",
+            )
+            context["date_start"] = start
+            context["date_end"] = end
+            if start > end:
+                st.error(
+                    "La date de début doit être antérieure ou égale à la date de fin.",
+                    icon=":material/error:",
+                )
+                return filtered.iloc[0:0].copy(), context
+            filtered = filtered.loc[
+                pd.to_datetime(filtered["created_at"], errors="coerce").between(
+                    pd.Timestamp(start),
+                    pd.Timestamp(end) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1),
+                )
+            ]
+    ref_query = st.text_input("Reference M-PESA_Turbo, DAT ou credit", key=f"{key_prefix}_reference").strip()
     context["reference_query"] = ref_query
     if ref_query:
         ref_columns = ["operation_reference", "reference_dat_operation", "reference_credit_operation", "references_internes"]
@@ -1754,6 +1798,8 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
             "parcours_turbo",
             "dat_en_cours_client",
             "remboursements_turbo_detail_client",
+            "elements_extrait_client_turbo",
+            "interets_dat_credites_client",
             "comportement_turbo",
             "mouvements_internes_turbo",
             "controles_client_turbo",
@@ -2549,14 +2595,17 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             default_completion_date = (
                 completion_times.max().normalize() - pd.Timedelta(days=1)
             ).date()
+        st.caption(f"Champ temporel analysé : {source_date_label}.")
         date_columns = st.columns(2)
         with date_columns[0]:
             date_start = st.date_input(
-                f"{source_date_label} - date de debut",
+                "Date de début",
                 value=default_completion_date,
                 min_value=completion_times.min().date(),
                 max_value=completion_times.max().date(),
                 key=f"mpesa_g2_completion_start_{completion_key}",
+                format="DD/MM/YYYY",
+                help=f"Première journée incluse selon {source_date_label}.",
             )
             time_start = st.time_input(
                 "Heure de debut",
@@ -2566,11 +2615,13 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             )
         with date_columns[1]:
             date_end = st.date_input(
-                f"{source_date_label} - date de fin",
+                "Date de fin",
                 value=default_completion_date,
                 min_value=completion_times.min().date(),
                 max_value=completion_times.max().date(),
                 key=f"mpesa_g2_completion_end_{completion_key}",
+                format="DD/MM/YYYY",
+                help=f"Dernière journée incluse selon {source_date_label}.",
             )
             time_end = st.time_input(
                 "Heure de fin",
@@ -2586,7 +2637,10 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         period_start = pd.Timestamp.combine(date_start, time_start)
         period_end = pd.Timestamp.combine(date_end, time_end)
         if period_start > period_end:
-            st.warning("La date et l'heure de debut doivent etre anterieures ou egales a la date et l'heure de fin.")
+            st.error(
+                "La date et l'heure de début doivent être antérieures ou égales à la date et l'heure de fin.",
+                icon=":material/error:",
+            )
             return
         filtered_g2 = filter_g2_transactions_by_completion_time(
             filtered_g2,
@@ -4149,18 +4203,32 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
     )
 
     with st.form("mpesa_finance_turbo_filters"):
-        date_col, frequency_col = st.columns([2.2, 1.0])
-        with date_col:
-            selected_period = st.date_input(
-                "Periode Turbo",
-                value=(default_start, default_end),
+        start_col, end_col, frequency_col = st.columns([1.0, 1.0, 1.0])
+        with start_col:
+            selected_start_date = st.date_input(
+                "Date de début",
+                value=default_start,
                 min_value=minimum_date,
                 max_value=maximum_date,
                 key=(
-                    f"mpesa_finance_turbo_period_{minimum_date:%Y%m%d}_"
+                    f"mpesa_finance_turbo_start_{minimum_date:%Y%m%d}_"
                     f"{maximum_date:%Y%m%d}_{len(transaction_dates)}"
                 ),
-                help="Les deux bornes sont incluses. La derniere journee complete est proposee par defaut.",
+                help="Première journée incluse dans les analyses Finance Turbo.",
+                format="DD/MM/YYYY",
+            )
+        with end_col:
+            selected_end_date = st.date_input(
+                "Date de fin",
+                value=default_end,
+                min_value=minimum_date,
+                max_value=maximum_date,
+                key=(
+                    f"mpesa_finance_turbo_end_{minimum_date:%Y%m%d}_"
+                    f"{maximum_date:%Y%m%d}_{len(transaction_dates)}"
+                ),
+                help="Dernière journée incluse. La dernière journée complète est proposée par défaut.",
+                format="DD/MM/YYYY",
             )
         with frequency_col:
             frequency = st.selectbox(
@@ -4202,14 +4270,14 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         )
         st.form_submit_button("Actualiser l'analyse Turbo", type="primary")
 
-    if isinstance(selected_period, (tuple, list)) and len(selected_period) == 2:
-        date_start, date_end = selected_period
-    elif isinstance(selected_period, (tuple, list)) and len(selected_period) == 1:
-        date_start = date_end = selected_period[0]
-    elif isinstance(selected_period, (tuple, list)):
-        date_start, date_end = default_start, default_end
-    else:
-        date_start = date_end = selected_period
+    date_start = selected_start_date
+    date_end = selected_end_date
+    if date_start > date_end:
+        st.error(
+            "La date de début doit être antérieure ou égale à la date de fin.",
+            icon=":material/error:",
+        )
+        return
 
     dat_interest_rate = float(
         st.session_state.get(
@@ -4534,7 +4602,11 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         _render_accounting_portfolio(accounting_view)
 
     with accounting_tab:
-        _render_accounting_balances_and_journals(accounting_view)
+        _render_accounting_balances_and_journals(
+            accounting_view,
+            date_start=date_start,
+            date_end=date_end,
+        )
 
     with risks_tab:
         render_panel_title("Concentration des transactions [Turbo]")
@@ -4712,6 +4784,9 @@ def _render_accounting_summary(report: dict[str, pd.DataFrame]) -> None:
 
 def _render_accounting_balances_and_journals(
     report: dict[str, pd.DataFrame],
+    *,
+    date_start: object,
+    date_end: object,
 ) -> None:
     """Restitue les balances auxiliaires et les journaux Turbo."""
     if report.get("synthese", pd.DataFrame()).empty:
@@ -4804,6 +4879,43 @@ def _render_accounting_balances_and_journals(
         st.dataframe(operation_view, width="stretch", hide_index=True)
     with st.expander("Afficher le journal brut des ecritures [Turbo]", expanded=False):
         st.dataframe(report.get("journal_ecritures", pd.DataFrame()), width="stretch", hide_index=True)
+
+    render_panel_title("Export de la balance observée [Turbo]")
+    st.caption(
+        "Documents prêts à transmettre à la direction. Les devises sélectionnées restent séparées, "
+        "les montants proviennent uniquement de Transactions M-PESA_Turbo et G2 ne complète que le nom du client."
+    )
+    start_token = pd.Timestamp(date_start).strftime("%Y%m%d")
+    end_token = pd.Timestamp(date_end).strftime("%Y%m%d")
+    export_columns = st.columns([1, 1, 4], gap="small")
+    export_columns[0].download_button(
+        "Télécharger Word",
+        data=lambda: _create_turbo_balance_word_cached(
+            report,
+            date_start,
+            date_end,
+        ),
+        file_name=f"balance_observee_turbo_{start_token}_{end_token}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        icon=":material/download:",
+        on_click="ignore",
+        width="content",
+        key=f"mpesa_turbo_balance_word_{start_token}_{end_token}",
+    )
+    export_columns[1].download_button(
+        "Télécharger PDF",
+        data=lambda: _create_turbo_balance_pdf_cached(
+            report,
+            date_start,
+            date_end,
+        ),
+        file_name=f"balance_observee_turbo_{start_token}_{end_token}.pdf",
+        mime="application/pdf",
+        icon=":material/download:",
+        on_click="ignore",
+        width="content",
+        key=f"mpesa_turbo_balance_pdf_{start_token}_{end_token}",
+    )
 
 
 def _render_accounting_flows(report: dict[str, pd.DataFrame]) -> None:

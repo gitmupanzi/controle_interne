@@ -14,6 +14,7 @@ from credit_app.services.mpesa_analysis import (
     build_customer_statement_view,
     build_customer_statement_filename,
     build_customer_matured_dat_interest_entries,
+    build_customer_statement_elements,
     build_customer_transaction_analysis,
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
@@ -30,6 +31,8 @@ from credit_app.services.mpesa_analysis import (
     create_g2_dat_word,
     create_customer_statement_pdf,
     create_customer_statement_word,
+    create_turbo_balance_pdf,
+    create_turbo_balance_word,
     build_g2_entry_report,
     build_entry_count_summary,
     build_entry_pivot,
@@ -1449,6 +1452,105 @@ class MpesaAnalysisTests(unittest.TestCase):
             .any()
         )
 
+    def test_customer_statement_elements_cover_six_turbo_focused_families(self) -> None:
+        events = pd.DataFrame(
+            [
+                {
+                    "created_at": "2026-07-21 08:00:00",
+                    "customer_id": "CLIENT-1",
+                    "currency_code": "CDF",
+                    "event_reference": "DEP-1",
+                    "type_operation": "Sortie M-PESA_Turbo vers epargne",
+                    "montant_operation": 100.0,
+                    "remboursement_compte_ouvert": 0.0,
+                    "remboursement_mpesa": 0.0,
+                },
+                {
+                    "created_at": "2026-07-21 09:00:00",
+                    "customer_id": "CLIENT-1",
+                    "currency_code": "CDF",
+                    "event_reference": "RET-1",
+                    "type_operation": "Entree M-PESA_Turbo depuis epargne",
+                    "montant_operation": 40.0,
+                    "remboursement_compte_ouvert": 0.0,
+                    "remboursement_mpesa": 0.0,
+                },
+                {
+                    "created_at": "2026-07-21 10:00:00",
+                    "customer_id": "CLIENT-1",
+                    "currency_code": "CDF",
+                    "event_reference": "REM-MPESA",
+                    "type_operation": "Remboursement de credit",
+                    "montant_operation": 25.0,
+                    "remboursement_compte_ouvert": 0.0,
+                    "remboursement_mpesa": 25.0,
+                },
+                {
+                    "created_at": "2026-07-21 11:00:00",
+                    "customer_id": "CLIENT-1",
+                    "currency_code": "CDF",
+                    "event_reference": "REM-OUVERT",
+                    "type_operation": "Remboursement de credit",
+                    "montant_operation": 30.0,
+                    "remboursement_compte_ouvert": 30.0,
+                    "remboursement_mpesa": 0.0,
+                },
+                {
+                    "created_at": "2026-07-21 12:00:00",
+                    "customer_id": "CLIENT-1",
+                    "currency_code": "CDF",
+                    "event_reference": "DAT-RETOUR",
+                    "type_operation": "Transfert DAT vers epargne courante",
+                    "montant_operation": 200.0,
+                    "remboursement_compte_ouvert": 0.0,
+                    "remboursement_mpesa": 0.0,
+                },
+            ]
+        )
+        interests = pd.DataFrame(
+            [
+                {
+                    "maturity_date": "2026-07-21",
+                    "date_ecriture_turbo": "2026-07-21 12:01:00",
+                    "customer_id": "CLIENT-1",
+                    "currency_code": "CDF",
+                    "savings_id": "DAT-1",
+                    "reference_transaction_turbo": "DAT-RETOUR",
+                    "interet_client_constate": 11.0,
+                }
+            ]
+        )
+
+        result = build_customer_statement_elements(events, interests)
+        detail = result["detail"].set_index("type_element_extrait")
+        summary = result["synthese"]
+
+        self.assertEqual(len(detail), 6)
+        self.assertEqual(len(summary), 6)
+        self.assertEqual(
+            detail.loc[
+                "Remboursement d'un credit depuis le compte ouvert",
+                "origine_operation",
+            ],
+            "Compte ouvert",
+        )
+        self.assertEqual(
+            float(
+                detail.loc[
+                    "Remboursement d'un credit depuis le compte ouvert",
+                    "montant_observe",
+                ]
+            ),
+            30.0,
+        )
+        self.assertEqual(
+            detail.loc[
+                "Entree des interets du capital mis en DAT",
+                "source_turbo",
+            ],
+            "Savings Account_Turbo - interest_earned",
+        )
+
     def test_customer_statement_uses_g2_only_for_name_and_selected_customer_control(self) -> None:
         transactions = prepare_transactions(
             pd.DataFrame(
@@ -1915,6 +2017,7 @@ class MpesaAnalysisTests(unittest.TestCase):
                     "principal_rembourse": 50_000.0,
                     "interet_observe": 0.0,
                     "penalite_observee": 500.0,
+                    "origine_remboursement_observee": "Compte M-PESA",
                     "mode_remboursement_observe": "M-PESA_Turbo + Penalite",
                 }
             ]
@@ -1923,9 +2026,34 @@ class MpesaAnalysisTests(unittest.TestCase):
         foreign_repayment["customer_id"] = "OTHER-CUSTOMER"
         foreign_repayment["event_reference"] = "FOREIGN-REPAYMENT"
         repayments = pd.concat([repayments, foreign_repayment], ignore_index=True)
+        dat_interest = pd.DataFrame(
+            [
+                {
+                    "customer_id": "1001",
+                    "maturity_date": pd.Timestamp("2026-07-16"),
+                    "savings_id": "DAT-INTERET-CLIENT",
+                    "currency_code": "CDF",
+                    "capital_place": 10_000.0,
+                    "interet_client_constate": 250.0,
+                    "montant_echeance_client": 10_250.0,
+                    "voda_interest": 60.0,
+                    "statut_tracabilite": "Colonne technique à masquer",
+                },
+                {
+                    "customer_id": "OTHER-CUSTOMER",
+                    "maturity_date": pd.Timestamp("2026-07-16"),
+                    "savings_id": "FOREIGN-INTEREST",
+                    "currency_code": "CDF",
+                    "capital_place": 2_000.0,
+                    "interet_client_constate": 50.0,
+                    "montant_echeance_client": 2_050.0,
+                },
+            ]
+        )
         analysis = {
             "dat_en_cours_client": active_dat,
             "remboursements_turbo_detail_client": repayments,
+            "interets_dat_credites_client": dat_interest,
         }
 
         word = create_customer_statement_word(
@@ -1968,11 +2096,13 @@ class MpesaAnalysisTests(unittest.TestCase):
                 "Principal remboursé",
                 "Intérêts",
                 "Pénalités",
+                "Origine du paiement",
                 "Mode observé",
             ]
         )
         self.assertIn("DAT en cours - situation au 17/07/2026", text)
         self.assertIn("Remboursements observés", text)
+        self.assertIn("Entrées des intérêts du capital mis en DAT", text)
         self.assertNotIn("Intérêts des DAT échus", text)
         self.assertNotIn("Crédit et remboursements observés", text)
         self.assertNotIn("Montant reçu", text)
@@ -1980,6 +2110,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(repayment_table.rows), 2)
         self.assertEqual(dat_table.rows[1].cells[0].text, "FA9T2OLVUC")
         self.assertEqual(repayment_table.rows[1].cells[1].text, "REM-CLIENT")
+        self.assertNotIn("Colonne technique à masquer", text)
 
         pdf = create_customer_statement_pdf(
             statement,
@@ -1996,11 +2127,14 @@ class MpesaAnalysisTests(unittest.TestCase):
         )
         self.assertIn("DAT en cours - situation au 17/07/2026", pdf_text)
         self.assertIn("Remboursements observés", pdf_text)
+        self.assertIn("Entrées des intérêts du capital mis en DAT", pdf_text)
         self.assertNotIn("Intérêts des DAT échus", pdf_text)
         self.assertNotIn("Crédit et remboursements observés", pdf_text)
         self.assertNotIn("Montant reçu", pdf_text)
         self.assertNotIn("FOREIGN-DAT", pdf_text)
         self.assertNotIn("FOREIGN-REPAYMENT", pdf_text)
+        self.assertNotIn("FOREIGN-INTEREST", pdf_text)
+        self.assertNotIn("Colonne technique à masquer", pdf_text)
 
     def test_customer_statement_pdf_contains_logo_and_keeps_currency_totals_separate(self) -> None:
         prepared = _sample_prepared_data()
@@ -2056,7 +2190,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("Crédit et remboursements observés", text)
         self.assertNotIn("Positions observees et rapprochement des soldes", text)
         self.assertNotIn("Jalons du parcours financier", text)
-        self.assertIn("Mouvements internes epargne / DAT", text)
+        self.assertIn("Retours du capital mis en DAT", text)
         self.assertIn("Detail des transactions", text)
         self.assertNotIn("[Turbo]", text)
         self.assertIn("Solution Bisou Bisou Digital", footer_text)
@@ -2149,6 +2283,8 @@ class MpesaAnalysisTests(unittest.TestCase):
                 "parcours_turbo",
                 "dat_en_cours_client",
                 "remboursements_turbo_detail_client",
+                "elements_extrait_client_turbo",
+                "interets_dat_credites_client",
                 "comportement_turbo",
                 "mouvements_internes_turbo",
                 "controles_client_turbo",
@@ -2172,6 +2308,8 @@ class MpesaAnalysisTests(unittest.TestCase):
             "Parcours_Turbo",
             "DAT_En_Cours",
             "Remboursements_Turbo",
+            "Elements_Extrait_Turbo",
+            "Interets_DAT_Credites",
             "Comportement_Turbo",
             "Mouvements_Internes",
             "Controles_Client_Turbo",
@@ -3403,6 +3541,49 @@ class MpesaAnalysisTests(unittest.TestCase):
                 "Journal_Operations_Turbo",
             ],
         )
+
+    def test_turbo_balance_word_and_pdf_are_direction_ready(self) -> None:
+        from docx import Document
+        from pypdf import PdfReader
+
+        prepared = _sample_prepared_data()
+        report = build_mpesa_accounting_analysis(
+            prepared,
+            date_start="2026-07-01",
+            date_end="2026-07-01",
+        )
+
+        word = create_turbo_balance_word(
+            report,
+            period_start="2026-07-01",
+            period_end="2026-07-01",
+            generated_at=pd.Timestamp("2026-07-02 08:00:00"),
+        )
+        pdf = create_turbo_balance_pdf(
+            report,
+            period_start="2026-07-01",
+            period_end="2026-07-01",
+            generated_at=pd.Timestamp("2026-07-02 08:00:00"),
+        )
+
+        self.assertTrue(word.startswith(b"PK"))
+        self.assertTrue(pdf.startswith(b"%PDF-"))
+        document = Document(BytesIO(word))
+        word_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        self.assertIn("Balance auxiliaire observée", word_text)
+        self.assertIn("balance générale certifiée", word_text)
+        self.assertTrue(
+            any(
+                table.rows[0].cells[0].text == "Client"
+                for table in document.tables
+            )
+        )
+        pdf_text = "\n".join(
+            page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
+        )
+        self.assertIn("Balance auxiliaire observée", pdf_text)
+        self.assertIn("balance générale certifiée", pdf_text)
+        self.assertIn("Type de compte Turbo", pdf_text)
 
     def test_mpesa_management_dashboard_builds_actionable_microfinance_views(self) -> None:
         g2 = prepare_g2_transactions(

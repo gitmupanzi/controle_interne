@@ -21,6 +21,10 @@ from credit_app.cycles import get_cycle_analysis_preset
 logger = logging.getLogger(__name__)
 
 NUMERIC_COLUMNS = [
+    "nombre",
+    "volume",
+    "montant",
+    "nombre_anomalies",
     "montant_demande",
     "montant_accorde",
     "revenu_mensuel",
@@ -44,6 +48,10 @@ NUMERIC_COLUMNS = [
 ]
 
 DATE_COLUMNS = [
+    "date_alerte",
+    "date_declaration",
+    "date_debut",
+    "date_fin",
     "date_demande",
     "date_decision",
     "date_operation",
@@ -123,6 +131,7 @@ RISK_LEVEL_MAP = {
 }
 
 CYCLE_DATE_PRIORITY = {
+    "conformite": ["date_alerte", "date_declaration", "date_operation", "date_debut"],
     "credit": ["date_demande", "date_decision"],
     "likelemba": ["date_demande", "date_decision"],
     "epargne": ["date_operation", "date_demande"],
@@ -344,8 +353,11 @@ def build_standardized_dataframe(
     standardized = _coalesce_duplicate_columns(standardized)
     standardized = _apply_reference_value_cleaning(standardized)
 
-    if standardize_columns and "client_id" not in standardized.columns and "code_client" in standardized.columns:
-        standardized["client_id"] = standardized["code_client"]
+    if standardize_columns and "client_id" not in standardized.columns:
+        for client_column in ["code_client", "code_adherent", "id_adherent_lab"]:
+            if client_column in standardized.columns:
+                standardized["client_id"] = standardized[client_column]
+                break
     if standardize_columns and "devise" not in standardized.columns and "code_devise" in standardized.columns:
         standardized["devise"] = standardized["code_devise"]
 
@@ -1637,7 +1649,38 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
     if "niveau_risque_calcule" in df.columns:
         mark(df["niveau_risque_calcule"].eq("Élevé"), "Risque élevé")
 
-    if cycle_key == "crm_clients":
+    if cycle_key == "conformite":
+        if "statut_couverture" in df.columns:
+            couverture = df["statut_couverture"].astype("string").map(normalize_text)
+            mark(couverture.isin({"bloquant", "non couvert"}), "Rubrique non couverte")
+            mark(couverture.eq("partiel"), "Couverture partielle à valider")
+        if "statut_revue_conformite" in df.columns:
+            statut_revue = df["statut_revue_conformite"].astype("string").map(normalize_text)
+            mark(statut_revue.str.contains("revoir", na=False), "Alerte à revoir")
+        if "etat_alerte" in df.columns:
+            mark(missing_text("etat_alerte"), "État de l'alerte manquant")
+        if "numero_alerte" in df.columns:
+            mark(missing_text("numero_alerte"), "Numéro d'alerte manquant")
+        if "severite" in df.columns:
+            severite = df["severite"].astype("string").map(normalize_text)
+            mark(severite.isin({"critique", "elevee", "eleve"}), "Anomalie de qualité prioritaire")
+        if "nombre_anomalies" in df.columns:
+            nombre_anomalies = pd.to_numeric(df["nombre_anomalies"], errors="coerce").fillna(0)
+            mark(nombre_anomalies.gt(0), "Anomalies de données détectées")
+        for flag_column, flag_label in {
+            "operation_fractionnee": "Opération fractionnée",
+            "operation_gel_fonds": "Opération liée à un gel de fonds",
+            "operation_haut_risque": "Opération à haut risque",
+            "soupcon_blanchiment": "Soupçon de blanchiment",
+            "soupcon_financement_terrorisme": "Soupçon de financement du terrorisme",
+            "anomalie_adherent_introuvable": "Client Perfect Vision introuvable",
+            "anomalie_identite_absente": "Identité blacklist insuffisante",
+        }.items():
+            if flag_column in df.columns:
+                mark(df[flag_column], flag_label)
+        if "devise" in df.columns and any(column in df.columns for column in ["montant", "volume", "montant_operation"]):
+            mark(missing_text("devise"), "Devise manquante")
+    elif cycle_key == "crm_clients":
         if "client_id" in df.columns:
             mark(missing_text("client_id"), "Identifiant client manquant")
         if "nom_client" in df.columns:
@@ -1973,7 +2016,24 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
         "niveau_risque_calcule",
         "commentaire",
     ]
-    if cycle_key == "epargne":
+    if cycle_key == "conformite":
+        candidate_columns.extend(
+            [
+                "date_alerte",
+                "date_declaration",
+                "date_operation",
+                "nom_client",
+                "code_adherent",
+                "description_alerte",
+                "motif_etat",
+                "source_donnee",
+                "source_declaration",
+                "reference_externe",
+                "regime_sanction",
+                "action_recommandee",
+            ]
+        )
+    elif cycle_key == "epargne":
         candidate_columns.extend(["nom_client", "telephone", "Provenance"])
     elif cycle_key == "crm_clients":
         candidate_columns.extend(

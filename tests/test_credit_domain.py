@@ -580,6 +580,7 @@ class CreditDomainTests(unittest.TestCase):
         likelemba_spec = get_cycle_spec("likelemba")
         money_provider_spec = get_cycle_spec("money_provider")
         crm_clients_spec = get_cycle_spec("crm_clients")
+        conformite_spec = get_cycle_spec("conformite")
 
         self.assertEqual(likelemba_spec["label"], "Likelemba solidaire")
         self.assertIn("nom_groupe", likelemba_spec["expected_columns"])
@@ -587,6 +588,36 @@ class CreditDomainTests(unittest.TestCase):
         self.assertIn("numero_reference", money_provider_spec["expected_columns"])
         self.assertEqual(crm_clients_spec["label"], "Suivi clients CRM")
         self.assertIn("client_id", crm_clients_spec["expected_columns"])
+        self.assertEqual(conformite_spec["label"], "Cycle conformité")
+        self.assertIn("numero_alerte", conformite_spec["expected_columns"])
+
+    def test_conformite_cycle_builds_priority_watchlist(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "date_alerte": ["2025-01-10", "2025-02-12"],
+                "code_adherent": ["CL-1", "CL-2"],
+                "numero_alerte": ["ALT-1", None],
+                "etat_alerte": ["OUVERTE", None],
+                "statut_revue_conformite": ["A_REVOIR", "TRAITEE"],
+                "statut_couverture": ["PARTIEL", "NON_COUVERT"],
+                "montant": [1000, 2000],
+                "devise": ["CDF", None],
+                "severite": ["ELEVEE", "CRITIQUE"],
+                "nombre_anomalies": [1, 2],
+            }
+        )
+
+        standardized, _ = build_standardized_dataframe(raw, standardize_columns=False)
+        standardized["client_id"] = standardized["code_adherent"]
+        watchlist = build_cycle_watchlist(standardized, "conformite")
+        motifs = " | ".join(watchlist["motif_alerte"].astype(str).tolist())
+
+        self.assertEqual(get_cycle_primary_date_column(standardized, "conformite"), "date_alerte")
+        self.assertEqual(len(watchlist), 2)
+        self.assertIn("Couverture partielle à valider", motifs)
+        self.assertIn("Rubrique non couverte", motifs)
+        self.assertIn("Numéro d'alerte manquant", motifs)
+        self.assertIn("Devise manquante", motifs)
 
     def test_crm_client_cycle_maps_columns_and_builds_watchlist(self) -> None:
         raw = pd.DataFrame(

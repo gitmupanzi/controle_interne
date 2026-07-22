@@ -25,9 +25,11 @@ class DataPipelineTests(unittest.TestCase):
     def test_cycle_detection_uses_business_tokens_not_substrings(self) -> None:
         credit = detect_cycle("102_cycle_credit_dashboard_cohorte_de_decaissement.xlsx")
         operations = detect_cycle("04_cycle_operations_depot_retrait_operations_apres_date.xlsx")
+        conformite = detect_cycle("149_cycle_conformite_reporting_annuel_lbc_ft.xlsx")
 
         self.assertEqual(credit.cycle_key, "credit")
         self.assertEqual(operations.cycle_key, "operations_depot_retrait")
+        self.assertEqual(conformite.cycle_key, "conformite")
 
     def test_cycle_detection_can_use_columns_when_name_is_neutral(self) -> None:
         result = detect_cycle(

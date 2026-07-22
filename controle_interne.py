@@ -391,6 +391,7 @@ def _preferred_included_file_index(file_names: list[str]) -> int:
 
 
 FILE_CYCLE_SLUG_TO_APP_KEY = {
+    "conformite_lbc_ft": "conformite",
     "caisse_et_guichet": "caisse",
     "comptable_et_financier": "comptable",
     "ressources_humaines_et_administration": "rh_admin",
@@ -471,6 +472,8 @@ def _reset_sidebar_filters() -> None:
         if key.startswith("credit_filter_sel_") or key in {
             "credit_filter_use_period",
             "credit_period_range",
+            "credit_period_start",
+            "credit_period_end",
         }:
             if key in st.session_state:
                 del st.session_state[key]
@@ -498,36 +501,15 @@ def _date_filter_label(date_column: str | None) -> str:
     return labels.get(str(date_column), "Période analytique")
 
 
-def _clamp_period_input_value(
+def _clamp_date_input_value(
     raw_value: object,
     min_date: date,
     max_date: date,
-) -> tuple[date, date]:
-    if isinstance(raw_value, tuple) and len(raw_value) == 2:
-        start_raw, end_raw = raw_value
-    elif isinstance(raw_value, list) and len(raw_value) == 2:
-        start_raw, end_raw = raw_value
-    elif isinstance(raw_value, date):
-        start_raw = raw_value
-        end_raw = raw_value
-    else:
-        return min_date, max_date
-
-    start = start_raw if isinstance(start_raw, date) else min_date
-    end = end_raw if isinstance(end_raw, date) else max_date
-
-    if start < min_date:
-        start = min_date
-    if start > max_date:
-        start = max_date
-    if end < min_date:
-        end = min_date
-    if end > max_date:
-        end = max_date
-    if start > end:
-        start, end = end, start
-
-    return start, end
+    *,
+    fallback: date,
+) -> date:
+    selected_date = raw_value if isinstance(raw_value, date) else fallback
+    return min(max(selected_date, min_date), max_date)
 
 
 def _filter_column_label(column_name: str) -> str:
@@ -1064,29 +1046,56 @@ def main() -> None:
     if selected_date_column and selected_date_column in standardized_df.columns:
         valid_dates = pd.to_datetime(standardized_df[selected_date_column], errors="coerce").dropna()
         if not valid_dates.empty:
-            default_range = (valid_dates.min().date(), valid_dates.max().date())
-            raw_period_value = st.session_state.get("credit_period_range", default_range)
-            safe_period_value = _clamp_period_input_value(
-                raw_period_value,
-                default_range[0],
-                default_range[1],
+            minimum_date = valid_dates.min().date()
+            maximum_date = valid_dates.max().date()
+            safe_start_date = _clamp_date_input_value(
+                st.session_state.get("credit_period_start"),
+                minimum_date,
+                maximum_date,
+                fallback=minimum_date,
             )
-            picked_range = st.sidebar.date_input(
-                _date_filter_label(selected_date_column),
-                value=safe_period_value,
-                min_value=default_range[0],
-                max_value=default_range[1],
-                key="credit_period_range",
+            safe_end_date = _clamp_date_input_value(
+                st.session_state.get("credit_period_end"),
+                minimum_date,
+                maximum_date,
+                fallback=maximum_date,
+            )
+            if st.session_state.get("credit_period_start") != safe_start_date:
+                st.session_state.pop("credit_period_start", None)
+            if st.session_state.get("credit_period_end") != safe_end_date:
+                st.session_state.pop("credit_period_end", None)
+            st.sidebar.caption(f"Champ analysé : {_date_filter_label(selected_date_column).lower()}.")
+            selected_start_date = st.sidebar.date_input(
+                "Date de début",
+                value=safe_start_date,
+                min_value=minimum_date,
+                max_value=maximum_date,
+                key="credit_period_start",
                 disabled=not use_period_filter,
+                format="DD/MM/YYYY",
+                help="Première journée incluse dans l'analyse.",
+            )
+            selected_end_date = st.sidebar.date_input(
+                "Date de fin",
+                value=safe_end_date,
+                min_value=minimum_date,
+                max_value=maximum_date,
+                key="credit_period_end",
+                disabled=not use_period_filter,
+                format="DD/MM/YYYY",
+                help="Dernière journée incluse dans l'analyse.",
             )
             if use_period_filter:
-                if isinstance(picked_range, tuple) and len(picked_range) == 2:
-                    start_date, end_date = picked_range
-                elif isinstance(picked_range, date):
-                    start_date = picked_range
-                    end_date = picked_range
+                if selected_start_date > selected_end_date:
+                    st.sidebar.error(
+                        "La date de début doit être antérieure ou égale à la date de fin.",
+                        icon=":material/error:",
+                    )
+                    st.stop()
+                start_date = selected_start_date
+                end_date = selected_end_date
             st.sidebar.caption(
-                f"Période disponible : {default_range[0].isoformat()} -> {default_range[1].isoformat()}"
+                f"Période disponible : {minimum_date:%d/%m/%Y} → {maximum_date:%d/%m/%Y}"
             )
 
     filtered_df = filter_dataframe(

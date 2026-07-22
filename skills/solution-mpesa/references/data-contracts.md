@@ -191,6 +191,10 @@ Une sortie B2C confirmée par Turbo conserve `Paiement client B2C` comme classif
 - Fixer `date_situation` depuis `updated_at` ou `date_locked`, à défaut depuis la dernière transaction Turbo du client, puis depuis `created_at` ou `date_approved`. Ne jamais utiliser G2 pour dater ou valoriser un DAT.
 - Estimer l'intérêt par `balance × taux / 100 × durée_contractuelle_jours / 365`, avec 11 % par défaut. Restituer `savings_id`, produit, approbation, échéance, jours restants, devise, capital, taux, intérêt estimé, capital avec intérêt estimé et situation client. L'estimation n'est pas une écriture comptable.
 - Construire la synthèse et le détail des remboursements depuis les seuls événements Turbo `Remboursement de credit` et `Remboursement avec penalite`. Restituer date, référence, devise, montant payé, principal, intérêts, pénalités et mode observé. Exclure les décaissements, la dette créée et les positions de crédit de l'Extrait client.
+- Produire `elements_extrait_client_turbo` et sa synthèse avec exactement six familles : `Depot normal`, `Retrait`, `Remboursement d'un credit depuis le compte M-PESA`, `Remboursement d'un credit depuis le compte ouvert`, `Retour du capital mis en DAT` et `Entree des interets du capital mis en DAT`.
+- Pour un remboursement, retenir `Compte ouvert` lorsqu'une ligne `NORMAL SAVINGS` du même événement porte un libellé de remboursement de compte; sinon retenir le mouvement `MPESA ACCOUNT`. Le montant payé suit cette source avant tout repli sur le montant global de l'événement.
+- Construire les retours de capital DAT depuis `Retrait Compte Bloque` dans Transactions Turbo. Construire les entrées d'intérêts DAT uniquement depuis `Savings Account.interest_earned` sur les DAT arrivés à échéance et dénoués. Ces deux familles restent hors du solde M-PESA sans ligne `MPESA ACCOUNT` correspondante.
+- Dans les Word/PDF client, ne restituer pour l'intérêt DAT que l'échéance, le `savings_id`, la devise, le capital placé, `interet_client_constate` et `montant_echeance_client`; exclure `voda_interest`, `statut_tracabilite` et les autres colonnes techniques.
 - Rechercher `compte_cree` dans cet ordre : `Clients.created_at`, épargne courante `created_at`, DAT `created_at` ou `date_approved`.
 - Résoudre vers `customer_id` avant de construire l'extrait client.
 - Permettre la recherche de l'extrait par `customer_id`, téléphone et nom G2 lorsque le fichier G2 est chargé.
@@ -309,6 +313,7 @@ Cas réel du 16 juillet 2026 avec les exports du 17 juillet : 135 événements, 
 - Les soldes Current Savings, Fixed Savings et Loans sont des instantanés de référence. Ne pas les forcer dans la clôture d'une journée antérieure; afficher leur date disponible et leur source.
 - Sans plan comptable complet et soldes d'ouverture officiels, employer `balance observée`, `position observée` et `solde de mouvement`; ne jamais annoncer une balance générale certifiée, un bilan ou un compte de résultat officiel.
 - Toutes les colonnes monétaires, tous les ratios et tous les contrôles sont calculés par devise.
+- Le volet `Balances et journaux` propose directement `balance_observee_turbo_<debut>_<fin>.docx` et `.pdf`. Les deux documents intègrent le logo, la période, une synthèse par devise, la balance client et la balance des mouvements par `account_type`; ils utilisent le terme `balance observée` et rappellent la limite de certification.
 
 ### Cas de référence clôturé du 16 juillet 2026
 
@@ -334,6 +339,10 @@ Les produits financiers observés restent séparés : CDF — intérêts 8 554, 
 
 L'export comptable de référence contient exactement les 12 feuilles suivantes : `Compta_Synthese_Turbo`, `Balance_Clients_Turbo`, `Positions_Clients_Turbo`, `Balance_Comptes_Turbo`, `Journal_Operations_Turbo`, `Journal_Ecritures_Turbo`, `Controles_Operations_Turbo`, `Controles_Soldes_Turbo`, `Flux_MPESA_Turbo`, `Produits_Financiers_Turbo`, `Positions_Portefeuille_Turbo` et `Controle_G2_Turbo`.
 
+### Cas de validation du 21 juillet 2026
+
+Avec `Transactions 20260722_084058.xlsx` présent dans le dossier de test, le journal contient 97 743 écritures et 85 événements le 21 juillet : 25 en CDF et 60 en USD. Le cas comporte 68 lignes client × devise dans la balance et 22 lignes devise × type de compte. Le client `31476` démontre un retour de capital DAT de 200 USD depuis `Retrait Compte Bloque`, conservé hors du solde M-PESA; ses exports client et les exports Word/PDF de balance doivent être générables sans G2 dans les montants.
+
 ## Fonctions à privilégier
 
 - Préparation : `prepare_transactions`, `prepare_savings_accounts`, `prepare_current_savings`, `prepare_fixed_savings_from_accounts`, `prepare_fixed_savings`, `prepare_loans`, `prepare_g2_transactions`, `prepare_customers`, `prepare_perfect_clients`.
@@ -354,5 +363,5 @@ L'export comptable de référence contient exactement les 12 feuilles suivantes 
 - Un fichier facultatif absent doit réduire le rapport proprement sans bloquer les analyses encore possibles.
 - Toute synthèse financière doit afficher la devise et éviter un total multidevise.
 - Le Word reste la restitution modifiable destinée à la Direction générale. L'Extrait client propose aussi un PDF natif CDF, USD ou ALL reprenant le même périmètre filtré, les mêmes comptes et la séparation stricte des devises. Les deux formats intègrent le logo officiel Bisou Bisou.
-- Le Word et le PDF de l'Extrait client ajoutent avant le détail transactionnel `DAT en cours` et `Remboursements observés`. L'Excel client utilise `DAT_En_Cours` et `Remboursements_Turbo` et n'exporte plus les feuilles d'intérêts DAT échus ou de crédit.
+- Le Word et le PDF de l'Extrait client ajoutent avant le détail transactionnel la synthèse des six familles attendues, `DAT en cours`, `Remboursements observés`, `Retours du capital mis en DAT` et les `Entrées des intérêts du capital mis en DAT` réellement constatées. L'Excel client utilise `DAT_En_Cours`, `Remboursements_Turbo`, `Elements_Extrait_Turbo` et `Interets_DAT_Credites`; il n'exporte plus l'ancienne feuille `Interets_DAT_Echus` ni les feuilles de crédit.
 - L'Excel écrit uniquement les feuilles explicitement demandées par l'appelant afin de réduire le temps et la taille de génération.

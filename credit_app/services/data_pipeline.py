@@ -31,6 +31,7 @@ class CompilationAssessment:
 
 
 CYCLE_NAME_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("conformite", ("cycle_conformite", "conformite_lbc_ft", "lbc_ft", "conformite")),
     ("operations_depot_retrait", ("operations_depot_retrait", "depots_et_retraits", "depot_retrait")),
     ("credit", ("cycle_credit", "credit_dashboard", "prets", "credit")),
     ("epargne", ("cycle_epargne", "epargne", "dat")),
@@ -44,6 +45,7 @@ CYCLE_NAME_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 CYCLE_COLUMN_HINTS: dict[str, frozenset[str]] = {
+    "conformite": frozenset({"numero_alerte", "type_alerte", "etat_alerte", "statut_couverture", "source_declaration"}),
     "credit": frozenset({"dossier_id", "montant_accorde", "encours_credit", "par30", "date_decaissement"}),
     "epargne": frozenset({"compte_id", "solde_compte", "solde_epargne", "date_derniere_transaction"}),
     "crm_clients": frozenset({"client_id", "telephone", "email", "statut_client"}),

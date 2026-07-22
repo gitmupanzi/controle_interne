@@ -34,6 +34,33 @@ from credit_app.ui import (
 CREDIT_LIKE_CYCLES = {"credit", "likelemba"}
 
 GENERIC_OVERVIEW_CONFIG = {
+    "conformite": {
+        "record_label": "Éléments de conformité",
+        "record_subtitle": "Alertes, déclarations et contrôles analysés",
+        "amount_columns": ["montant", "volume", "montant_operation"],
+        "amount_label": "Volume documenté",
+        "amount_subtitle": "Montants conservés dans leur devise source",
+        "entity_columns": ["numero_alerte", "id_declaration", "client_id", "reference_interne"],
+        "entity_label": "Alertes / dossiers / clients",
+        "entity_subtitle": "Références uniques couvertes",
+        "site_columns": ["point_service", "agence"],
+        "site_label": "Points de service",
+        "site_subtitle": "Implantations documentées",
+        "primary_columns": ["type_alerte", "statut_couverture", "source_declaration"],
+        "primary_title": "Répartition des éléments de conformité",
+        "secondary_columns": ["etat_alerte", "niveau_risque", "severite"],
+        "secondary_title": "États, risques et sévérités",
+        "group_columns": ["statut_couverture", "type_alerte", "source_declaration"],
+        "group_title": "Volumes par catégorie de conformité",
+        "actor_columns": ["utilisateur_attribution"],
+        "actor_label": "Utilisateurs documentés",
+        "actor_subtitle": "Affectations manuelles tracées",
+        "timeline_title": "Évolution mensuelle de l'activité de conformité",
+        "balance_columns": [],
+        "alert_columns": ["nombre_anomalies", "anomalie_adherent_introuvable", "anomalie_identite_absente"],
+        "alert_label": "Anomalies signalées",
+        "alert_subtitle": "Lignes nécessitant une revue",
+    },
     "epargne": {
         "record_label": "Comptes d'épargne",
         "record_subtitle": "Comptes analysés",

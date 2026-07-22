@@ -41,6 +41,7 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 
 ## Invariants du tableau de bord Streamlit
 
+- Pour toute période utilisateur, afficher deux `st.date_input` distincts intitulés exactement `Date de début` et `Date de fin`, au format `DD/MM/YYYY`. Ne jamais utiliser un `st.date_input` initialisé avec un tuple ou une liste comme sélecteur de plage. Employer deux clés stables distinctes, valider `date_debut <= date_fin` et appliquer des bornes inclusives.
 - Conserver les analyses détaillées de Perfect Vision dans des `st.tabs`. Perfect Vision constitue un tableau de bord complet : calculer tous les sous-onglets ensemble au chargement initial afin qu'ils soient ensuite immédiatement consultables.
 - Ne jamais remplacer ces `st.tabs` par une navigation conditionnelle qui calcule uniquement l'onglet sélectionné. Cette optimisation à la demande est réservée aux modules dont le fonctionnement métier l'autorise, pas à Perfect Vision.
 - Améliorer les performances avec `st.cache_data` sur la lecture, la normalisation et les calculs déterministes coûteux. Invalider naturellement le cache lorsque le fichier, la feuille, les paramètres ou les filtres changent; ne pas mettre en cache un rendu Streamlit susceptible de devenir obsolète.
