@@ -16,6 +16,7 @@ from credit_app.services.mpesa_analysis import (
     build_customer_matured_dat_interest_entries,
     build_customer_statement_elements,
     build_customer_transaction_analysis,
+    build_filtered_turbo_balance_report,
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
     build_g2_retention_report,
@@ -1374,6 +1375,51 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(statement.iloc[-1]["solde_mpesa_apres"]), 11000.0)
         self.assertIn("loan_balance", statement.columns)
         self.assertEqual(float(statement["dat_final_client"].iloc[0]), 5000.0)
+        summary = report["synthese"].iloc[0]
+        self.assertEqual(float(summary["total_entrees_mpesa"]), 1000.0)
+        self.assertEqual(float(summary["total_sorties_mpesa"]), 2000.0)
+        self.assertEqual(float(summary["mouvement_net"]), -1000.0)
+        self.assertEqual(float(summary["solde_mpesa_final"]), 9000.0)
+
+    def test_customer_summary_uses_bisou_perspective_for_every_currency(self) -> None:
+        rows: list[dict[str, object]] = []
+        row_id = 0
+        for currency, debit, credit in [("CDF", 100.0, 30.0), ("USD", 5.0, 2.0)]:
+            for suffix, dr, cr in [("ENTREE", debit, 0.0), ("SORTIE", 0.0, credit)]:
+                row_id += 1
+                rows.append(
+                    {
+                        "id": row_id,
+                        "customer_id": "CLIENT-SENS",
+                        "msisdn1": "0812345678",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": f"{currency}-{suffix}",
+                        "currency_code": currency,
+                        "dr": dr,
+                        "cr": cr,
+                        "bal_before": 0,
+                        "bal_after": abs(dr - cr),
+                        "ref_no": f"{currency}-{suffix}",
+                        "description": "M-Pesa Depot" if dr else "Retrait Vers M-Pesa",
+                        "created_at": f"2026-07-21 {8 + row_id:02d}:00:00",
+                    }
+                )
+        prepared = MpesaPreparedData(
+            transactions=prepare_transactions(pd.DataFrame(rows)),
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=pd.DataFrame(),
+        )
+
+        summary = build_mpesa_statement(prepared, "CLIENT-SENS")["synthese"].set_index("devise")
+
+        self.assertEqual(float(summary.loc["CDF", "total_entrees_mpesa"]), 100.0)
+        self.assertEqual(float(summary.loc["CDF", "total_sorties_mpesa"]), 30.0)
+        self.assertEqual(float(summary.loc["CDF", "mouvement_net"]), 70.0)
+        self.assertEqual(float(summary.loc["USD", "total_entrees_mpesa"]), 5.0)
+        self.assertEqual(float(summary.loc["USD", "total_sorties_mpesa"]), 2.0)
+        self.assertEqual(float(summary.loc["USD", "mouvement_net"]), 3.0)
 
     def test_customer_transaction_analysis_reconstructs_credit_internal_dat_and_positions(self) -> None:
         prepared = _sample_customer_transaction_analysis_data()
@@ -3506,10 +3552,83 @@ class MpesaAnalysisTests(unittest.TestCase):
             report["balance_clients"]["customer_id"].eq("CLIENT-USD")
         ].iloc[0]
         self.assertEqual(float(cdf_client["solde_epargne_courante_observe"]), 300.0)
+        self.assertEqual(float(cdf_client["depots_epargne_observes"]), 100.0)
+        self.assertEqual(float(cdf_client["retraits_epargne_observes"]), 0.0)
         self.assertEqual(float(usd_client["encours_principal_observe"]), 20.0)
         self.assertEqual(cdf_client["Nom_client"], "CLIENT CDF")
         # Les montants G2 volontairement differents ne remplacent jamais Turbo.
         self.assertNotEqual(float(cdf_summary["total_debit"]), 900.0)
+
+    def test_filtered_turbo_balance_report_recalculates_the_export_scope(self) -> None:
+        client_balance = pd.DataFrame(
+            [
+                {
+                    "customer_id": "CLIENT-A",
+                    "Nom_client": "CLIENT A",
+                    "telephone": "243811111111",
+                    "currency_code": "CDF",
+                    "nombre_lignes": 2,
+                    "nombre_operations": 1,
+                    "operations_a_verifier": 0,
+                    "total_debit": 100,
+                    "total_credit": 100,
+                    "depots_epargne_observes": 100,
+                    "retraits_epargne_observes": 0,
+                },
+                {
+                    "customer_id": "CLIENT-B",
+                    "Nom_client": "CLIENT B",
+                    "telephone": "243822222222",
+                    "currency_code": "USD",
+                    "nombre_lignes": 2,
+                    "nombre_operations": 1,
+                    "operations_a_verifier": 0,
+                    "total_debit": 20,
+                    "total_credit": 20,
+                    "depots_epargne_observes": 20,
+                    "retraits_epargne_observes": 0,
+                },
+            ]
+        )
+        journal_entries = pd.DataFrame(
+            [
+                {
+                    "id": "A-1",
+                    "customer_id": "CLIENT-A",
+                    "currency_code": "CDF",
+                    "account_type": "NORMAL SAVINGS",
+                    "dr": 0,
+                    "cr": 100,
+                    "created_at": pd.Timestamp("2026-07-21 08:00:00"),
+                    "cle_operation_turbo": "REF-A",
+                },
+                {
+                    "id": "B-1",
+                    "customer_id": "CLIENT-B",
+                    "currency_code": "USD",
+                    "account_type": "NORMAL SAVINGS",
+                    "dr": 0,
+                    "cr": 20,
+                    "created_at": pd.Timestamp("2026-07-21 09:00:00"),
+                    "cle_operation_turbo": "REF-B",
+                },
+            ]
+        )
+        report = {
+            "periode": pd.DataFrame(
+                [{"date_debut": pd.Timestamp("2026-07-21"), "date_fin": pd.Timestamp("2026-07-21 23:59:59")}]
+            ),
+            "balance_clients": client_balance,
+            "journal_ecritures": journal_entries,
+        }
+
+        filtered = build_filtered_turbo_balance_report(report, client_balance.iloc[[0]])
+
+        self.assertEqual(filtered["balance_clients"]["customer_id"].tolist(), ["CLIENT-A"])
+        self.assertEqual(filtered["synthese"]["currency_code"].tolist(), ["CDF"])
+        self.assertEqual(float(filtered["synthese"].iloc[0]["depots_epargne_observes"]), 100.0)
+        self.assertEqual(int(filtered["balance_comptes"].iloc[0]["nombre_clients"]), 1)
+        self.assertEqual(set(filtered["balance_comptes"]["currency_code"]), {"CDF"})
 
     def test_mpesa_accounting_analysis_degrades_without_g2_and_exports_targeted_sheets(self) -> None:
         prepared = _sample_prepared_data()
@@ -3572,11 +3691,33 @@ class MpesaAnalysisTests(unittest.TestCase):
         word_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
         self.assertIn("Balance auxiliaire observée", word_text)
         self.assertIn("balance générale certifiée", word_text)
-        self.assertTrue(
-            any(
-                table.rows[0].cells[0].text == "Client"
-                for table in document.tables
-            )
+        criteria_header = document.tables[0]
+        self.assertEqual(criteria_header.cell(0, 1).text, "Critères")
+        criteria = criteria_header.cell(1, 1).tables[0]
+        criteria_labels = [row.cells[0].text for row in criteria.rows]
+        self.assertEqual(
+            criteria_labels,
+            ["Date du :", "Au :", "Clients :", "Périmètre :", "Devise(s) :"],
+        )
+        client_table = next(
+            table
+            for table in document.tables
+            if table.rows[0].cells[0].text == "Client"
+        )
+        self.assertEqual(
+            [cell.text for cell in client_table.rows[0].cells],
+            [
+                "Client",
+                "Nom du client",
+                "Téléphone",
+                "Devise",
+                "Dépôts épargne",
+                "Retraits épargne",
+                "Mouvement net épargne",
+                "Épargne courante",
+                "DAT",
+                "Principal crédit",
+            ],
         )
         pdf_text = "\n".join(
             page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
@@ -3584,6 +3725,10 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Balance auxiliaire observée", pdf_text)
         self.assertIn("balance générale certifiée", pdf_text)
         self.assertIn("Type de compte Turbo", pdf_text)
+        self.assertIn("Critères", pdf_text)
+        self.assertIn("Clients :", pdf_text)
+        self.assertIn("Périmètre :", pdf_text)
+        self.assertIn("Devise(s) :", pdf_text)
 
     def test_mpesa_management_dashboard_builds_actionable_microfinance_views(self) -> None:
         g2 = prepare_g2_transactions(

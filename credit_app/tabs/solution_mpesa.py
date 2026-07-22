@@ -44,6 +44,7 @@ from credit_app.services.mpesa_analysis import (
     build_customer_transaction_analysis,
     build_customer_statement_filename,
     build_customer_statement_view,
+    build_filtered_turbo_balance_report,
     build_perfect_client_crosscheck,
     create_excel_export,
     create_customer_statement_pdf,
@@ -4810,12 +4811,13 @@ def _render_accounting_balances_and_journals(
     balance_clients = report["balance_clients"]
     client_view = _apply_local_multiselect_filters(
         balance_clients,
-        ["currency_code", "Nom_client", "customer_id"],
+        ["currency_code", "Nom_client", "telephone", "customer_id"],
         key_prefix="mpesa_accounting_client_balance_filter",
     )
     client_columns = [
         "customer_id", "Nom_client", "telephone", "currency_code", "nombre_operations",
-        "nombre_lignes", "total_debit", "total_credit", "solde_debiteur_mouvement",
+        "nombre_lignes", "depots_epargne_observes", "retraits_epargne_observes",
+        "mouvement_net_epargne_observe", "total_debit", "total_credit", "solde_debiteur_mouvement",
         "solde_crediteur_mouvement", "solde_epargne_courante_observe", "solde_dat_observe",
         "avoirs_epargne_observes", "encours_principal_observe", "operations_a_verifier",
         "premiere_ecriture", "derniere_ecriture",
@@ -4882,40 +4884,54 @@ def _render_accounting_balances_and_journals(
 
     render_panel_title("Export de la balance observée [Turbo]")
     st.caption(
-        "Documents prêts à transmettre à la direction. Les devises sélectionnées restent séparées, "
-        "les montants proviennent uniquement de Transactions M-PESA_Turbo et G2 ne complète que le nom du client."
+        "Les documents reprennent exactement les clients et devises conservés par les filtres de "
+        "Balance par client ci-dessus. Les montants proviennent uniquement de Transactions "
+        "M-PESA_Turbo et G2 ne complète que le nom du client."
     )
+    export_report = build_filtered_turbo_balance_report(report, client_view)
     start_token = pd.Timestamp(date_start).strftime("%Y%m%d")
     end_token = pd.Timestamp(date_end).strftime("%Y%m%d")
-    export_columns = st.columns([1, 1, 4], gap="small")
-    export_columns[0].download_button(
-        "Télécharger Word",
-        data=lambda: _create_turbo_balance_word_cached(
-            report,
-            date_start,
-            date_end,
-        ),
-        file_name=f"balance_observee_turbo_{start_token}_{end_token}.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        icon=":material/download:",
-        on_click="ignore",
-        width="content",
-        key=f"mpesa_turbo_balance_word_{start_token}_{end_token}",
+    selection_frame = client_view[
+        [column for column in ["customer_id", "currency_code"] if column in client_view.columns]
+    ]
+    selection_token = hashlib.sha256(
+        pd.util.hash_pandas_object(selection_frame, index=False).values.tobytes()
+    ).hexdigest()[:10]
+    st.caption(
+        f"Périmètre exporté : {len(client_view)} ligne(s) client × devise, "
+        f"{client_view['customer_id'].astype('string').nunique() if not client_view.empty else 0} client(s)."
     )
-    export_columns[1].download_button(
-        "Télécharger PDF",
-        data=lambda: _create_turbo_balance_pdf_cached(
-            report,
-            date_start,
-            date_end,
-        ),
-        file_name=f"balance_observee_turbo_{start_token}_{end_token}.pdf",
-        mime="application/pdf",
-        icon=":material/download:",
-        on_click="ignore",
-        width="content",
-        key=f"mpesa_turbo_balance_pdf_{start_token}_{end_token}",
-    )
+    with st.container(horizontal=True, gap="small"):
+        st.download_button(
+            "Télécharger Word",
+            data=lambda: _create_turbo_balance_word_cached(
+                export_report,
+                date_start,
+                date_end,
+            ),
+            file_name=f"balance_observee_turbo_{start_token}_{end_token}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            icon=":material/download:",
+            on_click="ignore",
+            width="content",
+            disabled=client_view.empty,
+            key=f"mpesa_turbo_balance_word_{start_token}_{end_token}_{selection_token}",
+        )
+        st.download_button(
+            "Télécharger PDF",
+            data=lambda: _create_turbo_balance_pdf_cached(
+                export_report,
+                date_start,
+                date_end,
+            ),
+            file_name=f"balance_observee_turbo_{start_token}_{end_token}.pdf",
+            mime="application/pdf",
+            icon=":material/download:",
+            on_click="ignore",
+            width="content",
+            disabled=client_view.empty,
+            key=f"mpesa_turbo_balance_pdf_{start_token}_{end_token}_{selection_token}",
+        )
 
 
 def _render_accounting_flows(report: dict[str, pd.DataFrame]) -> None:
