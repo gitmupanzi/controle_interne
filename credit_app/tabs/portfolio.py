@@ -27,6 +27,7 @@ from credit_app.sql_operations import (
     normalize_operations_analysis_frame,
     build_top_clients_table,
 )
+from credit_app.tabs.conformite import render_conformite_portefeuille_tab
 from credit_app.tabs.table_filters import render_filtered_dataframe
 from credit_app.ui import (
     render_kpi_cards,
@@ -982,6 +983,10 @@ def render_portfolio_tab(
     epargne_bundles: list[dict[str, object]] | None = None,
     epargne_source_label: str | None = None,
 ) -> None:
+    if cycle_key == "conformite":
+        render_conformite_portefeuille_tab(df)
+        return
+
     if cycle_key == "epargne":
         _render_epargne_reconstructed_report(
             conversion_rate,

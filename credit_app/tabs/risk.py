@@ -22,6 +22,7 @@ from credit_app.sql_operations import (
     build_high_activity_kyc_table,
     build_unusual_operations_table,
 )
+from credit_app.tabs.conformite import render_conformite_risques_tab
 from credit_app.tabs.table_filters import render_filtered_dataframe
 from credit_app.ui import (
     render_kpi_cards,
@@ -152,6 +153,10 @@ def _render_perfect_vision_credit_risk(df: pd.DataFrame, cycle_key: str) -> None
 
 
 def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate: float = 2800.0) -> None:
+    if cycle_key == "conformite":
+        render_conformite_risques_tab(df)
+        return
+
     if df.empty:
         st.warning("Aucune donnée n'est disponible dans cet onglet.")
         return

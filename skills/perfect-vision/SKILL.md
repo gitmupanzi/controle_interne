@@ -25,6 +25,8 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 - Qualifier les objets avec `dbo.` et conserver les noms exacts du schéma.
 - Utiliser des bornes de dates explicites. Pour les colonnes datetime, préférer `>= @date_debut AND < DATEADD(day, 1, @date_fin)`.
 - Ne jamais additionner CDF et USD. Grouper par `ID_DEVISE` ou filtrer la devise demandée.
+- Pour les requêtes paramétrées avec `@id_devise_reporting`, appliquer la convention suivante : une valeur précise filtre une seule devise; `@id_devise_reporting = NULL` signifie toutes les devises disponibles, mais toujours avec une ligne, un groupe ou un détail par devise. Ne jamais utiliser `NULL` pour produire un total monétaire multi-devises.
+- Quand `@id_devise_reporting = NULL`, appliquer les seuils LBC-FT par devise : USD avec les seuils nominaux `5000` et `10000`, CDF avec `@seuil_5k_usd_cdf` et `@seuil_10k_usd_cdf`. Si une autre devise apparaît, la traiter comme une devise distincte et documenter l'hypothèse de seuil.
 - Distinguer les sources back-office et API avant de les réunir avec `UNION ALL`.
 - Éviter `NOLOCK` pour les contrôles nécessitant une image cohérente, sauf demande explicite et risque documenté.
 - Signaler toute jointure incertaine et la confirmer dans le schéma ou dans une requête existante.

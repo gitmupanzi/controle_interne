@@ -24,6 +24,7 @@ from credit_app.sql_operations import (
     build_point_service_summary_table,
     build_risky_users_table,
 )
+from credit_app.tabs.conformite import render_conformite_alertes_tab
 from credit_app.tabs.table_filters import render_filtered_dataframe
 from credit_app.ui import (
     render_panel_title,
@@ -376,6 +377,10 @@ def render_surveillance_tab(
     cycle_key: str = "credit",
     conversion_rate: float = 2800.0,
 ) -> None:
+    if cycle_key == "conformite":
+        render_conformite_alertes_tab(df)
+        return
+
     if df.empty:
         st.warning("Aucune ligne ne correspond aux filtres choisis.")
         return

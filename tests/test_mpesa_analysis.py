@@ -294,6 +294,97 @@ def _sample_customer_transaction_analysis_data() -> MpesaPreparedData:
     )
 
 
+def _sample_seven_percent_loan_data() -> MpesaPreparedData:
+    """Reproduit le pret de 5 USD du scenario Benjamin au grain Turbo."""
+    common = {
+        "customer_id": "37370",
+        "msisdn1": "243821064833",
+        "currency_code": "USD",
+        "reference_id": "LN11FAEGXL",
+    }
+    rows: list[dict[str, object]] = []
+
+    def add(
+        row_id: int,
+        account_type: str,
+        description: str,
+        created_at: str,
+        *,
+        dr: float = 0.0,
+        cr: float = 0.0,
+        ref_no: str = "",
+        reference_id: str | None = None,
+    ) -> None:
+        rows.append(
+            {
+                **common,
+                "reference_id": common["reference_id"] if reference_id is None else reference_id,
+                "id": row_id,
+                "account_type": account_type,
+                "dr": dr,
+                "cr": cr,
+                "bal_before": 0.0,
+                "bal_after": max(dr, cr),
+                "ref_no": ref_no,
+                "description": description,
+                "created_at": created_at,
+            }
+        )
+
+    origination = "2026-07-22 16:17:16"
+    add(98365, "PRINCIPLE", "Montant principal", origination, dr=5.0)
+    add(98366, "LOAN ACCOUNT", "Compte de pret", origination, cr=5.35)
+    add(98367, "PRINCIPLE", "Montant principal", origination, cr=0.35)
+    add(98368, "LOAN ACCOUNT", "Revenu du interets", origination, dr=0.35)
+    add(98369, "INTEREST EARNED", "Revenu du interets", origination, cr=0.35)
+    add(98370, "LOAN PORTFOLIO", "Portefeuille Pret", origination, cr=5.35)
+    add(98371, "LOAN PORTFOLIO", "Revenu du interets", origination, dr=0.35)
+    add(98372, "LOAN AMOUNT A/C", "Montant pret", origination, cr=5.0)
+    add(98373, "MPESA ACCOUNT", "Montant pret", origination, cr=5.0)
+    add(98374, "MPESA ACCOUNT", "Compte du M-Pesa", origination, dr=0.35)
+    add(98375, "BISOU COLLECTION", "Part Bisou", origination, cr=2.50)
+    add(98376, "VODA COLLECTION A/C", "Part Voda", origination, cr=1.00)
+
+    repayment = "2026-07-22 16:26:43"
+    repayment_reference = "LRXAPRP29V"
+    add(98385, "PRINCIPLE", "Remboursement du principal", repayment, cr=5.0, ref_no=repayment_reference)
+    add(98386, "LOAN ACCOUNT", "Remboursement du Pret", repayment, dr=5.0, ref_no=repayment_reference)
+    add(98387, "LOAN PORTFOLIO", "Portefeuille Pret Remboursement", repayment, dr=5.0, ref_no=repayment_reference)
+    add(98388, "MPESA ACCOUNT", "Remboursement du M-Pesa", repayment, dr=5.0, ref_no=repayment_reference)
+    add(98389, "NORMAL SAVINGS", "Remboursement de compte epargne", repayment, dr=5.0, ref_no=repayment_reference, reference_id="")
+    add(98390, "FIXED SAVINGS", "Remboursement de compte epargne", repayment, dr=5.0, ref_no=repayment_reference, reference_id="")
+
+    loans = prepare_loans(
+        pd.DataFrame(
+            [
+                {
+                    "loan_id": "LN11FAEGXL",
+                    "customer_id": "37370",
+                    "customer": "MUPANZI KITSHI BENJAMIN",
+                    "currency_code": "USD",
+                    "loan_amount": 5.0,
+                    "loan_balance": 0.0,
+                    "amount_paid": 5.35,
+                    "outstanding_principle": 0.0,
+                    "outstanding_interest": 0.0,
+                    "interest_earned": 0.35,
+                    "status_name": "Matured",
+                    "created_at": origination,
+                    "updated_at": repayment,
+                    "msisdn1": "243821064833",
+                }
+            ]
+        )
+    )
+    return MpesaPreparedData(
+        transactions=prepare_transactions(pd.DataFrame(rows)),
+        current_savings=pd.DataFrame(),
+        fixed_savings=pd.DataFrame(),
+        loans=loans,
+        load_report=build_load_report({}, {}),
+    )
+
+
 class MpesaAnalysisTests(unittest.TestCase):
     def test_multi_file_turbo_and_perfect_snapshots_are_deduplicated_by_business_key(self) -> None:
         transaction_rows = pd.DataFrame(
@@ -1498,7 +1589,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             .any()
         )
 
-    def test_customer_statement_elements_cover_six_turbo_focused_families(self) -> None:
+    def test_customer_statement_elements_cover_seven_turbo_focused_families(self) -> None:
         events = pd.DataFrame(
             [
                 {
@@ -1508,6 +1599,16 @@ class MpesaAnalysisTests(unittest.TestCase):
                     "event_reference": "DEP-1",
                     "type_operation": "Sortie M-PESA_Turbo vers epargne",
                     "montant_operation": 100.0,
+                    "remboursement_compte_ouvert": 0.0,
+                    "remboursement_mpesa": 0.0,
+                },
+                {
+                    "created_at": "2026-07-21 08:30:00",
+                    "customer_id": "CLIENT-1",
+                    "currency_code": "CDF",
+                    "event_reference": "DAT-DEP-1",
+                    "type_operation": "Sortie M-PESA_Turbo vers DAT",
+                    "montant_operation": 80.0,
                     "remboursement_compte_ouvert": 0.0,
                     "remboursement_mpesa": 0.0,
                 },
@@ -1571,8 +1672,12 @@ class MpesaAnalysisTests(unittest.TestCase):
         detail = result["detail"].set_index("type_element_extrait")
         summary = result["synthese"]
 
-        self.assertEqual(len(detail), 6)
-        self.assertEqual(len(summary), 6)
+        self.assertEqual(len(detail), 7)
+        self.assertEqual(len(summary), 7)
+        self.assertEqual(
+            float(detail.loc["Dépôt à terme (DAT)", "montant_observe"]),
+            80.0,
+        )
         self.assertEqual(
             detail.loc[
                 "Remboursement d'un credit depuis le compte ouvert",
@@ -1596,6 +1701,454 @@ class MpesaAnalysisTests(unittest.TestCase):
             ],
             "Savings Account_Turbo - interest_earned",
         )
+
+    def test_customer_statement_exports_move_dat_deposit_out_of_transaction_detail(self) -> None:
+        from docx import Document
+        from pypdf import PdfReader
+
+        transactions = prepare_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "id": 1,
+                        "customer_id": "37370",
+                        "msisdn1": "243821064833",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "FA9IQ86JE7",
+                        "currency_code": "USD",
+                        "dr": 10.0,
+                        "cr": 0.0,
+                        "bal_before": 0.0,
+                        "bal_after": 10.0,
+                        "ref_no": "DGI967CPZ3V",
+                        "description": "M-Pesa Compte",
+                        "created_at": "2026-07-18 14:52:41",
+                    },
+                    {
+                        "id": 2,
+                        "customer_id": "37370",
+                        "msisdn1": "243821064833",
+                        "account_type": "FIXED SAVINGS",
+                        "reference_id": "FA9IQ86JE7",
+                        "currency_code": "USD",
+                        "dr": 0.0,
+                        "cr": 10.0,
+                        "bal_before": 0.0,
+                        "bal_after": 10.0,
+                        "ref_no": "DGI967CPZ3V",
+                        "description": "Depot Bloque",
+                        "created_at": "2026-07-18 14:52:41",
+                    },
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=transactions,
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=pd.DataFrame(),
+        )
+        report = build_mpesa_statement(
+            prepared,
+            "37370",
+            date_start="2026-07-18",
+            date_end="2026-07-18",
+        )
+        dat_summary = report["elements_extrait_client_synthese"].loc[
+            report["elements_extrait_client_synthese"]["type_element_extrait"].eq(
+                "Dépôt à terme (DAT)"
+            )
+        ].iloc[0]
+        self.assertEqual(int(dat_summary["nombre_operations"]), 1)
+        self.assertEqual(float(dat_summary["montant_total_observe"]), 10.0)
+
+        view = build_customer_statement_view(report["extrait"])
+        self.assertEqual(float(view["total_entries"]), 10.0)
+
+        export_kwargs = {
+            "analysis_report": report,
+            "customer_id": "37370",
+            "customer_name": "MUPANZI KITSHI BENJAMIN",
+            "telephone": "243821064833",
+            "currency": "USD",
+            "period_start": "2026-07-18",
+            "period_end": "2026-07-18",
+        }
+        word = create_customer_statement_word(report["extrait"], **export_kwargs)
+        document = Document(BytesIO(word))
+        word_text = "\n".join(
+            [paragraph.text for paragraph in document.paragraphs]
+            + [
+                " | ".join(cell.text for cell in row.cells)
+                for table in document.tables
+                for row in table.rows
+            ]
+        )
+        self.assertIn("Dépôt à terme (DAT)", word_text)
+        transaction_table = next(
+            table
+            for table in document.tables
+            if [cell.text for cell in table.rows[0].cells]
+            == [
+                "Date",
+                "Compte",
+                "Référence Turbo",
+                "Devise",
+                "Description",
+                "Entrée",
+                "Sortie",
+                "Cumul net des flux",
+            ]
+        )
+        self.assertEqual(len(transaction_table.rows), 1)
+
+        pdf = create_customer_statement_pdf(report["extrait"], **export_kwargs)
+        pdf_text = "\n".join(
+            page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
+        )
+        self.assertIn("Dépôt à terme (DAT)", pdf_text)
+        self.assertNotIn("DGI967CPZ3V", pdf_text)
+
+    def test_customer_bisou_statement_matches_benjamin_scenario(self) -> None:
+        from docx import Document
+        from docx.enum.section import WD_ORIENT
+        from pypdf import PdfReader
+
+        rows: list[dict[str, object]] = []
+
+        def add(
+            created_at: str,
+            account_type: str,
+            *,
+            dr: float = 0.0,
+            cr: float = 0.0,
+            bal_before: float = 0.0,
+            bal_after: float = 0.0,
+            ref_no: str = "",
+            reference_id: str = "",
+            description: str,
+        ) -> None:
+            rows.append(
+                {
+                    "id": len(rows) + 1,
+                    "customer_id": "37370",
+                    "msisdn1": "243821064833",
+                    "account_type": account_type,
+                    "reference_id": reference_id,
+                    "currency_code": "USD",
+                    "dr": dr,
+                    "cr": cr,
+                    "bal_before": bal_before,
+                    "bal_after": bal_after,
+                    "ref_no": ref_no,
+                    "description": description,
+                    "created_at": created_at,
+                }
+            )
+
+        add(
+            "2026-07-18 14:52:41",
+            "MPESA ACCOUNT",
+            dr=10.0,
+            bal_after=10.0,
+            ref_no="DGI967CPZ3V",
+            reference_id="FA9IQ86JE7",
+            description="M-Pesa Compte",
+        )
+        add(
+            "2026-07-18 14:52:41",
+            "FIXED SAVINGS",
+            cr=10.0,
+            bal_after=10.0,
+            ref_no="DGI967CPZ3V",
+            reference_id="FA9IQ86JE7",
+            description="Depot Bloque",
+        )
+        add(
+            "2026-07-22 16:17:16",
+            "PRINCIPLE",
+            dr=5.0,
+            bal_after=5.0,
+            reference_id="LN11FAEGXL",
+            description="Montant principal",
+        )
+        add(
+            "2026-07-22 16:17:16",
+            "LOAN ACCOUNT",
+            cr=5.35,
+            bal_after=5.35,
+            reference_id="LN11FAEGXL",
+            description="Compte de pret",
+        )
+        add(
+            "2026-07-22 16:17:16",
+            "MPESA ACCOUNT",
+            cr=5.0,
+            bal_after=5.0,
+            reference_id="LN11FAEGXL",
+            description="Montant pret",
+        )
+        add(
+            "2026-07-22 16:17:16",
+            "MPESA ACCOUNT",
+            dr=0.35,
+            bal_after=0.35,
+            reference_id="LN11FAEGXL",
+            description="Compte du M-Pesa",
+        )
+        add(
+            "2026-07-22 16:24:50",
+            "MPESA ACCOUNT",
+            dr=5.0,
+            bal_after=5.0,
+            ref_no="DGM667X843U",
+            description="M-Pesa Depot",
+        )
+        add(
+            "2026-07-22 16:24:50",
+            "NORMAL SAVINGS",
+            cr=5.0,
+            bal_after=5.0,
+            ref_no="DGM667X843U",
+            description="Epargne depot",
+        )
+        for account_type, dr, cr, before, after, description in [
+            ("PRINCIPLE", 0.0, 5.0, 5.0, 0.0, "Remboursement du principal"),
+            ("LOAN ACCOUNT", 5.0, 0.0, 5.0, 0.0, "Remboursement du pret"),
+            ("MPESA ACCOUNT", 5.0, 0.0, 0.0, 5.0, "Remboursement du M-Pesa"),
+            ("NORMAL SAVINGS", 5.0, 0.0, 5.0, 0.0, "Remboursement de compte epargne"),
+            # Ligne technique présente dans le scénario réel : elle ne doit
+            # pas réduire le compte bloqué, car le paiement vient du compte ouvert.
+            ("FIXED SAVINGS", 5.0, 0.0, 5.0, 0.0, "Remboursement de compte epargne"),
+        ]:
+            add(
+                "2026-07-22 16:26:43",
+                account_type,
+                dr=dr,
+                cr=cr,
+                bal_before=before,
+                bal_after=after,
+                ref_no="LRXAPRP29V",
+                reference_id=(
+                    "LN11FAEGXL"
+                    if account_type in {"PRINCIPLE", "LOAN ACCOUNT", "MPESA ACCOUNT"}
+                    else ""
+                ),
+                description=description,
+            )
+
+        savings_accounts = pd.DataFrame(
+            [
+                {
+                    "savings_id": "SATXW2I7Y1",
+                    "customer_id": "37370",
+                    "msisdn1": "243821064833",
+                    "product_name": "Open Savings",
+                    "product_description": "Current account",
+                    "currency_code": "CDF",
+                    "balance": 0.0,
+                    "status": "active",
+                    "created_at": "2026-07-10 07:26:33",
+                    "updated_at": "2026-07-10 07:26:33",
+                },
+                {
+                    "savings_id": "SADW5C1Z50",
+                    "customer_id": "37370",
+                    "msisdn1": "243821064833",
+                    "product_name": "Open Savings",
+                    "product_description": "Current account",
+                    "currency_code": "USD",
+                    "balance": 0.0,
+                    "status": "active",
+                    "created_at": "2026-07-10 07:26:33",
+                    "updated_at": "2026-07-22 16:26:43",
+                },
+                {
+                    "savings_id": "FA9IQ86JE7",
+                    "customer_id": "37370",
+                    "msisdn1": "243821064833",
+                    "product_name": "1 Month",
+                    "product_description": "1 Month Fixed Account",
+                    "currency_code": "USD",
+                    "balance": 10.0,
+                    "status": "active",
+                    "date_approved": "2026-07-18 14:52:41",
+                    "date_activated": "2026-07-18 14:52:41",
+                    "maturity_date": "2026-08-18 14:52:41",
+                    "interest_earned": 0.0,
+                    "created_at": "2026-07-18 14:52:41",
+                    "updated_at": "2026-07-18 14:52:41",
+                },
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=prepare_transactions(pd.DataFrame(rows)),
+            current_savings=prepare_current_savings(savings_accounts),
+            fixed_savings=prepare_fixed_savings_from_accounts(savings_accounts),
+            loans=pd.DataFrame(),
+            load_report=pd.DataFrame(),
+        )
+        report = build_mpesa_statement(
+            prepared,
+            "37370",
+            {"USD": 13.34},
+        )
+        situation = report["synthese"].iloc[0]
+
+        self.assertAlmostEqual(float(situation["solde_mpesa_client_final"]), 2.99)
+        self.assertEqual(float(situation["total_entrees_mpesa"]), 15.0)
+        self.assertEqual(float(situation["total_sorties_mpesa"]), 4.65)
+        self.assertEqual(float(situation["mouvement_net"]), 10.35)
+        self.assertEqual(float(situation["epargne_courante_finale"]), 0.0)
+        self.assertEqual(float(situation["dat_final"]), 10.0)
+        self.assertIn("Savings Account [Turbo]", situation["source_epargne_courante_finale"])
+        self.assertIn("Savings Account [Turbo]", situation["source_dat_final"])
+
+        analysis = build_customer_transaction_analysis(prepared, "37370")
+        active_dat = analysis["dat_en_cours_client"].iloc[0]
+        self.assertEqual(active_dat["savings_id"], "FA9IQ86JE7")
+        self.assertEqual(float(active_dat["balance"]), 10.0)
+        self.assertAlmostEqual(float(active_dat["interet_estime_echeance"]), 0.09, places=2)
+        self.assertEqual(active_dat["situation_dat_client"], "En cours")
+        positions = analysis["positions_turbo"].set_index(
+            ["famille_position", "currency_code"]
+        )
+        self.assertEqual(
+            float(
+                positions.loc[
+                    ("Epargne courante", "USD"),
+                    "solde_transactions_observe",
+                ]
+            ),
+            0.0,
+        )
+        self.assertEqual(
+            float(positions.loc[("DAT", "USD"), "solde_transactions_observe"]),
+            10.0,
+        )
+
+        export_report = dict(report)
+        export_report.update(analysis)
+        export_kwargs = {
+            "analysis_report": export_report,
+            "customer_id": "37370",
+            "customer_name": "MUPANZI KITSHI BENJAMIN",
+            "telephone": "243821064833",
+            "currency": "USD",
+            "period_start": "2026-07-18",
+            "period_end": "2026-07-22",
+        }
+        document = Document(
+            BytesIO(create_customer_statement_word(report["extrait"], **export_kwargs))
+        )
+        word_text = "\n".join(
+            [paragraph.text for paragraph in document.paragraphs]
+            + [
+                " | ".join(cell.text for cell in row.cells)
+                for table in document.tables
+                for row in table.rows
+            ]
+        )
+        self.assertNotIn("Situation financière actuelle du client", word_text)
+        self.assertNotIn("Solde M-PESA | Compte ouvert", word_text)
+        self.assertIn("Synthèse financière par devise", word_text)
+        self.assertNotIn("Synthèse des flux", word_text)
+        self.assertNotIn("Situation de l'épargne", word_text)
+        self.assertNotIn("Synthèse des flux — point de vue Bisou Bisou", word_text)
+        self.assertNotIn(
+            "Les entrées, les sorties, le flux net et le cumul sont présentés du point de vue de Bisou Bisou.",
+            word_text,
+        )
+        self.assertEqual(document.sections[0].orientation, WD_ORIENT.PORTRAIT)
+        self.assertIn("FA9IQ86JE7", word_text)
+
+        financial_table = next(
+            table
+            for table in document.tables
+            if [cell.text for cell in table.rows[0].cells]
+            == [
+                "Devise",
+                "Ouverture",
+                "Entrées externes",
+                "Sorties externes",
+                "Flux net externe",
+                "Clôture",
+                "Compte ouvert",
+                "Compte bloqué",
+            ]
+        )
+        self.assertEqual(
+            [cell.text for cell in financial_table.rows[1].cells],
+            ["USD", "13.34", "15.00", "4.65", "10.35", "23.69", "0.00", "10.00"],
+        )
+        self.assertEqual(financial_table.style.name, "Table Grid")
+        self.assertFalse(
+            any(
+                bool(run.bold)
+                for cell in financial_table.rows[1].cells
+                for paragraph in cell.paragraphs
+                for run in paragraph.runs
+            )
+        )
+        criteria_table = document.tables[0].cell(1, 1).tables[0]
+        criteria_text = "\n".join(
+            cell.text for row in criteria_table.rows for cell in row.cells
+        )
+        self.assertIn("Taux annuel DAT :", criteria_text)
+        self.assertIn("11,0 %", criteria_text)
+        transaction_table = next(
+            table
+            for table in document.tables
+            if table.rows
+            and [cell.text for cell in table.rows[0].cells[:2]] == ["Date", "Compte"]
+        )
+        self.assertEqual(transaction_table.rows[0].cells[2].text, "Référence Turbo")
+        self.assertEqual(
+            transaction_table.rows[0].cells[-1].text,
+            "Cumul net des flux",
+        )
+        self.assertNotIn(
+            "LRXAPRP29V",
+            "\n".join(cell.text for row in transaction_table.rows for cell in row.cells),
+        )
+
+        pdf_reader = PdfReader(
+            BytesIO(create_customer_statement_pdf(report["extrait"], **export_kwargs))
+        )
+        self.assertLess(
+            float(pdf_reader.pages[0].mediabox.width),
+            float(pdf_reader.pages[0].mediabox.height),
+        )
+        pdf_text = "\n".join(page.extract_text() or "" for page in pdf_reader.pages)
+        self.assertNotIn("Situation financière actuelle du client", pdf_text)
+        self.assertIn("Synthèse financière par devise", pdf_text)
+        self.assertNotIn("Synthèse des flux", pdf_text)
+        self.assertNotIn("Synthèse des flux — point de vue Bisou Bisou", pdf_text)
+        self.assertIn("10.35", pdf_text)
+        self.assertNotIn("Situation de l'épargne", pdf_text)
+        self.assertIn("Compte ouvert", pdf_text)
+        self.assertIn("Compte bloqué", pdf_text)
+        self.assertIn("Ouverture", pdf_text)
+        self.assertIn("Clôture", pdf_text)
+        self.assertIn("Taux annuel DAT", pdf_text)
+        self.assertIn("Référence Turbo", pdf_text)
+        self.assertIn("FA9IQ86JE7", pdf_text)
+        self.assertNotIn("sont présentés du point de vue de Bisou Bisou", pdf_text)
+        minimal_pdf_reader = PdfReader(
+            BytesIO(create_customer_statement_pdf(report["extrait"], **export_kwargs, minimal=True))
+        )
+        minimal_pdf_text = "\n".join(
+            page.extract_text() or "" for page in minimal_pdf_reader.pages
+        )
+        self.assertIn("Extrait minimal de compte", minimal_pdf_text)
+        self.assertIn("Synthèse financière par devise", minimal_pdf_text)
+        self.assertIn("Ouverture", minimal_pdf_text)
+        self.assertIn("Clôture", minimal_pdf_text)
+        self.assertIn("Détail des transactions", minimal_pdf_text)
+        self.assertNotIn("Éléments couverts par l'extrait client", minimal_pdf_text)
+        self.assertNotIn("DAT en cours", minimal_pdf_text)
+        self.assertNotIn("Remboursements observés", minimal_pdf_text)
 
     def test_customer_statement_uses_g2_only_for_name_and_selected_customer_control(self) -> None:
         transactions = prepare_transactions(
@@ -1704,6 +2257,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(view["opening_amount"]), 10000.0)
         self.assertEqual(float(view["total_entries"]), 1000.0)
         self.assertEqual(float(view["total_outputs"]), 2000.0)
+        self.assertEqual(float(view["flow_net"]), -1000.0)
         self.assertEqual(float(view["closing_amount"]), 9000.0)
         self.assertTrue(view["transactions"]["compte"].eq("1441").all())
         self.assertTrue(view["transactions"]["devise"].eq("CDF").all())
@@ -1718,6 +2272,111 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(relative_view["balance_label"], "Cumul net")
         self.assertEqual(float(relative_view["opening_amount"]), 0.0)
         self.assertEqual(float(relative_view["closing_amount"]), -1000.0)
+        self.assertEqual(float(relative_view["flow_net"]), -1000.0)
+
+    def test_seven_percent_loan_keeps_gross_interest_and_net_separate(self) -> None:
+        prepared = _sample_seven_percent_loan_data()
+
+        journal = build_turbo_operation_events(prepared.transactions)
+        self.assertEqual(len(journal["events"]), 2)
+        origination_event = journal["events"].loc[
+            journal["events"]["type_operation"].eq("Decaissement de credit")
+        ].iloc[0]
+        repayment_event = journal["events"].loc[
+            journal["events"]["type_operation"].eq("Remboursement de credit")
+        ].iloc[0]
+        self.assertEqual(int(origination_event["nombre_lignes"]), 12)
+        self.assertEqual(int(repayment_event["nombre_lignes"]), 6)
+        self.assertEqual(
+            int(prepared.transactions["reference_id"].eq("LN11FAEGXL").sum()),
+            16,
+        )
+        self.assertEqual(float(origination_event["pret_brut_decaisse"]), 5.0)
+        self.assertEqual(float(origination_event["interet_pret_preleve"]), 0.35)
+        self.assertAlmostEqual(float(origination_event["taux_interet_pret_pct"]), 7.0)
+        self.assertEqual(float(origination_event["net_pret_verse"]), 4.65)
+        self.assertAlmostEqual(float(origination_event["ecart_interet_pret_vs_7pct"]), 0.0)
+
+        statement = build_mpesa_statement(prepared, "37370")["extrait"]
+        loan_statement = statement.loc[
+            statement["type_operation"].eq("Decaissement de credit")
+        ].copy()
+        self.assertEqual(len(loan_statement), 1)
+        self.assertEqual(float(loan_statement.iloc[0]["pret_brut_decaisse"]), 5.0)
+        self.assertEqual(float(loan_statement.iloc[0]["interet_pret_preleve"]), 0.35)
+        self.assertAlmostEqual(float(loan_statement.iloc[0]["taux_interet_pret_pct"]), 7.0)
+        self.assertEqual(float(loan_statement.iloc[0]["net_pret_verse"]), 4.65)
+
+        view = build_customer_statement_view(
+            loan_statement,
+            entry_account_number="1441",
+            output_account_number="15558",
+        )
+        self.assertEqual(float(view["total_outputs"]), 4.65)
+        self.assertEqual(float(view["flow_net"]), -4.65)
+        self.assertEqual(float(view["transactions"].iloc[0]["sortie"]), 4.65)
+        self.assertIn(
+            "Prêt brut : 5,00 USD — intérêt prélevé : 0,35 USD (7 %) — net versé : 4,65 USD",
+            view["transactions"].iloc[0]["description"],
+        )
+
+        from docx import Document
+        from pypdf import PdfReader
+
+        export_kwargs = {
+            "customer_id": "37370",
+            "customer_name": "MUPANZI KITSHI BENJAMIN",
+            "telephone": "243821064833",
+            "currency": "USD",
+            "entry_account_number": "1441",
+            "output_account_number": "15558",
+            "period_start": "2026-07-22",
+            "period_end": "2026-07-22",
+            "generated_at": pd.Timestamp("2026-07-22 18:00:00"),
+        }
+        word = create_customer_statement_word(loan_statement, **export_kwargs)
+        document = Document(BytesIO(word))
+        word_text = "\n".join(
+            cell.text
+            for table in document.tables
+            for row in table.rows
+            for cell in row.cells
+        )
+        self.assertIn("Prêt brut : 5,00 USD", word_text)
+        self.assertIn("net versé : 4,65 USD", word_text)
+
+        pdf = create_customer_statement_pdf(loan_statement, **export_kwargs)
+        pdf_text = "\n".join(
+            page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
+        )
+        self.assertIn("Prêt brut : 5,00 USD", pdf_text)
+        self.assertIn("net versé : 4,65", pdf_text)
+
+        finance = build_mpesa_turbo_financial_analysis(
+            prepared,
+            date_start="2026-07-22",
+            date_end="2026-07-22",
+            turbo_events=journal["events"],
+            turbo_transaction_lines=journal["lines"],
+        )
+        self.assertEqual(
+            float(finance["nouveaux_credits_synthese"].iloc[0]["montant_decaisse_turbo"]),
+            5.0,
+        )
+        accounting = build_mpesa_accounting_analysis(
+            prepared,
+            date_start="2026-07-22",
+            date_end="2026-07-22",
+        )
+        interest_product = accounting["produits_financiers"].loc[
+            accounting["produits_financiers"]["account_type"].eq("INTEREST EARNED")
+        ].iloc[0]
+        self.assertEqual(float(interest_product["montant_observe"]), 0.35)
+        interest_detail = accounting["produits_financiers_detail"].loc[
+            accounting["produits_financiers_detail"]["account_type"].eq("INTEREST EARNED")
+        ].iloc[0]
+        self.assertEqual(interest_detail["reference_id"], "LN11FAEGXL")
+        self.assertEqual(float(interest_detail["montant_observe"]), 0.35)
 
     def test_customer_statement_filename_uses_turbo_identity_and_optional_g2_name(self) -> None:
         turbo_only = build_customer_statement_filename(
@@ -1858,18 +2517,31 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(statement_tables), 1)
         self.assertEqual(
             [cell.text for cell in statement_tables[0].rows[0].cells],
-            ["Date", "Compte", "Receipt No", "Devise", "Description", "Entrée", "Sortie", "Solde"],
+            [
+                "Date",
+                "Compte",
+                "Référence Turbo",
+                "Devise",
+                "Description",
+                "Entrée",
+                "Sortie",
+                "Cumul net des flux",
+            ],
         )
-        self.assertEqual(statement_tables[0].rows[1].cells[1].text, "1441")
-        self.assertEqual(statement_tables[0].rows[1].cells[2].text, "TX001")
+        self.assertEqual(len(statement_tables[0].rows), 2)
+        self.assertEqual(statement_tables[0].rows[1].cells[1].text, "15558")
+        self.assertEqual(statement_tables[0].rows[1].cells[2].text, "TX002")
         self.assertEqual(statement_tables[0].rows[1].cells[3].text, "CDF")
-        self.assertIn("M-Pesa Compte", statement_tables[0].rows[1].cells[4].text)
-        self.assertEqual(statement_tables[0].rows[2].cells[1].text, "15558")
+        self.assertIn("Montant pret", statement_tables[0].rows[1].cells[4].text)
+        self.assertNotIn(
+            "TX001",
+            [row.cells[2].text for row in statement_tables[0].rows[1:]],
+        )
         criteria_table = document.tables[0].cell(1, 1).tables[0]
         criteria_labels = [row.cells[0].text for row in criteria_table.rows]
         self.assertIn("Devise :", criteria_labels)
         self.assertNotIn("Compte :", criteria_labels)
-        self.assertEqual(document.sections[0].orientation, WD_ORIENT.LANDSCAPE)
+        self.assertEqual(document.sections[0].orientation, WD_ORIENT.PORTRAIT)
         self.assertGreaterEqual(len(document.inline_shapes), 1)
 
         relative_statement = build_mpesa_statement(prepared, "1001", {"CDF": None})["extrait"]
@@ -1889,7 +2561,10 @@ class MpesaAnalysisTests(unittest.TestCase):
             if table.rows and table.rows[0].cells[0].text == "Date"
         ]
         relative_text = "\n".join(paragraph.text for paragraph in relative_document.paragraphs)
-        self.assertEqual(relative_tables[0].rows[0].cells[-1].text, "Cumul net")
+        self.assertEqual(
+            relative_tables[0].rows[0].cells[-1].text,
+            "Cumul net des flux",
+        )
         self.assertNotIn("le solde d'ouverture n'a pas ete fourni", relative_text)
         self.assertIn("Extrait de compte - 243812345678 - CDF", relative_text)
         self.assertNotIn("Extrait de compte - 243812345678 - NON DISPONIBLE - CDF", relative_text)
@@ -2118,16 +2793,13 @@ class MpesaAnalysisTests(unittest.TestCase):
             if [cell.text for cell in table.rows[0].cells]
             == [
                 "DAT",
-                "Durée",
                 "Souscription",
                 "Échéance",
                 "Jours restants",
                 "Devise",
                 "Capital bloqué",
-                "Taux annuel",
-                "Intérêt estimé",
-                "Capital + intérêt estimé",
                 "Situation",
+                "Capital + intérêt estimé",
             ]
         )
         repayment_table = next(
@@ -2139,11 +2811,9 @@ class MpesaAnalysisTests(unittest.TestCase):
                 "Référence",
                 "Devise",
                 "Montant payé",
-                "Principal remboursé",
                 "Intérêts",
-                "Pénalités",
                 "Origine du paiement",
-                "Mode observé",
+                "Pénalités",
             ]
         )
         self.assertIn("DAT en cours - situation au 17/07/2026", text)
@@ -2156,6 +2826,10 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(repayment_table.rows), 2)
         self.assertEqual(dat_table.rows[1].cells[0].text, "FA9T2OLVUC")
         self.assertEqual(repayment_table.rows[1].cells[1].text, "REM-CLIENT")
+        self.assertEqual(repayment_table.rows[1].cells[4].text, "0")
+        self.assertEqual(repayment_table.rows[1].cells[6].text, "500")
+        self.assertNotIn("Principal remboursé", text)
+        self.assertNotIn("Mode observé", text)
         self.assertNotIn("Colonne technique à masquer", text)
 
         pdf = create_customer_statement_pdf(
@@ -2168,9 +2842,12 @@ class MpesaAnalysisTests(unittest.TestCase):
         )
         self.assertTrue(pdf.startswith(b"%PDF-"))
         self.assertGreater(len(pdf), 5_000)
-        pdf_text = "\n".join(
-            page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
+        pdf_reader = PdfReader(BytesIO(pdf))
+        self.assertLess(
+            float(pdf_reader.pages[0].mediabox.width),
+            float(pdf_reader.pages[0].mediabox.height),
         )
+        pdf_text = "\n".join(page.extract_text() or "" for page in pdf_reader.pages)
         self.assertIn("DAT en cours - situation au 17/07/2026", pdf_text)
         self.assertIn("Remboursements observés", pdf_text)
         self.assertIn("Entrées des intérêts du capital mis en DAT", pdf_text)
@@ -2181,6 +2858,8 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("FOREIGN-REPAYMENT", pdf_text)
         self.assertNotIn("FOREIGN-INTEREST", pdf_text)
         self.assertNotIn("Colonne technique à masquer", pdf_text)
+        self.assertNotIn("Principal remboursé", pdf_text)
+        self.assertNotIn("Mode observé", pdf_text)
 
     def test_customer_statement_pdf_contains_logo_and_keeps_currency_totals_separate(self) -> None:
         prepared = _sample_prepared_data()
@@ -2280,7 +2959,17 @@ class MpesaAnalysisTests(unittest.TestCase):
         summary_table = next(
             table
             for table in document.tables
-            if table.rows[0].cells[0].text == "Devise" and len(table.rows[0].cells) == 5
+            if [cell.text for cell in table.rows[0].cells]
+            == [
+                "Devise",
+                "Ouverture",
+                "Entrées externes",
+                "Sorties externes",
+                "Flux net externe",
+                "Clôture",
+                "Compte ouvert",
+                "Compte bloqué",
+            ]
         )
         self.assertIn("ALL (CDF, USD)", text)
         self.assertEqual(
@@ -2293,7 +2982,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         )
         self.assertEqual(
             {row.cells[1].text for row in statement_table.rows[1:]},
-            {"1441", "15558"},
+            {"15558"},
         )
 
     def test_excel_export_contains_content(self) -> None:
@@ -2402,7 +3091,11 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(report["extrait"]), 2)
         self.assertTrue(report["dat_final"].empty)
         self.assertTrue(report["credits"].empty)
-        self.assertEqual(float(report["synthese"].iloc[0]["dat_final"]), 0.0)
+        self.assertEqual(float(report["synthese"].iloc[0]["dat_final"]), 5000.0)
+        self.assertIn(
+            "Transactions [Turbo]",
+            report["synthese"].iloc[0]["source_dat_final"],
+        )
 
     def test_g2_transactions_extract_phone_and_match_dat(self) -> None:
         prepared = _sample_prepared_data()

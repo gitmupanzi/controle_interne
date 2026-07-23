@@ -5,6 +5,7 @@ import plotly.express as px
 import streamlit as st
 
 from credit_app.domain import build_epargne_kyc_completeness_table
+from credit_app.tabs.conformite import render_conformite_quality_extension
 from credit_app.tabs.table_filters import render_filtered_dataframe
 from credit_app.ui import (
     render_kpi_cards,
@@ -25,6 +26,9 @@ def render_quality_tab(
     mapping_df: pd.DataFrame,
     cycle_key: str = "credit",
 ) -> None:
+    if cycle_key == "conformite":
+        render_conformite_quality_extension(standardized_df, quality_df, missing_df, mapping_df)
+
     total_anomalies = int(quality_df["nombre_lignes"].sum()) if not quality_df.empty else 0
     missing_critical = (
         int((missing_df["taux_manquant"] >= 0.3).sum())

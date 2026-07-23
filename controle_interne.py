@@ -94,6 +94,7 @@ from credit_app.components.preparation import render_preparation_status
 from credit_app.services.data_pipeline import build_preparation_summary, prepare_payload_from_dataframe
 from credit_app.services.mpesa_analysis import DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT
 from credit_app.tabs.audit_control import render_analyste_credit_tab
+from credit_app.tabs.conformite import render_conformite_cycle_tab
 from credit_app.tabs.crm_clients import render_crm_clients_tab
 from credit_app.tabs.export import render_export_tab
 from credit_app.tabs.methodology import render_methodology_tab
@@ -205,6 +206,11 @@ def configure_page() -> None:
     inject_professional_credit_css()
 
 
+def _is_conformite_156_export_name(filename: str | None) -> bool:
+    normalized = (filename or "").replace("\\", "/").split("/")[-1].lower()
+    return "156_cycle_conformite_lbc_ft" in normalized
+
+
 @st.cache_data(show_spinner=False)
 def prepare_dataset(
     file_bytes: bytes,
@@ -213,7 +219,8 @@ def prepare_dataset(
     standardize_columns: bool,
 ) -> dict:
     raw_df = load_dataframe_from_bytes(file_bytes, filename, sheet_name)
-    return _prepare_payload_from_dataframe(raw_df, standardize_columns=standardize_columns)
+    effective_standardize = standardize_columns and not _is_conformite_156_export_name(filename)
+    return _prepare_payload_from_dataframe(raw_df, standardize_columns=effective_standardize)
 
 
 @st.cache_data(show_spinner=False)
@@ -223,7 +230,8 @@ def prepare_dataset_from_path(
     standardize_columns: bool,
 ) -> dict:
     raw_df = load_dataframe_from_path(file_path, sheet_name)
-    return _prepare_payload_from_dataframe(raw_df, standardize_columns=standardize_columns)
+    effective_standardize = standardize_columns and not _is_conformite_156_export_name(file_path)
+    return _prepare_payload_from_dataframe(raw_df, standardize_columns=effective_standardize)
 
 
 @st.cache_data(show_spinner=False)
@@ -1257,11 +1265,13 @@ def main() -> None:
         "Synthèse",
         "Contrôles",
     ]
+    if selected_cycle_key == "conformite":
+        tab_labels.append("Conformité")
     if selected_cycle_key == "crm_clients":
         tab_labels.append("Actions CRM")
     tab_labels.extend(
         [
-            "Alertes",
+            "Surveillance" if selected_cycle_key == "conformite" else "Alertes",
             "Portefeuille",
             "Risques",
             "Qualité",
@@ -1286,6 +1296,10 @@ def main() -> None:
     with tabs[1]:
         render_analyste_credit_tab(selected_cycle_key, standardized_df)
     tab_index = 2
+    if selected_cycle_key == "conformite":
+        with tabs[tab_index]:
+            render_conformite_cycle_tab(filtered_df)
+        tab_index += 1
     if selected_cycle_key == "crm_clients":
         with tabs[tab_index]:
             render_crm_clients_tab(filtered_df)
