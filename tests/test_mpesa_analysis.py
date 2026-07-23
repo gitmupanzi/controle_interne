@@ -12,6 +12,7 @@ from credit_app.services.mpesa_analysis import (
     CUSTOMER_STATEMENT_FOCUS_OPERATION_TYPES,
     G2_CLASSIFIED_TRANSACTION_COLUMNS,
     build_customer_statement_view,
+    build_customer_client_statement_view,
     build_customer_statement_filename,
     build_customer_matured_dat_interest_entries,
     build_customer_statement_elements,
@@ -30,6 +31,8 @@ from credit_app.services.mpesa_analysis import (
     build_loan_savings_reconciliation,
     build_g2_dat_pdf_html,
     create_g2_dat_word,
+    create_customer_client_statement_pdf,
+    create_customer_client_statement_word,
     create_customer_statement_pdf,
     create_customer_statement_word,
     create_turbo_balance_pdf,
@@ -2150,6 +2153,91 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("DAT en cours", minimal_pdf_text)
         self.assertNotIn("Remboursements observés", minimal_pdf_text)
 
+        client_view = build_customer_client_statement_view(
+            report["extrait"],
+            analysis_report=export_report,
+            customer_id="37370",
+            currency="USD",
+        )
+        client_summary = client_view["summary"].iloc[0]
+        self.assertEqual(float(client_summary["compte_ouvert"]), 0.0)
+        self.assertEqual(float(client_summary["compte_bloque"]), 10.0)
+        self.assertEqual(float(client_summary["position_epargne_finale"]), 10.0)
+        self.assertEqual(float(client_summary["pret_net_recu"]), 4.65)
+        self.assertEqual(float(client_summary["frais_interets_credit"]), 0.35)
+        self.assertEqual(float(client_summary["remboursements_observes"]), 5.0)
+        client_detail = client_view["detail"]
+        self.assertEqual(float(client_detail.iloc[-1]["position_epargne"]), 10.0)
+        self.assertIn("Dépôt DAT / compte bloqué", set(client_detail["operation"]))
+        self.assertIn("Remboursement depuis compte ouvert", set(client_detail["operation"]))
+
+        client_word_complete = create_customer_client_statement_word(
+            report["extrait"],
+            **export_kwargs,
+        )
+        client_word_complete_document = Document(BytesIO(client_word_complete))
+        client_word_complete_text = "\n".join(
+            [paragraph.text for paragraph in client_word_complete_document.paragraphs]
+            + [
+                " | ".join(cell.text for cell in row.cells)
+                for table in client_word_complete_document.tables
+                for row in table.rows
+            ]
+        )
+        self.assertIn("DAT en cours", client_word_complete_text)
+        self.assertIn("Jours restants", client_word_complete_text)
+        self.assertIn("Extrait de compte", client_word_complete_text)
+        self.assertIn("Synthèse financière par devise", client_word_complete_text)
+        self.assertNotIn("vue client", client_word_complete_text)
+        self.assertNotIn("Synthèse de la position client", client_word_complete_text)
+
+        client_pdf_complete_reader = PdfReader(
+            BytesIO(create_customer_client_statement_pdf(report["extrait"], **export_kwargs))
+        )
+        client_pdf_complete_text = "\n".join(
+            page.extract_text() or "" for page in client_pdf_complete_reader.pages
+        )
+        self.assertIn("DAT en cours", client_pdf_complete_text)
+        self.assertIn("Jours restants", client_pdf_complete_text)
+        self.assertIn("Extrait de compte", client_pdf_complete_text)
+        self.assertIn("Synthèse financière par devise", client_pdf_complete_text)
+        self.assertNotIn("vue client", client_pdf_complete_text)
+        self.assertNotIn("Synthèse de la position client", client_pdf_complete_text)
+
+        client_word = create_customer_client_statement_word(
+            report["extrait"],
+            **export_kwargs,
+            minimal=True,
+        )
+        client_word_document = Document(BytesIO(client_word))
+        client_word_text = "\n".join(
+            [paragraph.text for paragraph in client_word_document.paragraphs]
+            + [
+                " | ".join(cell.text for cell in row.cells)
+                for table in client_word_document.tables
+                for row in table.rows
+            ]
+        )
+        self.assertIn("Extrait minimal de compte", client_word_text)
+        self.assertIn("Position épargne", client_word_text)
+        self.assertIn("10.00", client_word_text)
+        self.assertIn("0.35", client_word_text)
+        self.assertNotIn("vue client", client_word_text)
+        self.assertNotIn("Synthèse de la position client", client_word_text)
+        self.assertNotIn("Cumul net des flux", client_word_text)
+
+        client_pdf_reader = PdfReader(
+            BytesIO(create_customer_client_statement_pdf(report["extrait"], **export_kwargs, minimal=True))
+        )
+        client_pdf_text = "\n".join(page.extract_text() or "" for page in client_pdf_reader.pages)
+        self.assertIn("Extrait minimal de compte", client_pdf_text)
+        self.assertIn("Position épargne", client_pdf_text)
+        self.assertIn("10.00", client_pdf_text)
+        self.assertIn("0.35", client_pdf_text)
+        self.assertNotIn("vue client", client_pdf_text)
+        self.assertNotIn("Synthèse de la position client", client_pdf_text)
+        self.assertNotIn("Cumul net des flux", client_pdf_text)
+
     def test_customer_statement_uses_g2_only_for_name_and_selected_customer_control(self) -> None:
         transactions = prepare_transactions(
             pd.DataFrame(
@@ -3062,6 +3150,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("Credits", workbook.sheet_names)
         exported_statement = pd.read_excel(workbook, sheet_name="Extrait_Turbo")
         exported_summary = pd.read_excel(workbook, sheet_name="Synthese")
+        exported_dat = pd.read_excel(workbook, sheet_name="DAT_En_Cours")
         self.assertEqual(len(exported_statement), 1)
         self.assertEqual(len(exported_summary), len(report["synthese"]))
         self.assertNotIn("nombre_credits", exported_summary.columns)
@@ -3069,6 +3158,8 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("operation_reference", exported_statement.columns)
         self.assertIn("Nom_client", exported_statement.columns)
         self.assertIn("mouvement_net_mpesa", exported_statement.columns)
+        self.assertIn("Jours restants", exported_dat.columns)
+        self.assertNotIn("jours_avant_echeance", exported_dat.columns)
 
         filtered_report["extrait"] = report["extrait"].iloc[0:0].copy()
         empty_export = create_excel_export(filtered_report)

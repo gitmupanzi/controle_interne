@@ -48,6 +48,8 @@ from credit_app.services.mpesa_analysis import (
     build_filtered_turbo_balance_report,
     build_perfect_client_crosscheck,
     create_excel_export,
+    create_customer_client_statement_pdf,
+    create_customer_client_statement_word,
     create_customer_statement_pdf,
     create_customer_statement_word,
     create_g2_dat_word,
@@ -309,6 +311,64 @@ def _create_customer_statement_pdf_cached(
     minimal: bool = False,
 ) -> bytes:
     return create_customer_statement_pdf(
+        statement,
+        analysis_report=analysis_report,
+        customer_id=customer_id,
+        customer_name=customer_name,
+        telephone=telephone,
+        currency=currency,
+        entry_account_number=entry_account_number,
+        output_account_number=output_account_number,
+        period_start=period_start,
+        period_end=period_end,
+        minimal=minimal,
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def _create_customer_client_statement_word_cached(
+    statement: pd.DataFrame,
+    analysis_report: dict[str, pd.DataFrame],
+    customer_id: str,
+    customer_name: str,
+    telephone: str,
+    currency: str,
+    entry_account_number: str,
+    output_account_number: str,
+    period_start: object | None,
+    period_end: object | None,
+    minimal: bool = False,
+) -> bytes:
+    return create_customer_client_statement_word(
+        statement,
+        analysis_report=analysis_report,
+        customer_id=customer_id,
+        customer_name=customer_name,
+        telephone=telephone,
+        currency=currency,
+        entry_account_number=entry_account_number,
+        output_account_number=output_account_number,
+        period_start=period_start,
+        period_end=period_end,
+        minimal=minimal,
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def _create_customer_client_statement_pdf_cached(
+    statement: pd.DataFrame,
+    analysis_report: dict[str, pd.DataFrame],
+    customer_id: str,
+    customer_name: str,
+    telephone: str,
+    currency: str,
+    entry_account_number: str,
+    output_account_number: str,
+    period_start: object | None,
+    period_end: object | None,
+    minimal: bool = False,
+) -> bytes:
+    return create_customer_client_statement_pdf(
         statement,
         analysis_report=analysis_report,
         customer_id=customer_id,
@@ -1770,10 +1830,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         export_targets = list(previews)
         if len(export_targets) > 1:
             export_targets.append("ALL")
-        # Garder des actions compactes meme lorsqu'une seule devise est disponible.
-        # Trois colonnes donnent une largeur maximale d'environ un tiers sur ordinateur.
-        word_columns = st.columns(3)
-        for index, currency in enumerate(export_targets):
+        def export_context(currency: str) -> tuple[pd.DataFrame, object | None, object | None, str, str, str]:
             target_statement = (
                 filtered_statement.copy()
                 if currency == "ALL"
@@ -1788,6 +1845,25 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
                 date_start = dates.min().date()
             if date_end is None and not dates.empty:
                 date_end = dates.max().date()
+            base_file_name = build_customer_statement_filename(
+                customer_id=selected_customer,
+                customer_name=customer_name,
+                telephone=customer_phone,
+                currency=currency,
+                period_start=date_start,
+                period_end=date_end,
+                g2_available=not prepared.g2_transactions.empty,
+            ).removesuffix(".docx")
+            start_token = f"{pd.Timestamp(date_start):%Y%m%d}" if date_start is not None else "debut"
+            end_token = f"{pd.Timestamp(date_end):%Y%m%d}" if date_end is not None else "fin"
+            return target_statement, date_start, date_end, start_token, end_token, base_file_name
+
+        for currency in export_targets:
+            if len(export_targets) > 1:
+                st.caption(f"Devise {currency}")
+            target_statement, date_start, date_end, start_token, end_token, base_file_name = export_context(currency)
+            st.caption("Vue Bisou Bisou")
+            bisou_columns = st.columns(3)
             try:
                 word_bytes = _create_customer_statement_word_cached(
                     target_statement,
@@ -1801,45 +1877,6 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
                     date_start,
                     date_end,
                 )
-            except (RuntimeError, ValueError) as exc:
-                word_columns[index % len(word_columns)].error(str(exc))
-                continue
-            file_name = build_customer_statement_filename(
-                customer_id=selected_customer,
-                customer_name=customer_name,
-                telephone=customer_phone,
-                currency=currency,
-                period_start=date_start,
-                period_end=date_end,
-                g2_available=not prepared.g2_transactions.empty,
-            )
-            start_token = f"{pd.Timestamp(date_start):%Y%m%d}" if date_start is not None else "debut"
-            end_token = f"{pd.Timestamp(date_end):%Y%m%d}" if date_end is not None else "fin"
-            word_columns[index % len(word_columns)].download_button(
-                f"Telecharger l'extrait Word {currency}",
-                data=word_bytes,
-                file_name=file_name,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                width="stretch",
-                key=f"mpesa_customer_word_{selected_customer}_{currency}_{start_token}_{end_token}",
-            )
-        pdf_columns = st.columns(3)
-        for index, currency in enumerate(export_targets):
-            target_statement = (
-                filtered_statement.copy()
-                if currency == "ALL"
-                else filtered_statement.loc[
-                    filtered_statement["currency_code"].eq(currency)
-                ].copy()
-            )
-            dates = pd.to_datetime(target_statement.get("created_at"), errors="coerce").dropna()
-            date_start = filter_context.get("date_start")
-            date_end = filter_context.get("date_end")
-            if date_start is None and not dates.empty:
-                date_start = dates.min().date()
-            if date_end is None and not dates.empty:
-                date_end = dates.max().date()
-            try:
                 pdf_bytes = _create_customer_statement_pdf_cached(
                     target_statement,
                     filtered_report,
@@ -1852,45 +1889,6 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
                     date_start,
                     date_end,
                 )
-            except (RuntimeError, ValueError) as exc:
-                pdf_columns[index % len(pdf_columns)].error(str(exc))
-                continue
-            pdf_file_name = build_customer_statement_filename(
-                customer_id=selected_customer,
-                customer_name=customer_name,
-                telephone=customer_phone,
-                currency=currency,
-                period_start=date_start,
-                period_end=date_end,
-                g2_available=not prepared.g2_transactions.empty,
-            ).removesuffix(".docx") + ".pdf"
-            start_token = f"{pd.Timestamp(date_start):%Y%m%d}" if date_start is not None else "debut"
-            end_token = f"{pd.Timestamp(date_end):%Y%m%d}" if date_end is not None else "fin"
-            pdf_columns[index % len(pdf_columns)].download_button(
-                f"Telecharger l'extrait PDF {currency}",
-                data=pdf_bytes,
-                file_name=pdf_file_name,
-                mime="application/pdf",
-                width="stretch",
-                key=f"mpesa_customer_pdf_{selected_customer}_{currency}_{start_token}_{end_token}",
-            )
-        minimal_pdf_columns = st.columns(3)
-        for index, currency in enumerate(export_targets):
-            target_statement = (
-                filtered_statement.copy()
-                if currency == "ALL"
-                else filtered_statement.loc[
-                    filtered_statement["currency_code"].eq(currency)
-                ].copy()
-            )
-            dates = pd.to_datetime(target_statement.get("created_at"), errors="coerce").dropna()
-            date_start = filter_context.get("date_start")
-            date_end = filter_context.get("date_end")
-            if date_start is None and not dates.empty:
-                date_start = dates.min().date()
-            if date_end is None and not dates.empty:
-                date_end = dates.max().date()
-            try:
                 minimal_pdf_bytes = _create_customer_statement_pdf_cached(
                     target_statement,
                     filtered_report,
@@ -1905,29 +1903,125 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
                     True,
                 )
             except (RuntimeError, ValueError) as exc:
-                minimal_pdf_columns[index % len(minimal_pdf_columns)].error(str(exc))
+                bisou_columns[0].error(str(exc))
                 continue
-            minimal_pdf_file_name = (
-                build_customer_statement_filename(
-                    customer_id=selected_customer,
-                    customer_name=customer_name,
-                    telephone=customer_phone,
-                    currency=currency,
-                    period_start=date_start,
-                    period_end=date_end,
-                    g2_available=not prepared.g2_transactions.empty,
-                ).removesuffix(".docx")
-                + "_minimal.pdf"
+            bisou_columns[0].download_button(
+                f"Word Bisou {currency}",
+                data=word_bytes,
+                file_name=f"{base_file_name}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                width="stretch",
+                key=f"mpesa_customer_word_{selected_customer}_{currency}_{start_token}_{end_token}",
             )
-            start_token = f"{pd.Timestamp(date_start):%Y%m%d}" if date_start is not None else "debut"
-            end_token = f"{pd.Timestamp(date_end):%Y%m%d}" if date_end is not None else "fin"
-            minimal_pdf_columns[index % len(minimal_pdf_columns)].download_button(
-                f"Telecharger l'extrait PDF minimal {currency}",
+            bisou_columns[1].download_button(
+                f"PDF Bisou {currency}",
+                data=pdf_bytes,
+                file_name=f"{base_file_name}.pdf",
+                mime="application/pdf",
+                width="stretch",
+                key=f"mpesa_customer_pdf_{selected_customer}_{currency}_{start_token}_{end_token}",
+            )
+            bisou_columns[2].download_button(
+                f"PDF Bisou min. {currency}",
                 data=minimal_pdf_bytes,
-                file_name=minimal_pdf_file_name,
+                file_name=f"{base_file_name}_minimal.pdf",
                 mime="application/pdf",
                 width="stretch",
                 key=f"mpesa_customer_pdf_minimal_{selected_customer}_{currency}_{start_token}_{end_token}",
+            )
+
+            st.caption(
+                "Vue client : position epargne = compte ouvert + compte bloque. "
+                "Le pret net recu, les remboursements et les frais/interets sont presentes separement."
+            )
+            client_columns = st.columns(4)
+            try:
+                client_word_bytes = _create_customer_client_statement_word_cached(
+                    target_statement,
+                    filtered_report,
+                    selected_customer,
+                    customer_name,
+                    customer_phone,
+                    currency,
+                    entry_account_number,
+                    output_account_number,
+                    date_start,
+                    date_end,
+                    False,
+                )
+                client_word_minimal_bytes = _create_customer_client_statement_word_cached(
+                    target_statement,
+                    filtered_report,
+                    selected_customer,
+                    customer_name,
+                    customer_phone,
+                    currency,
+                    entry_account_number,
+                    output_account_number,
+                    date_start,
+                    date_end,
+                    True,
+                )
+                client_pdf_bytes = _create_customer_client_statement_pdf_cached(
+                    target_statement,
+                    filtered_report,
+                    selected_customer,
+                    customer_name,
+                    customer_phone,
+                    currency,
+                    entry_account_number,
+                    output_account_number,
+                    date_start,
+                    date_end,
+                    False,
+                )
+                client_pdf_minimal_bytes = _create_customer_client_statement_pdf_cached(
+                    target_statement,
+                    filtered_report,
+                    selected_customer,
+                    customer_name,
+                    customer_phone,
+                    currency,
+                    entry_account_number,
+                    output_account_number,
+                    date_start,
+                    date_end,
+                    True,
+                )
+            except (RuntimeError, ValueError) as exc:
+                client_columns[0].error(str(exc))
+                continue
+            client_columns[0].download_button(
+                f"Word client {currency}",
+                data=client_word_bytes,
+                file_name=f"{base_file_name}_vue_client.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                width="stretch",
+                key=f"mpesa_customer_client_word_{selected_customer}_{currency}_{start_token}_{end_token}",
+            )
+            client_columns[1].download_button(
+                f"Word client min. {currency}",
+                data=client_word_minimal_bytes,
+                file_name=f"{base_file_name}_vue_client_minimal.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                width="stretch",
+                key=f"mpesa_customer_client_word_minimal_{selected_customer}_{currency}_{start_token}_{end_token}",
+            )
+            client_columns[2].download_button(
+                f"PDF client {currency}",
+                data=client_pdf_bytes,
+                file_name=f"{base_file_name}_vue_client.pdf",
+                mime="application/pdf",
+                width="stretch",
+                key=f"mpesa_customer_client_pdf_{selected_customer}_{currency}_{start_token}_{end_token}",
+            )
+            client_columns[3].download_button(
+                f"PDF client min. {currency}",
+                data=client_pdf_minimal_bytes,
+                file_name=f"{base_file_name}_vue_client_minimal.pdf",
+                mime="application/pdf",
+                width="stretch",
+                key=f"mpesa_customer_client_pdf_minimal_{selected_customer}_{currency}_{start_token}_{end_token}",
             )
 
     st.caption(
