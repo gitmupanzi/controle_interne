@@ -1801,9 +1801,9 @@ class MpesaAnalysisTests(unittest.TestCase):
                 "Référence Turbo",
                 "Devise",
                 "Description",
-                "Entrée",
-                "Sortie",
-                "Cumul net des flux",
+                "Entrées",
+                "Sorties",
+                "Solde",
             ]
         )
         self.assertEqual(len(transaction_table.rows), 1)
@@ -2075,17 +2075,16 @@ class MpesaAnalysisTests(unittest.TestCase):
             == [
                 "Devise",
                 "Ouverture",
-                "Entrées externes",
-                "Sorties externes",
-                "Flux net externe",
-                "Clôture",
+                "Entrée",
+                "Sorties",
+                "Cloture",
                 "Compte ouvert",
                 "Compte bloqué",
             ]
         )
         self.assertEqual(
             [cell.text for cell in financial_table.rows[1].cells],
-            ["USD", "13.34", "15.00", "4.65", "10.35", "23.69", "0.00", "10.00"],
+            ["USD", "0.00", "5.00", "5.00", "0.00", "0.00", "10.00"],
         )
         self.assertEqual(financial_table.style.name, "Table Grid")
         self.assertFalse(
@@ -2111,12 +2110,15 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(transaction_table.rows[0].cells[2].text, "Référence Turbo")
         self.assertEqual(
             transaction_table.rows[0].cells[-1].text,
-            "Cumul net des flux",
+            "Solde",
         )
-        self.assertNotIn(
-            "LRXAPRP29V",
-            "\n".join(cell.text for row in transaction_table.rows for cell in row.cells),
+        transaction_table_text = "\n".join(
+            cell.text for row in transaction_table.rows for cell in row.cells
         )
+        self.assertIn("DGM667X843U", transaction_table_text)
+        self.assertIn("LRXAPRP29V", transaction_table_text)
+        self.assertNotIn("LN11FAEGXL", transaction_table_text)
+        self.assertNotIn("DGI967CPZ3V", transaction_table_text)
 
         pdf_reader = PdfReader(
             BytesIO(create_customer_statement_pdf(report["extrait"], **export_kwargs))
@@ -2130,12 +2132,12 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Synthèse financière par devise", pdf_text)
         self.assertNotIn("Synthèse des flux", pdf_text)
         self.assertNotIn("Synthèse des flux — point de vue Bisou Bisou", pdf_text)
-        self.assertIn("10.35", pdf_text)
+        self.assertIn("10.00", pdf_text)
         self.assertNotIn("Situation de l'épargne", pdf_text)
         self.assertIn("Compte ouvert", pdf_text)
         self.assertIn("Compte bloqué", pdf_text)
         self.assertIn("Ouverture", pdf_text)
-        self.assertIn("Clôture", pdf_text)
+        self.assertIn("Cloture", pdf_text)
         self.assertIn("Taux annuel DAT", pdf_text)
         self.assertIn("Référence Turbo", pdf_text)
         self.assertIn("FA9IQ86JE7", pdf_text)
@@ -2149,7 +2151,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Extrait minimal de compte", minimal_pdf_text)
         self.assertIn("Synthèse financière par devise", minimal_pdf_text)
         self.assertIn("Ouverture", minimal_pdf_text)
-        self.assertIn("Clôture", minimal_pdf_text)
+        self.assertIn("Cloture", minimal_pdf_text)
         self.assertIn("Détail des transactions", minimal_pdf_text)
         self.assertNotIn("Éléments couverts par l'extrait client", minimal_pdf_text)
         self.assertNotIn("DAT en cours", minimal_pdf_text)
@@ -2169,9 +2171,10 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(client_summary["frais_interets_credit"]), 0.35)
         self.assertEqual(float(client_summary["remboursements_observes"]), 5.0)
         client_detail = client_view["detail"]
-        self.assertEqual(float(client_detail.iloc[-1]["position_epargne"]), 10.0)
-        self.assertIn("Dépôt DAT / compte bloqué", set(client_detail["operation"]))
+        self.assertEqual(float(client_detail.iloc[-1]["position_epargne"]), 0.0)
+        self.assertIn("Dépôt compte ouvert", set(client_detail["operation"]))
         self.assertIn("Remboursement depuis compte ouvert", set(client_detail["operation"]))
+        self.assertNotIn("Dépôt DAT / compte bloqué", set(client_detail["operation"]))
 
         client_word_complete = create_customer_client_statement_word(
             report["extrait"],
@@ -2432,15 +2435,15 @@ class MpesaAnalysisTests(unittest.TestCase):
             for row in table.rows
             for cell in row.cells
         )
-        self.assertIn("Prêt brut : 5,00 USD", word_text)
-        self.assertIn("net versé : 4,65 USD", word_text)
+        self.assertNotIn("Prêt brut : 5,00 USD", word_text)
+        self.assertNotIn("net versé : 4,65 USD", word_text)
 
         pdf = create_customer_statement_pdf(loan_statement, **export_kwargs)
         pdf_text = "\n".join(
             page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
         )
-        self.assertIn("Prêt brut : 5,00 USD", pdf_text)
-        self.assertIn("net versé : 4,65", pdf_text)
+        self.assertNotIn("Prêt brut : 5,00 USD", pdf_text)
+        self.assertNotIn("net versé : 4,65", pdf_text)
 
         finance = build_mpesa_turbo_financial_analysis(
             prepared,
@@ -2613,16 +2616,20 @@ class MpesaAnalysisTests(unittest.TestCase):
                 "Référence Turbo",
                 "Devise",
                 "Description",
-                "Entrée",
-                "Sortie",
-                "Cumul net des flux",
+                "Entrées",
+                "Sorties",
+                "Solde",
             ],
         )
-        self.assertEqual(len(statement_tables[0].rows), 2)
-        self.assertEqual(statement_tables[0].rows[1].cells[1].text, "15558")
-        self.assertEqual(statement_tables[0].rows[1].cells[2].text, "TX002")
-        self.assertEqual(statement_tables[0].rows[1].cells[3].text, "CDF")
-        self.assertIn("Montant pret", statement_tables[0].rows[1].cells[4].text)
+        self.assertEqual(len(statement_tables[0].rows), 1)
+        self.assertNotIn(
+            "TX002",
+            [row.cells[2].text for row in statement_tables[0].rows[1:]],
+        )
+        self.assertNotIn(
+            "Montant pret",
+            "\n".join(cell.text for row in statement_tables[0].rows for cell in row.cells),
+        )
         self.assertNotIn(
             "TX001",
             [row.cells[2].text for row in statement_tables[0].rows[1:]],
@@ -2653,7 +2660,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         relative_text = "\n".join(paragraph.text for paragraph in relative_document.paragraphs)
         self.assertEqual(
             relative_tables[0].rows[0].cells[-1].text,
-            "Cumul net des flux",
+            "Solde",
         )
         self.assertNotIn("le solde d'ouverture n'a pas ete fourni", relative_text)
         self.assertIn("Extrait de compte - 243812345678 - CDF", relative_text)
@@ -3053,10 +3060,9 @@ class MpesaAnalysisTests(unittest.TestCase):
             == [
                 "Devise",
                 "Ouverture",
-                "Entrées externes",
-                "Sorties externes",
-                "Flux net externe",
-                "Clôture",
+                "Entrée",
+                "Sorties",
+                "Cloture",
                 "Compte ouvert",
                 "Compte bloqué",
             ]
@@ -3066,14 +3072,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             {row.cells[0].text.split()[0] for row in summary_table.rows[1:]},
             {"CDF", "USD"},
         )
-        self.assertEqual(
-            {row.cells[3].text for row in statement_table.rows[1:]},
-            {"CDF", "USD"},
-        )
-        self.assertEqual(
-            {row.cells[1].text for row in statement_table.rows[1:]},
-            {"15558"},
-        )
+        self.assertEqual(len(statement_table.rows), 1)
 
     def test_excel_export_contains_content(self) -> None:
         prepared = _sample_prepared_data()

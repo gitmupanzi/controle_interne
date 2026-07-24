@@ -45,6 +45,8 @@ from credit_app.services.mpesa_analysis import (
     build_customer_transaction_analysis,
     build_customer_statement_filename,
     build_customer_statement_financial_summary,
+    build_customer_statement_detail_with_covered_operations,
+    build_customer_statement_detail_with_opening_balance,
     build_customer_statement_view,
     build_filtered_turbo_balance_report,
     build_perfect_client_crosscheck,
@@ -283,6 +285,7 @@ def _create_customer_statement_word_cached(
     output_account_number: str,
     period_start: object | None,
     period_end: object | None,
+    minimal: bool = False,
 ) -> bytes:
     return create_customer_statement_word(
         statement,
@@ -295,6 +298,7 @@ def _create_customer_statement_word_cached(
         output_account_number=output_account_number,
         period_start=period_start,
         period_end=period_end,
+        minimal=minimal,
     )
 
 
@@ -1053,7 +1057,7 @@ def _render_statement_charts(statement: pd.DataFrame) -> None:
     with st.expander("Afficher les graphiques complementaires", expanded=False):
         left, right = st.columns(2)
         with left:
-            render_panel_title("Cumul net des flux - point de vue Bisou Bisou [Turbo]")
+            render_panel_title("Cumul net des flux [Turbo]")
             fig = px.line(
                 chart_df,
                 x="created_at",
@@ -1349,6 +1353,15 @@ def _render_customer_statement_preview(
             entry_account_number=entry_account_number,
             output_account_number=output_account_number,
         )
+        enriched_detail = build_customer_statement_detail_with_covered_operations(
+            view["detail_transactions"],
+            analysis_report,
+            customer_id=customer_id,
+            currency=currency,
+            entry_account_number=entry_account_number,
+        )
+        view = dict(view)
+        view["detail_transactions"] = enriched_detail
         previews[currency] = view
         dates = pd.to_datetime(currency_statement.get("created_at"), errors="coerce").dropna()
         date_start = filter_context.get("date_start")
@@ -1402,13 +1415,16 @@ def _render_customer_statement_preview(
             customer_id=customer_id,
             currency=currency,
         )
+        view["detail_transactions"] = build_customer_statement_detail_with_opening_balance(
+            view["detail_transactions"],
+            financial_summary,
+        )
         if not financial_summary.empty:
             financial_display = financial_summary.copy()
             for column in [
                 "opening_amount",
                 "total_entries",
                 "total_outputs",
-                "flow_net",
                 "closing_amount",
                 "compte_ouvert",
                 "compte_bloque",
@@ -1416,14 +1432,24 @@ def _render_customer_statement_preview(
                 financial_display[column] = financial_display[column].map(
                     _format_amount
                 )
+            financial_display = financial_display[
+                [
+                    "currency_code",
+                    "opening_amount",
+                    "total_entries",
+                    "total_outputs",
+                    "closing_amount",
+                    "compte_ouvert",
+                    "compte_bloque",
+                ]
+            ]
             financial_display = financial_display.rename(
                 columns={
                     "currency_code": "Devise",
-                    "opening_amount": "Solde d'ouverture",
-                    "total_entries": "Entrées externes",
-                    "total_outputs": "Sorties externes",
-                    "flow_net": "Flux net externe",
-                    "closing_amount": "Solde de clôture",
+                    "opening_amount": "Ouverture",
+                    "total_entries": "Entrée",
+                    "total_outputs": "Sorties",
+                    "closing_amount": "Cloture",
                     "compte_ouvert": "Compte ouvert",
                     "compte_bloque": "Compte bloqué",
                 }
@@ -1452,9 +1478,9 @@ def _render_customer_statement_preview(
                 "receipt_no": "Référence Turbo",
                 "devise": "Devise",
                 "description": "Description",
-                "entree": "Entree",
-                "sortie": "Sortie",
-                "solde": "Cumul net des flux",
+                "entree": "Entrées",
+                "sortie": "Sorties",
+                "solde": "Solde",
             }
         )
         st.dataframe(display, width="stretch", hide_index=True)
@@ -1848,7 +1874,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
 
     render_panel_title("10. Exports")
     st.caption(
-        "Les exports Word et PDF présentent exclusivement les flux du point de vue de Bisou Bisou. "
+        "Les exports Word et PDF produisent un relevé bancaire standard centré sur le compte ouvert. "
         "Le détail transactionnel reprend exactement le client, la période, "
         "la devise, les types d'opération et les références filtrés. "
         "Les boutons CDF et USD produisent un document par devise; ALL les reunit dans un seul document "
@@ -1892,8 +1918,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
             if len(export_targets) > 1:
                 st.caption(f"Devise {currency}")
             target_statement, date_start, date_end, start_token, end_token, base_file_name = export_context(currency)
-            st.caption("Vue Bisou Bisou")
-            bisou_columns = st.columns(3)
+            export_columns = st.columns(4)
             try:
                 word_bytes = _create_customer_statement_word_cached(
                     target_statement,
@@ -1906,6 +1931,19 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
                     output_account_number,
                     date_start,
                     date_end,
+                )
+                word_minimal_bytes = _create_customer_statement_word_cached(
+                    target_statement,
+                    filtered_report,
+                    selected_customer,
+                    customer_name,
+                    customer_phone,
+                    currency,
+                    entry_account_number,
+                    output_account_number,
+                    date_start,
+                    date_end,
+                    True,
                 )
                 pdf_bytes = _create_customer_statement_pdf_cached(
                     target_statement,
@@ -1933,125 +1971,39 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
                     True,
                 )
             except (RuntimeError, ValueError) as exc:
-                bisou_columns[0].error(str(exc))
+                export_columns[0].error(str(exc))
                 continue
-            bisou_columns[0].download_button(
-                f"Word Bisou {currency}",
+            export_columns[0].download_button(
+                f"Word global {currency}",
                 data=word_bytes,
                 file_name=f"{base_file_name}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 width="stretch",
                 key=f"mpesa_customer_word_{selected_customer}_{currency}_{start_token}_{end_token}",
             )
-            bisou_columns[1].download_button(
-                f"PDF Bisou {currency}",
+            export_columns[1].download_button(
+                f"PDF global {currency}",
                 data=pdf_bytes,
                 file_name=f"{base_file_name}.pdf",
                 mime="application/pdf",
                 width="stretch",
                 key=f"mpesa_customer_pdf_{selected_customer}_{currency}_{start_token}_{end_token}",
             )
-            bisou_columns[2].download_button(
-                f"PDF Bisou min. {currency}",
+            export_columns[2].download_button(
+                f"Word minimal {currency}",
+                data=word_minimal_bytes,
+                file_name=f"{base_file_name}_minimal.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                width="stretch",
+                key=f"mpesa_customer_word_minimal_{selected_customer}_{currency}_{start_token}_{end_token}",
+            )
+            export_columns[3].download_button(
+                f"PDF minimal {currency}",
                 data=minimal_pdf_bytes,
                 file_name=f"{base_file_name}_minimal.pdf",
                 mime="application/pdf",
                 width="stretch",
                 key=f"mpesa_customer_pdf_minimal_{selected_customer}_{currency}_{start_token}_{end_token}",
-            )
-
-            st.caption(
-                "Vue client : position epargne = compte ouvert + compte bloque. "
-                "Le pret net recu, les remboursements et les frais/interets sont presentes separement."
-            )
-            client_columns = st.columns(4)
-            try:
-                client_word_bytes = _create_customer_client_statement_word_cached(
-                    target_statement,
-                    filtered_report,
-                    selected_customer,
-                    customer_name,
-                    customer_phone,
-                    currency,
-                    entry_account_number,
-                    output_account_number,
-                    date_start,
-                    date_end,
-                    False,
-                )
-                client_word_minimal_bytes = _create_customer_client_statement_word_cached(
-                    target_statement,
-                    filtered_report,
-                    selected_customer,
-                    customer_name,
-                    customer_phone,
-                    currency,
-                    entry_account_number,
-                    output_account_number,
-                    date_start,
-                    date_end,
-                    True,
-                )
-                client_pdf_bytes = _create_customer_client_statement_pdf_cached(
-                    target_statement,
-                    filtered_report,
-                    selected_customer,
-                    customer_name,
-                    customer_phone,
-                    currency,
-                    entry_account_number,
-                    output_account_number,
-                    date_start,
-                    date_end,
-                    False,
-                )
-                client_pdf_minimal_bytes = _create_customer_client_statement_pdf_cached(
-                    target_statement,
-                    filtered_report,
-                    selected_customer,
-                    customer_name,
-                    customer_phone,
-                    currency,
-                    entry_account_number,
-                    output_account_number,
-                    date_start,
-                    date_end,
-                    True,
-                )
-            except (RuntimeError, ValueError) as exc:
-                client_columns[0].error(str(exc))
-                continue
-            client_columns[0].download_button(
-                f"Word client {currency}",
-                data=client_word_bytes,
-                file_name=f"{base_file_name}_vue_client.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                width="stretch",
-                key=f"mpesa_customer_client_word_{selected_customer}_{currency}_{start_token}_{end_token}",
-            )
-            client_columns[1].download_button(
-                f"Word client min. {currency}",
-                data=client_word_minimal_bytes,
-                file_name=f"{base_file_name}_vue_client_minimal.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                width="stretch",
-                key=f"mpesa_customer_client_word_minimal_{selected_customer}_{currency}_{start_token}_{end_token}",
-            )
-            client_columns[2].download_button(
-                f"PDF client {currency}",
-                data=client_pdf_bytes,
-                file_name=f"{base_file_name}_vue_client.pdf",
-                mime="application/pdf",
-                width="stretch",
-                key=f"mpesa_customer_client_pdf_{selected_customer}_{currency}_{start_token}_{end_token}",
-            )
-            client_columns[3].download_button(
-                f"PDF client min. {currency}",
-                data=client_pdf_minimal_bytes,
-                file_name=f"{base_file_name}_vue_client_minimal.pdf",
-                mime="application/pdf",
-                width="stretch",
-                key=f"mpesa_customer_client_pdf_minimal_{selected_customer}_{currency}_{start_token}_{end_token}",
             )
 
     st.caption(

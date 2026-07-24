@@ -1949,6 +1949,62 @@ def build_account_events(transactions_client: pd.DataFrame, account_type: str) -
     )
 
 
+def build_open_savings_operation_flows(transactions_client: pd.DataFrame) -> pd.DataFrame:
+    """Agrège les mouvements qui touchent réellement le compte ouvert client.
+
+    Le détail de l'extrait client doit être lu sur ``NORMAL SAVINGS``. Les
+    écritures de prêt qui passent du compte prêt Bisou Bisou vers M-PESA ne
+    touchent pas le compte ouvert et restent donc hors du tableau détaillé.
+    """
+    columns = [
+        "customer_id",
+        "currency_code",
+        "created_at",
+        "operation_reference",
+        "debit_compte_ouvert",
+        "credit_compte_ouvert",
+        "description_compte_ouvert",
+        "nombre_lignes_compte_ouvert",
+    ]
+    if transactions_client.empty or "account_type" not in transactions_client.columns:
+        return pd.DataFrame(columns=columns)
+    lines = transactions_client.loc[
+        transactions_client["account_type"].astype("string").eq("NORMAL SAVINGS")
+    ].copy()
+    if lines.empty:
+        return pd.DataFrame(columns=columns)
+    normalized_description = lines["description"].apply(normalize_label)
+    balance_delta = (
+        pd.to_numeric(lines["bal_after"], errors="coerce")
+        - pd.to_numeric(lines["bal_before"], errors="coerce")
+    )
+    movement_amount = balance_delta.abs().where(
+        balance_delta.notna() & balance_delta.ne(0),
+        pd.concat([numeric_column(lines, "dr"), numeric_column(lines, "cr")], axis=1).max(axis=1),
+    )
+    dat_return = normalized_description.str.contains("retrait compte bloque", na=False)
+    lines["debit_compte_ouvert"] = numeric_column(lines, "dr").where(~dat_return, 0.0)
+    lines["credit_compte_ouvert"] = numeric_column(lines, "cr").where(
+        ~dat_return,
+        movement_amount,
+    )
+    flows = (
+        lines.groupby(
+            ["customer_id", "currency_code", "created_at", "operation_reference"],
+            as_index=False,
+            dropna=False,
+        )
+        .agg(
+            debit_compte_ouvert=("debit_compte_ouvert", "sum"),
+            credit_compte_ouvert=("credit_compte_ouvert", "sum"),
+            description_compte_ouvert=("description", concat_unique),
+            nombre_lignes_compte_ouvert=("id", "count"),
+        )
+        .sort_values(["currency_code", "created_at", "operation_reference"])
+    )
+    return flows[columns]
+
+
 def add_reconstructed_balance(
     operations: pd.DataFrame,
     events: pd.DataFrame,
@@ -10000,6 +10056,29 @@ def build_mpesa_statement(
         on=["customer_id", "currency_code", "created_at", "operation_reference"],
         how="left",
     )
+    open_savings_flows = build_open_savings_operation_flows(tx_client)
+    if not open_savings_flows.empty:
+        statement = statement.merge(
+            open_savings_flows,
+            on=["customer_id", "currency_code", "created_at", "operation_reference"],
+            how="left",
+        )
+    else:
+        statement["debit_compte_ouvert"] = 0.0
+        statement["credit_compte_ouvert"] = 0.0
+        statement["description_compte_ouvert"] = ""
+        statement["nombre_lignes_compte_ouvert"] = 0
+    for column in ["debit_compte_ouvert", "credit_compte_ouvert", "nombre_lignes_compte_ouvert"]:
+        statement[column] = pd.to_numeric(
+            statement.get(column, pd.Series(0, index=statement.index)),
+            errors="coerce",
+        ).fillna(0.0)
+    statement["description_compte_ouvert"] = clean_text(
+        statement.get(
+            "description_compte_ouvert",
+            pd.Series("", index=statement.index),
+        )
+    )
     has_turbo_description = ~statement["description_turbo"].apply(_is_empty_text)
     statement["descriptions"] = statement["description_turbo"].where(
         has_turbo_description, statement["descriptions"]
@@ -10759,6 +10838,10 @@ def format_statement_columns(statement: pd.DataFrame) -> pd.DataFrame:
         "entree_mpesa",
         "sortie_mpesa",
         "mouvement_net_mpesa",
+        "debit_compte_ouvert",
+        "credit_compte_ouvert",
+        "description_compte_ouvert",
+        "nombre_lignes_compte_ouvert",
         "solde_mpesa_avant",
         "solde_mpesa_apres",
         "cumul_net_depuis_debut_fichier",
@@ -11030,13 +11113,102 @@ def build_customer_statement_view(
             "entry_account_number": entry_account,
             "output_account_number": output_account,
             "summary_by_currency": summary_by_currency,
-            "detail_transactions": _customer_statement_detail_transactions(
+            "detail_transactions": _customer_open_savings_detail_transactions(
                 transactions,
                 frame,
+                entry_account_number=entry_account,
+                output_account_number=output_account,
             ),
         }
     )
     return result
+
+
+def _customer_open_savings_detail_transactions(
+    transactions: pd.DataFrame,
+    statement: pd.DataFrame,
+    *,
+    entry_account_number: object | None = None,
+    output_account_number: object | None = None,
+) -> pd.DataFrame:
+    """Construit le détail à partir du seul compte ouvert du client.
+
+    Le tableau ``Détail des transactions`` est un relevé opérationnel du compte
+    ouvert : il reprend uniquement les écritures ``NORMAL SAVINGS``. Les dépôts
+    DAT, les décaissements de prêt et les écritures techniques de crédit qui ne
+    touchent pas le compte ouvert restent dans leurs blocs dédiés.
+    """
+    empty_detail = pd.DataFrame(columns=CUSTOMER_STATEMENT_COLUMNS)
+    if (
+        transactions.empty
+        or not isinstance(statement, pd.DataFrame)
+        or statement.empty
+        or not {"debit_compte_ouvert", "credit_compte_ouvert"}.issubset(statement.columns)
+    ):
+        return empty_detail
+
+    frame = statement.copy()
+    frame["created_at"] = pd.to_datetime(
+        frame.get("created_at", pd.Series(pd.NaT, index=frame.index)),
+        errors="coerce",
+    )
+    frame["currency_code"] = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper()
+    frame["debit_compte_ouvert"] = pd.to_numeric(
+        frame["debit_compte_ouvert"], errors="coerce"
+    ).fillna(0.0)
+    frame["credit_compte_ouvert"] = pd.to_numeric(
+        frame["credit_compte_ouvert"], errors="coerce"
+    ).fillna(0.0)
+    frame = frame.loc[
+        frame["debit_compte_ouvert"].abs().gt(0)
+        | frame["credit_compte_ouvert"].abs().gt(0)
+    ].copy()
+    if frame.empty:
+        return empty_detail
+    frame = frame.sort_values(
+        ["currency_code", "created_at", "operation_reference"],
+        na_position="last",
+    ).reset_index(drop=True)
+
+    entry_account = str(entry_account_number or "").strip() or "Compte ouvert"
+    output_account = str(output_account_number or "").strip() or "Compte ouvert"
+
+    def detail_description(row: pd.Series) -> str:
+        source_description = row.get("description_compte_ouvert")
+        if _is_empty_text(source_description):
+            source_description = row.get("description_turbo")
+        if _is_empty_text(source_description):
+            source_description = row.get("descriptions")
+        parts = [source_description, row.get("telephone"), row.get("Nom_client")]
+        return " - ".join(str(value).strip() for value in parts if not _is_empty_text(value))
+
+    entree = frame["credit_compte_ouvert"]
+    sortie = frame["debit_compte_ouvert"]
+    account_values = np.select(
+        [entree.gt(0) & sortie.le(0), sortie.gt(0) & entree.le(0)],
+        [entry_account, output_account],
+        default="Compte ouvert",
+    )
+    detail = pd.DataFrame(
+        {
+            "date": frame["created_at"],
+            "compte": account_values,
+            "receipt_no": frame.get(
+                "operation_reference",
+                pd.Series("", index=frame.index),
+            ),
+            "devise": frame["currency_code"],
+            "description": frame.apply(detail_description, axis=1),
+            "entree": entree,
+            "sortie": sortie,
+        }
+    )
+    detail["solde"] = (
+        detail["entree"].sub(detail["sortie"]).groupby(detail["devise"], sort=False).cumsum()
+    )
+    return detail[CUSTOMER_STATEMENT_COLUMNS].reset_index(drop=True)
 
 
 def _customer_statement_detail_transactions(
@@ -11110,39 +11282,25 @@ def _customer_statement_export_detail(
     transactions: pd.DataFrame,
     statement: pd.DataFrame,
     summary_by_currency: pd.DataFrame,
+    *,
+    entry_account_number: object | None = None,
+    output_account_number: object | None = None,
 ) -> pd.DataFrame:
-    """Prépare le détail officiel avec un cumul de flux sans solde d'ouverture.
+    """Prépare le détail officiel du compte ouvert.
 
-    Le solde d'ouverture saisi décrit le portefeuille M-PESA du client. Il ne
-    doit pas être mélangé au cumul des flux présentés du point de vue de Bisou
-    Bisou. Les dépôts DAT restent inclus dans ce cumul même lorsqu'ils sont
-    retirés du tableau détaillé pour éviter une double restitution.
+    Son cumul part de zéro et suit uniquement les écritures ``NORMAL SAVINGS``
+    affichées dans ce tableau. Le solde d'ouverture, la clôture, les DAT et le
+    prêt net restent dans leurs blocs dédiés.
     """
-    detail = _customer_statement_detail_transactions(transactions, statement)
+    detail = _customer_open_savings_detail_transactions(
+        transactions,
+        statement,
+        entry_account_number=entry_account_number,
+        output_account_number=output_account_number,
+    )
     if detail.empty or "solde" not in detail.columns:
         return detail
-    openings = pd.DataFrame(summary_by_currency).copy()
-    if openings.empty or not {"currency_code", "opening_amount"}.issubset(
-        openings.columns
-    ):
-        detail["solde"] = pd.to_numeric(detail["solde"], errors="coerce")
-        return detail
-    opening_map = (
-        openings.assign(
-            currency_code=clean_text(openings["currency_code"]).str.upper(),
-            opening_amount=pd.to_numeric(
-                openings["opening_amount"], errors="coerce"
-            ).fillna(0.0),
-        )
-        .drop_duplicates("currency_code", keep="last")
-        .set_index("currency_code")["opening_amount"]
-    )
-    detail_currency = clean_text(
-        detail.get("devise", pd.Series("", index=detail.index))
-    ).str.upper()
-    detail["solde"] = pd.to_numeric(detail["solde"], errors="coerce") - detail_currency.map(
-        opening_map
-    ).fillna(0.0)
+    detail["solde"] = pd.to_numeric(detail["solde"], errors="coerce")
     return detail
 
 
@@ -11208,6 +11366,205 @@ def _customer_statement_analysis_frame(
                 clean_text(scoped[currency_column]).str.upper().eq(currency_text)
             ].copy()
     return scoped
+
+
+def build_customer_statement_detail_with_covered_operations(
+    detail: pd.DataFrame,
+    analysis_report: dict[str, Any],
+    *,
+    customer_id: object,
+    currency: object,
+    entry_account_number: object | None = None,
+    all_currencies: bool = False,
+) -> pd.DataFrame:
+    """Ajoute au détail les opérations DAT qui reviennent au compte client.
+
+    Le détail reste un relevé opérationnel : dépôts, retraits et remboursements
+    depuis le compte ouvert viennent des lignes ``NORMAL SAVINGS``. Les retours
+    de principal DAT et les intérêts DAT constatés peuvent provenir des analyses
+    Turbo/Savings, car ils n'ont pas toujours une ligne ``MPESA ACCOUNT``.
+    """
+    base = (
+        detail.copy()
+        if isinstance(detail, pd.DataFrame) and not detail.empty
+        else pd.DataFrame(columns=CUSTOMER_STATEMENT_COLUMNS)
+    )
+    for column in CUSTOMER_STATEMENT_COLUMNS:
+        if column not in base.columns:
+            base[column] = pd.NA
+    base = base[CUSTOMER_STATEMENT_COLUMNS].copy()
+    base["date"] = pd.to_datetime(base["date"], errors="coerce")
+    base["devise"] = clean_text(base["devise"]).str.upper()
+    base["entree"] = pd.to_numeric(base["entree"], errors="coerce").fillna(0.0)
+    base["sortie"] = pd.to_numeric(base["sortie"], errors="coerce").fillna(0.0)
+
+    account = str(entry_account_number or "").strip() or "Compte ouvert"
+    rows: list[dict[str, object]] = []
+
+    def has_similar_entry(date_value: object, currency_value: object, amount: float, pattern: str) -> bool:
+        if base.empty or amount <= 0:
+            return False
+        dates = pd.to_datetime(base["date"], errors="coerce")
+        date = pd.to_datetime(date_value, errors="coerce")
+        if pd.isna(date):
+            date_mask = pd.Series(False, index=base.index)
+        else:
+            date_mask = dates.eq(date)
+        currency_mask = base["devise"].eq(str(currency_value).strip().upper())
+        amount_mask = (base["entree"] - float(amount)).abs().le(1e-9)
+        description_mask = base["description"].apply(normalize_label).str.contains(
+            pattern,
+            regex=True,
+            na=False,
+        )
+        return bool((date_mask & currency_mask & amount_mask & description_mask).any())
+
+    internal = _customer_statement_analysis_frame(
+        analysis_report,
+        "mouvements_internes_turbo",
+        customer_id=customer_id,
+        currency=currency,
+        all_currencies=all_currencies,
+    )
+    if not internal.empty:
+        for _, row in internal.iterrows():
+            amount = pd.to_numeric(
+                pd.Series(
+                    [
+                        row.get("transfert_epargne_entree"),
+                        row.get("transfert_dat_sortie"),
+                        row.get("montant_operation"),
+                    ]
+                ),
+                errors="coerce",
+            ).dropna()
+            value = float(amount.max()) if not amount.empty else 0.0
+            if value <= 0:
+                continue
+            date_value = row.get("created_at")
+            currency_value = str(row.get("currency_code", "")).strip().upper()
+            if has_similar_entry(date_value, currency_value, value, r"retrait compte bloque|dat"):
+                continue
+            reference = row.get("event_reference")
+            description = "Retour du montant principal du DAT"
+            source_description = row.get("descriptions")
+            if not _is_empty_text(source_description):
+                description = f"{description} - {source_description}"
+            rows.append(
+                {
+                    "date": date_value,
+                    "compte": account,
+                    "receipt_no": reference,
+                    "devise": currency_value,
+                    "description": description,
+                    "entree": value,
+                    "sortie": 0.0,
+                    "solde": 0.0,
+                }
+            )
+
+    dat_interest = _customer_statement_analysis_frame(
+        analysis_report,
+        "interets_dat_credites_client",
+        customer_id=customer_id,
+        currency=currency,
+        all_currencies=all_currencies,
+    )
+    if not dat_interest.empty:
+        for _, row in dat_interest.iterrows():
+            value = pd.to_numeric(row.get("interet_client_constate"), errors="coerce")
+            if pd.isna(value) or float(value) <= 0:
+                continue
+            date_value = row.get("date_ecriture_turbo")
+            if pd.isna(pd.to_datetime(date_value, errors="coerce")):
+                date_value = row.get("maturity_date")
+            currency_value = str(row.get("currency_code", "")).strip().upper()
+            if has_similar_entry(date_value, currency_value, float(value), r"interet|intérêt|dat"):
+                continue
+            reference = row.get("reference_transaction_turbo")
+            if _is_empty_text(reference):
+                reference = row.get("savings_id")
+            savings_id = row.get("savings_id")
+            description = "Entrée des intérêts sur DAT"
+            if not _is_empty_text(savings_id):
+                description = f"{description} - {savings_id}"
+            rows.append(
+                {
+                    "date": date_value,
+                    "compte": account,
+                    "receipt_no": reference,
+                    "devise": currency_value,
+                    "description": description,
+                    "entree": float(value),
+                    "sortie": 0.0,
+                    "solde": 0.0,
+                }
+            )
+
+    if rows:
+        additional = pd.DataFrame(rows)
+        base = (
+            additional
+            if base.empty
+            else pd.concat([base, additional], ignore_index=True, sort=False)
+        )
+    if base.empty:
+        return base[CUSTOMER_STATEMENT_COLUMNS]
+    base["date"] = pd.to_datetime(base["date"], errors="coerce")
+    base["devise"] = clean_text(base["devise"]).str.upper()
+    base["entree"] = pd.to_numeric(base["entree"], errors="coerce").fillna(0.0)
+    base["sortie"] = pd.to_numeric(base["sortie"], errors="coerce").fillna(0.0)
+    base = base.sort_values(
+        ["devise", "date", "receipt_no"],
+        na_position="last",
+    ).reset_index(drop=True)
+    base["solde"] = (
+        base["entree"].sub(base["sortie"]).groupby(base["devise"], sort=False).cumsum()
+    )
+    return base[CUSTOMER_STATEMENT_COLUMNS].reset_index(drop=True)
+
+
+def build_customer_statement_detail_with_opening_balance(
+    detail: pd.DataFrame,
+    financial_summary: pd.DataFrame,
+) -> pd.DataFrame:
+    """Recalcule le solde du détail depuis l'ouverture de la synthèse."""
+    if not isinstance(detail, pd.DataFrame) or detail.empty:
+        return pd.DataFrame(columns=CUSTOMER_STATEMENT_COLUMNS)
+    output = detail.copy()
+    for column in CUSTOMER_STATEMENT_COLUMNS:
+        if column not in output.columns:
+            output[column] = pd.NA
+    output = output[CUSTOMER_STATEMENT_COLUMNS].copy()
+    output["date"] = pd.to_datetime(output["date"], errors="coerce")
+    output["devise"] = clean_text(output["devise"]).str.upper()
+    output["entree"] = pd.to_numeric(output["entree"], errors="coerce").fillna(0.0)
+    output["sortie"] = pd.to_numeric(output["sortie"], errors="coerce").fillna(0.0)
+    if (
+        isinstance(financial_summary, pd.DataFrame)
+        and not financial_summary.empty
+        and {"currency_code", "opening_amount"}.issubset(financial_summary.columns)
+    ):
+        openings = (
+            financial_summary.assign(
+                currency_code=clean_text(financial_summary["currency_code"]).str.upper(),
+                opening_amount=pd.to_numeric(
+                    financial_summary["opening_amount"], errors="coerce"
+                ).fillna(0.0),
+            )
+            .drop_duplicates("currency_code", keep="last")
+            .set_index("currency_code")["opening_amount"]
+        )
+    else:
+        openings = pd.Series(dtype="float64")
+    output = output.sort_values(
+        ["devise", "date", "receipt_no"],
+        na_position="last",
+    ).reset_index(drop=True)
+    movement = output["entree"] - output["sortie"]
+    output["solde"] = movement.groupby(output["devise"], sort=False).cumsum()
+    output["solde"] = output["solde"] + output["devise"].map(openings).fillna(0.0)
+    return output[CUSTOMER_STATEMENT_COLUMNS].reset_index(drop=True)
 
 
 def _customer_statement_dat_rate_label(
@@ -11291,7 +11648,7 @@ def build_customer_statement_financial_summary(
     currency: object,
     all_currencies: bool = False,
 ) -> pd.DataFrame:
-    """Fusionne flux externes et positions d'epargne sans les compenser."""
+    """Produit une synthèse bancaire du compte ouvert, enrichie par l'épargne."""
     flow_summary = _customer_statement_flow_summary(view)
     savings_summary = build_customer_statement_savings_summary(
         analysis_report,
@@ -11312,15 +11669,62 @@ def build_customer_statement_financial_summary(
     if flow_summary.empty and savings_summary.empty:
         return pd.DataFrame(columns=columns)
 
-    summary = flow_summary.merge(
+    detail = view.get("detail_transactions", pd.DataFrame())
+    if isinstance(detail, pd.DataFrame) and not detail.empty and "devise" in detail.columns:
+        detail_frame = detail.copy()
+        detail_frame["currency_code"] = clean_text(detail_frame["devise"]).str.upper()
+        detail_frame["entree"] = pd.to_numeric(
+            detail_frame.get("entree", pd.Series(0.0, index=detail_frame.index)),
+            errors="coerce",
+        ).fillna(0.0)
+        detail_frame["sortie"] = pd.to_numeric(
+            detail_frame.get("sortie", pd.Series(0.0, index=detail_frame.index)),
+            errors="coerce",
+        ).fillna(0.0)
+        bank_flow_summary = (
+            detail_frame.groupby("currency_code", as_index=False, dropna=False)
+            .agg(total_entries=("entree", "sum"), total_outputs=("sortie", "sum"))
+        )
+    else:
+        bank_flow_summary = pd.DataFrame(
+            columns=["currency_code", "total_entries", "total_outputs"]
+        )
+
+    currencies: set[str] = set()
+    for source in [flow_summary, savings_summary, bank_flow_summary]:
+        if isinstance(source, pd.DataFrame) and not source.empty and "currency_code" in source.columns:
+            currencies |= {
+                str(value).strip().upper()
+                for value in source["currency_code"].dropna().tolist()
+                if str(value).strip()
+            }
+    summary = pd.DataFrame({"currency_code": sorted(currencies)})
+    summary = summary.merge(
+        bank_flow_summary,
+        on="currency_code",
+        how="left",
+    ).merge(
         savings_summary,
         on="currency_code",
-        how="outer",
+        how="left",
     )
     for column in columns:
         if column not in summary.columns:
             summary[column] = np.nan
     summary["currency_code"] = clean_text(summary["currency_code"]).str.upper()
+    summary["total_entries"] = pd.to_numeric(
+        summary["total_entries"], errors="coerce"
+    ).fillna(0.0)
+    summary["total_outputs"] = pd.to_numeric(
+        summary["total_outputs"], errors="coerce"
+    ).fillna(0.0)
+    summary["flow_net"] = summary["total_entries"] - summary["total_outputs"]
+    compte_ouvert = pd.to_numeric(summary["compte_ouvert"], errors="coerce")
+    summary["closing_amount"] = compte_ouvert.where(
+        compte_ouvert.notna(),
+        summary["flow_net"],
+    )
+    summary["opening_amount"] = summary["closing_amount"] - summary["flow_net"]
     flow_order = {
         str(value).upper(): index
         for index, value in enumerate(
@@ -11524,11 +11928,11 @@ def build_customer_client_statement_view(
         frame.get("interet_pret_preleve", pd.Series(0.0, index=frame.index)),
         errors="coerce",
     ).fillna(0.0).where(operation_type.eq("Decaissement de credit"), 0.0)
+    detail_loan_net = pd.Series(0.0, index=frame.index, dtype="float64")
+    detail_loan_fees = pd.Series(0.0, index=frame.index, dtype="float64")
     savings_entries = pd.Series(0.0, index=frame.index, dtype="float64")
     savings_entries = savings_entries.mask(
-        operation_type.isin(
-            ["Sortie M-PESA_Turbo vers epargne", "Sortie M-PESA_Turbo vers DAT"]
-        ),
+        operation_type.eq("Sortie M-PESA_Turbo vers epargne"),
         sortie_mpesa,
     )
     savings_outputs = pd.Series(0.0, index=frame.index, dtype="float64")
@@ -11554,9 +11958,9 @@ def build_customer_client_statement_view(
             "operation": frame.apply(_customer_client_statement_operation_label, axis=1),
             "entree_epargne": savings_entries,
             "sortie_epargne": savings_outputs,
-            "pret_net_recu": loan_net,
+            "pret_net_recu": detail_loan_net,
             "remboursement_paye": repayments_paid,
-            "frais_interets": loan_fees,
+            "frais_interets": detail_loan_fees,
         }
     )
     keep_detail = (
@@ -11581,11 +11985,7 @@ def build_customer_client_statement_view(
             if isinstance(row, pd.DataFrame):
                 row = row.iloc[-1]
             compte_ouvert = pd.to_numeric(row.get("compte_ouvert"), errors="coerce")
-            compte_bloque = pd.to_numeric(row.get("compte_bloque"), errors="coerce")
-            position_finale = (
-                (0.0 if pd.isna(compte_ouvert) else float(compte_ouvert))
-                + (0.0 if pd.isna(compte_bloque) else float(compte_bloque))
-            )
+            position_finale = 0.0 if pd.isna(compte_ouvert) else float(compte_ouvert)
         deltas = (
             pd.to_numeric(detail.loc[index, "entree_epargne"], errors="coerce").fillna(0.0)
             - pd.to_numeric(detail.loc[index, "sortie_epargne"], errors="coerce").fillna(0.0)
@@ -12145,6 +12545,7 @@ def create_customer_statement_word(
     period_start: object | None = None,
     period_end: object | None = None,
     generated_at: pd.Timestamp | None = None,
+    minimal: bool = False,
 ) -> bytes:
     """Genere un extrait Word CDF, USD ou ALL sans sommer les devises."""
     try:
@@ -12182,6 +12583,8 @@ def create_customer_statement_word(
         transactions,
         frame,
         view["summary_by_currency"],
+        entry_account_number=entry_account_number,
+        output_account_number=output_account_number,
     )
     customer_id_text = str(customer_id).strip() or view["customer_id"] or "Non disponible"
     customer_name_text = str(customer_name).strip() or view["customer_name"] or "Nom non disponible"
@@ -12196,6 +12599,16 @@ def create_customer_statement_word(
     )
     generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
     analysis_report = analysis_report or {}
+    detail_transactions = build_customer_statement_detail_with_covered_operations(
+        detail_transactions,
+        analysis_report,
+        customer_id=customer_id_text,
+        currency=currency_text,
+        entry_account_number=entry_account_number,
+        all_currencies=all_currencies,
+    )
+    view_for_summary = dict(view)
+    view_for_summary["detail_transactions"] = detail_transactions
     dat_rate_label = _customer_statement_dat_rate_label(
         analysis_report,
         customer_id=customer_id_text,
@@ -12308,7 +12721,10 @@ def create_customer_statement_word(
         and normalize_label(customer_name_text)
         not in {"non disponible", "nom non disponible"}
     )
-    title_parts = ["Extrait de compte", telephone_text]
+    title_parts = [
+        "Extrait minimal de compte" if minimal else "Extrait de compte",
+        telephone_text,
+    ]
     if customer_name_available:
         title_parts.append(customer_name_text.upper())
     title_parts.append(currency_label)
@@ -12322,19 +12738,22 @@ def create_customer_statement_word(
     financial_title_run.font.size = Pt(10)
     financial_title_run.font.color.rgb = RGBColor(24, 63, 91)
     financial_summary = build_customer_statement_financial_summary(
-        view,
+        view_for_summary,
         analysis_report,
         customer_id=customer_id_text,
         currency=currency_text,
         all_currencies=all_currencies,
     )
+    detail_transactions = build_customer_statement_detail_with_opening_balance(
+        detail_transactions,
+        financial_summary,
+    )
     financial_headers = [
         "Devise",
         "Ouverture",
-        "Entrées externes",
-        "Sorties externes",
-        "Flux net externe",
-        "Clôture",
+        "Entrée",
+        "Sorties",
+        "Cloture",
         "Compte ouvert",
         "Compte bloqué",
     ]
@@ -12346,7 +12765,7 @@ def create_customer_statement_word(
     for index, label in enumerate(financial_headers):
         summary.cell(0, index).text = label
         summary.cell(0, index).width = Cm(
-            [1.5, 2.1, 2.4, 2.4, 2.3, 2.1, 2.1, 2.1][index]
+            [1.7, 2.2, 2.2, 2.2, 2.2, 2.3, 2.3][index]
         )
         set_cell_shading(summary.cell(0, index), "DCE6F1")
         summary.cell(0, index).paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -12362,7 +12781,6 @@ def create_customer_statement_word(
             _pdf_number(summary_row.get("opening_amount"), decimals=row_decimals),
             _pdf_number(summary_row.get("total_entries"), decimals=row_decimals),
             _pdf_number(summary_row.get("total_outputs"), decimals=row_decimals),
-            _pdf_number(summary_row.get("flow_net"), decimals=row_decimals),
             _pdf_number(summary_row.get("closing_amount"), decimals=row_decimals),
             _pdf_number(summary_row.get("compte_ouvert"), decimals=row_decimals),
             _pdf_number(summary_row.get("compte_bloque"), decimals=row_decimals),
@@ -12370,7 +12788,7 @@ def create_customer_statement_word(
         for index, value in enumerate(values):
             cells[index].text = value
             cells[index].width = Cm(
-                [1.5, 2.1, 2.4, 2.4, 2.3, 2.1, 2.1, 2.1][index]
+                [1.7, 2.2, 2.2, 2.2, 2.2, 2.3, 2.3][index]
             )
             cells[index].paragraphs[0].alignment = (
                 WD_ALIGN_PARAGRAPH.CENTER if index == 0 else WD_ALIGN_PARAGRAPH.RIGHT
@@ -12470,7 +12888,7 @@ def create_customer_statement_word(
                         run.font.size = Pt(6.8)
 
     statement_element_summary = analysis_frame("elements_extrait_client_synthese")
-    if not statement_element_summary.empty:
+    if not minimal and not statement_element_summary.empty:
         add_analysis_title("Éléments couverts par l'extrait client")
         add_analysis_table(
             statement_element_summary,
@@ -12492,7 +12910,7 @@ def create_customer_statement_word(
         )
 
     active_dat = analysis_frame("dat_en_cours_client")
-    if not active_dat.empty:
+    if not minimal and not active_dat.empty:
         situation_dates = pd.to_datetime(active_dat.get("date_situation"), errors="coerce").dropna()
         dat_title = "DAT en cours"
         if not situation_dates.empty:
@@ -12524,7 +12942,7 @@ def create_customer_statement_word(
         )
 
     repayments = analysis_frame("remboursements_turbo_detail_client")
-    if not repayments.empty:
+    if not minimal and not repayments.empty:
         add_analysis_title("Remboursements observés")
         add_analysis_table(
             repayments,
@@ -12546,7 +12964,7 @@ def create_customer_statement_word(
         )
 
     internal = analysis_frame("mouvements_internes_turbo")
-    if not internal.empty:
+    if not minimal and not internal.empty:
         add_analysis_title("Retours du capital mis en DAT")
         add_analysis_table(
             internal,
@@ -12570,7 +12988,7 @@ def create_customer_statement_word(
         )
 
     dat_interest_entries = analysis_frame("interets_dat_credites_client")
-    if not dat_interest_entries.empty:
+    if not minimal and not dat_interest_entries.empty:
         add_analysis_title("Entrées des intérêts du capital mis en DAT")
         add_analysis_table(
             dat_interest_entries,
@@ -12604,9 +13022,9 @@ def create_customer_statement_word(
         "receipt_no": "Référence Turbo",
         "devise": "Devise",
         "description": "Description",
-        "entree": "Entrée",
-        "sortie": "Sortie",
-        "solde": "Cumul net des flux",
+        "entree": "Entrées",
+        "sortie": "Sorties",
+        "solde": "Solde",
     }
     widths = {
         "date": 1.8,
@@ -12731,6 +13149,8 @@ def create_customer_statement_pdf(
         transactions,
         frame,
         view["summary_by_currency"],
+        entry_account_number=entry_account_number,
+        output_account_number=output_account_number,
     )
     customer_id_text = str(customer_id).strip() or view["customer_id"] or "Non disponible"
     customer_name_text = str(customer_name).strip() or view["customer_name"] or "Nom non disponible"
@@ -12744,6 +13164,16 @@ def create_customer_statement_pdf(
         else currency_text or view["currency"]
     )
     analysis_report = analysis_report or {}
+    detail_transactions = build_customer_statement_detail_with_covered_operations(
+        detail_transactions,
+        analysis_report,
+        customer_id=customer_id_text,
+        currency=currency_text,
+        entry_account_number=entry_account_number,
+        all_currencies=all_currencies,
+    )
+    view_for_summary = dict(view)
+    view_for_summary["detail_transactions"] = detail_transactions
     dat_rate_label = _customer_statement_dat_rate_label(
         analysis_report,
         customer_id=customer_id_text,
@@ -12828,19 +13258,22 @@ def create_customer_statement_pdf(
     financial_rows = [[
         Paragraph("Devise", header_style),
         Paragraph("Ouverture", header_style),
-        Paragraph("Entrées externes", header_style),
-        Paragraph("Sorties externes", header_style),
-        Paragraph("Flux net externe", header_style),
-        Paragraph("Clôture", header_style),
+        Paragraph("Entrée", header_style),
+        Paragraph("Sorties", header_style),
+        Paragraph("Cloture", header_style),
         Paragraph("Compte ouvert", header_style),
         Paragraph("Compte bloqué", header_style),
     ]]
     financial_summary = build_customer_statement_financial_summary(
-        view,
+        view_for_summary,
         analysis_report,
         customer_id=customer_id_text,
         currency=currency_text,
         all_currencies=all_currencies,
+    )
+    detail_transactions = build_customer_statement_detail_with_opening_balance(
+        detail_transactions,
+        financial_summary,
     )
     for _, row in financial_summary.iterrows():
         row_currency = str(row.get("currency_code", ""))
@@ -12850,7 +13283,6 @@ def create_customer_statement_pdf(
             _pdf_number(row.get("opening_amount"), decimals=decimals),
             _pdf_number(row.get("total_entries"), decimals=decimals),
             _pdf_number(row.get("total_outputs"), decimals=decimals),
-            _pdf_number(row.get("flow_net"), decimals=decimals),
             _pdf_number(row.get("closing_amount"), decimals=decimals),
             _pdf_number(row.get("compte_ouvert"), decimals=decimals),
             _pdf_number(row.get("compte_bloque"), decimals=decimals),
@@ -12862,14 +13294,13 @@ def create_customer_statement_pdf(
     summary_table = Table(
         financial_rows,
         colWidths=[
-            1.5 * cm,
-            2.1 * cm,
-            2.4 * cm,
-            2.4 * cm,
+            1.7 * cm,
+            2.2 * cm,
+            2.2 * cm,
+            2.2 * cm,
+            2.2 * cm,
             2.3 * cm,
-            2.1 * cm,
-            2.1 * cm,
-            2.1 * cm,
+            2.3 * cm,
         ],
         repeatRows=1,
     )
@@ -13164,9 +13595,9 @@ def create_customer_statement_pdf(
         "Référence Turbo",
         "Devise",
         "Description",
-        "Entrée",
-        "Sortie",
-        "Cumul net des flux",
+        "Entrées",
+        "Sorties",
+        "Solde",
     ]
     detail_rows: list[list[Any]] = [[Paragraph(label, header_style) for label in labels]]
     for _, row in detail_transactions.iterrows():
