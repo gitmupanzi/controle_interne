@@ -103,7 +103,7 @@ MPESA_SOLUTION_TAB_LABELS = (
     "G2 / DAT",
     "Detail des credits",
     "Perfect_client",
-    "Statistique",
+    "Statistiques",
 )
 
 
@@ -5437,7 +5437,7 @@ def _render_diagnostics_tab(prepared: MpesaPreparedData, report: dict[str, Any] 
 @st.fragment
 def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
     render_summary_box(
-        "Statistique Turbo",
+        "Statistiques Turbo",
         [
             "Les statistiques financieres et commerciales sont calculees depuis les sources Turbo.",
             "Transactions [G2] et Clients_Perfect restent facultatifs : ils enrichissent ou controlent, sans modifier les montants.",
