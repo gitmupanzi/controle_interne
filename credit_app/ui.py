@@ -989,8 +989,11 @@ def style_plotly_figure(fig: go.Figure, height: int | None = None) -> go.Figure:
     fig.update_layout(
         template="plotly_white",
         colorway=CHART_COLORWAY,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+        # Keep the exported PNG readable even when Streamlit or the browser is
+        # using a dark theme. Plotly's camera/download button can render
+        # transparent backgrounds as black in some environments.
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
         font=dict(color="#20344f", size=11, family="Arial, sans-serif"),
         showlegend=should_show_legend if fig.layout.showlegend is None else fig.layout.showlegend,
         legend=dict(
@@ -999,7 +1002,7 @@ def style_plotly_figure(fig: go.Figure, height: int | None = None) -> go.Figure:
             y=1.02,
             xanchor="left",
             x=0,
-            bgcolor="rgba(255,255,255,0)",
+            bgcolor="rgba(255,255,255,0.92)",
             font=dict(size=10),
             itemclick="toggle",
             itemdoubleclick="toggleothers",

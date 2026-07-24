@@ -36,7 +36,7 @@ desktop.ini
 .DS_Store
 
 # Depots de donnees locales
-line_list/*
-!line_list/.gitkeep
+# line_list/*
+# !line_list/.gitkeep
 data/vision/*
 SOP/*

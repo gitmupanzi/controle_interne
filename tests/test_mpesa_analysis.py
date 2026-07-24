@@ -4793,7 +4793,7 @@ class MpesaAnalysisTests(unittest.TestCase):
                 for row in table.rows
             ]
         )
-        self.assertIn("Rapport statistique - Solution M_PESA", word_text)
+        self.assertIn("Rapport statistique - Solution Numérique", word_text)
         self.assertIn("1. Clients", word_text)
         self.assertIn("2. Comptes ouverts et comptes bloques", word_text)
         self.assertIn("3. Credits", word_text)
@@ -4803,6 +4803,86 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Chiffre d'affaires observe", word_text)
         self.assertIn("Turbo uniquement", word_text)
         self.assertNotIn("Graphiques de synthese", word_text)
+
+    def test_mpesa_statistics_word_keeps_money_by_currency(self) -> None:
+        from docx import Document
+
+        report = {
+            "date_debut": pd.Timestamp("2026-07-01"),
+            "date_fin": pd.Timestamp("2026-07-31"),
+            "frequence": "Mois",
+            "vue_ensemble": pd.DataFrame(
+                [
+                    {
+                        "currency_code": "CDF",
+                        "clients_turbo_connus": 3,
+                        "clients_turbo_actifs": 2,
+                        "operations": 5,
+                        "volume_total_transactions": 100.0,
+                        "chiffre_affaires_observe": 4.0,
+                    },
+                    {
+                        "currency_code": "USD",
+                        "clients_turbo_connus": 3,
+                        "clients_turbo_actifs": 1,
+                        "operations": 2,
+                        "volume_total_transactions": 10.0,
+                        "chiffre_affaires_observe": 2.0,
+                    },
+                ]
+            ),
+            "activite_evolution": pd.DataFrame(),
+            "clients_croissance": pd.DataFrame(),
+            "chiffre_affaires": pd.DataFrame(),
+            "epargne_dat_portefeuille": pd.DataFrame(
+                [
+                    {"currency_code": "CDF", "famille": "Compte ouvert", "nombre_comptes": 2, "solde_total": 100.0},
+                    {"currency_code": "USD", "famille": "Compte ouvert", "nombre_comptes": 1, "solde_total": 10.0},
+                ]
+            ),
+            "credit_synthese": pd.DataFrame(
+                [
+                    {
+                        "currency_code": "CDF",
+                        "nombre_credits": 1,
+                        "nombre_clients": 1,
+                        "montant_credits": 100.0,
+                        "montant_rembourse": 40.0,
+                        "encours_total": 60.0,
+                        "encours_retard_30j": 0.0,
+                    },
+                    {
+                        "currency_code": "USD",
+                        "nombre_credits": 1,
+                        "nombre_clients": 1,
+                        "montant_credits": 10.0,
+                        "montant_rembourse": 2.0,
+                        "encours_total": 8.0,
+                        "encours_retard_30j": 1.0,
+                    },
+                ]
+            ),
+            "priorite_sources": pd.DataFrame(),
+            "definitions": pd.DataFrame(),
+        }
+
+        document = Document(BytesIO(create_mpesa_statistics_word(report)))
+        word_text = "\n".join(
+            [paragraph.text for paragraph in document.paragraphs]
+            + [
+                " | ".join(cell.text for cell in row.cells)
+                for table in document.tables
+                for row in table.rows
+            ]
+        )
+
+        self.assertIn("aucun montant n'est totalise entre devises", word_text)
+        self.assertIn("Volume transactionnel observe | CDF", word_text)
+        self.assertIn("Volume transactionnel observe | USD", word_text)
+        self.assertIn("Chiffre d'affaires observe | CDF", word_text)
+        self.assertIn("Chiffre d'affaires observe | USD", word_text)
+        self.assertNotIn("Volume total observe | 110,00", word_text)
+        self.assertNotIn("Chiffre d'affaires observe | 6,00", word_text)
 
     def test_turbo_financial_analysis_uses_one_event_grain_and_never_g2_amounts(self) -> None:
         prepared = _sample_customer_transaction_analysis_data()

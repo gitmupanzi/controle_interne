@@ -71,6 +71,8 @@ def test_shared_chart_theme_uses_accessible_palette_and_auto_margins() -> None:
 
     assert list(fig.layout.colorway) == CHART_COLORWAY
     assert fig.layout.height == 320
+    assert fig.layout.paper_bgcolor == "#ffffff"
+    assert fig.layout.plot_bgcolor == "#ffffff"
     assert fig.layout.xaxis.automargin is True
     assert fig.layout.yaxis.automargin is True
 

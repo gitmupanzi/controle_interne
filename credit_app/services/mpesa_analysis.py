@@ -6837,6 +6837,15 @@ def build_mpesa_statistics_report(
         if not events.empty and "customer_id" in events.columns
         else 0
     )
+    active_clients_by_currency: dict[str, int] = {}
+    if not events.empty and {"customer_id", "currency_code"}.issubset(events.columns):
+        currency_clients = events.copy()
+        currency_clients["currency_code"] = clean_text(currency_clients["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
+        currency_clients["client_key"] = clean_identifier(currency_clients["customer_id"]).replace("", pd.NA)
+        active_clients_by_currency = {
+            str(currency): int(group["client_key"].dropna().nunique())
+            for currency, group in currency_clients.groupby("currency_code", dropna=False)
+        }
 
     if not customer_reference.empty:
         growth = customer_reference.copy()
@@ -6990,6 +6999,7 @@ def build_mpesa_statistics_report(
                 "currency_code": currency,
                 "clients_turbo_connus": total_known_clients,
                 "clients_turbo_actifs": active_clients,
+                "clients_turbo_actifs_devise": active_clients_by_currency.get(str(currency), 0),
                 "operations": float(turnover_row.iloc[0].get("nombre_operations", 0)) if not turnover_row.empty else 0.0,
                 "volume_total_transactions": float(turnover_row.iloc[0].get("volume_total_transactions", 0)) if not turnover_row.empty else 0.0,
                 "chiffre_affaires_observe": float(turnover_row.iloc[0].get("chiffre_affaires_observe", 0)) if not turnover_row.empty else 0.0,
@@ -7003,6 +7013,7 @@ def build_mpesa_statistics_report(
                     "currency_code": "Toutes",
                     "clients_turbo_connus": total_known_clients,
                     "clients_turbo_actifs": active_clients,
+                    "clients_turbo_actifs_devise": active_clients,
                     "operations": 0.0,
                     "volume_total_transactions": 0.0,
                     "chiffre_affaires_observe": 0.0,
@@ -7141,7 +7152,7 @@ def create_mpesa_statistics_word(
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.paragraph_format.space_before = Pt(5)
     title.paragraph_format.space_after = Pt(6)
-    title.add_run("Rapport statistique - Solution M_PESA")
+    title.add_run("Rapport statistique - Solution Numérique")
 
     intro = document.add_paragraph()
     intro.paragraph_format.space_after = Pt(6)
@@ -7278,6 +7289,10 @@ def create_mpesa_statistics_word(
         family = clean_text(frame["famille"])
         return frame.loc[family.eq(family_label)].copy()
 
+    def _currency_label(value: Any) -> str:
+        text = str(value).strip().upper()
+        return text or "NON RENSEIGNEE"
+
     add_title("Synthese executive")
     overview = statistics_report.get("vue_ensemble", pd.DataFrame())
     activity_frame = statistics_report.get("activite_evolution", pd.DataFrame())
@@ -7285,21 +7300,51 @@ def create_mpesa_statistics_word(
     turnover_frame = statistics_report.get("chiffre_affaires", pd.DataFrame())
     portfolio_frame = statistics_report.get("epargne_dat_portefeuille", pd.DataFrame())
     credit_frame = statistics_report.get("credit_synthese", pd.DataFrame())
+    add_text(
+        "Principe de lecture : les nombres de clients ou d'operations peuvent etre consolides, "
+        "mais aucun montant n'est totalise entre devises. Les volumes, soldes, credits et chiffre d'affaires "
+        "sont toujours lus devise par devise."
+    )
     if isinstance(overview, pd.DataFrame) and not overview.empty:
         total_operations = _as_numeric(overview.get("operations", pd.Series(dtype=float))).sum()
-        total_volume = _as_numeric(overview.get("volume_total_transactions", pd.Series(dtype=float))).sum()
-        total_turnover = _as_numeric(overview.get("chiffre_affaires_observe", pd.Series(dtype=float))).sum()
         first_row = overview.iloc[0]
-        summary_table = pd.DataFrame(
-            [
-                {"indicateur": "Clients Turbo connus", "valeur": _pdf_number(first_row.get("clients_turbo_connus", 0), decimals=0)},
-                {"indicateur": "Clients Turbo actifs", "valeur": _pdf_number(first_row.get("clients_turbo_actifs", 0), decimals=0)},
-                {"indicateur": "Operations Turbo", "valeur": _pdf_number(total_operations, decimals=0)},
-                {"indicateur": "Volume total observe", "valeur": _pdf_number(total_volume, decimals=2)},
-                {"indicateur": "Chiffre d'affaires observe", "valeur": _pdf_number(total_turnover, decimals=2)},
-            ]
+        summary_rows = [
+            {"indicateur": "Clients Turbo connus", "devise": "-", "valeur": _pdf_number(first_row.get("clients_turbo_connus", 0), decimals=0)},
+            {"indicateur": "Clients Turbo actifs", "devise": "-", "valeur": _pdf_number(first_row.get("clients_turbo_actifs", 0), decimals=0)},
+            {"indicateur": "Operations Turbo", "devise": "-", "valeur": _pdf_number(total_operations, decimals=0)},
+        ]
+        for _, row in overview.iterrows():
+            currency = _currency_label(row.get("currency_code", ""))
+            summary_rows.extend(
+                [
+                    {
+                        "indicateur": "Clients Turbo actifs",
+                        "devise": currency,
+                        "valeur": _pdf_number(row.get("clients_turbo_actifs_devise", 0), decimals=0),
+                    },
+                    {
+                        "indicateur": "Operations Turbo",
+                        "devise": currency,
+                        "valeur": _pdf_number(row.get("operations", 0), decimals=0),
+                    },
+                    {
+                        "indicateur": "Volume transactionnel observe",
+                        "devise": currency,
+                        "valeur": _pdf_number(row.get("volume_total_transactions", 0), decimals=2),
+                    },
+                    {
+                        "indicateur": "Chiffre d'affaires observe",
+                        "devise": currency,
+                        "valeur": _pdf_number(row.get("chiffre_affaires_observe", 0), decimals=2),
+                    },
+                ]
+            )
+        summary_table = pd.DataFrame(summary_rows)
+        add_table(
+            summary_table,
+            {"indicateur": "Indicateur", "devise": "Devise", "valeur": "Valeur"},
+            max_rows=30,
         )
-        add_table(summary_table, {"indicateur": "Indicateur", "valeur": "Valeur"}, max_rows=10)
     else:
         document.add_paragraph("Aucune synthese disponible avec le perimetre filtre.")
 
@@ -7346,9 +7391,6 @@ def create_mpesa_statistics_word(
     add_title("2. Comptes ouverts et comptes bloques")
     open_accounts = _frame_by_family(portfolio_frame, "Compte ouvert")
     fixed_accounts = _frame_by_family(portfolio_frame, "DAT")
-    open_balance = _number_value(open_accounts, "solde_total")
-    fixed_balance = _number_value(fixed_accounts, "solde_total")
-    total_savings_balance = open_balance + fixed_balance
     open_count = _number_value(open_accounts, "nombre_comptes")
     fixed_count = _number_value(fixed_accounts, "nombre_comptes")
     total_accounts = open_count + fixed_count
@@ -7364,14 +7406,20 @@ def create_mpesa_statistics_word(
         f"Comptes bloques / DAT : {_pdf_number(fixed_count, decimals=0)} compte(s), soit {_percent(fixed_count, total_accounts)} "
         f"du nombre de comptes d'epargne observes."
     )
-    add_bullet(
-        f"Solde des comptes ouverts : {_pdf_number(open_balance, decimals=2)}, soit {_percent(open_balance, total_savings_balance)} "
-        f"du portefeuille epargne + DAT observe."
-    )
-    add_bullet(
-        f"Solde des comptes bloques / DAT : {_pdf_number(fixed_balance, decimals=2)}, soit {_percent(fixed_balance, total_savings_balance)} "
-        f"du portefeuille epargne + DAT observe."
-    )
+    if isinstance(portfolio_frame, pd.DataFrame) and not portfolio_frame.empty and "currency_code" in portfolio_frame.columns:
+        for currency, group in portfolio_frame.groupby("currency_code", dropna=False):
+            currency = _currency_label(currency)
+            group_open = _frame_by_family(group, "Compte ouvert")
+            group_fixed = _frame_by_family(group, "DAT")
+            open_balance = _number_value(group_open, "solde_total")
+            fixed_balance = _number_value(group_fixed, "solde_total")
+            total_savings_balance = open_balance + fixed_balance
+            add_bullet(
+                f"{currency} : solde comptes ouverts {_pdf_number(open_balance, decimals=2)} "
+                f"({_percent(open_balance, total_savings_balance)} du portefeuille epargne + DAT {currency}); "
+                f"solde comptes bloques / DAT {_pdf_number(fixed_balance, decimals=2)} "
+                f"({_percent(fixed_balance, total_savings_balance)})."
+            )
     add_table(
         portfolio_frame,
         {
@@ -7385,10 +7433,6 @@ def create_mpesa_statistics_word(
     )
 
     add_title("3. Credits")
-    credit_amount = _number_value(credit_frame, "montant_credits")
-    credit_paid = _number_value(credit_frame, "montant_rembourse")
-    credit_outstanding = _number_value(credit_frame, "encours_total")
-    overdue_30 = _number_value(credit_frame, "encours_retard_30j")
     credit_count = _number_value(credit_frame, "nombre_credits")
     credit_clients = _number_value(credit_frame, "nombre_clients")
     add_text(
@@ -7399,18 +7443,20 @@ def create_mpesa_statistics_word(
         f"Nombre de credits : {_pdf_number(credit_count, decimals=0)} pour "
         f"{_pdf_number(credit_clients, decimals=0)} client(s)."
     )
-    add_bullet(
-        f"Montant accorde : {_pdf_number(credit_amount, decimals=2)}. Montant rembourse observe : "
-        f"{_pdf_number(credit_paid, decimals=2)}, soit {_percent(credit_paid, credit_amount)} du montant accorde."
-    )
-    add_bullet(
-        f"Encours credit observe : {_pdf_number(credit_outstanding, decimals=2)}. "
-        f"Rapporte au montant accorde, cela represente {_percent(credit_outstanding, credit_amount)}."
-    )
-    add_bullet(
-        f"Encours en retard de 30 jours et plus : {_pdf_number(overdue_30, decimals=2)}, "
-        f"soit un PAR 30j de {_percent(overdue_30, credit_outstanding)}."
-    )
+    if isinstance(credit_frame, pd.DataFrame) and not credit_frame.empty:
+        for _, row in credit_frame.iterrows():
+            currency = _currency_label(row.get("currency_code", ""))
+            credit_amount = _safe_float(row.get("montant_credits", 0))
+            credit_paid = _safe_float(row.get("montant_rembourse", 0))
+            credit_outstanding = _safe_float(row.get("encours_total", 0))
+            overdue_30 = _safe_float(row.get("encours_retard_30j", 0))
+            add_bullet(
+                f"{currency} : montant accorde {_pdf_number(credit_amount, decimals=2)}; "
+                f"montant rembourse observe {_pdf_number(credit_paid, decimals=2)}, soit {_percent(credit_paid, credit_amount)} "
+                f"du montant accorde; encours {_pdf_number(credit_outstanding, decimals=2)} "
+                f"({_percent(credit_outstanding, credit_amount)} du montant accorde); PAR 30j "
+                f"{_percent(overdue_30, credit_outstanding)}."
+            )
     add_table(
         credit_frame,
         {
@@ -7426,19 +7472,13 @@ def create_mpesa_statistics_word(
 
     add_title("4. Transactions")
     total_operations = _number_value(overview, "operations")
-    total_volume = _number_value(overview, "volume_total_transactions")
-    total_turnover = _number_value(overview, "chiffre_affaires_observe")
     add_text(
         "Lecture : les transactions proviennent exclusivement de Transactions [Turbo]. "
         "Le chiffre d'affaires observe est prudent et non certifie : interets + penalites + part Bisou detectes."
     )
     add_bullet(
         f"Operations consolidees : {_pdf_number(total_operations, decimals=0)}. "
-        f"Volume total observe : {_pdf_number(total_volume, decimals=2)}."
-    )
-    add_bullet(
-        f"Chiffre d'affaires observe : {_pdf_number(total_turnover, decimals=2)}, "
-        f"soit {_percent(total_turnover, total_volume)} du volume transactionnel observe."
+        "Les volumes et chiffres d'affaires ci-dessous restent separes par devise."
     )
     if isinstance(overview, pd.DataFrame) and not overview.empty:
         for _, row in overview.iterrows():
@@ -7448,7 +7488,7 @@ def create_mpesa_statistics_word(
             currency_operations = _safe_float(row.get("operations", 0))
             add_bullet(
                 f"{currency} : {_pdf_number(currency_operations, decimals=0)} operation(s), "
-                f"{_pdf_number(currency_volume, decimals=2)} de volume, soit {_percent(currency_volume, total_volume)} du volume total; "
+                f"{_pdf_number(currency_volume, decimals=2)} de volume; "
                 f"CA observe {_pdf_number(currency_turnover, decimals=2)}, soit {_percent(currency_turnover, currency_volume)} du volume {currency}."
             )
     if isinstance(activity_frame, pd.DataFrame) and not activity_frame.empty and {"currency_code", "periode_analyse", "volume_total_transactions"}.issubset(activity_frame.columns):
@@ -7494,7 +7534,8 @@ def create_mpesa_statistics_word(
         {
             "currency_code": "Devise",
             "clients_turbo_connus": "Clients connus",
-            "clients_turbo_actifs": "Clients actifs",
+            "clients_turbo_actifs": "Clients actifs globaux",
+            "clients_turbo_actifs_devise": "Clients actifs devise",
             "operations": "Operations",
             "volume_total_transactions": "Volume total",
             "chiffre_affaires_observe": "Chiffre d'affaires observe",
@@ -7518,7 +7559,7 @@ def create_mpesa_statistics_word(
     footer_run.font.size = Pt(8)
     footer_run.font.color.rgb = RGBColor(110, 125, 140)
 
-    document.core_properties.title = "Rapport statistique - Solution M_PESA"
+    document.core_properties.title = "Rapport statistique - Solution Numérique"
     document.core_properties.subject = "Statistiques operationnelles Turbo"
     document.core_properties.author = "Solution Controle Interne"
     buffer = BytesIO()

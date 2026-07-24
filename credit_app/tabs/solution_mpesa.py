@@ -5724,34 +5724,43 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
             family = portfolio.get("famille", pd.Series("", index=portfolio.index)).astype(str)
             open_accounts = portfolio.loc[family.eq("Compte ouvert")]
             fixed_accounts = portfolio.loc[family.eq("DAT")]
-            render_kpi_cards(
-                [
-                    (
-                        "Comptes ouverts",
-                        _format_count(_sum_column(open_accounts, "nombre_comptes")),
-                        "NORMAL SAVINGS",
-                        "blue",
-                    ),
-                    (
-                        "Solde comptes ouverts",
-                        _format_amount(_sum_column(open_accounts, "solde_total")),
-                        "Somme des soldes par devise filtree",
-                        "green",
-                    ),
-                    (
-                        "Comptes bloques / DAT",
-                        _format_count(_sum_column(fixed_accounts, "nombre_comptes")),
-                        "FIXED SAVINGS",
-                        "navy",
-                    ),
-                    (
-                        "Solde comptes bloques",
-                        _format_amount(_sum_column(fixed_accounts, "solde_total")),
-                        "Capital bloque observe",
-                        "orange",
-                    ),
-                ]
-            )
+            account_cards: list[tuple[str, str, str, str]] = [
+                (
+                    "Comptes ouverts",
+                    _format_count(_sum_column(open_accounts, "nombre_comptes")),
+                    "Nombre global de comptes NORMAL SAVINGS",
+                    "blue",
+                ),
+                (
+                    "Comptes bloques / DAT",
+                    _format_count(_sum_column(fixed_accounts, "nombre_comptes")),
+                    "Nombre global de comptes FIXED SAVINGS",
+                    "navy",
+                ),
+            ]
+            if "currency_code" in portfolio.columns:
+                for currency in sorted(portfolio["currency_code"].dropna().astype(str).unique()):
+                    currency_portfolio = portfolio.loc[portfolio["currency_code"].astype(str).eq(currency)]
+                    currency_family = currency_portfolio.get("famille", pd.Series("", index=currency_portfolio.index)).astype(str)
+                    currency_open = currency_portfolio.loc[currency_family.eq("Compte ouvert")]
+                    currency_fixed = currency_portfolio.loc[currency_family.eq("DAT")]
+                    account_cards.extend(
+                        [
+                            (
+                                f"Solde comptes ouverts [{currency}]",
+                                _format_amount(_sum_column(currency_open, "solde_total")),
+                                "NORMAL SAVINGS, sans total multidevise",
+                                "green",
+                            ),
+                            (
+                                f"Solde comptes bloques [{currency}]",
+                                _format_amount(_sum_column(currency_fixed, "solde_total")),
+                                "FIXED SAVINGS / DAT, sans total multidevise",
+                                "orange",
+                            ),
+                        ]
+                    )
+            render_kpi_cards(account_cards)
             st.dataframe(
                 portfolio,
                 width="stretch",
@@ -5769,36 +5778,42 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
         if credit_summary.empty:
             st.info("Loans Account [Turbo] est requis pour analyser les credits.")
         else:
-            encours_total = _sum_column(credit_summary, "encours_total")
-            encours_retard_30j = _sum_column(credit_summary, "encours_retard_30j")
-            render_kpi_cards(
-                [
-                    (
-                        "Credits",
-                        _format_count(_sum_column(credit_summary, "nombre_credits")),
-                        "Nombre de credits Turbo",
-                        "navy",
-                    ),
-                    (
-                        "Montant accorde",
-                        _format_amount(_sum_column(credit_summary, "montant_credits")),
-                        "Somme loan_amount",
-                        "blue",
-                    ),
-                    (
-                        "Encours credit",
-                        _format_amount(encours_total),
-                        "Position Loans Account [Turbo]",
-                        "orange",
-                    ),
-                    (
-                        "PAR 30j",
-                        _safe_rate(encours_retard_30j, encours_total),
-                        "Encours en retard 30j / encours total",
-                        "red",
-                    ),
-                ]
-            )
+            credit_cards: list[tuple[str, str, str, str]] = [
+                (
+                    "Credits",
+                    _format_count(_sum_column(credit_summary, "nombre_credits")),
+                    "Nombre global de credits Turbo",
+                    "navy",
+                )
+            ]
+            if "currency_code" in credit_summary.columns:
+                for _, row in credit_summary.sort_values("currency_code").iterrows():
+                    currency = str(row.get("currency_code", "")).strip() or "Devise"
+                    encours_total = _scalar_number(row.get("encours_total", 0))
+                    encours_retard_30j = _scalar_number(row.get("encours_retard_30j", 0))
+                    credit_cards.extend(
+                        [
+                            (
+                                f"Montant accorde [{currency}]",
+                                _format_amount(row.get("montant_credits", 0)),
+                                "Somme loan_amount, sans total multidevise",
+                                "blue",
+                            ),
+                            (
+                                f"Encours credit [{currency}]",
+                                _format_amount(encours_total),
+                                "Position Loans Account [Turbo]",
+                                "orange",
+                            ),
+                            (
+                                f"PAR 30j [{currency}]",
+                                _safe_rate(encours_retard_30j, encours_total),
+                                "Encours en retard 30j / encours de la devise",
+                                "red",
+                            ),
+                        ]
+                    )
+            render_kpi_cards(credit_cards)
             st.dataframe(
                 credit_summary,
                 width="stretch",
@@ -5900,7 +5915,7 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
         st.download_button(
             "Telecharger le rapport statistique Word [Turbo]",
             data=word_bytes,
-            file_name=f"rapport_statistique_solution_mpesa_turbo_{start_token}_{end_token}.docx",
+            file_name=f"rapport_statistiques_solution_turbo_{start_token}_{end_token}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             width="content",
             key=f"mpesa_statistics_word_{start_token}_{end_token}",
