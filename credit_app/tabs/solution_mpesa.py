@@ -5472,53 +5472,109 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
         (pd.Timestamp(default_end) - pd.Timedelta(days=90)).date(),
     )
 
+    filter_scope_key = f"{minimum_date:%Y%m%d}_{maximum_date:%Y%m%d}_{len(combined_dates)}"
+    start_widget_key = f"mpesa_statistics_start_widget_{filter_scope_key}"
+    end_widget_key = f"mpesa_statistics_end_widget_{filter_scope_key}"
+    applied_filters_key = f"mpesa_statistics_applied_filters_{filter_scope_key}"
+    applied_at_key = f"mpesa_statistics_applied_at_{filter_scope_key}"
+    if start_widget_key not in st.session_state:
+        st.session_state[start_widget_key] = default_start
+    if end_widget_key not in st.session_state:
+        st.session_state[end_widget_key] = default_end
+    if st.session_state[start_widget_key] < minimum_date or st.session_state[start_widget_key] > maximum_date:
+        st.session_state[start_widget_key] = default_start
+    if st.session_state[end_widget_key] < minimum_date or st.session_state[end_widget_key] > maximum_date:
+        st.session_state[end_widget_key] = default_end
+    st.session_state.setdefault("mpesa_statistics_frequency", "Mois")
+    st.session_state.setdefault("mpesa_statistics_top_n_clients", 50)
+    st.session_state.setdefault(
+        applied_filters_key,
+        {
+            "date_debut": st.session_state[start_widget_key],
+            "date_fin": st.session_state[end_widget_key],
+            "frequence": st.session_state["mpesa_statistics_frequency"],
+            "top_n_clients": st.session_state["mpesa_statistics_top_n_clients"],
+        },
+    )
+
     with st.form("mpesa_statistics_filters"):
         start_col, end_col, frequency_col, top_col = st.columns([1.0, 1.0, 1.0, 1.0])
         with start_col:
-            selected_start_date = st.date_input(
+            st.date_input(
                 "Date de debut",
-                value=default_start,
                 min_value=minimum_date,
                 max_value=maximum_date,
-                key=(
-                    f"mpesa_statistics_start_{minimum_date:%Y%m%d}_"
-                    f"{maximum_date:%Y%m%d}_{len(combined_dates)}"
-                ),
+                key=start_widget_key,
                 format="DD/MM/YYYY",
             )
         with end_col:
-            selected_end_date = st.date_input(
+            st.date_input(
                 "Date de fin",
-                value=default_end,
                 min_value=minimum_date,
                 max_value=maximum_date,
-                key=(
-                    f"mpesa_statistics_end_{minimum_date:%Y%m%d}_"
-                    f"{maximum_date:%Y%m%d}_{len(combined_dates)}"
-                ),
+                key=end_widget_key,
                 format="DD/MM/YYYY",
             )
         with frequency_col:
-            frequency = st.selectbox(
+            st.selectbox(
                 "Frequence",
                 ["Jour", "Semaine", "Mois"],
-                index=2,
                 key="mpesa_statistics_frequency",
             )
         with top_col:
-            top_n_clients = st.number_input(
+            st.number_input(
                 "Top clients affiches",
                 min_value=5,
                 max_value=200,
-                value=50,
                 step=5,
                 key="mpesa_statistics_top_n_clients",
             )
-        st.form_submit_button("Actualiser les statistiques", type="primary")
+        statistics_submitted = st.form_submit_button("Actualiser les statistiques", type="primary")
+
+    if statistics_submitted:
+        st.session_state[applied_filters_key] = {
+            "date_debut": st.session_state[start_widget_key],
+            "date_fin": st.session_state[end_widget_key],
+            "frequence": st.session_state["mpesa_statistics_frequency"],
+            "top_n_clients": st.session_state["mpesa_statistics_top_n_clients"],
+        }
+        st.session_state[applied_at_key] = pd.Timestamp.now()
+
+    applied_filters = st.session_state.get(applied_filters_key, {})
+    selected_start_date = applied_filters.get("date_debut", default_start)
+    selected_end_date = applied_filters.get("date_fin", default_end)
+    frequency = applied_filters.get("frequence", "Mois")
+    top_n_clients = int(applied_filters.get("top_n_clients", 50) or 50)
 
     if selected_start_date > selected_end_date:
         st.error("La date de debut doit etre anterieure ou egale a la date de fin.", icon=":material/error:")
         return
+
+    if statistics_submitted:
+        st.success(
+            (
+                "Statistiques actualisees pour la periode "
+                f"{pd.Timestamp(selected_start_date):%d/%m/%Y} - {pd.Timestamp(selected_end_date):%d/%m/%Y}, "
+                f"frequence {frequency}, top {top_n_clients} clients."
+            ),
+            icon=":material/check_circle:",
+        )
+    elif applied_at_key in st.session_state:
+        st.caption(
+            (
+                f"Dernier perimetre applique : {pd.Timestamp(selected_start_date):%d/%m/%Y} - "
+                f"{pd.Timestamp(selected_end_date):%d/%m/%Y}, frequence {frequency}, "
+                f"top {top_n_clients} clients."
+            )
+        )
+    else:
+        st.caption(
+            (
+                f"Perimetre applique par defaut : {pd.Timestamp(selected_start_date):%d/%m/%Y} - "
+                f"{pd.Timestamp(selected_end_date):%d/%m/%Y}, frequence {frequency}, "
+                f"top {top_n_clients} clients."
+            )
+        )
 
     with st.spinner("Construction des statistiques Turbo..."):
         report = _build_mpesa_statistics_report_cached(

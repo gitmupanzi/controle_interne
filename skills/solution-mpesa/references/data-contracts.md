@@ -323,7 +323,7 @@ Cas réel du 16 juillet 2026 avec les exports du 17 juillet : 135 événements, 
 - `Clients Turbo actifs` correspond aux clients ayant au moins une operation Transactions [Turbo] dans la periode. `Clients Turbo connus` vient de `Customers [Turbo]` quand la source est chargee; sinon il est degrade depuis les clients observes dans les sources Turbo disponibles.
 - La courbe d'evolution des clients utilise `Customers [Turbo].created_at` lorsque disponible. En absence de Customers, elle utilise la premiere observation Turbo connue du client.
 - `Chiffre d'affaires observe` est prudent et non certifie : interets + penalites + part Bisou detectes dans Transactions [Turbo], toujours separes par devise. G2 et Perfect ne doivent jamais contribuer aux montants.
-- L'export Word du rapport statistique inclut le logo, les criteres, les sources et importance, la vue d'ensemble, le chiffre d'affaires observe, la croissance clients, epargne/DAT, credit et definitions.
+- L'export Word du rapport statistique inclut le logo, les criteres, une synthese executive, puis un rapport textuel professionnel par blocs : `Clients`, `Comptes ouverts et comptes bloques`, `Credits` et `Transactions`. Il doit presenter les chiffres, ratios et pourcentages utiles a la direction, sans graphiques dans le Word, puis conserver les annexes utiles : sources et importance, vue d'ensemble et definitions. Le Word reprend exactement le perimetre filtre de l'onglet.
 
 ## Balance et analyses comptables Turbo
 
@@ -336,7 +336,7 @@ Cas réel du 16 juillet 2026 avec les exports du 17 juillet : 135 événements, 
 - Les soldes Current Savings, Fixed Savings et Loans sont des instantanés de référence. Ne pas les forcer dans la clôture d'une journée antérieure; afficher leur date disponible et leur source.
 - Sans plan comptable complet et soldes d'ouverture officiels, employer `balance observée`, `position observée` et `solde de mouvement`; ne jamais annoncer une balance générale certifiée, un bilan ou un compte de résultat officiel.
 - Toutes les colonnes monétaires, tous les ratios et tous les contrôles sont calculés par devise.
-- Le volet `Balances et journaux` propose directement `balance_observee_turbo_<debut>_<fin>.docx` et `.pdf`. Les deux documents intègrent le logo, la période, une synthèse par devise, la balance client et la balance des mouvements par `account_type`; ils utilisent le terme `balance observée` et rappellent la limite de certification.
+- Le volet `Balances et journaux` propose directement `balance_observee_turbo_<debut>_<fin>.docx` et `.pdf`. Les deux documents intègrent le logo, la période, une synthèse par devise, la balance client et la balance des mouvements par `account_type`; ils sont générés en A4 portrait avec des colonnes compactes, utilisent le terme `balance observée` et rappellent la limite de certification.
 
 ### Cas de référence clôturé du 16 juillet 2026
 

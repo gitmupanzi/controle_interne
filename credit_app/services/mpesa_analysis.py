@@ -7220,7 +7220,262 @@ def create_mpesa_statistics_word(
                 run.italic = True
                 run.font.size = Pt(7)
 
-    add_title("1. Sources et importance")
+    def _as_numeric(series: Any) -> pd.Series:
+        return pd.to_numeric(series, errors="coerce").fillna(0.0)
+
+    def _number_value(frame: pd.DataFrame, column: str) -> float:
+        if not isinstance(frame, pd.DataFrame) or frame.empty or column not in frame.columns:
+            return 0.0
+        return float(_as_numeric(frame[column]).sum())
+
+    def _first_number(frame: pd.DataFrame, column: str) -> float:
+        if not isinstance(frame, pd.DataFrame) or frame.empty or column not in frame.columns:
+            return 0.0
+        values = _as_numeric(frame[column])
+        return float(values.iloc[0]) if not values.empty else 0.0
+
+    def _safe_float(value: Any) -> float:
+        parsed = pd.to_numeric(value, errors="coerce")
+        if pd.isna(parsed):
+            return 0.0
+        return float(parsed)
+
+    def _percent(numerator: float, denominator: float) -> str:
+        numerator = _safe_float(numerator)
+        denominator = _safe_float(denominator)
+        if not denominator:
+            return "non calculable"
+        return f"{100 * numerator / denominator:.2f} %"
+
+    def _variation_percent(start_value: float, end_value: float) -> str:
+        start_value = _safe_float(start_value)
+        end_value = _safe_float(end_value)
+        if not start_value:
+            return "non calculable"
+        return f"{100 * (end_value - start_value) / start_value:.2f} %"
+
+    def add_text(text: str, *, bold_prefix: str | None = None) -> None:
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.space_after = Pt(3)
+        if bold_prefix and text.startswith(bold_prefix):
+            prefix = paragraph.add_run(bold_prefix)
+            prefix.bold = True
+            prefix.font.size = Pt(8.5)
+            paragraph.add_run(text[len(bold_prefix):]).font.size = Pt(8.5)
+        else:
+            paragraph.add_run(text).font.size = Pt(8.5)
+
+    def add_bullet(text: str) -> None:
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.left_indent = Cm(0.35)
+        paragraph.paragraph_format.space_after = Pt(2)
+        run = paragraph.add_run(f"- {text}")
+        run.font.size = Pt(8.2)
+
+    def _frame_by_family(frame: pd.DataFrame, family_label: str) -> pd.DataFrame:
+        if not isinstance(frame, pd.DataFrame) or frame.empty or "famille" not in frame.columns:
+            return pd.DataFrame()
+        family = clean_text(frame["famille"])
+        return frame.loc[family.eq(family_label)].copy()
+
+    add_title("Synthese executive")
+    overview = statistics_report.get("vue_ensemble", pd.DataFrame())
+    activity_frame = statistics_report.get("activite_evolution", pd.DataFrame())
+    growth_frame = statistics_report.get("clients_croissance", pd.DataFrame())
+    turnover_frame = statistics_report.get("chiffre_affaires", pd.DataFrame())
+    portfolio_frame = statistics_report.get("epargne_dat_portefeuille", pd.DataFrame())
+    credit_frame = statistics_report.get("credit_synthese", pd.DataFrame())
+    if isinstance(overview, pd.DataFrame) and not overview.empty:
+        total_operations = _as_numeric(overview.get("operations", pd.Series(dtype=float))).sum()
+        total_volume = _as_numeric(overview.get("volume_total_transactions", pd.Series(dtype=float))).sum()
+        total_turnover = _as_numeric(overview.get("chiffre_affaires_observe", pd.Series(dtype=float))).sum()
+        first_row = overview.iloc[0]
+        summary_table = pd.DataFrame(
+            [
+                {"indicateur": "Clients Turbo connus", "valeur": _pdf_number(first_row.get("clients_turbo_connus", 0), decimals=0)},
+                {"indicateur": "Clients Turbo actifs", "valeur": _pdf_number(first_row.get("clients_turbo_actifs", 0), decimals=0)},
+                {"indicateur": "Operations Turbo", "valeur": _pdf_number(total_operations, decimals=0)},
+                {"indicateur": "Volume total observe", "valeur": _pdf_number(total_volume, decimals=2)},
+                {"indicateur": "Chiffre d'affaires observe", "valeur": _pdf_number(total_turnover, decimals=2)},
+            ]
+        )
+        add_table(summary_table, {"indicateur": "Indicateur", "valeur": "Valeur"}, max_rows=10)
+    else:
+        document.add_paragraph("Aucune synthese disponible avec le perimetre filtre.")
+
+    add_title("1. Clients")
+    known_clients = _first_number(overview, "clients_turbo_connus")
+    active_clients = _first_number(overview, "clients_turbo_actifs")
+    new_clients = _number_value(growth_frame, "nouveaux_clients_turbo")
+    final_clients = _number_value(growth_frame.tail(1), "clients_turbo_cumules") if isinstance(growth_frame, pd.DataFrame) else 0.0
+    add_text(
+        "Lecture : la base client est analysee a partir de Customers [Turbo] lorsqu'il est charge; "
+        "a defaut, elle est degradee depuis les clients observes dans les sources Turbo."
+    )
+    add_bullet(
+        f"Clients Turbo connus : {_pdf_number(known_clients, decimals=0)}. "
+        f"Clients actifs sur la periode : {_pdf_number(active_clients, decimals=0)}, "
+        f"soit {_percent(active_clients, known_clients)} de la base connue."
+    )
+    add_bullet(
+        f"Nouveaux clients observes dans la courbe : {_pdf_number(new_clients, decimals=0)}. "
+        f"Rapportes a la base finale observee ({_pdf_number(final_clients, decimals=0)}), ils representent "
+        f"{_percent(new_clients, final_clients)}."
+    )
+    if isinstance(activity_frame, pd.DataFrame) and not activity_frame.empty and {"currency_code", "periode_analyse", "nombre_clients"}.issubset(activity_frame.columns):
+        for currency, group in activity_frame.sort_values("periode_analyse").groupby("currency_code", dropna=False):
+            values = _as_numeric(group["nombre_clients"])
+            if values.empty:
+                continue
+            add_bullet(
+                f"Pour {currency}, les clients actifs passent de {_pdf_number(values.iloc[0], decimals=0)} "
+                f"a {_pdf_number(values.iloc[-1], decimals=0)} sur les bornes observees, "
+                f"soit une variation de {_variation_percent(float(values.iloc[0]), float(values.iloc[-1]))}."
+            )
+    add_table(
+        growth_frame,
+        {
+            "periode": "Periode",
+            "nouveaux_clients_turbo": "Nouveaux clients",
+            "clients_turbo_cumules": "Clients cumules",
+            "source_principale": "Source",
+        },
+        max_rows=60,
+    )
+
+    add_title("2. Comptes ouverts et comptes bloques")
+    open_accounts = _frame_by_family(portfolio_frame, "Compte ouvert")
+    fixed_accounts = _frame_by_family(portfolio_frame, "DAT")
+    open_balance = _number_value(open_accounts, "solde_total")
+    fixed_balance = _number_value(fixed_accounts, "solde_total")
+    total_savings_balance = open_balance + fixed_balance
+    open_count = _number_value(open_accounts, "nombre_comptes")
+    fixed_count = _number_value(fixed_accounts, "nombre_comptes")
+    total_accounts = open_count + fixed_count
+    add_text(
+        "Lecture : les comptes ouverts correspondent aux comptes d'epargne courante. "
+        "Les comptes bloques correspondent aux DAT. Les soldes proviennent de Savings Account [Turbo]."
+    )
+    add_bullet(
+        f"Comptes ouverts : {_pdf_number(open_count, decimals=0)} compte(s), soit {_percent(open_count, total_accounts)} "
+        f"du nombre de comptes d'epargne observes."
+    )
+    add_bullet(
+        f"Comptes bloques / DAT : {_pdf_number(fixed_count, decimals=0)} compte(s), soit {_percent(fixed_count, total_accounts)} "
+        f"du nombre de comptes d'epargne observes."
+    )
+    add_bullet(
+        f"Solde des comptes ouverts : {_pdf_number(open_balance, decimals=2)}, soit {_percent(open_balance, total_savings_balance)} "
+        f"du portefeuille epargne + DAT observe."
+    )
+    add_bullet(
+        f"Solde des comptes bloques / DAT : {_pdf_number(fixed_balance, decimals=2)}, soit {_percent(fixed_balance, total_savings_balance)} "
+        f"du portefeuille epargne + DAT observe."
+    )
+    add_table(
+        portfolio_frame,
+        {
+            "currency_code": "Devise",
+            "famille": "Famille",
+            "nombre_comptes": "Comptes",
+            "comptes_solde_positif": "Comptes positifs",
+            "clients": "Clients",
+            "solde_total": "Solde total",
+        },
+    )
+
+    add_title("3. Credits")
+    credit_amount = _number_value(credit_frame, "montant_credits")
+    credit_paid = _number_value(credit_frame, "montant_rembourse")
+    credit_outstanding = _number_value(credit_frame, "encours_total")
+    overdue_30 = _number_value(credit_frame, "encours_retard_30j")
+    credit_count = _number_value(credit_frame, "nombre_credits")
+    credit_clients = _number_value(credit_frame, "nombre_clients")
+    add_text(
+        "Lecture : le credit est restitue depuis Loans Account [Turbo]. L'encours et le PAR restent des positions "
+        "observees et doivent etre lus separement par devise."
+    )
+    add_bullet(
+        f"Nombre de credits : {_pdf_number(credit_count, decimals=0)} pour "
+        f"{_pdf_number(credit_clients, decimals=0)} client(s)."
+    )
+    add_bullet(
+        f"Montant accorde : {_pdf_number(credit_amount, decimals=2)}. Montant rembourse observe : "
+        f"{_pdf_number(credit_paid, decimals=2)}, soit {_percent(credit_paid, credit_amount)} du montant accorde."
+    )
+    add_bullet(
+        f"Encours credit observe : {_pdf_number(credit_outstanding, decimals=2)}. "
+        f"Rapporte au montant accorde, cela represente {_percent(credit_outstanding, credit_amount)}."
+    )
+    add_bullet(
+        f"Encours en retard de 30 jours et plus : {_pdf_number(overdue_30, decimals=2)}, "
+        f"soit un PAR 30j de {_percent(overdue_30, credit_outstanding)}."
+    )
+    add_table(
+        credit_frame,
+        {
+            "currency_code": "Devise",
+            "nombre_credits": "Credits",
+            "nombre_clients": "Clients",
+            "montant_credits": "Montant accorde",
+            "montant_rembourse": "Montant rembourse",
+            "encours_total": "Encours",
+            "par_30j_pct": "PAR 30j",
+        },
+    )
+
+    add_title("4. Transactions")
+    total_operations = _number_value(overview, "operations")
+    total_volume = _number_value(overview, "volume_total_transactions")
+    total_turnover = _number_value(overview, "chiffre_affaires_observe")
+    add_text(
+        "Lecture : les transactions proviennent exclusivement de Transactions [Turbo]. "
+        "Le chiffre d'affaires observe est prudent et non certifie : interets + penalites + part Bisou detectes."
+    )
+    add_bullet(
+        f"Operations consolidees : {_pdf_number(total_operations, decimals=0)}. "
+        f"Volume total observe : {_pdf_number(total_volume, decimals=2)}."
+    )
+    add_bullet(
+        f"Chiffre d'affaires observe : {_pdf_number(total_turnover, decimals=2)}, "
+        f"soit {_percent(total_turnover, total_volume)} du volume transactionnel observe."
+    )
+    if isinstance(overview, pd.DataFrame) and not overview.empty:
+        for _, row in overview.iterrows():
+            currency = str(row.get("currency_code", "")).strip() or "Non renseignee"
+            currency_volume = _safe_float(row.get("volume_total_transactions", 0))
+            currency_turnover = _safe_float(row.get("chiffre_affaires_observe", 0))
+            currency_operations = _safe_float(row.get("operations", 0))
+            add_bullet(
+                f"{currency} : {_pdf_number(currency_operations, decimals=0)} operation(s), "
+                f"{_pdf_number(currency_volume, decimals=2)} de volume, soit {_percent(currency_volume, total_volume)} du volume total; "
+                f"CA observe {_pdf_number(currency_turnover, decimals=2)}, soit {_percent(currency_turnover, currency_volume)} du volume {currency}."
+            )
+    if isinstance(activity_frame, pd.DataFrame) and not activity_frame.empty and {"currency_code", "periode_analyse", "volume_total_transactions"}.issubset(activity_frame.columns):
+        for currency, group in activity_frame.sort_values("periode_analyse").groupby("currency_code", dropna=False):
+            values = _as_numeric(group["volume_total_transactions"])
+            if values.empty:
+                continue
+            add_bullet(
+                f"Tendance {currency} : le volume passe de {_pdf_number(values.iloc[0], decimals=2)} "
+                f"a {_pdf_number(values.iloc[-1], decimals=2)}, soit une variation de "
+                f"{_variation_percent(float(values.iloc[0]), float(values.iloc[-1]))}."
+            )
+    add_table(
+        turnover_frame,
+        {
+            "currency_code": "Devise",
+            "montant_entrees": "Entrees",
+            "montant_sorties": "Sorties",
+            "volume_total_transactions": "Volume total",
+            "interets_credit_observes": "Interets",
+            "penalites_observees": "Penalites",
+            "part_bisou_observee": "Part Bisou",
+            "chiffre_affaires_observe": "CA observe",
+        },
+    )
+
+    add_title("Annexe 1. Sources et importance")
     add_table(
         statistics_report.get("priorite_sources", pd.DataFrame()),
         {
@@ -7233,7 +7488,7 @@ def create_mpesa_statistics_word(
         },
         max_rows=10,
     )
-    add_title("2. Vue d'ensemble")
+    add_title("Annexe 2. Vue d'ensemble")
     add_table(
         statistics_report.get("vue_ensemble", pd.DataFrame()),
         {
@@ -7245,56 +7500,7 @@ def create_mpesa_statistics_word(
             "chiffre_affaires_observe": "Chiffre d'affaires observe",
         },
     )
-    add_title("3. Chiffre d'affaires observe et volume")
-    add_table(
-        statistics_report.get("chiffre_affaires", pd.DataFrame()),
-        {
-            "currency_code": "Devise",
-            "montant_entrees": "Entrees",
-            "montant_sorties": "Sorties",
-            "volume_total_transactions": "Volume total",
-            "interets_credit_observes": "Interets",
-            "penalites_observees": "Penalites",
-            "part_bisou_observee": "Part Bisou",
-            "chiffre_affaires_observe": "CA observe",
-        },
-    )
-    add_title("4. Croissance des clients Turbo")
-    add_table(
-        statistics_report.get("clients_croissance", pd.DataFrame()),
-        {
-            "periode": "Periode",
-            "nouveaux_clients_turbo": "Nouveaux clients",
-            "clients_turbo_cumules": "Clients cumules",
-            "source_principale": "Source",
-        },
-        max_rows=60,
-    )
-    add_title("5. Epargne et DAT")
-    add_table(
-        statistics_report.get("epargne_dat_portefeuille", pd.DataFrame()),
-        {
-            "currency_code": "Devise",
-            "famille": "Famille",
-            "nombre_comptes": "Comptes",
-            "comptes_solde_positif": "Comptes positifs",
-            "clients": "Clients",
-            "solde_total": "Solde total",
-        },
-    )
-    add_title("6. Credit")
-    add_table(
-        statistics_report.get("credit_synthese", pd.DataFrame()),
-        {
-            "currency_code": "Devise",
-            "nombre_credits": "Credits",
-            "nombre_clients": "Clients",
-            "montant_initial": "Montant initial",
-            "encours_total": "Encours",
-            "par_30j_pct": "PAR 30j",
-        },
-    )
-    add_title("7. Definitions")
+    add_title("Annexe 3. Definitions")
     add_table(
         statistics_report.get("definitions", pd.DataFrame()),
         {
@@ -13763,7 +13969,6 @@ def create_turbo_balance_word(
     """Génère la balance observée Turbo en Word pour la Direction."""
     try:
         from docx import Document
-        from docx.enum.section import WD_ORIENT
         from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
         from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.oxml import OxmlElement
@@ -13785,8 +13990,6 @@ def create_turbo_balance_word(
 
     document = Document()
     section = document.sections[0]
-    section.orientation = WD_ORIENT.LANDSCAPE
-    section.page_width, section.page_height = section.page_height, section.page_width
     section.top_margin = Cm(0.9)
     section.bottom_margin = Cm(1.0)
     section.left_margin = Cm(0.9)
@@ -13810,7 +14013,7 @@ def create_turbo_balance_word(
     header.alignment = WD_TABLE_ALIGNMENT.CENTER
     header.autofit = False
     logo_cell = header.cell(0, 0).merge(header.cell(1, 0))
-    logo_cell.width = Cm(17.5)
+    logo_cell.width = Cm(10.2)
     logo_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
     logo_cell.paragraphs[0].paragraph_format.space_after = Pt(0)
     if CUSTOMER_STATEMENT_LOGO_PATH.is_file():
@@ -13824,7 +14027,7 @@ def create_turbo_balance_word(
         logo_cell.text = "IMF Microfinance Bisou Bisou"
 
     criteria_title = header.cell(0, 1)
-    criteria_title.width = Cm(9.0)
+    criteria_title.width = Cm(8.0)
     criteria_title.text = "Critères"
     criteria_title.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
     shade(criteria_title, "1F2937")
@@ -13834,15 +14037,15 @@ def create_turbo_balance_word(
         run.font.color.rgb = RGBColor(255, 255, 255)
 
     criteria_cell = header.cell(1, 1)
-    criteria_cell.width = Cm(9.0)
+    criteria_cell.width = Cm(8.0)
     criteria = criteria_cell.add_table(rows=len(criteria_rows), cols=2)
     criteria.style = "Table Grid"
     criteria.autofit = False
     for row_index, (label, value) in enumerate(criteria_rows):
         criteria.cell(row_index, 0).text = label
         criteria.cell(row_index, 1).text = value
-        criteria.cell(row_index, 0).width = Cm(4.1)
-        criteria.cell(row_index, 1).width = Cm(4.9)
+        criteria.cell(row_index, 0).width = Cm(3.4)
+        criteria.cell(row_index, 1).width = Cm(4.6)
         for run in criteria.cell(row_index, 0).paragraphs[0].runs:
             run.bold = True
             run.font.size = Pt(8)
@@ -14020,7 +14223,7 @@ def create_turbo_balance_pdf(
     try:
         from reportlab.lib import colors
         from reportlab.lib.enums import TA_CENTER, TA_RIGHT
-        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib.pagesizes import A4
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.units import cm
         from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
@@ -14094,7 +14297,7 @@ def create_turbo_balance_pdf(
     buffer = BytesIO()
     document = SimpleDocTemplate(
         buffer,
-        pagesize=landscape(A4),
+        pagesize=A4,
         leftMargin=0.8 * cm,
         rightMargin=0.8 * cm,
         topMargin=0.7 * cm,
@@ -14114,7 +14317,7 @@ def create_turbo_balance_pdf(
         [Paragraph(f"<b>{escape(label)}</b>", body_style), Paragraph(escape(value), body_style)]
         for label, value in criteria_rows
     )
-    criteria = Table(criteria_data, colWidths=[4.2 * cm, 4.8 * cm])
+    criteria = Table(criteria_data, colWidths=[3.5 * cm, 4.5 * cm])
     criteria.setStyle(TableStyle([
         ("SPAN", (0, 0), (1, 0)),
         ("BACKGROUND", (0, 0), (1, 0), colors.HexColor("#1F2937")),
@@ -14125,7 +14328,7 @@ def create_turbo_balance_pdf(
         ("TOPPADDING", (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
-    masthead = Table([[logo, criteria]], colWidths=[17.5 * cm, 9.0 * cm])
+    masthead = Table([[logo, criteria]], colWidths=[10.0 * cm, 8.0 * cm])
     masthead.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
     story.extend([masthead, Spacer(1, 0.15 * cm)])
     story.append(Paragraph("Balance auxiliaire observée - Solution M_PESA", title_style))
@@ -14203,7 +14406,7 @@ def create_turbo_balance_pdf(
             "avoirs_epargne_observes": "Avoirs épargne",
             "encours_principal_observe": "Encours principal",
         },
-        [1.6, 1.5, 3.0, 3.0, 3.0, 4.0, 4.0],
+        [1.2, 1.2, 2.5, 2.5, 2.7, 3.1, 3.1],
     )
     append_table(
         "Balance par client",
@@ -14224,7 +14427,7 @@ def create_turbo_balance_pdf(
             "solde_epargne_courante_observe": "Épargne courante",
             "solde_dat_observe": "DAT", "encours_principal_observe": "Principal crédit",
         },
-        [1.4, 3.2, 2.3, 1.0, 1.7, 1.7, 1.8, 1.9, 1.5, 1.9],
+        [1.2, 2.4, 2.0, 0.9, 1.5, 1.5, 1.6, 1.7, 1.3, 1.7],
     )
     append_table(
         "Balance des mouvements par type de compte",
@@ -14241,7 +14444,7 @@ def create_turbo_balance_pdf(
             "solde_debiteur_mouvement": "Solde débiteur",
             "solde_crediteur_mouvement": "Solde créditeur",
         },
-        [1.5, 6.0, 2.0, 3.5, 3.5, 4.0, 4.0],
+        [1.1, 4.0, 1.5, 2.4, 2.4, 3.0, 3.0],
     )
 
     def draw_footer(canvas: Any, doc: Any) -> None:
@@ -14249,7 +14452,7 @@ def create_turbo_balance_pdf(
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(colors.HexColor("#6E7D8C"))
         canvas.drawCentredString(
-            landscape(A4)[0] / 2,
+            A4[0] / 2,
             0.4 * cm,
             f"Balance générée le {generated_at:%d/%m/%Y %H:%M} - "
             f"Solution Bisou Bisou Digital - Page {doc.page}",

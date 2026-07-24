@@ -4474,6 +4474,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertTrue(word.startswith(b"PK"))
         self.assertTrue(pdf.startswith(b"%PDF-"))
         document = Document(BytesIO(word))
+        self.assertLess(document.sections[0].page_width, document.sections[0].page_height)
         word_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
         self.assertIn("Balance auxiliaire observée", word_text)
         self.assertIn("balance générale certifiée", word_text)
@@ -4508,13 +4509,16 @@ class MpesaAnalysisTests(unittest.TestCase):
         pdf_text = "\n".join(
             page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
         )
-        self.assertIn("Balance auxiliaire observée", pdf_text)
-        self.assertIn("balance générale certifiée", pdf_text)
-        self.assertIn("Type de compte Turbo", pdf_text)
-        self.assertIn("Critères", pdf_text)
-        self.assertIn("Clients :", pdf_text)
-        self.assertIn("Périmètre :", pdf_text)
-        self.assertIn("Devise(s) :", pdf_text)
+        normalized_pdf_text = " ".join(pdf_text.split())
+        first_pdf_page = PdfReader(BytesIO(pdf)).pages[0]
+        self.assertLess(float(first_pdf_page.mediabox.width), float(first_pdf_page.mediabox.height))
+        self.assertIn("Balance auxiliaire observée", normalized_pdf_text)
+        self.assertIn("balance générale certifiée", normalized_pdf_text)
+        self.assertIn("Type de compte Turbo", normalized_pdf_text)
+        self.assertIn("Critères", normalized_pdf_text)
+        self.assertIn("Clients :", normalized_pdf_text)
+        self.assertIn("Périmètre :", normalized_pdf_text)
+        self.assertIn("Devise(s) :", normalized_pdf_text)
 
     def test_mpesa_management_dashboard_builds_actionable_microfinance_views(self) -> None:
         g2 = prepare_g2_transactions(
@@ -4790,10 +4794,15 @@ class MpesaAnalysisTests(unittest.TestCase):
             ]
         )
         self.assertIn("Rapport statistique - Solution M_PESA", word_text)
+        self.assertIn("1. Clients", word_text)
+        self.assertIn("2. Comptes ouverts et comptes bloques", word_text)
+        self.assertIn("3. Credits", word_text)
+        self.assertIn("4. Transactions", word_text)
         self.assertIn("Sources et importance", word_text)
         self.assertIn("Vue d'ensemble", word_text)
         self.assertIn("Chiffre d'affaires observe", word_text)
         self.assertIn("Turbo uniquement", word_text)
+        self.assertNotIn("Graphiques de synthese", word_text)
 
     def test_turbo_financial_analysis_uses_one_event_grain_and_never_g2_amounts(self) -> None:
         prepared = _sample_customer_transaction_analysis_data()
