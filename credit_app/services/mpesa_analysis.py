@@ -6636,6 +6636,691 @@ def build_mpesa_management_dashboard(
     return report
 
 
+def _mpesa_statistics_client_key(frame: pd.DataFrame, *, prefer_phone: bool = True) -> pd.Series:
+    """Retourne une cle client stable pour les statistiques Turbo."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return pd.Series(dtype="string")
+    if prefer_phone and "msisdn1" in frame.columns:
+        phone = normalize_phone(frame["msisdn1"])
+        if phone.replace("", pd.NA).notna().any():
+            return phone
+    if prefer_phone and "msisdn" in frame.columns:
+        phone = normalize_phone(frame["msisdn"])
+        if phone.replace("", pd.NA).notna().any():
+            return phone
+    if "customer_id" in frame.columns:
+        return clean_identifier(frame["customer_id"])
+    if "msisdn1" in frame.columns:
+        return normalize_phone(frame["msisdn1"])
+    if "msisdn" in frame.columns:
+        return normalize_phone(frame["msisdn"])
+    return pd.Series("", index=frame.index, dtype="string")
+
+
+def _mpesa_statistics_source_rows(prepared: MpesaPreparedData) -> pd.DataFrame:
+    source_specs = [
+        (
+            1,
+            "Transactions [Turbo]",
+            "Indispensable",
+            prepared.transactions,
+            "created_at",
+            "Mouvements, volume d'activite, chiffre d'affaires observe, clients actifs et tendances.",
+        ),
+        (
+            2,
+            "Savings Account [Turbo]",
+            "Indispensable",
+            concat_frames_stable([prepared.current_savings, prepared.fixed_savings]),
+            "updated_at",
+            "Comptes ouverts, DAT, soldes d'epargne et positions instantanees.",
+        ),
+        (
+            3,
+            "Loans Account [Turbo]",
+            "Tres important",
+            prepared.loans,
+            "updated_at",
+            "Credits, encours, portefeuille et risque.",
+        ),
+        (
+            4,
+            "Customers [Turbo]",
+            "Important",
+            prepared.customers,
+            "created_at",
+            "Referentiel client et courbe de creation des clients.",
+        ),
+        (
+            5,
+            "Transactions [G2] (facultatif)",
+            "Facultatif utile",
+            prepared.g2_transactions,
+            "completion_time",
+            "Nom client et preuve de rapprochement; ne calcule pas les montants.",
+        ),
+        (
+            6,
+            "Clients_Perfect (facultatif)",
+            "Facultatif analytique",
+            prepared.perfect_clients,
+            "",
+            "Adoption et croisements Perfect/Turbo/G2.",
+        ),
+    ]
+    rows: list[dict[str, Any]] = []
+    for rank, source_name, importance, frame, date_column, role in source_specs:
+        available = isinstance(frame, pd.DataFrame) and not frame.empty
+        dates = (
+            pd.to_datetime(frame[date_column], errors="coerce").dropna()
+            if available and date_column and date_column in frame.columns
+            else pd.Series(dtype="datetime64[ns]")
+        )
+        rows.append(
+            {
+                "rang_importance": rank,
+                "source": source_name,
+                "niveau_importance": importance,
+                "disponible": available,
+                "nombre_lignes": int(len(frame)) if available else 0,
+                "date_min": dates.min() if not dates.empty else pd.NaT,
+                "date_max": dates.max() if not dates.empty else pd.NaT,
+                "role_statistique": role,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _mpesa_customer_reference(prepared: MpesaPreparedData) -> pd.DataFrame:
+    """Construit le referentiel client statistique, avec Customers comme priorite."""
+    if isinstance(prepared.customers, pd.DataFrame) and not prepared.customers.empty:
+        customers = prepared.customers.copy()
+        customers["client_key"] = _mpesa_statistics_client_key(customers, prefer_phone=True)
+        customers["created_at"] = pd.to_datetime(
+            customers.get("created_at", pd.Series(pd.NaT, index=customers.index)),
+            errors="coerce",
+        )
+        customers = customers.loc[customers["client_key"].astype(str).str.strip().ne("")]
+        if not customers.empty:
+            return (
+                customers.groupby("client_key", as_index=False, dropna=False)
+                .agg(
+                    date_creation=("created_at", "min"),
+                    source_client=("client_key", lambda _: "Customers [Turbo]"),
+                )
+                .reset_index(drop=True)
+            )
+
+    fallback_frames: list[pd.DataFrame] = []
+    for source_name, frame, date_column in [
+        ("Transactions [Turbo]", prepared.transactions, "created_at"),
+        ("Savings Account [Turbo]", prepared.current_savings, "created_at"),
+        ("Savings Account [Turbo]", prepared.fixed_savings, "created_at"),
+        ("Loans Account [Turbo]", prepared.loans, "created_at"),
+    ]:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        tmp = pd.DataFrame(
+            {
+                "client_key": _mpesa_statistics_client_key(frame, prefer_phone=False),
+                "date_creation": pd.to_datetime(
+                    frame.get(date_column, pd.Series(pd.NaT, index=frame.index)),
+                    errors="coerce",
+                ),
+                "source_client": source_name,
+            }
+        )
+        tmp = tmp.loc[tmp["client_key"].astype(str).str.strip().ne("")]
+        if not tmp.empty:
+            fallback_frames.append(tmp)
+    if not fallback_frames:
+        return pd.DataFrame(columns=["client_key", "date_creation", "source_client"])
+    fallback = concat_frames_stable(fallback_frames)
+    return (
+        fallback.sort_values(["client_key", "date_creation"], na_position="last")
+        .groupby("client_key", as_index=False, dropna=False)
+        .agg(
+            date_creation=("date_creation", "min"),
+            source_client=("source_client", concat_unique),
+        )
+    )
+
+
+def build_mpesa_statistics_report(
+    prepared: MpesaPreparedData,
+    *,
+    date_start: Any | None = None,
+    date_end: Any | None = None,
+    frequency: str = "Mois",
+    turbo_events: pd.DataFrame | None = None,
+    turbo_transaction_lines: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    """Construit le cockpit statistique Turbo-first de la Solution M-PESA.
+
+    G2 et Perfect restent documentes comme sources facultatives, mais les
+    montants, volumes, clients actifs, epargne, DAT et credits proviennent des
+    sources Turbo.
+    """
+    transactions = prepared.transactions if isinstance(prepared.transactions, pd.DataFrame) else pd.DataFrame()
+    transaction_dates = (
+        pd.to_datetime(transactions["created_at"], errors="coerce").dropna()
+        if not transactions.empty and "created_at" in transactions.columns
+        else pd.Series(dtype="datetime64[ns]")
+    )
+    fallback_end = _mpesa_analysis_date(prepared, date_end)
+    end_date = pd.Timestamp(fallback_end).normalize()
+    if date_start is not None and pd.notna(pd.to_datetime(date_start, errors="coerce")):
+        start_date = pd.Timestamp(pd.to_datetime(date_start, errors="coerce")).normalize()
+    elif not transaction_dates.empty:
+        start_date = pd.Timestamp(transaction_dates.min()).normalize()
+    else:
+        start_date = end_date
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    finance = build_mpesa_turbo_financial_analysis(
+        prepared,
+        date_start=start_date,
+        date_end=end_date,
+        frequency=frequency,
+        turbo_events=turbo_events,
+        turbo_transaction_lines=turbo_transaction_lines,
+    )
+    events = finance.get("operations_turbo", pd.DataFrame()).copy()
+    lines = finance.get("lignes_turbo_periode", pd.DataFrame()).copy()
+
+    source_priority = _mpesa_statistics_source_rows(prepared)
+    customer_reference = _mpesa_customer_reference(prepared)
+    total_known_clients = int(customer_reference["client_key"].nunique()) if not customer_reference.empty else 0
+    active_clients = (
+        int(clean_identifier(events["customer_id"]).replace("", pd.NA).nunique())
+        if not events.empty and "customer_id" in events.columns
+        else 0
+    )
+
+    if not customer_reference.empty:
+        growth = customer_reference.copy()
+        growth["date_creation"] = pd.to_datetime(growth["date_creation"], errors="coerce")
+        growth = growth.loc[growth["date_creation"].notna() & growth["date_creation"].le(end_date + pd.Timedelta(days=1))]
+        if not growth.empty:
+            growth["periode"] = _turbo_period_bucket(growth["date_creation"], frequency)
+            customer_growth = (
+                growth.groupby("periode", as_index=False, dropna=False)
+                .agg(nouveaux_clients_turbo=("client_key", "nunique"))
+                .sort_values("periode")
+                .reset_index(drop=True)
+            )
+            customer_growth["clients_turbo_cumules"] = customer_growth[
+                "nouveaux_clients_turbo"
+            ].cumsum()
+            customer_growth["source_principale"] = (
+                "Customers [Turbo]"
+                if "Customers [Turbo]" in set(customer_reference["source_client"].astype(str))
+                else "Sources Turbo observees"
+            )
+        else:
+            customer_growth = pd.DataFrame()
+    else:
+        customer_growth = pd.DataFrame()
+
+    flow_summary = finance.get("flux_synthese", pd.DataFrame()).copy()
+    if not flow_summary.empty:
+        for column in [
+            "montant_entrees",
+            "montant_sorties",
+            "interets_credit_observes",
+            "penalites_observees",
+            "nombre_operations",
+            "nombre_clients",
+        ]:
+            if column not in flow_summary.columns:
+                flow_summary[column] = 0.0
+            flow_summary[column] = pd.to_numeric(flow_summary[column], errors="coerce").fillna(0.0)
+        flow_summary["volume_total_transactions"] = (
+            flow_summary["montant_entrees"] + flow_summary["montant_sorties"]
+        )
+    else:
+        flow_summary = pd.DataFrame(columns=["currency_code", "volume_total_transactions"])
+
+    product_rows = pd.DataFrame()
+    if not lines.empty and {"account_type", "currency_code"}.issubset(lines.columns):
+        scoped_lines = lines.copy()
+        scoped_lines["account_type"] = clean_text(scoped_lines["account_type"]).str.upper()
+        scoped_lines["currency_code"] = clean_text(scoped_lines["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
+        scoped_lines["montant_ecriture"] = scoped_lines[["dr", "cr"]].apply(
+            lambda row: pd.to_numeric(row, errors="coerce").fillna(0).max(),
+            axis=1,
+        )
+        product_map = {
+            "INTEREST EARNED": "interets_produits_observes",
+            "LOAN PENALTY FEES": "penalites_produits_observees",
+            "BISOU COLLECTION": "part_bisou_observee",
+            "VODA COLLECTION A/C": "part_voda_observee",
+        }
+        product_lines = scoped_lines.loc[scoped_lines["account_type"].isin(product_map)].copy()
+        if not product_lines.empty:
+            product_lines["produit"] = product_lines["account_type"].map(product_map)
+            product_rows = (
+                product_lines.pivot_table(
+                    index="currency_code",
+                    columns="produit",
+                    values="montant_ecriture",
+                    aggfunc="sum",
+                    fill_value=0.0,
+                )
+                .reset_index()
+                .rename_axis(columns=None)
+            )
+
+    turnover = flow_summary.merge(product_rows, on="currency_code", how="outer") if not product_rows.empty else flow_summary
+    if not turnover.empty:
+        for column in [
+            "volume_total_transactions",
+            "interets_credit_observes",
+            "penalites_observees",
+            "interets_produits_observes",
+            "penalites_produits_observees",
+            "part_bisou_observee",
+            "part_voda_observee",
+        ]:
+            if column not in turnover.columns:
+                turnover[column] = 0.0
+            turnover[column] = pd.to_numeric(turnover[column], errors="coerce").fillna(0.0)
+        turnover["chiffre_affaires_observe"] = (
+            turnover["interets_produits_observes"].where(
+                turnover["interets_produits_observes"].ne(0),
+                turnover["interets_credit_observes"],
+            )
+            + turnover["penalites_produits_observees"].where(
+                turnover["penalites_produits_observees"].ne(0),
+                turnover["penalites_observees"],
+            )
+            + turnover["part_bisou_observee"]
+        )
+        turnover["definition_chiffre_affaires"] = (
+            "Produits financiers Turbo observes : interets + penalites + part Bisou; "
+            "montant indicatif non certifie et separe par devise."
+        )
+        turnover = turnover.sort_values("currency_code").reset_index(drop=True)
+
+    activity_evolution = finance.get("flux_evolution", pd.DataFrame()).copy()
+    if not activity_evolution.empty:
+        activity_evolution["volume_total_transactions"] = (
+            pd.to_numeric(activity_evolution.get("montant_entrees", 0), errors="coerce").fillna(0.0)
+            + pd.to_numeric(activity_evolution.get("montant_sorties", 0), errors="coerce").fillna(0.0)
+        )
+
+    current = prepared.current_savings.copy() if isinstance(prepared.current_savings, pd.DataFrame) else pd.DataFrame()
+    fixed = prepared.fixed_savings.copy() if isinstance(prepared.fixed_savings, pd.DataFrame) else pd.DataFrame()
+    portfolio_rows: list[pd.DataFrame] = []
+    for family, frame in [("Compte ouvert", current), ("DAT", fixed)]:
+        if frame.empty or "currency_code" not in frame.columns:
+            continue
+        tmp = frame.copy()
+        tmp["currency_code"] = clean_text(tmp["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
+        tmp["balance"] = numeric_column(tmp, "balance")
+        tmp["client_key"] = _mpesa_statistics_client_key(tmp, prefer_phone=False)
+        grouped = (
+            tmp.groupby("currency_code", as_index=False, dropna=False)
+            .agg(
+                famille=("currency_code", lambda _: family),
+                nombre_comptes=("balance", "size"),
+                comptes_solde_positif=("balance", lambda values: int(pd.to_numeric(values, errors="coerce").fillna(0).gt(0).sum())),
+                clients=("client_key", lambda values: clean_identifier(values).replace("", pd.NA).nunique()),
+                solde_total=("balance", "sum"),
+            )
+        )
+        portfolio_rows.append(grouped)
+    savings_portfolio = (
+        concat_frames_stable(portfolio_rows).sort_values(["currency_code", "famille"]).reset_index(drop=True)
+        if portfolio_rows
+        else pd.DataFrame()
+    )
+
+    overview_rows: list[dict[str, Any]] = []
+    currencies = sorted(
+        set(turnover.get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
+        | set(savings_portfolio.get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
+        | set(finance.get("credit_synthese", pd.DataFrame()).get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
+    )
+    for currency in currencies:
+        turnover_row = turnover.loc[turnover["currency_code"].eq(currency)].head(1) if not turnover.empty else pd.DataFrame()
+        overview_rows.append(
+            {
+                "currency_code": currency,
+                "clients_turbo_connus": total_known_clients,
+                "clients_turbo_actifs": active_clients,
+                "operations": float(turnover_row.iloc[0].get("nombre_operations", 0)) if not turnover_row.empty else 0.0,
+                "volume_total_transactions": float(turnover_row.iloc[0].get("volume_total_transactions", 0)) if not turnover_row.empty else 0.0,
+                "chiffre_affaires_observe": float(turnover_row.iloc[0].get("chiffre_affaires_observe", 0)) if not turnover_row.empty else 0.0,
+            }
+        )
+    overview = pd.DataFrame(overview_rows)
+    if overview.empty:
+        overview = pd.DataFrame(
+            [
+                {
+                    "currency_code": "Toutes",
+                    "clients_turbo_connus": total_known_clients,
+                    "clients_turbo_actifs": active_clients,
+                    "operations": 0.0,
+                    "volume_total_transactions": 0.0,
+                    "chiffre_affaires_observe": 0.0,
+                }
+            ]
+        )
+
+    return {
+        "date_debut": start_date,
+        "date_fin": end_date,
+        "frequence": frequency,
+        "priorite_sources": source_priority,
+        "clients_reference": customer_reference,
+        "clients_croissance": customer_growth,
+        "vue_ensemble": overview,
+        "chiffre_affaires": turnover,
+        "activite_evolution": activity_evolution,
+        "epargne_dat_portefeuille": savings_portfolio,
+        "credit_synthese": finance.get("credit_synthese", pd.DataFrame()),
+        "clients_volume_top": finance.get("concentration_transactions_clients", pd.DataFrame()),
+        "operations_turbo": events,
+        "definitions": pd.DataFrame(
+            [
+                {
+                    "indicateur": "Clients Turbo actifs",
+                    "definition": "Clients ayant au moins une operation Turbo sur la periode filtree.",
+                    "source": "Transactions [Turbo]",
+                },
+                {
+                    "indicateur": "Clients Turbo connus",
+                    "definition": "Clients du fichier Customers [Turbo], sinon clients observes dans les sources Turbo chargees.",
+                    "source": "Customers [Turbo] puis sources Turbo observees",
+                },
+                {
+                    "indicateur": "Chiffre d'affaires observe",
+                    "definition": "Interets + penalites + part Bisou observes dans Transactions [Turbo], par devise; indicateur non certifie.",
+                    "source": "Transactions [Turbo]",
+                },
+                {
+                    "indicateur": "Volume total des transactions",
+                    "definition": "Entrees + sorties observees au grain evenement Turbo consolide, par devise.",
+                    "source": "Transactions [Turbo]",
+                },
+            ]
+        ),
+    }
+
+
+def create_mpesa_statistics_word(
+    statistics_report: dict[str, Any],
+    *,
+    generated_at: pd.Timestamp | None = None,
+) -> bytes:
+    """Genere le rapport Word statistique Turbo-first."""
+    try:
+        from docx import Document
+        from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.shared import Cm, Pt, RGBColor
+    except ImportError as exc:
+        raise RuntimeError("La dependance python-docx est requise pour generer le rapport statistique Word.") from exc
+
+    generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
+    start_date = pd.to_datetime(statistics_report.get("date_debut"), errors="coerce")
+    end_date = pd.to_datetime(statistics_report.get("date_fin"), errors="coerce")
+    period_text = (
+        f"{start_date:%d/%m/%Y} au {end_date:%d/%m/%Y}"
+        if pd.notna(start_date) and pd.notna(end_date)
+        else "Non disponible"
+    )
+    frequency_text = str(statistics_report.get("frequence", "") or "Non disponible")
+
+    document = Document()
+    section = document.sections[0]
+    section.top_margin = Cm(1.0)
+    section.bottom_margin = Cm(1.0)
+    section.left_margin = Cm(1.0)
+    section.right_margin = Cm(1.0)
+    styles = document.styles
+    styles["Normal"].font.name = "Aptos"
+    styles["Normal"].font.size = Pt(8.5)
+    styles["Title"].font.name = "Aptos Display"
+    styles["Title"].font.size = Pt(15)
+    styles["Title"].font.color.rgb = RGBColor(24, 41, 58)
+
+    def set_cell_shading(cell: Any, fill: str) -> None:
+        cell_properties = cell._tc.get_or_add_tcPr()
+        shading = OxmlElement("w:shd")
+        shading.set(qn("w:fill"), fill)
+        cell_properties.append(shading)
+
+    def set_repeat_header(row: Any) -> None:
+        row_properties = row._tr.get_or_add_trPr()
+        repeat_header = OxmlElement("w:tblHeader")
+        repeat_header.set(qn("w:val"), "true")
+        row_properties.append(repeat_header)
+
+    header = document.add_table(rows=2, cols=2)
+    header.alignment = WD_TABLE_ALIGNMENT.CENTER
+    header.autofit = False
+    brand_cell = header.cell(0, 0).merge(header.cell(1, 0))
+    brand_paragraph = brand_cell.paragraphs[0]
+    if CUSTOMER_STATEMENT_LOGO_PATH.is_file():
+        try:
+            brand_paragraph.add_run().add_picture(str(CUSTOMER_STATEMENT_LOGO_PATH), width=Cm(4.6))
+        except (OSError, ValueError):
+            brand_paragraph.add_run("IMF Microfinance Bisou Bisou").bold = True
+    else:
+        brand_paragraph.add_run("IMF Microfinance Bisou Bisou").bold = True
+    criteria_title = header.cell(0, 1)
+    criteria_title.text = "Criteres"
+    criteria_title.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    set_cell_shading(criteria_title, "1F2937")
+    for run in criteria_title.paragraphs[0].runs:
+        run.bold = True
+        run.font.color.rgb = RGBColor(255, 255, 255)
+    criteria = header.cell(1, 1).add_table(rows=3, cols=2)
+    for row_index, (label, value) in enumerate(
+        [
+            ("Periode :", period_text),
+            ("Frequence :", frequency_text),
+            ("Source des montants :", "Turbo uniquement"),
+        ]
+    ):
+        criteria.cell(row_index, 0).text = label
+        criteria.cell(row_index, 1).text = str(value)
+        for run in criteria.cell(row_index, 0).paragraphs[0].runs:
+            run.bold = True
+            run.font.size = Pt(8)
+        for run in criteria.cell(row_index, 1).paragraphs[0].runs:
+            run.font.size = Pt(8)
+
+    title = document.add_paragraph(style="Title")
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.space_before = Pt(5)
+    title.paragraph_format.space_after = Pt(6)
+    title.add_run("Rapport statistique - Solution M_PESA")
+
+    intro = document.add_paragraph()
+    intro.paragraph_format.space_after = Pt(6)
+    intro.add_run(
+        "Ce rapport restitue les statistiques operationnelles issues du portail Turbo. "
+        "Source des montants : Turbo uniquement. "
+        "G2 et Perfect sont des sources facultatives d'enrichissement ou de controle; "
+        "ils ne modifient pas les montants, les soldes, les DAT ni les credits."
+    )
+
+    def format_value(value: Any, column: str) -> str:
+        if _is_empty_text(value):
+            return ""
+        if isinstance(value, (bool, np.bool_)):
+            return "Oui" if bool(value) else "Non"
+        if "date" in column.lower() or column in {"periode"}:
+            parsed = pd.to_datetime(value, errors="coerce")
+            return f"{parsed:%d/%m/%Y}" if pd.notna(parsed) else str(value)
+        if any(
+            token in column.lower()
+            for token in ["montant", "volume", "solde", "chiffre", "interet", "penalite", "part_", "encours"]
+        ):
+            return _pdf_number(value, decimals=2)
+        if any(token in column.lower() for token in ["nombre", "clients", "operations", "comptes", "rang"]):
+            return _pdf_number(value, decimals=0)
+        return str(value)
+
+    def add_title(text: str) -> None:
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.space_before = Pt(7)
+        paragraph.paragraph_format.space_after = Pt(3)
+        run = paragraph.add_run(text)
+        run.bold = True
+        run.font.size = Pt(10)
+        run.font.color.rgb = RGBColor(24, 63, 91)
+
+    def add_table(frame: pd.DataFrame, labels: dict[str, str], *, max_rows: int = 30) -> None:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            paragraph = document.add_paragraph("Aucune donnee disponible.")
+            paragraph.paragraph_format.space_after = Pt(4)
+            return
+        columns = [column for column in labels if column in frame.columns]
+        if not columns:
+            paragraph = document.add_paragraph("Aucune colonne exploitable.")
+            paragraph.paragraph_format.space_after = Pt(4)
+            return
+        table = document.add_table(rows=1, cols=len(columns))
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        table.style = "Table Grid"
+        set_repeat_header(table.rows[0])
+        for index, column in enumerate(columns):
+            cell = table.rows[0].cells[index]
+            cell.text = labels[column]
+            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+            set_cell_shading(cell, "1F2937")
+            for paragraph in cell.paragraphs:
+                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                for run in paragraph.runs:
+                    run.bold = True
+                    run.font.size = Pt(7)
+                    run.font.color.rgb = RGBColor(255, 255, 255)
+        for _, source_row in frame.head(max_rows).iterrows():
+            row_cells = table.add_row().cells
+            for index, column in enumerate(columns):
+                row_cells[index].text = format_value(source_row.get(column), column)
+                row_cells[index].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                for paragraph in row_cells[index].paragraphs:
+                    for run in paragraph.runs:
+                        run.font.size = Pt(7)
+        if len(frame) > max_rows:
+            note = document.add_paragraph(
+                f"Tableau limite aux {max_rows} premieres lignes sur {len(frame)}."
+            )
+            note.paragraph_format.space_after = Pt(4)
+            for run in note.runs:
+                run.italic = True
+                run.font.size = Pt(7)
+
+    add_title("1. Sources et importance")
+    add_table(
+        statistics_report.get("priorite_sources", pd.DataFrame()),
+        {
+            "rang_importance": "Priorite",
+            "source": "Fichier",
+            "niveau_importance": "Importance",
+            "disponible": "Charge",
+            "nombre_lignes": "Lignes",
+            "role_statistique": "Role statistique",
+        },
+        max_rows=10,
+    )
+    add_title("2. Vue d'ensemble")
+    add_table(
+        statistics_report.get("vue_ensemble", pd.DataFrame()),
+        {
+            "currency_code": "Devise",
+            "clients_turbo_connus": "Clients connus",
+            "clients_turbo_actifs": "Clients actifs",
+            "operations": "Operations",
+            "volume_total_transactions": "Volume total",
+            "chiffre_affaires_observe": "Chiffre d'affaires observe",
+        },
+    )
+    add_title("3. Chiffre d'affaires observe et volume")
+    add_table(
+        statistics_report.get("chiffre_affaires", pd.DataFrame()),
+        {
+            "currency_code": "Devise",
+            "montant_entrees": "Entrees",
+            "montant_sorties": "Sorties",
+            "volume_total_transactions": "Volume total",
+            "interets_credit_observes": "Interets",
+            "penalites_observees": "Penalites",
+            "part_bisou_observee": "Part Bisou",
+            "chiffre_affaires_observe": "CA observe",
+        },
+    )
+    add_title("4. Croissance des clients Turbo")
+    add_table(
+        statistics_report.get("clients_croissance", pd.DataFrame()),
+        {
+            "periode": "Periode",
+            "nouveaux_clients_turbo": "Nouveaux clients",
+            "clients_turbo_cumules": "Clients cumules",
+            "source_principale": "Source",
+        },
+        max_rows=60,
+    )
+    add_title("5. Epargne et DAT")
+    add_table(
+        statistics_report.get("epargne_dat_portefeuille", pd.DataFrame()),
+        {
+            "currency_code": "Devise",
+            "famille": "Famille",
+            "nombre_comptes": "Comptes",
+            "comptes_solde_positif": "Comptes positifs",
+            "clients": "Clients",
+            "solde_total": "Solde total",
+        },
+    )
+    add_title("6. Credit")
+    add_table(
+        statistics_report.get("credit_synthese", pd.DataFrame()),
+        {
+            "currency_code": "Devise",
+            "nombre_credits": "Credits",
+            "nombre_clients": "Clients",
+            "montant_initial": "Montant initial",
+            "encours_total": "Encours",
+            "par_30j_pct": "PAR 30j",
+        },
+    )
+    add_title("7. Definitions")
+    add_table(
+        statistics_report.get("definitions", pd.DataFrame()),
+        {
+            "indicateur": "Indicateur",
+            "definition": "Definition",
+            "source": "Source",
+        },
+    )
+
+    footer = section.footer.paragraphs[0]
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer_run = footer.add_run(
+        f"Rapport genere le {generated_at:%d/%m/%Y %H:%M} - Solution Bisou Bisou Digital"
+    )
+    footer_run.font.size = Pt(8)
+    footer_run.font.color.rgb = RGBColor(110, 125, 140)
+
+    document.core_properties.title = "Rapport statistique - Solution M_PESA"
+    document.core_properties.subject = "Statistiques operationnelles Turbo"
+    document.core_properties.author = "Solution Controle Interne"
+    buffer = BytesIO()
+    document.save(buffer)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 def search_customers(query: object, prepared: MpesaPreparedData) -> pd.DataFrame:
     text = str(query).strip()
     if not text:

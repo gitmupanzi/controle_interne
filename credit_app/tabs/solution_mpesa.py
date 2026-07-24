@@ -38,6 +38,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_dat_maturity_analysis,
     build_loan_savings_reconciliation,
     build_mpesa_management_dashboard,
+    build_mpesa_statistics_report,
     build_turbo_operation_events,
     build_mpesa_statement,
     build_savings_accounts_reconciliation,
@@ -48,6 +49,7 @@ from credit_app.services.mpesa_analysis import (
     build_filtered_turbo_balance_report,
     build_perfect_client_crosscheck,
     create_excel_export,
+    create_mpesa_statistics_word,
     create_customer_client_statement_pdf,
     create_customer_client_statement_word,
     create_customer_statement_pdf,
@@ -95,13 +97,13 @@ MPESA_FINANCE_TURBO_TAB_LABELS = (
 
 MPESA_SOLUTION_TAB_LABELS = (
     "Importation",
-    "Finance Turbo",
     "Extrait client",
+    "Finance Turbo",
     "DAT",
     "G2 / DAT",
-    "Perfect_client",
     "Detail des credits",
-    "Controle des donnees",
+    "Perfect_client",
+    "Statistique",
 )
 
 
@@ -509,6 +511,29 @@ def _build_mpesa_management_dashboard_cached(
 
 @st.cache_data(
     show_spinner=False,
+    max_entries=8,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _build_mpesa_statistics_report_cached(
+    prepared: MpesaPreparedData,
+    date_start: object,
+    date_end: object,
+    frequency: str,
+) -> dict[str, Any]:
+    operation_journal = _build_turbo_operation_events_cached(prepared)
+    scoped_prepared = _prepared_data_as_of(prepared, date_end)
+    return build_mpesa_statistics_report(
+        scoped_prepared,
+        date_start=date_start,
+        date_end=date_end,
+        frequency=frequency,
+        turbo_events=operation_journal["events"],
+        turbo_transaction_lines=operation_journal["lines"],
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
     max_entries=16,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
@@ -866,6 +891,11 @@ def _render_import_tab(prepared: MpesaPreparedData, missing: dict[str, list[str]
         if not frame.empty
     )
     st.caption(f"Colonnes `Unnamed` restantes apres nettoyage : {unnamed_count}.")
+    render_panel_title("Controle des donnees")
+    st.caption(
+        "Les controles techniques et les anomalies Transactions Turbo sont maintenant integres a l'importation."
+    )
+    _render_diagnostics_content(prepared, None)
 
 
 def _filter_statement(
@@ -5326,8 +5356,7 @@ def _render_accounting_export(
         )
 
 
-@st.fragment
-def _render_diagnostics_tab(prepared: MpesaPreparedData, report: dict[str, Any] | None) -> None:
+def _render_diagnostics_content(prepared: MpesaPreparedData, report: dict[str, Any] | None) -> None:
     diagnostics = report["diagnostics"] if report is not None else build_diagnostics(prepared)
     diagnostics_view = _apply_local_multiselect_filters(
         diagnostics,
@@ -5398,6 +5427,430 @@ def _render_diagnostics_tab(prepared: MpesaPreparedData, report: dict[str, Any] 
                     "Le tableau est limite aux 1 000 premieres anomalies; "
                     f"{len(anomalies) - 1000} ligne(s) supplementaire(s) ne sont pas affichees."
                 )
+
+
+@st.fragment
+def _render_diagnostics_tab(prepared: MpesaPreparedData, report: dict[str, Any] | None) -> None:
+    _render_diagnostics_content(prepared, report)
+
+
+@st.fragment
+def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
+    render_summary_box(
+        "Statistique Turbo",
+        [
+            "Les statistiques financieres et commerciales sont calculees depuis les sources Turbo.",
+            "Transactions [G2] et Clients_Perfect restent facultatifs : ils enrichissent ou controlent, sans modifier les montants.",
+            "Le chiffre d'affaires affiche est observe et non certifie : il reprend les produits financiers Turbo detectables, separes par devise.",
+        ],
+    )
+
+    date_candidates: list[pd.Series] = []
+    if not prepared.transactions.empty and "created_at" in prepared.transactions.columns:
+        date_candidates.append(pd.to_datetime(prepared.transactions["created_at"], errors="coerce").dropna())
+    if not prepared.customers.empty and "created_at" in prepared.customers.columns:
+        date_candidates.append(pd.to_datetime(prepared.customers["created_at"], errors="coerce").dropna())
+    combined_dates = (
+        pd.concat(date_candidates, ignore_index=True).dropna()
+        if date_candidates
+        else pd.Series(dtype="datetime64[ns]")
+    )
+    if combined_dates.empty:
+        st.info(
+            "Chargez au moins Transactions [Turbo] ou Customers [Turbo] avec une date exploitable pour produire les statistiques."
+        )
+        source_preview = build_mpesa_statistics_report(prepared).get("priorite_sources", pd.DataFrame())
+        if not source_preview.empty:
+            st.dataframe(source_preview, width="stretch", hide_index=True)
+        return
+
+    minimum_date = combined_dates.min().date()
+    maximum_date = combined_dates.max().date()
+    default_end = maximum_date
+    default_start = max(
+        minimum_date,
+        (pd.Timestamp(default_end) - pd.Timedelta(days=90)).date(),
+    )
+
+    with st.form("mpesa_statistics_filters"):
+        start_col, end_col, frequency_col, top_col = st.columns([1.0, 1.0, 1.0, 1.0])
+        with start_col:
+            selected_start_date = st.date_input(
+                "Date de debut",
+                value=default_start,
+                min_value=minimum_date,
+                max_value=maximum_date,
+                key=(
+                    f"mpesa_statistics_start_{minimum_date:%Y%m%d}_"
+                    f"{maximum_date:%Y%m%d}_{len(combined_dates)}"
+                ),
+                format="DD/MM/YYYY",
+            )
+        with end_col:
+            selected_end_date = st.date_input(
+                "Date de fin",
+                value=default_end,
+                min_value=minimum_date,
+                max_value=maximum_date,
+                key=(
+                    f"mpesa_statistics_end_{minimum_date:%Y%m%d}_"
+                    f"{maximum_date:%Y%m%d}_{len(combined_dates)}"
+                ),
+                format="DD/MM/YYYY",
+            )
+        with frequency_col:
+            frequency = st.selectbox(
+                "Frequence",
+                ["Jour", "Semaine", "Mois"],
+                index=2,
+                key="mpesa_statistics_frequency",
+            )
+        with top_col:
+            top_n_clients = st.number_input(
+                "Top clients affiches",
+                min_value=5,
+                max_value=200,
+                value=50,
+                step=5,
+                key="mpesa_statistics_top_n_clients",
+            )
+        st.form_submit_button("Actualiser les statistiques", type="primary")
+
+    if selected_start_date > selected_end_date:
+        st.error("La date de debut doit etre anterieure ou egale a la date de fin.", icon=":material/error:")
+        return
+
+    with st.spinner("Construction des statistiques Turbo..."):
+        report = _build_mpesa_statistics_report_cached(
+            prepared,
+            selected_start_date,
+            selected_end_date,
+            frequency,
+        )
+
+    currency_options: set[str] = set()
+    for value in report.values():
+        if isinstance(value, pd.DataFrame) and not value.empty and "currency_code" in value.columns:
+            currency_options.update(
+                item
+                for item in value["currency_code"].dropna().astype(str).unique()
+                if item.strip()
+            )
+    currency_options_sorted = sorted(currency_options)
+    selected_currencies = st.multiselect(
+        "Devises affichees",
+        options=currency_options_sorted,
+        default=currency_options_sorted,
+        key="mpesa_statistics_currencies",
+        help="Une selection vide conserve toutes les devises.",
+    )
+    report_view = _filter_pilotage_currencies(report, selected_currencies)
+
+    overview = report_view.get("vue_ensemble", pd.DataFrame())
+    activity = report_view.get("activite_evolution", pd.DataFrame())
+    growth = report_view.get("clients_croissance", pd.DataFrame())
+    turnover = report_view.get("chiffre_affaires", pd.DataFrame())
+    portfolio = report_view.get("epargne_dat_portefeuille", pd.DataFrame())
+    credit_summary = report_view.get("credit_synthese", pd.DataFrame())
+    top_clients = report_view.get("clients_volume_top", pd.DataFrame())
+    source_priority = report_view.get("priorite_sources", pd.DataFrame())
+
+    def _sum_column(frame: pd.DataFrame, column: str) -> float:
+        if frame.empty or column not in frame.columns:
+            return 0.0
+        return float(pd.to_numeric(frame[column], errors="coerce").fillna(0).sum())
+
+    def _scalar_number(value: Any) -> float:
+        numeric_value = pd.to_numeric(value, errors="coerce")
+        if pd.isna(numeric_value):
+            return 0.0
+        return float(numeric_value)
+
+    def _safe_rate(numerator: float, denominator: float) -> str:
+        if not denominator or pd.isna(denominator):
+            return "-"
+        return f"{100 * numerator / denominator:.2f}%"
+
+    if not source_priority.empty:
+        render_panel_title("Sources et importance")
+        st.dataframe(
+            source_priority,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "rang_importance": st.column_config.NumberColumn("Priorite", format="%d"),
+                "source": st.column_config.TextColumn("Fichier", pinned=True),
+                "niveau_importance": st.column_config.TextColumn("Importance"),
+                "disponible": st.column_config.CheckboxColumn("Charge"),
+                "nombre_lignes": st.column_config.NumberColumn("Lignes", format="%d"),
+                "role_statistique": st.column_config.TextColumn("Role statistique"),
+            },
+        )
+
+    with st.expander("1. Clients", expanded=True):
+        st.caption(
+            "Ce bloc mesure la base client Turbo : clients connus, clients actifs et evolution des creations."
+        )
+        first_row = overview.iloc[0] if not overview.empty else pd.Series(dtype=object)
+        known_clients = _scalar_number(first_row.get("clients_turbo_connus", 0))
+        active_clients = _scalar_number(first_row.get("clients_turbo_actifs", 0))
+        render_kpi_cards(
+            [
+                (
+                    "Clients Turbo connus",
+                    _format_count(known_clients),
+                    "Customers [Turbo], sinon sources Turbo observees",
+                    "navy",
+                ),
+                (
+                    "Clients Turbo actifs",
+                    _format_count(active_clients),
+                    "Au moins une operation Turbo sur la periode",
+                    "blue",
+                ),
+                (
+                    "Taux d'activite",
+                    _safe_rate(active_clients, known_clients),
+                    "Clients actifs / clients connus",
+                    "green",
+                ),
+            ]
+        )
+        if not activity.empty and {"periode_analyse", "currency_code", "nombre_clients"}.issubset(activity.columns):
+            clients_chart = px.line(
+                activity,
+                x="periode_analyse",
+                y="nombre_clients",
+                color="currency_code",
+                markers=True,
+                labels={
+                    "periode_analyse": "Periode",
+                    "nombre_clients": "Clients actifs",
+                    "currency_code": "Devise",
+                },
+            )
+            style_standard_line(clients_chart, height=410, tickangle=-20)
+            st.markdown("**Clients actifs par periode**")
+            st.caption("Clients avec au moins une operation Turbo sur la periode filtree.")
+            st_plot(
+                clients_chart,
+                key="mpesa_statistics_active_clients_trend",
+                height=410,
+            )
+        if not growth.empty:
+            growth_chart = px.line(
+                growth,
+                x="periode",
+                y="clients_turbo_cumules",
+                markers=True,
+                labels={"periode": "Periode", "clients_turbo_cumules": "Clients cumules"},
+            )
+            style_standard_line(growth_chart, height=390, tickangle=-20)
+            st.markdown("**Evolution du nombre de clients Turbo**")
+            st.caption(
+                "Base Customers [Turbo] lorsqu'elle est disponible, sinon premiere observation dans les sources Turbo."
+            )
+            st_plot(
+                growth_chart,
+                key="mpesa_statistics_customer_growth",
+                height=390,
+            )
+            with st.expander("Afficher la table de croissance clients", expanded=False):
+                st.dataframe(growth, width="stretch", hide_index=True)
+
+    with st.expander("2. Comptes ouverts et comptes bloques", expanded=False):
+        st.caption(
+            "Ce bloc suit les positions d'epargne Turbo : comptes ouverts, DAT/comptes bloques, soldes et clients concernes."
+        )
+        if portfolio.empty:
+            st.info("Savings Account [Turbo] est requis pour analyser les comptes ouverts et bloques.")
+        else:
+            family = portfolio.get("famille", pd.Series("", index=portfolio.index)).astype(str)
+            open_accounts = portfolio.loc[family.eq("Compte ouvert")]
+            fixed_accounts = portfolio.loc[family.eq("DAT")]
+            render_kpi_cards(
+                [
+                    (
+                        "Comptes ouverts",
+                        _format_count(_sum_column(open_accounts, "nombre_comptes")),
+                        "NORMAL SAVINGS",
+                        "blue",
+                    ),
+                    (
+                        "Solde comptes ouverts",
+                        _format_amount(_sum_column(open_accounts, "solde_total")),
+                        "Somme des soldes par devise filtree",
+                        "green",
+                    ),
+                    (
+                        "Comptes bloques / DAT",
+                        _format_count(_sum_column(fixed_accounts, "nombre_comptes")),
+                        "FIXED SAVINGS",
+                        "navy",
+                    ),
+                    (
+                        "Solde comptes bloques",
+                        _format_amount(_sum_column(fixed_accounts, "solde_total")),
+                        "Capital bloque observe",
+                        "orange",
+                    ),
+                ]
+            )
+            st.dataframe(
+                portfolio,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                    "solde_total": st.column_config.NumberColumn("Solde total", format="%.2f"),
+                },
+            )
+
+    with st.expander("3. Credits", expanded=False):
+        st.caption(
+            "Ce bloc suit le portefeuille credit Turbo : credits accordes, encours, remboursements et risque observe."
+        )
+        if credit_summary.empty:
+            st.info("Loans Account [Turbo] est requis pour analyser les credits.")
+        else:
+            encours_total = _sum_column(credit_summary, "encours_total")
+            encours_retard_30j = _sum_column(credit_summary, "encours_retard_30j")
+            render_kpi_cards(
+                [
+                    (
+                        "Credits",
+                        _format_count(_sum_column(credit_summary, "nombre_credits")),
+                        "Nombre de credits Turbo",
+                        "navy",
+                    ),
+                    (
+                        "Montant accorde",
+                        _format_amount(_sum_column(credit_summary, "montant_credits")),
+                        "Somme loan_amount",
+                        "blue",
+                    ),
+                    (
+                        "Encours credit",
+                        _format_amount(encours_total),
+                        "Position Loans Account [Turbo]",
+                        "orange",
+                    ),
+                    (
+                        "PAR 30j",
+                        _safe_rate(encours_retard_30j, encours_total),
+                        "Encours en retard 30j / encours total",
+                        "red",
+                    ),
+                ]
+            )
+            st.dataframe(
+                credit_summary,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                },
+            )
+
+    with st.expander("4. Transactions", expanded=False):
+        st.caption(
+            "Ce bloc analyse l'activite transactionnelle Turbo : volume, chiffre d'affaires observe, operations et concentration client."
+        )
+        total_operations = _sum_column(overview, "operations")
+        transaction_cards: list[tuple[str, str, str, str]] = [
+            (
+                "Operations Turbo",
+                _format_count(total_operations),
+                "Evenements consolides sur la periode",
+                "green",
+            )
+        ]
+        if not overview.empty:
+            for _, row in overview.iterrows():
+                currency = str(row.get("currency_code", "")).strip() or "Devise"
+                transaction_cards.append(
+                    (
+                        f"Volume total [{currency}]",
+                        _format_amount(row.get("volume_total_transactions", 0)),
+                        "Entrees + sorties observees",
+                        "orange",
+                    )
+                )
+                transaction_cards.append(
+                    (
+                        f"CA observe [{currency}]",
+                        _format_amount(row.get("chiffre_affaires_observe", 0)),
+                        "Interets + penalites + part Bisou",
+                        "green",
+                    )
+                )
+        render_kpi_cards(transaction_cards)
+        if not activity.empty and {"periode_analyse", "currency_code", "volume_total_transactions"}.issubset(activity.columns):
+            chart = px.line(
+                activity,
+                x="periode_analyse",
+                y="volume_total_transactions",
+                color="currency_code",
+                markers=True,
+                labels={
+                    "periode_analyse": "Periode",
+                    "volume_total_transactions": "Volume total",
+                    "currency_code": "Devise",
+                },
+            )
+            style_standard_line(chart, height=430, tickangle=-20)
+            st.markdown("**Volume total des transactions par periode**")
+            st.caption("Entrees + sorties observees dans Transactions [Turbo], separees par devise.")
+            st_plot(
+                chart,
+                key="mpesa_statistics_activity_trend",
+                height=430,
+            )
+        if not turnover.empty:
+            st.markdown("**Chiffre d'affaires observe et volume**")
+            st.caption(
+                "Le chiffre d'affaires observe est indicatif : interets + penalites + part Bisou detectes dans Transactions [Turbo]."
+            )
+            st.dataframe(
+                turnover,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                    "volume_total_transactions": st.column_config.NumberColumn("Volume total", format="%.2f"),
+                    "chiffre_affaires_observe": st.column_config.NumberColumn("CA observe", format="%.2f"),
+                },
+            )
+        if not top_clients.empty:
+            st.markdown("**Top clients par volume de transactions**")
+            top_view = top_clients.sort_values(["currency_code", "rang_volume"]).head(
+                int(top_n_clients)
+            )
+            st.dataframe(
+                top_view,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                    "volume_total": st.column_config.NumberColumn("Volume total", format="%.2f"),
+                },
+            )
+
+    render_panel_title("Export")
+    start_token = pd.Timestamp(selected_start_date).strftime("%Y%m%d")
+    end_token = pd.Timestamp(selected_end_date).strftime("%Y%m%d")
+    try:
+        word_bytes = create_mpesa_statistics_word(report_view)
+        st.download_button(
+            "Telecharger le rapport statistique Word [Turbo]",
+            data=word_bytes,
+            file_name=f"rapport_statistique_solution_mpesa_turbo_{start_token}_{end_token}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            width="content",
+            key=f"mpesa_statistics_word_{start_token}_{end_token}",
+        )
+    except RuntimeError as exc:
+        st.warning(str(exc))
 
 
 def render_solution_mpesa_tab() -> None:
@@ -5487,36 +5940,110 @@ def render_solution_mpesa_tab() -> None:
             )
 
     with st.expander("Voir les colonnes attendues pour les fichiers", expanded=False):
-        expected_transactions, expected_savings, expected_customers = st.columns(3, gap="small")
-        with expected_transactions:
-            st.markdown("**Transactions [Turbo]**")
-            st.code(", ".join(sorted(TRANSACTION_REQUIRED_COLUMNS)), language="text")
-            st.markdown("**Transactions [G2] (facultatif)**")
-            st.code(", ".join(sorted(G2_TRANSACTION_REQUIRED_COLUMNS)), language="text")
-        with expected_savings:
-            st.markdown("**Savings Account [Turbo]**")
-            st.code(
-                "savings_id, customer_id, msisdn1, product_name, product_description, "
-                "balance, currency_code, date_approved, maturity_date, created_at, updated_at",
-                language="text",
-            )
-            st.caption(
-                "Alternative compatible : sélectionner ensemble les exports résumés Customers with Current "
-                "Savings Account et Customers with Fixed Savings Account. Cette alternative ne contient que "
-                "les comptes à solde positif."
-            )
-        with expected_customers:
-            st.markdown("**Loans Account [Turbo]**")
-            st.code(
-                "customer_id, loan_id, savings_account_id, msisdn1, currency_code, loan_amount, "
-                "loan_balance, amount_paid, outstanding_principle, outstanding_interest, "
-                "outstanding_penalty_fees, status_name, due_date",
-                language="text",
-            )
-            st.markdown("**Customers [Turbo]**")
-            st.code(", ".join(sorted(CUSTOMERS_REQUIRED_COLUMNS)), language="text")
-            st.markdown("**Clients_Perfect**")
-            st.code(", ".join(sorted(PERFECT_CLIENTS_REQUIRED_COLUMNS)), language="text")
+        st.caption(
+            "Cette grille aide à comprendre quels fichiers pilotent le cœur financier Turbo "
+            "et lesquels servent seulement au contrôle ou à l'analyse complémentaire."
+        )
+        expected_sources = pd.DataFrame(
+            [
+                {
+                    "Priorité": 1,
+                    "Fichier": "Transactions [Turbo]",
+                    "Importance": "Indispensable",
+                    "Pourquoi": (
+                        "Source principale des mouvements, chiffre d'affaires, dépôts, retraits, "
+                        "remboursements, crédits décaissés et activité dans le temps."
+                    ),
+                    "Colonnes attendues": ", ".join(sorted(TRANSACTION_REQUIRED_COLUMNS)),
+                },
+                {
+                    "Priorité": 2,
+                    "Fichier": "Savings Account [Turbo]",
+                    "Importance": "Indispensable",
+                    "Pourquoi": (
+                        "Source des comptes ouverts, DAT, soldes d'épargne, comptes actifs/inactifs "
+                        "et échéances DAT."
+                    ),
+                    "Colonnes attendues": (
+                        "id, savings_id, customer_id, msisdn1, product_id, product_name, "
+                        "product_description, currency_code, balance, status, date_closed, "
+                        "date_approved, date_activated, is_interest_calculated, "
+                        "last_interest_calculation_date, next_interest_calculation_date, "
+                        "maturity_date, interest_earned, voda_interest, fees_due, locked_balance, "
+                        "date_locked, created_at, updated_at"
+                    ),
+                },
+                {
+                    "Priorité": 3,
+                    "Fichier": "Loans Account [Turbo]",
+                    "Importance": "Très important",
+                    "Pourquoi": (
+                        "Source des crédits accordés, encours, impayés, remboursements attendus "
+                        "et portefeuille crédit."
+                    ),
+                    "Colonnes attendues": (
+                        "id, loan_id, customer_id, customer, currency_code, loan_product_id, "
+                        "savings_account_id, repayment_installments, repayment_period, "
+                        "repayment_period_unit, loan_amount, loan_balance, amount_paid, "
+                        "outstanding_principle, outstanding_setup_fees, outstanding_interest, "
+                        "outstanding_penalty_fees, interest_earned, status_name, defaulted, "
+                        "interest_calculated, is_rollover, is_grace_period, due_date, "
+                        "last_repayment_date, last_interest_calc_date, created_at, updated_at, msisdn1"
+                    ),
+                },
+                {
+                    "Priorité": 4,
+                    "Fichier": "Customers [Turbo]",
+                    "Importance": "Important",
+                    "Pourquoi": (
+                        "Permet de mesurer les créations de clients dans le temps et le nombre "
+                        "de clients Turbo connus."
+                    ),
+                    "Colonnes attendues": ", ".join(sorted(CUSTOMERS_REQUIRED_COLUMNS)),
+                },
+                {
+                    "Priorité": 5,
+                    "Fichier": "Transactions [G2]",
+                    "Importance": "Facultatif utile",
+                    "Pourquoi": (
+                        "Sert surtout à enrichir le nom client et contrôler les écritures. "
+                        "Ne doit pas piloter les montants."
+                    ),
+                    "Colonnes attendues": (
+                        "Receipt No., Completion Time, Initiation Time, Details, Transaction Status, "
+                        "Currency, Paid In, Withdrawn, Balance, Reason Type, Opposite Party, "
+                        "Linked Transaction ID"
+                    ),
+                },
+                {
+                    "Priorité": 6,
+                    "Fichier": "Clients_Perfect",
+                    "Importance": "Facultatif analytique",
+                    "Pourquoi": (
+                        "Utile pour adoption, croisement Perfect/Turbo/G2, mais pas nécessaire "
+                        "au cœur financier M_PESA."
+                    ),
+                    "Colonnes attendues": ", ".join(sorted(PERFECT_CLIENTS_REQUIRED_COLUMNS)),
+                },
+            ]
+        )
+        st.dataframe(
+            expected_sources,
+            hide_index=True,
+            column_config={
+                "Priorité": st.column_config.NumberColumn("Priorité", format="%d"),
+                "Fichier": st.column_config.TextColumn("Fichier", pinned=True),
+                "Importance": st.column_config.TextColumn("Importance"),
+                "Pourquoi": st.column_config.TextColumn("Pourquoi"),
+                "Colonnes attendues": st.column_config.TextColumn("Colonnes attendues"),
+            },
+        )
+        st.caption(
+            "Alternative compatible pour Savings Account : sélectionner ensemble les exports résumés "
+            "Customers with Current Savings Account et Customers with Fixed Savings Account. Cette "
+            "alternative ne contient que les comptes à solde positif; la source complète Savings Account "
+            "reste prioritaire lorsqu'elle est chargée."
+        )
 
     try:
         transactions_raw = _uploaded_dataframes(
@@ -5565,16 +6092,16 @@ def render_solution_mpesa_tab() -> None:
     with sub_tabs[0]:
         _render_import_tab(prepared, missing)
     with sub_tabs[1]:
-        _render_finance_turbo_tab(prepared)
-    with sub_tabs[2]:
         _render_customer_extract(prepared)
+    with sub_tabs[2]:
+        _render_finance_turbo_tab(prepared)
     with sub_tabs[3]:
         _render_dat_tab(None, prepared)
     with sub_tabs[4]:
         _render_g2_dat_tab(None, prepared)
     with sub_tabs[5]:
-        _render_perfect_client_tab(prepared)
-    with sub_tabs[6]:
         _render_loans_tab(None, prepared)
+    with sub_tabs[6]:
+        _render_perfect_client_tab(prepared)
     with sub_tabs[7]:
-        _render_diagnostics_tab(prepared, None)
+        _render_statistics_tab(prepared)

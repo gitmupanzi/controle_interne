@@ -26,11 +26,13 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_dat_maturity_analysis,
     build_mpesa_accounting_analysis,
     build_mpesa_management_dashboard,
+    build_mpesa_statistics_report,
     build_mpesa_turbo_financial_analysis,
     build_turbo_operation_events,
     build_loan_savings_reconciliation,
     build_g2_dat_pdf_html,
     create_g2_dat_word,
+    create_mpesa_statistics_word,
     create_customer_client_statement_pdf,
     create_customer_client_statement_word,
     create_customer_statement_pdf,
@@ -4703,6 +4705,95 @@ class MpesaAnalysisTests(unittest.TestCase):
                 "Echeances_DAT_Turbo",
             ],
         )
+
+    def test_mpesa_statistics_report_is_turbo_first_and_exports_word(self) -> None:
+        from docx import Document
+
+        base = _sample_customer_transaction_analysis_data()
+        customers = prepare_customers(
+            pd.DataFrame(
+                [
+                    {
+                        "customer_id": "CLIENT-ANALYSE",
+                        "msisdn1": "0812345678",
+                        "created_at": "2026-01-15",
+                    }
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=base.transactions,
+            current_savings=base.current_savings,
+            fixed_savings=base.fixed_savings,
+            loans=base.loans,
+            load_report=base.load_report,
+            customers=customers,
+            g2_transactions=prepare_g2_transactions(
+                pd.DataFrame(
+                    [
+                        {
+                            "Receipt No.": "G2-STATS-IGNORED",
+                            "Completion Time": "2026-07-03 08:00:00",
+                            "Opposite Party": "0812345678 - CLIENT ANALYSE",
+                            "Currency": "CDF",
+                            "Paid In": 999999,
+                            "Withdrawn": 0,
+                            "Balance": 999999,
+                            "Transaction Status": "Completed",
+                            "Details": "BisouBisouC2B",
+                        }
+                    ]
+                )
+            ),
+        )
+
+        report = build_mpesa_statistics_report(
+            prepared,
+            date_start="2026-07-01",
+            date_end="2026-07-05",
+            frequency="Jour",
+        )
+
+        source_priority = report["priorite_sources"].set_index("source")
+        self.assertEqual(
+            source_priority.loc["Transactions [Turbo]", "niveau_importance"],
+            "Indispensable",
+        )
+        self.assertEqual(
+            source_priority.loc["Transactions [G2] (facultatif)", "niveau_importance"],
+            "Facultatif utile",
+        )
+        self.assertFalse(
+            "G2-STATS-IGNORED" in report["operations_turbo"].get("event_reference", pd.Series(dtype=str)).astype(str).tolist()
+        )
+
+        overview = report["vue_ensemble"].loc[
+            report["vue_ensemble"]["currency_code"].eq("CDF")
+        ].iloc[0]
+        self.assertEqual(int(overview["clients_turbo_connus"]), 1)
+        self.assertEqual(int(overview["clients_turbo_actifs"]), 1)
+        self.assertGreater(float(overview["volume_total_transactions"]), 0)
+        self.assertEqual(float(overview["chiffre_affaires_observe"]), 15.0)
+
+        growth = report["clients_croissance"]
+        self.assertEqual(int(growth.iloc[-1]["clients_turbo_cumules"]), 1)
+        self.assertIn("epargne_dat_portefeuille", report)
+        self.assertFalse(report["epargne_dat_portefeuille"].empty)
+
+        document = Document(BytesIO(create_mpesa_statistics_word(report)))
+        word_text = "\n".join(
+            [paragraph.text for paragraph in document.paragraphs]
+            + [
+                " | ".join(cell.text for cell in row.cells)
+                for table in document.tables
+                for row in table.rows
+            ]
+        )
+        self.assertIn("Rapport statistique - Solution M_PESA", word_text)
+        self.assertIn("Sources et importance", word_text)
+        self.assertIn("Vue d'ensemble", word_text)
+        self.assertIn("Chiffre d'affaires observe", word_text)
+        self.assertIn("Turbo uniquement", word_text)
 
     def test_turbo_financial_analysis_uses_one_event_grain_and_never_g2_amounts(self) -> None:
         prepared = _sample_customer_transaction_analysis_data()

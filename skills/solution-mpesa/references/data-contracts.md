@@ -87,6 +87,8 @@ L'interface Streamlit utilise désormais ce parcours :
 
 `Customers with Current Savings Account` et `Customers with Fixed Savings Account` n'ont pas de widgets séparés. Ils peuvent être sélectionnés ensemble dans l'emplacement multiple `Savings Account` lorsque la source complète n'est pas disponible. L'interface doit alors avertir que seuls les soldes positifs sont couverts. Si le fichier complet est aussi présent, il est seul retenu. Les quatre emplacements Turbo principaux doivent produire les mêmes comptes, soldes, devises, statuts et dates que la source maître validée lorsque celle-ci est fournie.
 
+Les sous-onglets principaux de Solution M-PESA suivent l'ordre `Importation`, `Extrait client`, `Finance Turbo`, `DAT`, `G2 / DAT`, `Detail des credits`, `Perfect_client`, `Statistique`. `Controle des donnees` est integre dans `Importation` afin de regrouper chargement, validation des colonnes, composition Savings Account et anomalies Transactions [Turbo].
+
 Règles de montant et de sens :
 
 - utiliser `Paid In` comme montant d'entrée lorsqu'il est non nul;
@@ -311,6 +313,17 @@ L'interface réunit le pilotage financier et la comptabilité observée dans un 
 - Conserver le journal d'événements en cache par empreinte des fichiers, puis le rapport par période et seuils. Tous les onglets internes du cockpit sont construits lors du premier calcul; changer d'onglet ne relance pas le moteur.
 
 Cas réel du 16 juillet 2026 avec les exports du 17 juillet : 135 événements, dont 48 CDF et 87 USD. Les remboursements observés sont 284 910 CDF et 194,54 USD; les nouveaux crédits décaissés sont 122 200 CDF et 99 USD. Les décaissements et les comptes de crédit créés se rapprochent exactement dans les deux devises pour ce cas.
+
+## Statistique Turbo
+
+- `Statistique` est un cockpit operationnel Turbo-first distinct de `Finance Turbo`. Il sert a suivre la croissance, l'activite, le volume, le chiffre d'affaires observe, l'epargne/DAT, le credit et les meilleurs clients.
+- L'ecran `Statistique` est classe par blocs decisionnels repliables/depliables : `Clients`, `Comptes ouverts et comptes bloques`, `Credits` et `Transactions`. Chaque bloc regroupe ses KPI, graphiques et tableaux afin de faciliter la lecture par la direction et d'eviter une page trop longue.
+- Les sources sont hierarchisees ainsi : `Transactions [Turbo]` indispensable, `Savings Account [Turbo]` indispensable, `Loans Account [Turbo]` tres important, `Customers [Turbo]` important, `Transactions [G2]` facultatif utile, `Clients_Perfect` facultatif analytique.
+- Les filtres de l'onglet sont `Date de debut`, `Date de fin`, `Frequence`, `Devises affichees` et `Top clients affiches`. Les KPI, graphiques, tableaux et l'export Word doivent reprendre ce perimetre.
+- `Clients Turbo actifs` correspond aux clients ayant au moins une operation Transactions [Turbo] dans la periode. `Clients Turbo connus` vient de `Customers [Turbo]` quand la source est chargee; sinon il est degrade depuis les clients observes dans les sources Turbo disponibles.
+- La courbe d'evolution des clients utilise `Customers [Turbo].created_at` lorsque disponible. En absence de Customers, elle utilise la premiere observation Turbo connue du client.
+- `Chiffre d'affaires observe` est prudent et non certifie : interets + penalites + part Bisou detectes dans Transactions [Turbo], toujours separes par devise. G2 et Perfect ne doivent jamais contribuer aux montants.
+- L'export Word du rapport statistique inclut le logo, les criteres, les sources et importance, la vue d'ensemble, le chiffre d'affaires observe, la croissance clients, epargne/DAT, credit et definitions.
 
 ## Balance et analyses comptables Turbo
 
