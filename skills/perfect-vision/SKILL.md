@@ -41,6 +41,18 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 - Préférer les codes, numéros et libellés métier aux identifiants techniques redondants. Conserver un identifiant technique seulement s'il est la seule clé exploitable pour la revue.
 - Vérifier que les colonnes finales suffisent pour identifier la population, comprendre l'anomalie, mesurer le montant, connaître la devise, dater le fait et retrouver la pièce source.
 
+## Contrat du cycle conformité
+
+- Considérer la requête 156 comme l'unique fichier d'entrée du cycle conformité. Elle doit reprendre, avec une logique SQL autonome, les analyses 38, 39, 48, 57 et 149 à 155.
+- Identifier chaque bloc exporté par le libellé métier `analyse` et son grain par `type_element`. Lire `analyse_source` et `type_ligne` uniquement comme anciens alias pendant la transition des fichiers historiques. Ne jamais faire dépendre Q156 d'une vue ou du résultat enregistré d'une autre requête : recopier ou factoriser la logique dans ses propres CTE ou tables temporaires locales.
+- Employer `rubrique` comme libellé canonique de l'élément analysé et `nombre` comme mesure canonique de comptage. Lire `type_alerte`, `controle` et `nombre_anomalies` uniquement comme anciens alias pendant la transition des fichiers historiques.
+- La projection finale de Q156 est destinée à un utilisateur métier : regrouper les dates techniques dans `date_evenement`, exposer `code_client` plutôt qu'un identifiant interne redondant, utiliser `numero_operation` pour la référence d'opération, retirer `id_devise` lorsque `devise` est présent et regrouper les drapeaux booléens dans `indicateurs`.
+- Pour les autres requêtes, appliquer la même règle au `SELECT` final : retirer un identifiant technique seulement lorsqu'un code, numéro ou libellé métier permet la même traçabilité. Ne jamais supprimer une clé qui est le seul moyen de retrouver la pièce source.
+- Conserver un grain exploitable : une ligne par alerte, déclaration, profil, sanction, réactivation ou contrôle ; une ligne par groupe client-jour-devise pour le fractionnement ; une ligne par mois-point de service-devise pour les gros mouvements ; une ligne par rubrique-devise pour les synthèses.
+- Mapper les mesures sans mélanger les devises : `montant` porte le montant de l'élément ou le maximum unitaire, `volume` porte le cumul du groupe, et `nombre` porte le nombre d'éléments. Documenter ce mapping dans `commentaire` lorsqu'un bloc agrégé l'utilise.
+- Pour toute modification de Q156 ou des onglets conformité, exécuter le va-et-vient complet : tester Q156 sur SQL Server, exporter le XLSX, le téléverser dans Streamlit, puis contrôler les onglets `Conformité`, `Surveillance`, `Portefeuille`, `Risques` et `Qualité`.
+- Vérifier que les anciens XLSX restent lisibles grâce aux alias de repli, sans réintroduire ces alias dans les nouveaux exports.
+
 ## Invariants du tableau de bord Streamlit
 
 - Pour toute période utilisateur, afficher deux `st.date_input` distincts intitulés exactement `Date de début` et `Date de fin`, au format `DD/MM/YYYY`. Ne jamais utiliser un `st.date_input` initialisé avec un tuple ou une liste comme sélecteur de plage. Employer deux clés stables distinctes, valider `date_debut <= date_fin` et appliquer des bornes inclusives.
@@ -73,6 +85,7 @@ python skills/perfect-vision/scripts/inspect_vision_sql.py --list-queries
 python skills/perfect-vision/scripts/inspect_vision_sql.py --query "crédit sans garantie"
 python skills/perfect-vision/scripts/inspect_vision_sql.py --number 144
 python skills/perfect-vision/scripts/inspect_vision_sql.py --table PRETS
+python skills/perfect-vision/scripts/export_vision_query.py --query 156 --date-start 2026-06-01 --date-end 2026-06-30
 ```
 
 Charger seulement les extraits pertinents : le schéma complet dépasse 3 Mo.

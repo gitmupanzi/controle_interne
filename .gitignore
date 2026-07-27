@@ -39,4 +39,5 @@ desktop.ini
 # line_list/*
 # !line_list/.gitkeep
 data/vision/*
+reports/*
 SOP/*

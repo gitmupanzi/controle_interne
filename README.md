@@ -159,6 +159,7 @@ Le panneau latéral permet de :
 - visualiser la couverture du référentiel du cycle
 - régler avant le chargement, dans `Référence et stockage`, la standardisation des colonnes, les taux de référence et les options communes d’affichage
 - définir le taux d’intérêt annuel DAT utilisé par Solution M-PESA pour les intérêts estimés
+- choisir le `Périmètre annuel M_PESA` : toutes les années par défaut, une année ou une plage d’années. Les fichiers restent entièrement chargés; seuls les sous-onglets analytiques utilisent la vue annuelle, tandis que `Importation` conserve le contrôle des sources complètes
 - activer l’option `Afficher annotations (valeurs)` et son seuil d’affichage
 - définir le taux `CDF/USD` lorsque le cycle actif l’exige
 

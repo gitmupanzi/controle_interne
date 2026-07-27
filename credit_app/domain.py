@@ -48,6 +48,7 @@ NUMERIC_COLUMNS = [
 ]
 
 DATE_COLUMNS = [
+    "date_evenement",
     "date_alerte",
     "date_declaration",
     "date_debut",
@@ -131,7 +132,7 @@ RISK_LEVEL_MAP = {
 }
 
 CYCLE_DATE_PRIORITY = {
-    "conformite": ["date_alerte", "date_declaration", "date_operation", "date_debut"],
+    "conformite": ["date_evenement", "date_alerte", "date_declaration", "date_operation", "date_debut"],
     "credit": ["date_demande", "date_decision"],
     "likelemba": ["date_demande", "date_decision"],
     "epargne": ["date_operation", "date_demande"],
@@ -153,6 +154,11 @@ VALUE_CLEANING_CRITERIA = {
     "unite_age": "Unite_age",
     "statut_test_reprise": "Boolean",
     "incident_majeur": "Boolean",
+    "analyse": "Analyse_conformite",
+    "type_element": "Type_element_conformite",
+    "statut_revue": "Statut_revue",
+    "statut_couverture": "Statut_couverture",
+    "severite": "Severite",
 }
 
 EPARGNE_DAT_MINIMUM_USD_PHYSIQUE = 500.0
@@ -343,17 +349,25 @@ def build_standardized_dataframe(
     standardize_columns: bool = True,
 ) -> tuple[pd.DataFrame, dict[str, str]]:
     standardized = df.copy()
-    mapping = (
-        {column: standardize_column_name(column) for column in standardized.columns}
-        if standardize_columns
-        else {column: column for column in standardized.columns}
+    source_columns = {str(column).strip() for column in standardized.columns}
+    is_conformite_socle = (
+        {"analyse", "type_element", "rubrique"}.issubset(source_columns)
+        or {"analyse_source", "type_ligne", "rubrique"}.issubset(source_columns)
     )
+    if standardize_columns and is_conformite_socle:
+        # Q156 définit déjà un contrat multi-analyse. Le mapping générique crédit
+        # ne doit notamment pas transformer `montant` en `montant_accorde`.
+        mapping = {column: str(column).strip() for column in standardized.columns}
+    elif standardize_columns:
+        mapping = {column: standardize_column_name(column) for column in standardized.columns}
+    else:
+        mapping = {column: column for column in standardized.columns}
     if standardize_columns:
         standardized = standardized.rename(columns=mapping)
     standardized = _coalesce_duplicate_columns(standardized)
     standardized = _apply_reference_value_cleaning(standardized)
 
-    if standardize_columns and "client_id" not in standardized.columns:
+    if standardize_columns and not is_conformite_socle and "client_id" not in standardized.columns:
         for client_column in ["code_client", "code_adherent", "id_adherent_lab"]:
             if client_column in standardized.columns:
                 standardized["client_id"] = standardized[client_column]
@@ -1654,11 +1668,19 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
             couverture = df["statut_couverture"].astype("string").map(normalize_text)
             mark(couverture.isin({"bloquant", "non couvert"}), "Rubrique non couverte")
             mark(couverture.eq("partiel"), "Couverture partielle à valider")
-        if "statut_revue_conformite" in df.columns:
-            statut_revue = df["statut_revue_conformite"].astype("string").map(normalize_text)
+        review_column = next(
+            (column for column in ["statut_revue", "statut_revue_conformite"] if column in df.columns),
+            None,
+        )
+        if review_column:
+            statut_revue = df[review_column].astype("string").map(normalize_text)
             mark(statut_revue.str.contains("revoir", na=False), "Alerte à revoir")
-        if "etat_alerte" in df.columns:
-            mark(missing_text("etat_alerte"), "État de l'alerte manquant")
+        alert_state_column = next(
+            (column for column in ["etat", "etat_alerte"] if column in df.columns),
+            None,
+        )
+        if alert_state_column:
+            mark(missing_text(alert_state_column), "État de l'alerte manquant")
         if "numero_alerte" in df.columns:
             mark(missing_text("numero_alerte"), "Numéro d'alerte manquant")
         if "severite" in df.columns:
@@ -1667,6 +1689,18 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
         if "nombre_anomalies" in df.columns:
             nombre_anomalies = pd.to_numeric(df["nombre_anomalies"], errors="coerce").fillna(0)
             mark(nombre_anomalies.gt(0), "Anomalies de données détectées")
+        elif "nombre" in df.columns and any(column in df.columns for column in ["type_element", "type_ligne"]):
+            nombre_anomalies = pd.to_numeric(df["nombre"], errors="coerce").fillna(0)
+            if "type_element" in df.columns:
+                controle_qualite = (
+                    df["type_element"].astype("string").map(normalize_text).eq("controle qualite")
+                )
+            else:
+                controle_qualite = df["type_ligne"].astype("string").str.upper().eq("CONTROLE_QUALITE")
+            mark(
+                controle_qualite & nombre_anomalies.gt(0),
+                "Anomalies de données détectées",
+            )
         for flag_column, flag_label in {
             "operation_fractionnee": "Opération fractionnée",
             "operation_gel_fonds": "Opération liée à un gel de fonds",
@@ -1678,6 +1712,18 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
         }.items():
             if flag_column in df.columns:
                 mark(df[flag_column], flag_label)
+        if "indicateurs" in df.columns:
+            indicateurs = df["indicateurs"].astype("string")
+            for keyword, label in {
+                "fractionnement": "Opération fractionnée",
+                "gel des fonds": "Opération liée à un gel de fonds",
+                "haut risque": "Opération à haut risque",
+                "blanchiment": "Soupçon de blanchiment",
+                "financement du terrorisme": "Soupçon de financement du terrorisme",
+                "client introuvable": "Client Perfect Vision introuvable",
+                "identite absente": "Identité blacklist insuffisante",
+            }.items():
+                mark(indicateurs.str.contains(keyword, case=False, na=False), label)
         if "devise" in df.columns and any(column in df.columns for column in ["montant", "volume", "montant_operation"]):
             mark(missing_text("devise"), "Devise manquante")
     elif cycle_key == "crm_clients":
@@ -2019,14 +2065,20 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
     if cycle_key == "conformite":
         candidate_columns.extend(
             [
+                "date_evenement",
                 "date_alerte",
                 "date_declaration",
                 "date_operation",
+                "code_client",
                 "nom_client",
                 "code_adherent",
+                "description",
                 "description_alerte",
+                "motif",
                 "motif_etat",
+                "origine_donnee",
                 "source_donnee",
+                "origine_declaration",
                 "source_declaration",
                 "reference_externe",
                 "regime_sanction",

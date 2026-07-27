@@ -95,7 +95,9 @@ from credit_app.services.data_pipeline import build_preparation_summary, prepare
 from credit_app.services.mpesa_analysis import (
     DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
     DEFAULT_MPESA_COMPARISON_PERIOD,
+    DEFAULT_MPESA_YEAR_SCOPE_MODE,
     MPESA_COMPARISON_PERIOD_OPTIONS,
+    MPESA_YEAR_SCOPE_MODES,
 )
 from credit_app.tabs.audit_control import render_analyste_credit_tab
 from credit_app.tabs.conformite import render_conformite_cycle_tab
@@ -502,6 +504,7 @@ def _reset_display_options() -> None:
 
 def _date_filter_label(date_column: str | None) -> str:
     labels = {
+        "date_evenement": "Période des événements",
         "date_demande": "Période de demande",
         "date_decision": "Période de décision",
         "date_operation": "Période d'opération",
@@ -671,6 +674,54 @@ def main() -> None:
                 "Date de début et Date de fin lorsqu'elles sont disponibles."
             ),
         )
+        st.session_state.setdefault(
+            "mpesa_year_scope_mode",
+            DEFAULT_MPESA_YEAR_SCOPE_MODE,
+        )
+        year_scope_mode = st.selectbox(
+            "Périmètre annuel M_PESA",
+            options=MPESA_YEAR_SCOPE_MODES,
+            key="mpesa_year_scope_mode",
+            help=(
+                "Ensemble des années conserve toutes les données chargées. Une année ou une "
+                "plage d'années crée une vue analytique sans supprimer ni recharger les fichiers."
+            ),
+        )
+        current_year = int(pd.Timestamp.now().year)
+        if year_scope_mode == "Année unique":
+            st.session_state.setdefault("mpesa_year_scope_single", current_year)
+            st.number_input(
+                "Année M_PESA",
+                min_value=2000,
+                max_value=current_year + 1,
+                step=1,
+                key="mpesa_year_scope_single",
+                help="Toutes les analyses M_PESA sont limitées à cette année.",
+            )
+        elif year_scope_mode == "Plage d'années":
+            st.session_state.setdefault("mpesa_year_scope_start", current_year - 1)
+            st.session_state.setdefault("mpesa_year_scope_end", current_year)
+            st.number_input(
+                "Année de début M_PESA",
+                min_value=2000,
+                max_value=current_year + 1,
+                step=1,
+                key="mpesa_year_scope_start",
+            )
+            st.number_input(
+                "Année de fin M_PESA",
+                min_value=2000,
+                max_value=current_year + 1,
+                step=1,
+                key="mpesa_year_scope_end",
+            )
+            selected_start_year = int(st.session_state["mpesa_year_scope_start"])
+            selected_end_year = int(st.session_state["mpesa_year_scope_end"])
+            if selected_start_year > selected_end_year:
+                st.caption(
+                    "La plage sera automatiquement normalisée de "
+                    f"{selected_end_year} à {selected_start_year}."
+                )
 
         if selected_cycle_key == "epargne":
             st.number_input(
@@ -724,6 +775,7 @@ def main() -> None:
 
         st.markdown("**Stockage local**")
         st.caption("Vous pouvez déposer vos fichiers de travail dans `line_list/` pour les relire ensuite sans téléversement.")
+        period_filter_slot = st.container()
 
     render_sidebar_section("Source des données", "Téléversez un fichier ou utilisez une base déjà stockée.")
     if "credit_source_mode" not in st.session_state:
@@ -1061,69 +1113,71 @@ def main() -> None:
 
     selected_column_filters = _build_cycle_sidebar_filters(standardized_df, selected_cycle_key)
 
-    render_sidebar_section("Période", "Filtrez les données selon la date principale du cycle.")
     start_date = None
     end_date = None
     selected_date_column = get_cycle_primary_date_column(standardized_df, selected_cycle_key)
-    use_period_filter = st.sidebar.checkbox(
-        f"Filtrer sur {_date_filter_label(selected_date_column).lower()}",
-        value=False,
-        key="credit_filter_use_period",
-    )
-    if selected_date_column and selected_date_column in standardized_df.columns:
-        valid_dates = pd.to_datetime(standardized_df[selected_date_column], errors="coerce").dropna()
-        if not valid_dates.empty:
-            minimum_date = valid_dates.min().date()
-            maximum_date = valid_dates.max().date()
-            safe_start_date = _clamp_date_input_value(
-                st.session_state.get("credit_period_start"),
-                minimum_date,
-                maximum_date,
-                fallback=minimum_date,
-            )
-            safe_end_date = _clamp_date_input_value(
-                st.session_state.get("credit_period_end"),
-                minimum_date,
-                maximum_date,
-                fallback=maximum_date,
-            )
-            if st.session_state.get("credit_period_start") != safe_start_date:
-                st.session_state.pop("credit_period_start", None)
-            if st.session_state.get("credit_period_end") != safe_end_date:
-                st.session_state.pop("credit_period_end", None)
-            st.sidebar.caption(f"Champ analysé : {_date_filter_label(selected_date_column).lower()}.")
-            selected_start_date = st.sidebar.date_input(
-                "Date de début",
-                value=safe_start_date,
-                min_value=minimum_date,
-                max_value=maximum_date,
-                key="credit_period_start",
-                disabled=not use_period_filter,
-                format="DD/MM/YYYY",
-                help="Première journée incluse dans l'analyse.",
-            )
-            selected_end_date = st.sidebar.date_input(
-                "Date de fin",
-                value=safe_end_date,
-                min_value=minimum_date,
-                max_value=maximum_date,
-                key="credit_period_end",
-                disabled=not use_period_filter,
-                format="DD/MM/YYYY",
-                help="Dernière journée incluse dans l'analyse.",
-            )
-            if use_period_filter:
-                if selected_start_date > selected_end_date:
-                    st.sidebar.error(
-                        "La date de début doit être antérieure ou égale à la date de fin.",
-                        icon=":material/error:",
-                    )
-                    st.stop()
-                start_date = selected_start_date
-                end_date = selected_end_date
-            st.sidebar.caption(
-                f"Période disponible : {minimum_date:%d/%m/%Y} → {maximum_date:%d/%m/%Y}"
-            )
+    with period_filter_slot:
+        st.markdown("**Période**")
+        st.caption("Filtrez les données selon la date principale du cycle.")
+        use_period_filter = st.checkbox(
+            f"Filtrer sur {_date_filter_label(selected_date_column).lower()}",
+            value=False,
+            key="credit_filter_use_period",
+        )
+        if selected_date_column and selected_date_column in standardized_df.columns:
+            valid_dates = pd.to_datetime(standardized_df[selected_date_column], errors="coerce").dropna()
+            if not valid_dates.empty:
+                minimum_date = valid_dates.min().date()
+                maximum_date = valid_dates.max().date()
+                safe_start_date = _clamp_date_input_value(
+                    st.session_state.get("credit_period_start"),
+                    minimum_date,
+                    maximum_date,
+                    fallback=minimum_date,
+                )
+                safe_end_date = _clamp_date_input_value(
+                    st.session_state.get("credit_period_end"),
+                    minimum_date,
+                    maximum_date,
+                    fallback=maximum_date,
+                )
+                if st.session_state.get("credit_period_start") != safe_start_date:
+                    st.session_state.pop("credit_period_start", None)
+                if st.session_state.get("credit_period_end") != safe_end_date:
+                    st.session_state.pop("credit_period_end", None)
+                st.caption(f"Champ analysé : {_date_filter_label(selected_date_column).lower()}.")
+                selected_start_date = st.date_input(
+                    "Date de début",
+                    value=safe_start_date,
+                    min_value=minimum_date,
+                    max_value=maximum_date,
+                    key="credit_period_start",
+                    disabled=not use_period_filter,
+                    format="DD/MM/YYYY",
+                    help="Première journée incluse dans l'analyse.",
+                )
+                selected_end_date = st.date_input(
+                    "Date de fin",
+                    value=safe_end_date,
+                    min_value=minimum_date,
+                    max_value=maximum_date,
+                    key="credit_period_end",
+                    disabled=not use_period_filter,
+                    format="DD/MM/YYYY",
+                    help="Dernière journée incluse dans l'analyse.",
+                )
+                if use_period_filter:
+                    if selected_start_date > selected_end_date:
+                        st.error(
+                            "La date de début doit être antérieure ou égale à la date de fin.",
+                            icon=":material/error:",
+                        )
+                        st.stop()
+                    start_date = selected_start_date
+                    end_date = selected_end_date
+                st.caption(
+                    f"Période disponible : {minimum_date:%d/%m/%Y} → {maximum_date:%d/%m/%Y}"
+                )
 
     filtered_df = filter_dataframe(
         standardized_df,
@@ -1193,7 +1247,7 @@ def main() -> None:
         f"Fichier : {filename} | Lignes brutes : {len(raw_df):,} | Lignes retenues : {len(filtered_df):,}"
     )
 
-    with st.sidebar.expander("Résumé des filtres", expanded=True):
+    with st.sidebar.expander("Résumé des filtres", expanded=False):
         active_filter_count = _count_active_sidebar_filters(selected_column_filters)
         cycle_filter_columns = [
             column
@@ -1244,14 +1298,18 @@ def main() -> None:
 
     with st.sidebar.expander("Périmètre actif", expanded=False):
         perimeter_items = []
-        if "client_id" in standardized_df.columns:
-            perimeter_items.append(("Clients", f"{standardized_df['client_id'].nunique():,}".replace(",", " ")))
+        client_column = next(
+            (column for column in ["code_client", "client_id"] if column in standardized_df.columns),
+            None,
+        )
+        if client_column:
+            perimeter_items.append(("Clients", f"{standardized_df[client_column].nunique():,}".replace(",", " ")))
         perimeter_items.append(("Colonnes", str(standardized_df.shape[1])))
         perimeter_items.append(("Lignes", f"{len(standardized_df):,}".replace(",", " ")))
         render_sidebar_stat_grid(perimeter_items[:4], container=st)
         st.write(
-            f"Clients uniques : **{standardized_df['client_id'].nunique():,}**".replace(",", " ")
-            if "client_id" in standardized_df.columns
+            f"Clients uniques : **{standardized_df[client_column].nunique():,}**".replace(",", " ")
+            if client_column
             else "Clients uniques : **-**"
         )
         for column_name in cycle_filter_columns[:4]:

@@ -590,6 +590,85 @@ class CreditDomainTests(unittest.TestCase):
         self.assertIn("client_id", crm_clients_spec["expected_columns"])
         self.assertEqual(conformite_spec["label"], "Cycle conformité")
         self.assertIn("numero_alerte", conformite_spec["expected_columns"])
+        self.assertIn("rubrique", conformite_spec["expected_columns"])
+
+    def test_conformite_156_contract_preserves_canonical_columns(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "analyse_source": ["150_ALERTES_LBC_FT", "155_QUALITE_DONNEES_LBC_FT"],
+                "type_ligne": ["ALERTE", "CONTROLE_QUALITE"],
+                "rubrique": ["MODIFICATION_IDENTITE", "ALERTE_SANS_DEVISE"],
+                "date_operation": ["2026-06-10", None],
+                "client_id": ["CL-1", None],
+                "numero_alerte": ["ALT-1", None],
+                "etat_alerte": ["G", None],
+                "statut_revue_conformite": ["A_REVOIR", None],
+                "statut_couverture": ["COUVERT", None],
+                "source_declaration": [None, None],
+                "reference_interne": [None, None],
+                "niveau_risque": [None, None],
+                "montant": [1500, None],
+                "volume": [None, None],
+                "nombre": [1, 3],
+                "devise": ["CDF", None],
+                "severite": [None, "ELEVEE"],
+            }
+        )
+
+        standardized, mapping = build_standardized_dataframe(raw)
+        watchlist = build_cycle_watchlist(standardized, "conformite")
+
+        self.assertEqual(mapping["montant"], "montant")
+        self.assertIn("montant", standardized.columns)
+        self.assertNotIn("montant_accorde", standardized.columns)
+        self.assertIn("rubrique", standardized.columns)
+        self.assertIn("nombre", standardized.columns)
+        self.assertNotIn("type_alerte", standardized.columns)
+        self.assertNotIn("controle", standardized.columns)
+        self.assertNotIn("nombre_anomalies", standardized.columns)
+        self.assertTrue(
+            watchlist["motif_alerte"]
+            .astype(str)
+            .str.contains("Anomalies de données détectées")
+            .any()
+        )
+
+    def test_conformite_156_business_projection_stays_user_facing(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "analyse": ["150 - Alertes LBC-FT", "155 - Qualite des donnees LBC-FT"],
+                "type_element": ["Alerte", "Controle qualite"],
+                "rubrique": ["OPERATION_ATYPIQUE", "ALERTE_SANS_DEVISE"],
+                "date_evenement": ["2026-06-10", None],
+                "code_client": ["CL-1", None],
+                "numero_alerte": ["ALT-1", None],
+                "etat": ["OUVERTE", None],
+                "statut_revue": ["A_REVOIR", None],
+                "statut_couverture": ["COUVERT", None],
+                "montant": [1500, None],
+                "nombre": [1, 3],
+                "devise": ["CDF", None],
+                "severite": [None, "ELEVEE"],
+                "indicateurs": ["Operation a haut risque", None],
+            }
+        )
+
+        standardized, mapping = build_standardized_dataframe(raw)
+        watchlist = build_cycle_watchlist(standardized, "conformite")
+
+        self.assertEqual(mapping["montant"], "montant")
+        self.assertIn("code_client", standardized.columns)
+        self.assertNotIn("client_id", standardized.columns)
+        self.assertEqual(
+            get_cycle_primary_date_column(standardized, "conformite"),
+            "date_evenement",
+        )
+        self.assertTrue(
+            watchlist["motif_alerte"]
+            .astype(str)
+            .str.contains("Anomalies de données détectées|Opération à haut risque")
+            .any()
+        )
 
     def test_conformite_cycle_builds_priority_watchlist(self) -> None:
         raw = pd.DataFrame(

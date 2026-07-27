@@ -68,6 +68,7 @@ from credit_app.services.mpesa_analysis import (
     prepare_fixed_savings_from_accounts,
     prepare_savings_accounts,
     prepare_transactions,
+    scope_mpesa_prepared_data_by_year,
     search_customers,
     validate_required_columns,
     TRANSACTION_REQUIRED_COLUMNS,
@@ -4934,6 +4935,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(int(growth.iloc[-1]["clients_turbo_cumules"]), 1)
         self.assertIn("epargne_dat_portefeuille", report)
         self.assertFalse(report["epargne_dat_portefeuille"].empty)
+        self.assertEqual(report["perimetre_annuel"], "Ensemble des années")
 
         document = Document(BytesIO(create_mpesa_statistics_word(report)))
         word_text = "\n".join(
@@ -4955,7 +4957,104 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Chiffre d'affaires observe", word_text)
         self.assertIn("Turbo uniquement", word_text)
         self.assertIn("Période filtrée", word_text)
+        self.assertIn("Ensemble des années", document._element.xml)
         self.assertNotIn("Graphiques de synthese", word_text)
+
+    def test_year_scope_filters_flows_and_preserves_snapshot_positions(self) -> None:
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(
+                {
+                    "id": ["T24", "T25", "T26", "T27", "T-UNDATED"],
+                    "created_at": [
+                        "2024-12-31 23:59:59",
+                        "2025-01-01 00:00:00",
+                        "2026-12-31 23:59:59",
+                        "2027-01-01 00:00:00",
+                        None,
+                    ],
+                }
+            ),
+            g2_transactions=pd.DataFrame(
+                {
+                    "receipt_no": ["G24", "G25", "G26", "G27"],
+                    "completion_time": [
+                        "2024-06-01",
+                        "2025-06-01",
+                        "2026-06-01",
+                        "2027-06-01",
+                    ],
+                }
+            ),
+            current_savings=pd.DataFrame(
+                {
+                    "savings_id": ["S24", "S26", "S27", "S-UNDATED"],
+                    "date_activated": [
+                        "2024-01-01",
+                        "2026-05-01",
+                        "2027-01-01",
+                        None,
+                    ],
+                }
+            ),
+            fixed_savings=pd.DataFrame(
+                {
+                    "savings_id": ["D24", "D27"],
+                    "date_approved": ["2024-01-01", "2027-01-01"],
+                }
+            ),
+            fixed_savings_control=pd.DataFrame(
+                {
+                    "savings_id": ["DC24", "DC27"],
+                    "date_approved": ["2024-01-01", "2027-01-01"],
+                }
+            ),
+            loans=pd.DataFrame(
+                {
+                    "loan_id": ["L24", "L26", "L27"],
+                    "created_at": ["2024-01-01", "2026-01-01", "2027-01-01"],
+                }
+            ),
+            customers=pd.DataFrame(
+                {
+                    "customer_id": ["C24", "C26", "C27"],
+                    "created_at": ["2024-01-01", "2026-01-01", "2027-01-01"],
+                }
+            ),
+            perfect_clients=pd.DataFrame({"client_id": ["P1", "P2"]}),
+            load_report=pd.DataFrame(),
+            cache_fingerprint="uploads-1",
+        )
+
+        scoped = scope_mpesa_prepared_data_by_year(
+            prepared,
+            mode="Plage d'années",
+            start_year=2026,
+            end_year=2025,
+        )
+
+        self.assertEqual(scoped.year_scope_label, "2025-2026")
+        self.assertEqual(scoped.year_scope_start, pd.Timestamp("2025-01-01"))
+        self.assertEqual(scoped.year_scope_end, pd.Timestamp("2026-12-31"))
+        self.assertEqual(scoped.transactions["id"].tolist(), ["T25", "T26"])
+        self.assertEqual(scoped.g2_transactions["receipt_no"].tolist(), ["G25", "G26"])
+        self.assertEqual(
+            scoped.current_savings["savings_id"].tolist(),
+            ["S24", "S26", "S-UNDATED"],
+        )
+        self.assertEqual(scoped.fixed_savings["savings_id"].tolist(), ["D24"])
+        self.assertEqual(scoped.fixed_savings_control["savings_id"].tolist(), ["DC24"])
+        self.assertEqual(scoped.loans["loan_id"].tolist(), ["L24", "L26"])
+        self.assertEqual(scoped.customers["customer_id"].tolist(), ["C24", "C26"])
+        self.assertEqual(scoped.perfect_clients["client_id"].tolist(), ["P1", "P2"])
+        self.assertIn("|year-scope:2025-2026", scoped.cache_fingerprint)
+
+        full = scope_mpesa_prepared_data_by_year(
+            prepared,
+            mode="Ensemble des années",
+        )
+        self.assertEqual(len(full.transactions), len(prepared.transactions))
+        self.assertIsNone(full.year_scope_start)
+        self.assertIsNone(full.year_scope_end)
 
     def test_mpesa_comparison_windows_support_microfinance_week_and_filtered_period(self) -> None:
         microfinance = build_mpesa_comparison_windows(

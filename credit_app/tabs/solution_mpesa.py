@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import time
 import hashlib
 from io import BytesIO
+import re
 from typing import Any
 
 import pandas as pd
@@ -18,11 +19,13 @@ from credit_app.services.mpesa_analysis import (
     DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
     DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
     DEFAULT_MPESA_COMPARISON_PERIOD,
+    DEFAULT_MPESA_YEAR_SCOPE_MODE,
     FIXED_SAVINGS_REQUIRED_COLUMNS,
     G2_CLASSIFIED_TRANSACTION_COLUMNS,
     G2_TRANSACTION_REQUIRED_COLUMNS,
     LOAN_USEFUL_COLUMNS,
     MPESA_COMPARISON_PERIOD_OPTIONS,
+    MPESA_YEAR_SCOPE_MODES,
     PERFECT_CLIENTS_REQUIRED_COLUMNS,
     TRANSACTION_REQUIRED_COLUMNS,
     TRANSACTION_ANOMALY_CONTROL_NAMES,
@@ -75,6 +78,7 @@ from credit_app.services.mpesa_analysis import (
     prepare_transactions,
     promote_g2_statement_header,
     search_customers,
+    scope_mpesa_prepared_data_by_year,
     validate_required_columns,
 )
 from credit_app.ui import (
@@ -152,6 +156,31 @@ def _selected_mpesa_comparison_period() -> str:
         if selected in MPESA_COMPARISON_PERIOD_OPTIONS
         else DEFAULT_MPESA_COMPARISON_PERIOD
     )
+
+
+def _selected_mpesa_year_scope() -> tuple[str, int | None, int | None]:
+    mode = str(
+        st.session_state.get(
+            "mpesa_year_scope_mode",
+            DEFAULT_MPESA_YEAR_SCOPE_MODE,
+        )
+        or DEFAULT_MPESA_YEAR_SCOPE_MODE
+    )
+    if mode not in MPESA_YEAR_SCOPE_MODES:
+        mode = DEFAULT_MPESA_YEAR_SCOPE_MODE
+    if mode == "Année unique":
+        selected_year = int(
+            st.session_state.get("mpesa_year_scope_single", pd.Timestamp.now().year)
+        )
+        return mode, selected_year, selected_year
+    if mode == "Plage d'années":
+        current_year = int(pd.Timestamp.now().year)
+        return (
+            mode,
+            int(st.session_state.get("mpesa_year_scope_start", current_year - 1)),
+            int(st.session_state.get("mpesa_year_scope_end", current_year)),
+        )
+    return DEFAULT_MPESA_YEAR_SCOPE_MODE, None, None
 
 
 def _render_weekly_comparison(
@@ -2260,12 +2289,18 @@ def _render_dat_repayment_schedule(prepared: MpesaPreparedData) -> None:
         st.info("Chargez Savings Account [Turbo] pour identifier les DAT echus ou proches de leur terme.")
         return
 
+    default_analysis_date = _latest_complete_turbo_date(prepared)
+    if prepared.year_scope_end is not None:
+        default_analysis_date = min(default_analysis_date, prepared.year_scope_end)
+    scope_token = re.sub(r"[^0-9A-Za-z]+", "_", prepared.year_scope_label).strip("_")
+    analysis_date_key = f"mpesa_dat_repayment_analysis_date_{scope_token or 'all'}"
+
     controls = st.columns(2, gap="medium")
     with controls[0]:
         analysis_date = st.date_input(
             "Date de situation DAT",
-            value=pd.Timestamp.now().date(),
-            key="mpesa_dat_repayment_analysis_date",
+            value=default_analysis_date.date(),
+            key=analysis_date_key,
             help="Les DAT deja echus et ceux arrivant a terme apres cette date sont classes separement.",
         )
     with controls[1]:
@@ -6616,6 +6651,26 @@ def render_solution_mpesa_tab() -> None:
         customers_raw,
         perfect_raw,
     )
+    year_scope_mode, year_scope_start, year_scope_end = _selected_mpesa_year_scope()
+    analysis_prepared = scope_mpesa_prepared_data_by_year(
+        prepared,
+        mode=year_scope_mode,
+        start_year=year_scope_start,
+        end_year=year_scope_end,
+    )
+    if analysis_prepared.year_scope_start is None:
+        st.caption(
+            "Périmètre annuel M_PESA : Ensemble des années. "
+            "Les analyses utilisent l'intégralité des données chargées."
+        )
+    else:
+        st.caption(
+            f"Périmètre annuel M_PESA : {analysis_prepared.year_scope_label}. "
+            f"Transactions Turbo retenues : {len(analysis_prepared.transactions):,} sur "
+            f"{len(prepared.transactions):,}. Les positions Savings, DAT, crédits et clients "
+            f"sont conservées jusqu'au {analysis_prepared.year_scope_end:%d/%m/%Y}. "
+            "Les fichiers complets restent chargés en mémoire."
+        )
     tabs_container_key = "mpesa_solution_tabs"
     inject_professional_tabs_css(container_key=tabs_container_key)
     tabs_container = st.container(key=tabs_container_key)
@@ -6625,16 +6680,16 @@ def render_solution_mpesa_tab() -> None:
     with sub_tabs[0]:
         _render_import_tab(prepared, missing)
     with sub_tabs[1]:
-        _render_customer_extract(prepared)
+        _render_customer_extract(analysis_prepared)
     with sub_tabs[2]:
-        _render_finance_turbo_tab(prepared)
+        _render_finance_turbo_tab(analysis_prepared)
     with sub_tabs[3]:
-        _render_dat_tab(None, prepared)
+        _render_dat_tab(None, analysis_prepared)
     with sub_tabs[4]:
-        _render_g2_dat_tab(None, prepared)
+        _render_g2_dat_tab(None, analysis_prepared)
     with sub_tabs[5]:
-        _render_loans_tab(None, prepared)
+        _render_loans_tab(None, analysis_prepared)
     with sub_tabs[6]:
-        _render_perfect_client_tab(prepared)
+        _render_perfect_client_tab(analysis_prepared)
     with sub_tabs[7]:
-        _render_statistics_tab(prepared)
+        _render_statistics_tab(analysis_prepared)

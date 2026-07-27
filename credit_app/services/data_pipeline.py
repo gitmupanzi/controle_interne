@@ -45,7 +45,16 @@ CYCLE_NAME_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 CYCLE_COLUMN_HINTS: dict[str, frozenset[str]] = {
-    "conformite": frozenset({"numero_alerte", "type_alerte", "etat_alerte", "statut_couverture", "source_declaration"}),
+    "conformite": frozenset({
+        "analyse",
+        "type_element",
+        "rubrique",
+        "statut_couverture",
+        "origine_declaration",
+        "analyse_source",
+        "type_ligne",
+        "source_declaration",
+    }),
     "credit": frozenset({"dossier_id", "montant_accorde", "encours_credit", "par30", "date_decaissement"}),
     "epargne": frozenset({"compte_id", "solde_compte", "solde_epargne", "date_derniere_transaction"}),
     "crm_clients": frozenset({"client_id", "telephone", "email", "statut_client"}),

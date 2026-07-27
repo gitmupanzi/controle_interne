@@ -39,6 +39,22 @@ class DataPipelineTests(unittest.TestCase):
         self.assertEqual(result.cycle_key, "operations_depot_retrait")
         self.assertGreater(result.confidence, 0.5)
 
+    def test_cycle_detection_recognizes_conformite_156_contract(self) -> None:
+        result = detect_cycle(
+            "extraction.xlsx",
+            ["analyse_source", "type_ligne", "rubrique", "statut_couverture", "source_declaration"],
+        )
+        self.assertEqual(result.cycle_key, "conformite")
+        self.assertGreater(result.confidence, 0.5)
+
+    def test_cycle_detection_recognizes_user_facing_conformite_156_contract(self) -> None:
+        result = detect_cycle(
+            "extraction.xlsx",
+            ["analyse", "type_element", "rubrique", "statut_couverture", "origine_declaration"],
+        )
+        self.assertEqual(result.cycle_key, "conformite")
+        self.assertGreater(result.confidence, 0.5)
+
     def test_compilation_rejects_different_cycles_and_incompatible_schemas(self) -> None:
         different_cycles = assess_compilation_compatibility(
             [

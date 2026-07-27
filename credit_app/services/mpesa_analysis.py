@@ -323,6 +323,9 @@ class MpesaPreparedData:
     perfect_clients: pd.DataFrame = field(default_factory=pd.DataFrame)
     cache_fingerprint: str = ""
     fixed_savings_control: pd.DataFrame = field(default_factory=pd.DataFrame)
+    year_scope_label: str = "Ensemble des années"
+    year_scope_start: pd.Timestamp | None = None
+    year_scope_end: pd.Timestamp | None = None
 
 
 def _is_empty_text(value: Any) -> bool:
@@ -337,6 +340,108 @@ def normalize_label(value: Any) -> str:
     text = "".join(char for char in text if not unicodedata.combining(char))
     text = re.sub(r"\s+", " ", text).strip().lower()
     return text
+
+
+MPESA_YEAR_SCOPE_MODES = [
+    "Ensemble des années",
+    "Année unique",
+    "Plage d'années",
+]
+DEFAULT_MPESA_YEAR_SCOPE_MODE = MPESA_YEAR_SCOPE_MODES[0]
+
+
+def scope_mpesa_prepared_data_by_year(
+    prepared: MpesaPreparedData,
+    *,
+    mode: str = DEFAULT_MPESA_YEAR_SCOPE_MODE,
+    start_year: int | None = None,
+    end_year: int | None = None,
+) -> MpesaPreparedData:
+    """Crée une vue annuelle non destructive des sources M_PESA préparées.
+
+    Les flux Transactions Turbo/G2 sont filtrés strictement dans la période.
+    Les instantanés Savings, DAT, Loans et Customers conservent les éléments
+    créés avant la fin du périmètre afin de ne pas faire disparaître une
+    position ancienne encore active.
+    """
+    normalized_mode = normalize_label(mode)
+    if normalized_mode == normalize_label(DEFAULT_MPESA_YEAR_SCOPE_MODE):
+        return replace(
+            prepared,
+            year_scope_label=DEFAULT_MPESA_YEAR_SCOPE_MODE,
+            year_scope_start=None,
+            year_scope_end=None,
+        )
+
+    current_year = pd.Timestamp.now().year
+    if normalized_mode == normalize_label("Année unique"):
+        selected_year = int(start_year or end_year or current_year)
+        first_year = selected_year
+        last_year = selected_year
+        scope_label = str(selected_year)
+    else:
+        first_year = int(start_year or current_year)
+        last_year = int(end_year or first_year)
+        if first_year > last_year:
+            first_year, last_year = last_year, first_year
+        scope_label = f"{first_year}-{last_year}"
+
+    period_start = pd.Timestamp(year=first_year, month=1, day=1)
+    period_end = pd.Timestamp(year=last_year, month=12, day=31)
+    period_end_exclusive = period_end + pd.Timedelta(days=1)
+
+    def _date_series(frame: pd.DataFrame, columns: list[str]) -> pd.Series:
+        dates = pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
+        for column in columns:
+            if column in frame.columns:
+                dates = dates.combine_first(
+                    pd.to_datetime(frame[column], errors="coerce")
+                )
+        return dates
+
+    def _filter_flows(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            return frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+        dates = _date_series(frame, columns)
+        return frame.loc[
+            dates.ge(period_start) & dates.lt(period_end_exclusive)
+        ].copy()
+
+    def _filter_snapshot(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            return frame.copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+        dates = _date_series(frame, columns)
+        return frame.loc[dates.isna() | dates.lt(period_end_exclusive)].copy()
+
+    return replace(
+        prepared,
+        transactions=_filter_flows(prepared.transactions, ["created_at"]),
+        g2_transactions=_filter_flows(
+            prepared.g2_transactions,
+            ["completion_time", "initiation_time"],
+        ),
+        current_savings=_filter_snapshot(
+            prepared.current_savings,
+            ["date_activated", "date_approved", "created_at"],
+        ),
+        fixed_savings=_filter_snapshot(
+            prepared.fixed_savings,
+            ["date_activated", "date_approved", "created_at"],
+        ),
+        fixed_savings_control=_filter_snapshot(
+            prepared.fixed_savings_control,
+            ["date_activated", "date_approved", "created_at"],
+        ),
+        loans=_filter_snapshot(prepared.loans, ["created_at"]),
+        customers=_filter_snapshot(prepared.customers, ["created_at"]),
+        cache_fingerprint=(
+            f"{prepared.cache_fingerprint or f'session-object:{id(prepared)}'}"
+            f"|year-scope:{first_year}-{last_year}"
+        ),
+        year_scope_label=scope_label,
+        year_scope_start=period_start,
+        year_scope_end=period_end,
+    )
 
 
 def normalize_g2_transaction_status(value: Any) -> str:
@@ -7828,6 +7933,14 @@ def build_mpesa_statistics_report(
 
     source_priority = _mpesa_statistics_source_rows(prepared)
     customer_reference = _mpesa_customer_reference(prepared)
+    if not customer_reference.empty and "date_creation" in customer_reference.columns:
+        reference_dates = pd.to_datetime(
+            customer_reference["date_creation"], errors="coerce"
+        )
+        customer_reference = customer_reference.loc[
+            reference_dates.isna()
+            | reference_dates.lt(end_date + pd.Timedelta(days=1))
+        ].copy()
     total_known_clients = int(customer_reference["client_key"].nunique()) if not customer_reference.empty else 0
     active_clients = (
         int(clean_identifier(events["customer_id"]).replace("", pd.NA).nunique())
@@ -7847,7 +7960,12 @@ def build_mpesa_statistics_report(
     if not customer_reference.empty:
         growth = customer_reference.copy()
         growth["date_creation"] = pd.to_datetime(growth["date_creation"], errors="coerce")
-        growth = growth.loc[growth["date_creation"].notna() & growth["date_creation"].le(end_date + pd.Timedelta(days=1))]
+        growth_mask = growth["date_creation"].notna() & growth["date_creation"].lt(
+            end_date + pd.Timedelta(days=1)
+        )
+        if prepared.year_scope_start is not None:
+            growth_mask &= growth["date_creation"].ge(prepared.year_scope_start)
+        growth = growth.loc[growth_mask]
         if not growth.empty:
             growth["periode"] = _turbo_period_bucket(growth["date_creation"], frequency)
             customer_growth = (
@@ -8038,6 +8156,9 @@ def build_mpesa_statistics_report(
         "date_fin": end_date,
         "frequence": frequency,
         "periode_comparaison": comparison_period,
+        "perimetre_annuel": prepared.year_scope_label,
+        "date_debut_perimetre_annuel": prepared.year_scope_start,
+        "date_fin_perimetre_annuel": prepared.year_scope_end,
         "priorite_sources": source_priority,
         "clients_reference": customer_reference,
         "clients_croissance": customer_growth,
@@ -8142,6 +8263,13 @@ def create_mpesa_statistics_word(
         )
         or DEFAULT_MPESA_COMPARISON_PERIOD
     )
+    annual_scope_text = str(
+        statistics_report.get(
+            "perimetre_annuel",
+            DEFAULT_MPESA_YEAR_SCOPE_MODE,
+        )
+        or DEFAULT_MPESA_YEAR_SCOPE_MODE
+    )
 
     document = Document()
     section = document.sections[0]
@@ -8187,10 +8315,11 @@ def create_mpesa_statistics_word(
     for run in criteria_title.paragraphs[0].runs:
         run.bold = True
         run.font.color.rgb = RGBColor(255, 255, 255)
-    criteria = header.cell(1, 1).add_table(rows=4, cols=2)
+    criteria = header.cell(1, 1).add_table(rows=5, cols=2)
     for row_index, (label, value) in enumerate(
         [
             ("Periode :", period_text),
+            ("Perimetre annuel :", annual_scope_text),
             ("Frequence :", frequency_text),
             ("Comparaison :", comparison_period_text),
             ("Source des montants :", "Turbo uniquement"),
