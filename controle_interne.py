@@ -92,7 +92,11 @@ from credit_app.domain import (
 )
 from credit_app.components.preparation import render_preparation_status
 from credit_app.services.data_pipeline import build_preparation_summary, prepare_payload_from_dataframe
-from credit_app.services.mpesa_analysis import DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT
+from credit_app.services.mpesa_analysis import (
+    DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+    DEFAULT_MPESA_COMPARISON_PERIOD,
+    MPESA_COMPARISON_PERIOD_OPTIONS,
+)
 from credit_app.tabs.audit_control import render_analyste_credit_tab
 from credit_app.tabs.conformite import render_conformite_cycle_tab
 from credit_app.tabs.crm_clients import render_crm_clients_tab
@@ -650,6 +654,21 @@ def main() -> None:
             help=(
                 "Utilisé par Solution M-PESA pour estimer l'intérêt simple du DAT entre "
                 "date_approved et maturity_date. La valeur 0 désactive l'estimation."
+            ),
+        )
+        st.session_state.setdefault(
+            "mpesa_comparison_period",
+            DEFAULT_MPESA_COMPARISON_PERIOD,
+        )
+        st.selectbox(
+            "Période de comparaison M_PESA",
+            options=MPESA_COMPARISON_PERIOD_OPTIONS,
+            key="mpesa_comparison_period",
+            help=(
+                "La semaine microfinance commence le lundi et compare les mêmes "
+                "jours à la semaine précédente. Les options glissantes utilisent "
+                "deux fenêtres consécutives. Période filtrée reprend exactement "
+                "Date de début et Date de fin lorsqu'elles sont disponibles."
             ),
         )
 

@@ -6753,7 +6753,10 @@ def _mpesa_statistics_source_rows(prepared: MpesaPreparedData) -> pd.DataFrame:
             "Facultatif utile",
             prepared.g2_transactions,
             "completion_time",
-            "Nom client et preuve de rapprochement; ne calcule pas les montants.",
+            (
+                "Nom client et qualité du rapprochement des entrées 1441 et sorties "
+                "15558; ne calcule aucun montant financier."
+            ),
         ),
         (
             6,
@@ -6842,12 +6845,950 @@ def _mpesa_customer_reference(prepared: MpesaPreparedData) -> pd.DataFrame:
     )
 
 
+MPESA_COMPARISON_PERIOD_OPTIONS = [
+    "Semaine microfinance (lundi)",
+    "7 jours glissants",
+    "15 jours glissants",
+    "30 jours glissants",
+    "Période filtrée",
+]
+DEFAULT_MPESA_COMPARISON_PERIOD = MPESA_COMPARISON_PERIOD_OPTIONS[0]
+
+
+def build_mpesa_comparison_windows(
+    *,
+    date_end: Any,
+    date_start: Any | None = None,
+    comparison_period: str = DEFAULT_MPESA_COMPARISON_PERIOD,
+) -> dict[str, Any]:
+    """Construit deux périodes comparables selon l'horizon choisi.
+
+    La semaine microfinance commence le lundi. Lorsqu'elle est incomplète,
+    la référence porte sur les mêmes jours de la semaine précédente : un
+    samedi compare donc lundi-samedi à lundi-samedi.
+    """
+    current_end = pd.Timestamp(date_end).normalize()
+    mode = normalize_label(comparison_period)
+    if mode == normalize_label("Période filtrée"):
+        parsed_start = pd.to_datetime(date_start, errors="coerce")
+        current_start = (
+            pd.Timestamp(parsed_start).normalize()
+            if pd.notna(parsed_start)
+            else current_end
+        )
+        if current_start > current_end:
+            current_start, current_end = current_end, current_start
+        duration_days = int((current_end - current_start).days) + 1
+        label = "Période filtrée"
+    elif mode == normalize_label("15 jours glissants"):
+        duration_days = 15
+        current_start = current_end - pd.Timedelta(days=duration_days - 1)
+        label = "15 jours glissants"
+    elif mode == normalize_label("30 jours glissants"):
+        duration_days = 30
+        current_start = current_end - pd.Timedelta(days=duration_days - 1)
+        label = "30 jours glissants"
+    elif mode == normalize_label("7 jours glissants"):
+        duration_days = 7
+        current_start = current_end - pd.Timedelta(days=duration_days - 1)
+        label = "7 jours glissants"
+    else:
+        current_start = current_end - pd.Timedelta(days=current_end.weekday())
+        duration_days = int((current_end - current_start).days) + 1
+        previous_start = current_start - pd.Timedelta(days=7)
+        previous_end = previous_start + pd.Timedelta(days=duration_days - 1)
+        return {
+            "periode_comparaison": DEFAULT_MPESA_COMPARISON_PERIOD,
+            "date_debut_periode_courante": current_start,
+            "date_fin_periode_courante": current_end,
+            "date_debut_periode_precedente": previous_start,
+            "date_fin_periode_precedente": previous_end,
+            "nombre_jours": duration_days,
+        }
+
+    previous_end = current_start - pd.Timedelta(days=1)
+    previous_start = previous_end - pd.Timedelta(days=duration_days - 1)
+    return {
+        "periode_comparaison": label,
+        "date_debut_periode_courante": current_start,
+        "date_fin_periode_courante": current_end,
+        "date_debut_periode_precedente": previous_start,
+        "date_fin_periode_precedente": previous_end,
+        "nombre_jours": duration_days,
+    }
+
+
+G2_STATISTICS_QUALITY_COLUMNS = [
+    "categorie",
+    "currency_code",
+    "operations_g2",
+    "operations_terminees",
+    "operations_rapprochees",
+    "operations_non_rapprochees",
+    "taux_rapprochement_pct",
+    "controle_attendu",
+]
+
+
+def build_mpesa_g2_statistics_quality(
+    prepared: MpesaPreparedData,
+    *,
+    date_start: Any | None = None,
+    date_end: Any | None = None,
+    comparison_period: str = DEFAULT_MPESA_COMPARISON_PERIOD,
+) -> dict[str, pd.DataFrame]:
+    """Mesure la couverture et la qualité G2 sans alimenter les montants Turbo.
+
+    Les entrées 1441 sont rapprochées par ``Receipt No = ref_no``. Les sorties
+    B2C 15558 utilisent également le repli Turbo documenté par téléphone,
+    devise, montant et heure. Les demandes de crédit restent un périmètre de
+    contrôle séparé : leur montant net G2 ne remplace jamais le prêt brut Turbo.
+    """
+    g2_source = (
+        prepared.g2_transactions.copy()
+        if isinstance(prepared.g2_transactions, pd.DataFrame)
+        else pd.DataFrame()
+    )
+    empty_quality = pd.DataFrame(columns=G2_STATISTICS_QUALITY_COLUMNS)
+    empty_status = pd.DataFrame(
+        columns=["currency_code", "statut_g2", "nombre_operations", "part_pct"]
+    )
+    empty_weekly = pd.DataFrame(columns=MPESA_WEEKLY_COMPARISON_COLUMNS)
+    empty_unmatched = pd.DataFrame(
+        columns=[
+            "date",
+            "receipt_no",
+            "categorie",
+            "currency_code",
+            "opposite_party",
+            "montant",
+            "statut_rapprochement",
+            "methode_rapprochement_turbo",
+            "fichier_source_g2",
+        ]
+    )
+
+    def _source_files(frame: pd.DataFrame) -> list[str]:
+        if frame.empty or "fichier_source_g2" not in frame.columns:
+            return []
+        files: set[str] = set()
+        for value in frame["fichier_source_g2"].dropna().astype(str):
+            files.update(
+                part.strip()
+                for part in value.split("|")
+                if part.strip()
+            )
+        return sorted(files)
+
+    files = _source_files(g2_source)
+    source_names = " | ".join(files).casefold()
+    reason_source = clean_text(
+        g2_source.get("reason_type", pd.Series("", index=g2_source.index))
+    ).map(normalize_label)
+    has_entries = (
+        "1441" in source_names
+        or reason_source.str.contains(
+            r"bisoubisouc2b|bisoubisourepayment", regex=True, na=False
+        ).any()
+    )
+    has_outputs = (
+        "15558" in source_names
+        or reason_source.str.contains(
+            r"bisoubisoub2c|bisoubisouloanrequest", regex=True, na=False
+        ).any()
+    )
+    if not g2_source.empty and has_entries and has_outputs:
+        coverage_label = "Complète - entrées 1441 et sorties 15558"
+    elif not g2_source.empty and has_entries:
+        coverage_label = "Partielle - entrées 1441 uniquement"
+    elif not g2_source.empty and has_outputs:
+        coverage_label = "Partielle - sorties 15558 uniquement"
+    elif not g2_source.empty:
+        coverage_label = "Partielle - compte G2 non identifié"
+    else:
+        coverage_label = "G2 absent"
+
+    source_dates = pd.to_datetime(
+        g2_source.get(
+            "completion_time",
+            pd.Series(pd.NaT, index=g2_source.index),
+        ),
+        errors="coerce",
+    )
+    coverage = pd.DataFrame(
+        [
+            {
+                "couverture_g2": coverage_label,
+                "entrees_1441_presentes": bool(has_entries),
+                "sorties_15558_presentes": bool(has_outputs),
+                "nombre_fichiers_g2": len(files),
+                "fichiers_g2": " | ".join(files),
+                "date_min_g2": source_dates.min() if not source_dates.dropna().empty else pd.NaT,
+                "date_max_g2": source_dates.max() if not source_dates.dropna().empty else pd.NaT,
+                "role_statistique": (
+                    "Identité client et preuve de rapprochement uniquement; "
+                    "aucun montant financier n'est calculé depuis G2."
+                ),
+            }
+        ]
+    )
+    if g2_source.empty:
+        return {
+            "couverture": coverage,
+            "qualite_rapprochement": empty_quality,
+            "statuts": empty_status,
+            "non_rapprochees": empty_unmatched,
+            "comparaison_hebdomadaire": empty_weekly,
+        }
+
+    end_date = pd.Timestamp(
+        _mpesa_analysis_date(prepared, date_end)
+    ).normalize()
+    if date_start is not None and pd.notna(pd.to_datetime(date_start, errors="coerce")):
+        start_date = pd.Timestamp(pd.to_datetime(date_start, errors="coerce")).normalize()
+    else:
+        valid_dates = source_dates.dropna()
+        start_date = (
+            pd.Timestamp(valid_dates.min()).normalize()
+            if not valid_dates.empty
+            else end_date
+        )
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    comparison_windows = build_mpesa_comparison_windows(
+        date_start=start_date,
+        date_end=end_date,
+        comparison_period=comparison_period,
+    )
+    current_period_start = comparison_windows["date_debut_periode_courante"]
+    current_period_end = comparison_windows["date_fin_periode_courante"]
+    previous_period_start = comparison_windows["date_debut_periode_precedente"]
+    previous_period_end = comparison_windows["date_fin_periode_precedente"]
+    comparison_label = comparison_windows["periode_comparaison"]
+    scope_start = min(start_date, previous_period_start)
+    scoped_g2 = filter_g2_transactions_by_completion_time(
+        g2_source,
+        start_date=scope_start,
+        end_date=end_date,
+    )
+    if scoped_g2.empty:
+        return {
+            "couverture": coverage,
+            "qualite_rapprochement": empty_quality,
+            "statuts": empty_status,
+            "non_rapprochees": empty_unmatched,
+            "comparaison_hebdomadaire": empty_weekly,
+        }
+
+    crosscheck = _enrich_g2_with_portal_controls(
+        scoped_g2,
+        prepared.transactions,
+    )
+    if crosscheck.empty:
+        return {
+            "couverture": coverage,
+            "qualite_rapprochement": empty_quality,
+            "statuts": empty_status,
+            "non_rapprochees": empty_unmatched,
+            "comparaison_hebdomadaire": empty_weekly,
+        }
+
+    crosscheck["date_g2_statistique"] = pd.to_datetime(
+        crosscheck.get(
+            "completion_time",
+            pd.Series(pd.NaT, index=crosscheck.index),
+        ),
+        errors="coerce",
+    )
+    crosscheck["currency_code"] = clean_text(
+        crosscheck.get(
+            "currency_code",
+            pd.Series("", index=crosscheck.index),
+        )
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    reason = clean_text(
+        crosscheck.get(
+            "reason_type",
+            pd.Series("", index=crosscheck.index),
+        )
+    ).map(normalize_label)
+    crosscheck["categorie"] = np.select(
+        [
+            reason.str.contains(
+                r"bisoubisouc2b|bisoubisourepayment", regex=True, na=False
+            ),
+            reason.str.contains(r"bisoubisoub2c", regex=True, na=False),
+            reason.str.contains(r"bisoubisouloanrequest", regex=True, na=False),
+            reason.str.contains(r"super transaction", regex=True, na=False),
+        ],
+        [
+            "Entrées et remboursements [1441]",
+            "Sorties B2C [15558]",
+            "Versements de prêts [15558]",
+            "Opérations internes",
+        ],
+        default="Autres opérations G2",
+    )
+    crosscheck["operation_terminee"] = g2_completed_transaction_mask(crosscheck)
+    reconciliation = clean_text(
+        crosscheck.get(
+            "statut_rapprochement",
+            pd.Series("", index=crosscheck.index),
+        )
+    )
+    crosscheck["operation_rapprochee"] = reconciliation.isin(
+        ["Rapproche exact", "Rapproche avec ecart"]
+    )
+    crosscheck["operation_comparable"] = crosscheck["categorie"].isin(
+        ["Entrées et remboursements [1441]", "Sorties B2C [15558]"]
+    )
+
+    period_mask = (
+        crosscheck["date_g2_statistique"].ge(start_date)
+        & crosscheck["date_g2_statistique"].lt(end_date + pd.Timedelta(days=1))
+    )
+    period = crosscheck.loc[period_mask].copy()
+
+    def _control_label(category: str) -> str:
+        if category == "Entrées et remboursements [1441]":
+            return "Receipt No. G2 = ref_no Turbo"
+        if category == "Sorties B2C [15558]":
+            return "Téléphone + devise + montant + heure Turbo"
+        if category == "Versements de prêts [15558]":
+            return "Contrôle crédit brut / intérêt 7 % / net versé"
+        if category == "Opérations internes":
+            return "Non applicable - opération interne"
+        return "À analyser séparément"
+
+    quality_rows: list[dict[str, Any]] = []
+    if not period.empty:
+        for (category, currency), group in period.groupby(
+            ["categorie", "currency_code"],
+            dropna=False,
+        ):
+            completed = group["operation_terminee"]
+            comparable = bool(group["operation_comparable"].any())
+            matched_count = int((completed & group["operation_rapprochee"]).sum())
+            completed_count = int(completed.sum())
+            non_matched_count = (
+                completed_count - matched_count
+                if comparable
+                else 0
+            )
+            quality_rows.append(
+                {
+                    "categorie": str(category),
+                    "currency_code": str(currency),
+                    "operations_g2": int(len(group)),
+                    "operations_terminees": completed_count,
+                    "operations_rapprochees": matched_count if comparable else 0,
+                    "operations_non_rapprochees": non_matched_count,
+                    "taux_rapprochement_pct": (
+                        100.0 * matched_count / completed_count
+                        if comparable and completed_count
+                        else np.nan
+                    ),
+                    "controle_attendu": _control_label(str(category)),
+                }
+            )
+    quality = pd.DataFrame(quality_rows, columns=G2_STATISTICS_QUALITY_COLUMNS)
+
+    status_rows: list[dict[str, Any]] = []
+    if not period.empty:
+        status_values = period.get(
+            "transaction_status",
+            pd.Series("Non renseigne", index=period.index),
+        ).map(normalize_g2_transaction_status)
+        status_frame = pd.DataFrame(
+            {
+                "currency_code": period["currency_code"],
+                "statut_g2": status_values,
+            }
+        )
+        for currency, group in status_frame.groupby("currency_code", dropna=False):
+            total = len(group)
+            for status, count in group["statut_g2"].value_counts(dropna=False).items():
+                status_rows.append(
+                    {
+                        "currency_code": str(currency),
+                        "statut_g2": str(status),
+                        "nombre_operations": int(count),
+                        "part_pct": 100.0 * int(count) / total if total else np.nan,
+                    }
+                )
+    statuses = pd.DataFrame(
+        status_rows,
+        columns=["currency_code", "statut_g2", "nombre_operations", "part_pct"],
+    )
+
+    unmatched_mask = (
+        period["operation_terminee"]
+        & period["operation_comparable"]
+        & ~period["operation_rapprochee"]
+    )
+    unmatched_source = period.loc[unmatched_mask].copy()
+    unmatched = pd.DataFrame(
+        {
+            "date": unmatched_source.get(
+                "date_g2_statistique",
+                pd.Series(pd.NaT, index=unmatched_source.index),
+            ),
+            "receipt_no": unmatched_source.get(
+                "receipt_no",
+                pd.Series("", index=unmatched_source.index),
+            ),
+            "categorie": unmatched_source.get(
+                "categorie",
+                pd.Series("", index=unmatched_source.index),
+            ),
+            "currency_code": unmatched_source.get(
+                "currency_code",
+                pd.Series("", index=unmatched_source.index),
+            ),
+            "opposite_party": unmatched_source.get(
+                "opposite_party",
+                pd.Series("", index=unmatched_source.index),
+            ),
+            "montant": pd.concat(
+                [
+                    numeric_column(unmatched_source, "montant_entree"),
+                    numeric_column(unmatched_source, "montant_sortie"),
+                ],
+                axis=1,
+            ).max(axis=1),
+            "statut_rapprochement": unmatched_source.get(
+                "statut_rapprochement",
+                pd.Series("", index=unmatched_source.index),
+            ),
+            "methode_rapprochement_turbo": unmatched_source.get(
+                "methode_rapprochement_turbo",
+                pd.Series("", index=unmatched_source.index),
+            ),
+            "fichier_source_g2": unmatched_source.get(
+                "fichier_source_g2",
+                pd.Series("", index=unmatched_source.index),
+            ),
+        }
+    ).reset_index(drop=True)
+
+    weekly_rows: list[dict[str, Any]] = []
+    weekly_coverage = "Non calculable"
+    valid_scope_dates = crosscheck["date_g2_statistique"].dropna()
+    if not valid_scope_dates.empty:
+        weekly_coverage = (
+            "Complete"
+            if valid_scope_dates.min().normalize() <= previous_period_start
+            and valid_scope_dates.max().normalize() >= current_period_end
+            else "Partielle"
+        )
+
+    def _week_rate(
+        frame: pd.DataFrame,
+        category: str | None,
+        currency: str,
+    ) -> float:
+        selected = frame.loc[frame["currency_code"].eq(currency)]
+        if category is not None:
+            selected = selected.loc[selected["categorie"].eq(category)]
+        selected = selected.loc[
+            selected["operation_terminee"] & selected["operation_comparable"]
+        ]
+        if selected.empty:
+            return np.nan
+        return float(100.0 * selected["operation_rapprochee"].sum() / len(selected))
+
+    current_week = crosscheck.loc[
+        crosscheck["date_g2_statistique"].ge(current_period_start)
+        & crosscheck["date_g2_statistique"].lt(current_period_end + pd.Timedelta(days=1))
+    ]
+    previous_week = crosscheck.loc[
+        crosscheck["date_g2_statistique"].ge(previous_period_start)
+        & crosscheck["date_g2_statistique"].lt(previous_period_end + pd.Timedelta(days=1))
+    ]
+    weekly_currencies = sorted(
+        set(current_week["currency_code"].dropna().astype(str))
+        | set(previous_week["currency_code"].dropna().astype(str))
+    )
+    weekly_indicators = [
+        (None, "g2_taux_global", "Taux de rapprochement G2"),
+        (
+            "Entrées et remboursements [1441]",
+            "g2_taux_entrees",
+            "Taux de rapprochement des entrées",
+        ),
+        (
+            "Sorties B2C [15558]",
+            "g2_taux_sorties_b2c",
+            "Taux de rapprochement des sorties B2C",
+        ),
+    ]
+    for currency in weekly_currencies:
+        for category, indicator_key, label in weekly_indicators:
+            current_rate = _week_rate(current_week, category, currency)
+            previous_rate = _week_rate(previous_week, category, currency)
+            if pd.isna(current_rate) and pd.isna(previous_rate):
+                continue
+            absolute_delta = (
+                current_rate - previous_rate
+                if pd.notna(current_rate) and pd.notna(previous_rate)
+                else np.nan
+            )
+            evolution = (
+                100.0 * absolute_delta / previous_rate
+                if pd.notna(absolute_delta) and previous_rate != 0
+                else np.nan
+            )
+            weekly_rows.append(
+                {
+                    "bloc": "Qualité G2",
+                    "indicator_key": indicator_key,
+                    "indicateur": label,
+                    "currency_code": currency,
+                    "valeur_semaine_courante": current_rate,
+                    "valeur_semaine_precedente": previous_rate,
+                    "ecart_absolu": absolute_delta,
+                    "evolution_pct": evolution,
+                    "unite": "pourcentage",
+                    "source": "Transactions [G2] + Transactions [Turbo]",
+                    "date_debut_semaine_courante": current_period_start,
+                    "date_fin_semaine_courante": current_period_end,
+                    "date_debut_semaine_precedente": previous_period_start,
+                    "date_fin_semaine_precedente": previous_period_end,
+                    "periode_comparaison": comparison_label,
+                    "couverture": weekly_coverage,
+                }
+            )
+    weekly = pd.DataFrame(weekly_rows, columns=MPESA_WEEKLY_COMPARISON_COLUMNS)
+    return {
+        "couverture": coverage,
+        "qualite_rapprochement": quality,
+        "statuts": statuses,
+        "non_rapprochees": unmatched,
+        "comparaison_hebdomadaire": weekly,
+    }
+
+
+MPESA_WEEKLY_COMPARISON_COLUMNS = [
+    "bloc",
+    "indicator_key",
+    "indicateur",
+    "currency_code",
+    "valeur_semaine_courante",
+    "valeur_semaine_precedente",
+    "ecart_absolu",
+    "evolution_pct",
+    "unite",
+    "source",
+    "date_debut_semaine_courante",
+    "date_fin_semaine_courante",
+    "date_debut_semaine_precedente",
+    "date_fin_semaine_precedente",
+    "periode_comparaison",
+    "couverture",
+]
+
+
+def build_mpesa_weekly_comparison(
+    prepared: MpesaPreparedData,
+    *,
+    as_of_date: Any | None = None,
+    date_start: Any | None = None,
+    comparison_period: str = DEFAULT_MPESA_COMPARISON_PERIOD,
+    turbo_events: pd.DataFrame | None = None,
+    turbo_transaction_lines: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Compare les indicateurs Turbo sur deux périodes consécutives comparables.
+
+    La semaine microfinance commence le lundi; les autres horizons sont
+    glissants ou reprennent la période filtrée. Les comptes d'épargne et les
+    crédits sont comparés selon leur date de création/activation, car les
+    fichiers Turbo chargés sont des instantanés. Tous les montants restent
+    séparés par devise.
+    """
+    analysis_end = _mpesa_analysis_date(prepared, as_of_date)
+    comparison_windows = build_mpesa_comparison_windows(
+        date_start=date_start,
+        date_end=analysis_end,
+        comparison_period=comparison_period,
+    )
+    current_start = comparison_windows["date_debut_periode_courante"]
+    current_end = comparison_windows["date_fin_periode_courante"]
+    previous_start = comparison_windows["date_debut_periode_precedente"]
+    previous_end = comparison_windows["date_fin_periode_precedente"]
+    comparison_label = comparison_windows["periode_comparaison"]
+
+    rows: list[dict[str, Any]] = []
+
+    def _date_series(frame: pd.DataFrame, *columns: str) -> pd.Series:
+        dates = pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
+        for column in columns:
+            if column in frame.columns:
+                dates = dates.combine_first(pd.to_datetime(frame[column], errors="coerce"))
+        return dates
+
+    def _period_mask(
+        dates: pd.Series,
+        period_start: pd.Timestamp,
+        period_end: pd.Timestamp,
+    ) -> pd.Series:
+        return dates.ge(period_start) & dates.lt(period_end + pd.Timedelta(days=1))
+
+    def _coverage(dates: pd.Series) -> str:
+        valid = dates.dropna()
+        if valid.empty:
+            return "Non calculable"
+        minimum = valid.min().normalize()
+        maximum = valid.max().normalize()
+        if minimum <= previous_start and maximum >= current_end:
+            return "Complete"
+        return "Partielle"
+
+    def _add_row(
+        *,
+        bloc: str,
+        indicator_key: str,
+        label: str,
+        current_value: Any,
+        previous_value: Any,
+        unit: str,
+        source: str,
+        currency: str = "",
+        coverage: str = "Complete",
+    ) -> None:
+        current_number = pd.to_numeric(current_value, errors="coerce")
+        previous_number = pd.to_numeric(previous_value, errors="coerce")
+        if pd.isna(current_number) or pd.isna(previous_number):
+            absolute_delta = np.nan
+            evolution_pct = np.nan
+        else:
+            current_number = float(current_number)
+            previous_number = float(previous_number)
+            absolute_delta = current_number - previous_number
+            evolution_pct = (
+                100.0 * absolute_delta / previous_number
+                if previous_number != 0
+                else (0.0 if current_number == 0 else np.nan)
+            )
+        rows.append(
+            {
+                "bloc": bloc,
+                "indicator_key": indicator_key,
+                "indicateur": label,
+                "currency_code": str(currency).strip().upper(),
+                "valeur_semaine_courante": current_number,
+                "valeur_semaine_precedente": previous_number,
+                "ecart_absolu": absolute_delta,
+                "evolution_pct": evolution_pct,
+                "unite": unit,
+                "source": source,
+                "date_debut_semaine_courante": current_start,
+                "date_fin_semaine_courante": current_end,
+                "date_debut_semaine_precedente": previous_start,
+                "date_fin_semaine_precedente": previous_end,
+                "periode_comparaison": comparison_label,
+                "couverture": coverage,
+            }
+        )
+
+    if isinstance(turbo_events, pd.DataFrame):
+        events = turbo_events.copy()
+    else:
+        events = build_turbo_operation_events(prepared.transactions)["events"]
+    event_dates = (
+        pd.to_datetime(events["created_at"], errors="coerce")
+        if not events.empty and "created_at" in events.columns
+        else pd.Series(pd.NaT, index=events.index, dtype="datetime64[ns]")
+    )
+    event_current = events.loc[_period_mask(event_dates, current_start, current_end)].copy()
+    event_previous = events.loc[_period_mask(event_dates, previous_start, previous_end)].copy()
+    event_coverage = _coverage(event_dates)
+
+    def _event_count(frame: pd.DataFrame) -> int:
+        if frame.empty:
+            return 0
+        if "event_key" in frame.columns:
+            return int(clean_identifier(frame["event_key"]).replace("", pd.NA).nunique())
+        return int(len(frame))
+
+    def _active_clients(frame: pd.DataFrame) -> int:
+        if frame.empty or "customer_id" not in frame.columns:
+            return 0
+        return int(clean_identifier(frame["customer_id"]).replace("", pd.NA).nunique())
+
+    _add_row(
+        bloc="Clients",
+        indicator_key="clients_actifs",
+        label="Clients Turbo actifs",
+        current_value=_active_clients(event_current),
+        previous_value=_active_clients(event_previous),
+        unit="nombre",
+        source="Transactions [Turbo]",
+        coverage=event_coverage,
+    )
+
+    customer_reference = _mpesa_customer_reference(prepared)
+    customer_dates = (
+        pd.to_datetime(customer_reference["date_creation"], errors="coerce")
+        if not customer_reference.empty and "date_creation" in customer_reference.columns
+        else pd.Series(pd.NaT, index=customer_reference.index, dtype="datetime64[ns]")
+    )
+    customer_current = customer_reference.loc[
+        _period_mask(customer_dates, current_start, current_end)
+    ]
+    customer_previous = customer_reference.loc[
+        _period_mask(customer_dates, previous_start, previous_end)
+    ]
+    _add_row(
+        bloc="Clients",
+        indicator_key="nouveaux_clients",
+        label="Nouveaux clients Turbo",
+        current_value=int(customer_current["client_key"].nunique()) if not customer_current.empty else 0,
+        previous_value=int(customer_previous["client_key"].nunique()) if not customer_previous.empty else 0,
+        unit="nombre",
+        source=(
+            "Customers [Turbo]"
+            if isinstance(prepared.customers, pd.DataFrame) and not prepared.customers.empty
+            else "Sources Turbo observees"
+        ),
+        coverage=_coverage(customer_dates),
+    )
+
+    def _account_count(frame: pd.DataFrame, mask: pd.Series) -> int:
+        scoped = frame.loc[mask]
+        if scoped.empty:
+            return 0
+        for column in ["savings_id", "id"]:
+            if column in scoped.columns:
+                identifiers = clean_identifier(scoped[column]).replace("", pd.NA)
+                if identifiers.notna().any():
+                    return int(identifiers.nunique())
+        return int(len(scoped))
+
+    for account_frame, indicator_key, label in [
+        (prepared.current_savings, "nouveaux_comptes_ouverts", "Nouveaux comptes ouverts"),
+        (prepared.fixed_savings, "nouveaux_dat", "Nouveaux comptes bloqués / DAT"),
+    ]:
+        frame = account_frame if isinstance(account_frame, pd.DataFrame) else pd.DataFrame()
+        account_dates = (
+            _date_series(frame, "date_activated", "date_approved", "created_at")
+            if not frame.empty
+            else pd.Series(dtype="datetime64[ns]")
+        )
+        _add_row(
+            bloc="Comptes",
+            indicator_key=indicator_key,
+            label=label,
+            current_value=_account_count(
+                frame,
+                _period_mask(account_dates, current_start, current_end),
+            ),
+            previous_value=_account_count(
+                frame,
+                _period_mask(account_dates, previous_start, previous_end),
+            ),
+            unit="nombre",
+            source="Savings Account [Turbo]",
+            coverage=_coverage(account_dates),
+        )
+
+    loans = prepared.loans.copy() if isinstance(prepared.loans, pd.DataFrame) else pd.DataFrame()
+    loan_dates = (
+        _date_series(loans, "created_at")
+        if not loans.empty
+        else pd.Series(dtype="datetime64[ns]")
+    )
+    current_loans = loans.loc[_period_mask(loan_dates, current_start, current_end)].copy()
+    previous_loans = loans.loc[_period_mask(loan_dates, previous_start, previous_end)].copy()
+
+    def _loan_count(frame: pd.DataFrame) -> int:
+        if frame.empty:
+            return 0
+        if "loan_id" in frame.columns:
+            return int(clean_identifier(frame["loan_id"]).replace("", pd.NA).nunique())
+        return int(len(frame))
+
+    _add_row(
+        bloc="Credits",
+        indicator_key="nouveaux_credits",
+        label="Nouveaux crédits",
+        current_value=_loan_count(current_loans),
+        previous_value=_loan_count(previous_loans),
+        unit="nombre",
+        source="Loans Account [Turbo]",
+        coverage=_coverage(loan_dates),
+    )
+
+    loan_currencies = sorted(
+        set(
+            clean_text(current_loans.get("currency_code", pd.Series(dtype="string")))
+            .str.upper()
+            .replace("", pd.NA)
+            .dropna()
+        )
+        | set(
+            clean_text(previous_loans.get("currency_code", pd.Series(dtype="string")))
+            .str.upper()
+            .replace("", pd.NA)
+            .dropna()
+        )
+    )
+    for currency in loan_currencies:
+        current_currency = current_loans.loc[
+            clean_text(current_loans["currency_code"]).str.upper().eq(currency)
+        ]
+        previous_currency = previous_loans.loc[
+            clean_text(previous_loans["currency_code"]).str.upper().eq(currency)
+        ]
+        _add_row(
+            bloc="Credits",
+            indicator_key="montant_nouveaux_credits",
+            label="Montant des nouveaux crédits",
+            current_value=numeric_column(current_currency, "loan_amount").sum(),
+            previous_value=numeric_column(previous_currency, "loan_amount").sum(),
+            unit="montant",
+            source="Loans Account [Turbo]",
+            currency=currency,
+            coverage=_coverage(loan_dates),
+        )
+
+    event_currencies = sorted(
+        set(
+            clean_text(event_current.get("currency_code", pd.Series(dtype="string")))
+            .str.upper()
+            .replace("", pd.NA)
+            .dropna()
+        )
+        | set(
+            clean_text(event_previous.get("currency_code", pd.Series(dtype="string")))
+            .str.upper()
+            .replace("", pd.NA)
+            .dropna()
+        )
+    )
+    for currency in event_currencies:
+        current_currency = event_current.loc[
+            clean_text(event_current["currency_code"]).str.upper().eq(currency)
+        ]
+        previous_currency = event_previous.loc[
+            clean_text(event_previous["currency_code"]).str.upper().eq(currency)
+        ]
+        _add_row(
+            bloc="Credits",
+            indicator_key="remboursements_credits",
+            label="Remboursements observés",
+            current_value=numeric_column(current_currency, "remboursement_mpesa").sum(),
+            previous_value=numeric_column(previous_currency, "remboursement_mpesa").sum(),
+            unit="montant",
+            source="Transactions [Turbo]",
+            currency=currency,
+            coverage=event_coverage,
+        )
+        _add_row(
+            bloc="Comptes",
+            indicator_key="depots_dat",
+            label="Dépôts sur comptes bloqués / DAT",
+            current_value=numeric_column(current_currency, "depot_dat_mpesa").sum(),
+            previous_value=numeric_column(previous_currency, "depot_dat_mpesa").sum(),
+            unit="montant",
+            source="Transactions [Turbo]",
+            currency=currency,
+            coverage=event_coverage,
+        )
+        current_volume = (
+            numeric_column(current_currency, "montant_entree_bisou").sum()
+            + numeric_column(current_currency, "montant_sortie_bisou").sum()
+        )
+        previous_volume = (
+            numeric_column(previous_currency, "montant_entree_bisou").sum()
+            + numeric_column(previous_currency, "montant_sortie_bisou").sum()
+        )
+        _add_row(
+            bloc="Transactions",
+            indicator_key="volume_transactions",
+            label="Volume des transactions",
+            current_value=current_volume,
+            previous_value=previous_volume,
+            unit="montant",
+            source="Transactions [Turbo]",
+            currency=currency,
+            coverage=event_coverage,
+        )
+
+    _add_row(
+        bloc="Transactions",
+        indicator_key="operations_turbo",
+        label="Operations Turbo",
+        current_value=_event_count(event_current),
+        previous_value=_event_count(event_previous),
+        unit="nombre",
+        source="Transactions [Turbo]",
+        coverage=event_coverage,
+    )
+
+    lines = (
+        turbo_transaction_lines.copy()
+        if isinstance(turbo_transaction_lines, pd.DataFrame)
+        else prepared.transactions.copy()
+        if isinstance(prepared.transactions, pd.DataFrame)
+        else pd.DataFrame()
+    )
+    line_dates = (
+        pd.to_datetime(lines["created_at"], errors="coerce")
+        if not lines.empty and "created_at" in lines.columns
+        else pd.Series(pd.NaT, index=lines.index, dtype="datetime64[ns]")
+    )
+    product_accounts = {"INTEREST EARNED", "LOAN PENALTY FEES", "BISOU COLLECTION"}
+
+    def _weekly_turnover(frame: pd.DataFrame) -> dict[str, float]:
+        if frame.empty or not {"account_type", "currency_code"}.issubset(frame.columns):
+            return {}
+        scoped = frame.copy()
+        scoped["account_type"] = clean_text(scoped["account_type"]).str.upper()
+        scoped["currency_code"] = (
+            clean_text(scoped["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
+        )
+        scoped = scoped.loc[scoped["account_type"].isin(product_accounts)].copy()
+        if scoped.empty:
+            return {}
+        scoped["montant_produit"] = pd.concat(
+            [numeric_column(scoped, "dr"), numeric_column(scoped, "cr")],
+            axis=1,
+        ).max(axis=1)
+        return {
+            str(currency): float(group["montant_produit"].sum())
+            for currency, group in scoped.groupby("currency_code", dropna=False)
+        }
+
+    turnover_current = _weekly_turnover(
+        lines.loc[_period_mask(line_dates, current_start, current_end)].copy()
+    )
+    turnover_previous = _weekly_turnover(
+        lines.loc[_period_mask(line_dates, previous_start, previous_end)].copy()
+    )
+    for currency in sorted(set(turnover_current) | set(turnover_previous)):
+        _add_row(
+            bloc="Transactions",
+            indicator_key="chiffre_affaires_observe",
+            label="Chiffre d'affaires observé",
+            current_value=turnover_current.get(currency, 0.0),
+            previous_value=turnover_previous.get(currency, 0.0),
+            unit="montant",
+            source="Transactions [Turbo]",
+            currency=currency,
+            coverage=_coverage(line_dates),
+        )
+
+    return pd.DataFrame(rows, columns=MPESA_WEEKLY_COMPARISON_COLUMNS)
+
+
 def build_mpesa_statistics_report(
     prepared: MpesaPreparedData,
     *,
     date_start: Any | None = None,
     date_end: Any | None = None,
     frequency: str = "Mois",
+    comparison_period: str = DEFAULT_MPESA_COMPARISON_PERIOD,
     turbo_events: pd.DataFrame | None = None,
     turbo_transaction_lines: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
@@ -7077,10 +8018,26 @@ def build_mpesa_statistics_report(
             ]
         )
 
+    weekly_comparison = build_mpesa_weekly_comparison(
+        prepared,
+        as_of_date=end_date,
+        date_start=start_date,
+        comparison_period=comparison_period,
+        turbo_events=turbo_events,
+        turbo_transaction_lines=turbo_transaction_lines,
+    )
+    g2_quality = build_mpesa_g2_statistics_quality(
+        prepared,
+        date_start=start_date,
+        date_end=end_date,
+        comparison_period=comparison_period,
+    )
+
     return {
         "date_debut": start_date,
         "date_fin": end_date,
         "frequence": frequency,
+        "periode_comparaison": comparison_period,
         "priorite_sources": source_priority,
         "clients_reference": customer_reference,
         "clients_croissance": customer_growth,
@@ -7091,6 +8048,12 @@ def build_mpesa_statistics_report(
         "credit_synthese": finance.get("credit_synthese", pd.DataFrame()),
         "clients_volume_top": finance.get("concentration_transactions_clients", pd.DataFrame()),
         "operations_turbo": events,
+        "comparaison_hebdomadaire": weekly_comparison,
+        "g2_couverture": g2_quality["couverture"],
+        "g2_qualite_rapprochement": g2_quality["qualite_rapprochement"],
+        "g2_statuts": g2_quality["statuts"],
+        "g2_non_rapprochees": g2_quality["non_rapprochees"],
+        "g2_comparaison_hebdomadaire": g2_quality["comparaison_hebdomadaire"],
         "definitions": pd.DataFrame(
             [
                 {
@@ -7113,6 +8076,35 @@ def build_mpesa_statistics_report(
                     "definition": "Entrees + sorties observees au grain evenement Turbo consolide, par devise.",
                     "source": "Transactions [Turbo]",
                 },
+                {
+                    "indicateur": "Comparaison temporelle",
+                    "definition": (
+                        "Deux périodes comparables selon l'horizon choisi. La semaine "
+                        "microfinance commence le lundi; les autres options couvrent 7, 15 ou "
+                        "30 jours glissants, ou toute la période filtrée. Les comptes et crédits "
+                        "sont comparés sur leur création/activation; les soldes instantanés ne "
+                        "sont pas historisés."
+                    ),
+                    "source": "Sources Turbo uniquement",
+                },
+                {
+                    "indicateur": "Taux de rapprochement G2",
+                    "definition": (
+                        "Part des opérations G2 terminées et comparables retrouvées dans Turbo. "
+                        "Les entrées 1441 utilisent Receipt No = ref_no; les sorties B2C 15558 "
+                        "utilisent téléphone, devise, montant et heure."
+                    ),
+                    "source": "Transactions [G2] + Transactions [Turbo]",
+                },
+                {
+                    "indicateur": "Versements de prêts G2",
+                    "definition": (
+                        "Périmètre contrôlé séparément par prêt brut Turbo, intérêt prélevé de "
+                        "7 % lorsqu'il est observé et montant net versé dans G2. Ces lignes ne "
+                        "sont pas comptées comme sorties B2C non rapprochées."
+                    ),
+                    "source": "Loans Account [Turbo] + Transactions [Turbo] + Transactions [G2]",
+                },
             ]
         ),
     }
@@ -7132,7 +8124,7 @@ def create_mpesa_statistics_word(
         from docx.oxml.ns import qn
         from docx.shared import Cm, Pt, RGBColor
     except ImportError as exc:
-        raise RuntimeError("La dependance python-docx est requise pour generer le rapport statistique Word.") from exc
+        raise RuntimeError("La dependance python-docx est requise pour generer le rapport statistiques Word.") from exc
 
     generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
     start_date = pd.to_datetime(statistics_report.get("date_debut"), errors="coerce")
@@ -7143,6 +8135,13 @@ def create_mpesa_statistics_word(
         else "Non disponible"
     )
     frequency_text = str(statistics_report.get("frequence", "") or "Non disponible")
+    comparison_period_text = str(
+        statistics_report.get(
+            "periode_comparaison",
+            DEFAULT_MPESA_COMPARISON_PERIOD,
+        )
+        or DEFAULT_MPESA_COMPARISON_PERIOD
+    )
 
     document = Document()
     section = document.sections[0]
@@ -7188,11 +8187,12 @@ def create_mpesa_statistics_word(
     for run in criteria_title.paragraphs[0].runs:
         run.bold = True
         run.font.color.rgb = RGBColor(255, 255, 255)
-    criteria = header.cell(1, 1).add_table(rows=3, cols=2)
+    criteria = header.cell(1, 1).add_table(rows=4, cols=2)
     for row_index, (label, value) in enumerate(
         [
             ("Periode :", period_text),
             ("Frequence :", frequency_text),
+            ("Comparaison :", comparison_period_text),
             ("Source des montants :", "Turbo uniquement"),
         ]
     ):
@@ -7208,7 +8208,7 @@ def create_mpesa_statistics_word(
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.paragraph_format.space_before = Pt(5)
     title.paragraph_format.space_after = Pt(6)
-    title.add_run("Rapport statistique - Solution Numérique")
+    title.add_run("Rapport statistiques - Solution Numérique")
 
     intro = document.add_paragraph()
     intro.paragraph_format.space_after = Pt(6)
@@ -7227,6 +8227,9 @@ def create_mpesa_statistics_word(
         if "date" in column.lower() or column in {"periode"}:
             parsed = pd.to_datetime(value, errors="coerce")
             return f"{parsed:%d/%m/%Y}" if pd.notna(parsed) else str(value)
+        if any(token in column.lower() for token in ["taux", "part_pct", "pourcentage"]):
+            parsed = pd.to_numeric(value, errors="coerce")
+            return f"{float(parsed):.2f} %" if pd.notna(parsed) else "-"
         if any(
             token in column.lower()
             for token in ["montant", "volume", "solde", "chiffre", "interet", "penalite", "part_", "encours"]
@@ -7356,6 +8359,14 @@ def create_mpesa_statistics_word(
     turnover_frame = statistics_report.get("chiffre_affaires", pd.DataFrame())
     portfolio_frame = statistics_report.get("epargne_dat_portefeuille", pd.DataFrame())
     credit_frame = statistics_report.get("credit_synthese", pd.DataFrame())
+    g2_coverage_frame = statistics_report.get("g2_couverture", pd.DataFrame())
+    g2_quality_frame = statistics_report.get("g2_qualite_rapprochement", pd.DataFrame())
+    g2_status_frame = statistics_report.get("g2_statuts", pd.DataFrame())
+    g2_unmatched_frame = statistics_report.get("g2_non_rapprochees", pd.DataFrame())
+    g2_weekly_frame = statistics_report.get(
+        "g2_comparaison_hebdomadaire",
+        pd.DataFrame(),
+    )
     add_text(
         "Principe de lecture : les nombres de clients ou d'operations peuvent etre consolides, "
         "mais aucun montant n'est totalise entre devises. Les volumes, soldes, credits et chiffre d'affaires "
@@ -7403,6 +8414,99 @@ def create_mpesa_statistics_word(
         )
     else:
         document.add_paragraph("Aucune synthese disponible avec le perimetre filtre.")
+
+    weekly_comparison = statistics_report.get("comparaison_hebdomadaire", pd.DataFrame())
+    if isinstance(weekly_comparison, pd.DataFrame) and not weekly_comparison.empty:
+        comparison_label = str(
+            weekly_comparison.iloc[0].get(
+                "periode_comparaison",
+                comparison_period_text,
+            )
+            or comparison_period_text
+        )
+        add_title("Comparaison avec la période précédente")
+        weekly_current_start = pd.to_datetime(
+            weekly_comparison.iloc[0].get("date_debut_semaine_courante"),
+            errors="coerce",
+        )
+        weekly_current_end = pd.to_datetime(
+            weekly_comparison.iloc[0].get("date_fin_semaine_courante"),
+            errors="coerce",
+        )
+        weekly_previous_start = pd.to_datetime(
+            weekly_comparison.iloc[0].get("date_debut_semaine_precedente"),
+            errors="coerce",
+        )
+        weekly_previous_end = pd.to_datetime(
+            weekly_comparison.iloc[0].get("date_fin_semaine_precedente"),
+            errors="coerce",
+        )
+        if all(
+            pd.notna(value)
+            for value in [
+                weekly_current_start,
+                weekly_current_end,
+                weekly_previous_start,
+                weekly_previous_end,
+            ]
+        ):
+            add_text(
+                f"Mode : {comparison_label}. Période courante : "
+                f"{weekly_current_start:%d/%m/%Y} au "
+                f"{weekly_current_end:%d/%m/%Y}. Période de référence : "
+                f"{weekly_previous_start:%d/%m/%Y} au {weekly_previous_end:%d/%m/%Y}."
+            )
+
+        weekly_rows: list[dict[str, Any]] = []
+        for _, row in weekly_comparison.iterrows():
+            current_value = pd.to_numeric(
+                row.get("valeur_semaine_courante"), errors="coerce"
+            )
+            previous_value = pd.to_numeric(
+                row.get("valeur_semaine_precedente"), errors="coerce"
+            )
+            evolution = pd.to_numeric(row.get("evolution_pct"), errors="coerce")
+            unit = str(row.get("unite", "") or "")
+            coverage = str(row.get("couverture", "") or "")
+            currency = _currency_label(row.get("currency_code", "")) if str(
+                row.get("currency_code", "") or ""
+            ).strip() else "-"
+
+            def _weekly_value(value: Any) -> str:
+                if coverage == "Non calculable" or pd.isna(value):
+                    return "-"
+                return _pdf_number(value, decimals=0 if unit == "nombre" else 2)
+
+            if coverage == "Non calculable" or pd.isna(previous_value):
+                evolution_text = "Référence indisponible"
+            elif float(previous_value) == 0 and pd.notna(current_value) and float(current_value) > 0:
+                evolution_text = "Nouvelle activité"
+            elif pd.isna(evolution):
+                evolution_text = "Non calculable"
+            else:
+                evolution_text = f"{float(evolution):+.1f} %"
+            weekly_rows.append(
+                {
+                    "bloc": row.get("bloc", ""),
+                    "indicateur": row.get("indicateur", ""),
+                    "devise": currency,
+                    "semaine_courante": _weekly_value(current_value),
+                    "semaine_precedente": _weekly_value(previous_value),
+                    "evolution": evolution_text,
+                }
+            )
+        add_table(
+            pd.DataFrame(weekly_rows),
+            {
+                "bloc": "Bloc",
+                "indicateur": "Indicateur",
+                "devise": "Devise",
+                "semaine_courante": "Période courante",
+                "semaine_precedente": "Période précédente",
+                "evolution": "Évolution",
+            },
+            max_rows=40,
+        )
 
     add_title("1. Clients")
     known_clients = _first_number(overview, "clients_turbo_connus")
@@ -7571,6 +8675,134 @@ def create_mpesa_statistics_word(
         },
     )
 
+    add_title("4.1 Qualité du rapprochement G2")
+    if isinstance(g2_coverage_frame, pd.DataFrame) and not g2_coverage_frame.empty:
+        coverage_row = g2_coverage_frame.iloc[0]
+        coverage_label = str(
+            coverage_row.get("couverture_g2", "G2 absent") or "G2 absent"
+        )
+        add_text(
+            f"Couverture : {coverage_label}. G2 enrichit l'identité du client et "
+            "fournit une preuve de rapprochement; il ne recalcule aucun montant, "
+            "solde, DAT, crédit ou remboursement Turbo."
+        )
+    else:
+        coverage_label = "G2 absent"
+        add_text(
+            "Transactions [G2] n'est pas chargé. Les statistiques financières Turbo "
+            "restent disponibles, mais le contrôle externe des écritures est absent."
+        )
+
+    if isinstance(g2_quality_frame, pd.DataFrame) and not g2_quality_frame.empty:
+        comparable = g2_quality_frame.loc[
+            g2_quality_frame["categorie"].isin(
+                [
+                    "Entrées et remboursements [1441]",
+                    "Sorties B2C [15558]",
+                ]
+            )
+        ]
+        completed_total = _number_value(comparable, "operations_terminees")
+        matched_total = _number_value(comparable, "operations_rapprochees")
+        add_bullet(
+            f"Opérations G2 terminées et comparables : "
+            f"{_pdf_number(completed_total, decimals=0)}; opérations rapprochées : "
+            f"{_pdf_number(matched_total, decimals=0)}, soit "
+            f"{_percent(matched_total, completed_total)}."
+        )
+        for currency, group in g2_quality_frame.groupby(
+            "currency_code",
+            dropna=False,
+        ):
+            currency_comparable = group.loc[
+                group["categorie"].isin(
+                    [
+                        "Entrées et remboursements [1441]",
+                        "Sorties B2C [15558]",
+                    ]
+                )
+            ]
+            currency_completed = _number_value(
+                currency_comparable,
+                "operations_terminees",
+            )
+            currency_matched = _number_value(
+                currency_comparable,
+                "operations_rapprochees",
+            )
+            loan_requests = _number_value(
+                group.loc[group["categorie"].eq("Versements de prêts [15558]")],
+                "operations_terminees",
+            )
+            add_bullet(
+                f"{_currency_label(currency)} : "
+                f"{_pdf_number(currency_matched, decimals=0)} rapprochement(s) sur "
+                f"{_pdf_number(currency_completed, decimals=0)} opération(s) comparable(s), "
+                f"soit {_percent(currency_matched, currency_completed)}; "
+                f"{_pdf_number(loan_requests, decimals=0)} versement(s) de prêt à "
+                "contrôler séparément par le brut Turbo, l'intérêt observé et le net G2."
+            )
+        add_table(
+            g2_quality_frame,
+            {
+                "categorie": "Circuit G2",
+                "currency_code": "Devise",
+                "operations_g2": "Opérations",
+                "operations_terminees": "Terminées",
+                "operations_rapprochees": "Rapprochées",
+                "operations_non_rapprochees": "Non rapprochées",
+                "taux_rapprochement_pct": "Taux",
+                "controle_attendu": "Contrôle",
+            },
+            max_rows=20,
+        )
+        if isinstance(g2_unmatched_frame, pd.DataFrame) and not g2_unmatched_frame.empty:
+            add_text(
+                f"{len(g2_unmatched_frame)} opération(s) G2 terminée(s) et comparable(s) "
+                "reste(nt) à vérifier dans le périmètre filtré."
+            )
+        if isinstance(g2_status_frame, pd.DataFrame) and not g2_status_frame.empty:
+            add_table(
+                g2_status_frame,
+                {
+                    "currency_code": "Devise",
+                    "statut_g2": "Statut G2",
+                    "nombre_operations": "Opérations",
+                    "part_pct": "Part",
+                },
+                max_rows=20,
+            )
+        if isinstance(g2_weekly_frame, pd.DataFrame) and not g2_weekly_frame.empty:
+            weekly_display = g2_weekly_frame.copy()
+            weekly_display["taux_courant"] = pd.to_numeric(
+                weekly_display["valeur_semaine_courante"],
+                errors="coerce",
+            )
+            weekly_display["taux_precedent"] = pd.to_numeric(
+                weekly_display["valeur_semaine_precedente"],
+                errors="coerce",
+            )
+            weekly_display["ecart_points"] = pd.to_numeric(
+                weekly_display["ecart_absolu"],
+                errors="coerce",
+            )
+            add_table(
+                weekly_display,
+                {
+                    "indicateur": "Évolution comparative",
+                    "currency_code": "Devise",
+                    "taux_courant": "Taux courant",
+                    "taux_precedent": "Taux précédent",
+                    "ecart_points": "Écart en points",
+                    "couverture": "Couverture",
+                },
+                max_rows=20,
+            )
+    elif coverage_label != "G2 absent":
+        add_text(
+            "Aucune opération G2 exploitable n'est comprise dans la période filtrée."
+        )
+
     add_title("Annexe 1. Sources et importance")
     add_table(
         statistics_report.get("priorite_sources", pd.DataFrame()),
@@ -7615,7 +8847,7 @@ def create_mpesa_statistics_word(
     footer_run.font.size = Pt(8)
     footer_run.font.color.rgb = RGBColor(110, 125, 140)
 
-    document.core_properties.title = "Rapport statistique - Solution Numérique"
+    document.core_properties.title = "Rapport statistiques - Solution Numérique"
     document.core_properties.subject = "Statistiques operationnelles Turbo"
     document.core_properties.author = "Solution Controle Interne"
     buffer = BytesIO()

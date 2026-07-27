@@ -17,10 +17,12 @@ from credit_app.services.mpesa_analysis import (
     CUSTOMERS_REQUIRED_COLUMNS,
     DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
     DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
+    DEFAULT_MPESA_COMPARISON_PERIOD,
     FIXED_SAVINGS_REQUIRED_COLUMNS,
     G2_CLASSIFIED_TRANSACTION_COLUMNS,
     G2_TRANSACTION_REQUIRED_COLUMNS,
     LOAN_USEFUL_COLUMNS,
+    MPESA_COMPARISON_PERIOD_OPTIONS,
     PERFECT_CLIENTS_REQUIRED_COLUMNS,
     TRANSACTION_REQUIRED_COLUMNS,
     TRANSACTION_ANOMALY_CONTROL_NAMES,
@@ -39,6 +41,7 @@ from credit_app.services.mpesa_analysis import (
     build_loan_savings_reconciliation,
     build_mpesa_management_dashboard,
     build_mpesa_statistics_report,
+    build_mpesa_weekly_comparison,
     build_turbo_operation_events,
     build_mpesa_statement,
     build_savings_accounts_reconciliation,
@@ -134,6 +137,187 @@ def _format_percent(value: Any) -> str:
     if pd.isna(number):
         return "-"
     return f"{number:.1f}%"
+
+
+def _selected_mpesa_comparison_period() -> str:
+    selected = str(
+        st.session_state.get(
+            "mpesa_comparison_period",
+            DEFAULT_MPESA_COMPARISON_PERIOD,
+        )
+        or DEFAULT_MPESA_COMPARISON_PERIOD
+    )
+    return (
+        selected
+        if selected in MPESA_COMPARISON_PERIOD_OPTIONS
+        else DEFAULT_MPESA_COMPARISON_PERIOD
+    )
+
+
+def _render_weekly_comparison(
+    comparison: pd.DataFrame,
+    *,
+    blocks: list[str] | None = None,
+    indicator_keys: list[str] | None = None,
+    selected_currencies: list[str] | None = None,
+    title: str = "Comparaison avec la période précédente [Turbo]",
+) -> None:
+    """Affiche des cartes KPI comparant deux périodes consécutives."""
+    if not isinstance(comparison, pd.DataFrame) or comparison.empty:
+        st.info("La comparaison avec la période précédente n'est pas calculable.")
+        return
+
+    view = comparison.copy()
+    if blocks:
+        view = view.loc[view["bloc"].astype(str).isin(blocks)]
+    if indicator_keys:
+        view = view.loc[view["indicator_key"].astype(str).isin(indicator_keys)]
+    if selected_currencies:
+        currency = view.get(
+            "currency_code", pd.Series("", index=view.index)
+        ).astype("string").fillna("")
+        view = view.loc[currency.eq("") | currency.isin(selected_currencies)]
+    if view.empty:
+        return
+
+    current_start = pd.to_datetime(
+        view.iloc[0].get("date_debut_semaine_courante"), errors="coerce"
+    )
+    current_end = pd.to_datetime(
+        view.iloc[0].get("date_fin_semaine_courante"), errors="coerce"
+    )
+    previous_start = pd.to_datetime(
+        view.iloc[0].get("date_debut_semaine_precedente"), errors="coerce"
+    )
+    previous_end = pd.to_datetime(
+        view.iloc[0].get("date_fin_semaine_precedente"), errors="coerce"
+    )
+    comparison_label = str(
+        view.iloc[0].get(
+            "periode_comparaison",
+            DEFAULT_MPESA_COMPARISON_PERIOD,
+        )
+        or DEFAULT_MPESA_COMPARISON_PERIOD
+    )
+    render_panel_title(title)
+    if all(pd.notna(value) for value in [current_start, current_end, previous_start, previous_end]):
+        st.caption(
+            f"Mode : {comparison_label} | Période analysée : "
+            f"{current_start:%d/%m/%Y} au {current_end:%d/%m/%Y} | "
+            f"Période de référence : {previous_start:%d/%m/%Y} au {previous_end:%d/%m/%Y}. "
+            "Une hausse porte un signe +; une baisse porte un signe -."
+        )
+
+    block_order = list(dict.fromkeys(view["bloc"].astype(str).tolist()))
+    for block in block_order:
+        block_view = view.loc[view["bloc"].astype(str).eq(block)]
+        if len(block_order) > 1:
+            st.markdown(f"**{block}**")
+        records = block_view.to_dict("records")
+        for offset in range(0, len(records), 4):
+            chunk = records[offset : offset + 4]
+            columns = st.columns(len(chunk), gap="small")
+            for column, row in zip(columns, chunk):
+                coverage = str(row.get("couverture", "")).strip()
+                current_value = pd.to_numeric(
+                    row.get("valeur_semaine_courante"), errors="coerce"
+                )
+                previous_value = pd.to_numeric(
+                    row.get("valeur_semaine_precedente"), errors="coerce"
+                )
+                evolution = pd.to_numeric(row.get("evolution_pct"), errors="coerce")
+                currency = str(row.get("currency_code", "") or "").strip().upper()
+                unit = str(row.get("unite", "") or "")
+                label = str(row.get("indicateur", "") or "Indicateur")
+                if currency:
+                    label = f"{label} [{currency}]"
+
+                if coverage == "Non calculable" or pd.isna(current_value):
+                    display_value = "-"
+                    delta_text = "Référence indisponible"
+                    delta_color = "off"
+                else:
+                    if unit == "nombre":
+                        display_value = _format_count(current_value)
+                    elif unit == "pourcentage":
+                        display_value = _format_percent(current_value)
+                    else:
+                        display_value = f"{_format_amount(current_value)} {currency}".strip()
+                    if pd.isna(previous_value):
+                        delta_text = "Référence indisponible"
+                        delta_color = "off"
+                    elif unit == "pourcentage":
+                        point_delta = pd.to_numeric(
+                            row.get("ecart_absolu"),
+                            errors="coerce",
+                        )
+                        delta_text = (
+                            "Référence indisponible"
+                            if pd.isna(point_delta)
+                            else f"{float(point_delta):+.1f} point(s) vs période précédente"
+                        )
+                        delta_color = "off" if pd.isna(point_delta) else "normal"
+                    elif float(previous_value) == 0 and float(current_value) > 0:
+                        delta_text = "Nouvelle activité vs période précédente"
+                        delta_color = "normal"
+                    elif pd.isna(evolution):
+                        delta_text = "Référence indisponible"
+                        delta_color = "off"
+                    else:
+                        delta_text = f"{float(evolution):+.1f}% vs période précédente"
+                        delta_color = "normal"
+
+                if pd.isna(previous_value):
+                    previous_display = "-"
+                elif unit == "nombre":
+                    previous_display = _format_count(previous_value)
+                elif unit == "pourcentage":
+                    previous_display = _format_percent(previous_value)
+                else:
+                    previous_display = f"{_format_amount(previous_value)} {currency}".strip()
+                help_text = (
+                    f"Valeur de la période précédente : {previous_display}. "
+                    f"Source : {row.get('source', 'Turbo')}. "
+                    f"Couverture temporelle : {coverage or 'Non renseignée'}."
+                )
+                with column:
+                    st.metric(
+                        label,
+                        display_value,
+                        delta_text,
+                        delta_color=delta_color,
+                        border=True,
+                        help=help_text,
+                    )
+
+
+def _latest_complete_turbo_date(prepared: MpesaPreparedData) -> pd.Timestamp:
+    """Propose la derniere journee Turbo complete pour une comparaison hebdomadaire."""
+    candidates: list[pd.Series] = []
+    for frame, date_columns in [
+        (prepared.transactions, ["created_at"]),
+        (prepared.loans, ["created_at"]),
+        (prepared.fixed_savings, ["date_activated", "date_approved", "created_at"]),
+        (prepared.current_savings, ["date_activated", "date_approved", "created_at"]),
+        (prepared.customers, ["created_at"]),
+    ]:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        dates = pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
+        for column in date_columns:
+            if column in frame.columns:
+                dates = dates.combine_first(pd.to_datetime(frame[column], errors="coerce"))
+        dates = dates.dropna()
+        if not dates.empty:
+            candidates.append(dates)
+    if not candidates:
+        return pd.Timestamp.now().normalize()
+    dates = pd.concat(candidates, ignore_index=True)
+    latest = pd.Timestamp(dates.max())
+    result = latest.normalize()
+    if dates.min().normalize() < result and latest.hour < 18:
+        result -= pd.Timedelta(days=1)
+    return result
 
 
 def _render_alert_banner(message: str) -> None:
@@ -484,6 +668,30 @@ def _build_turbo_operation_events_cached(
 
 @st.cache_data(
     show_spinner=False,
+    max_entries=16,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _build_mpesa_weekly_comparison_cached(
+    prepared: MpesaPreparedData,
+    as_of_date: object,
+    comparison_period: str = DEFAULT_MPESA_COMPARISON_PERIOD,
+    date_start: object | None = None,
+) -> pd.DataFrame:
+    """Compare deux périodes Turbo en réutilisant le journal consolidé en cache."""
+    operation_journal = _build_turbo_operation_events_cached(prepared)
+    scoped_prepared = _prepared_data_as_of(prepared, as_of_date)
+    return build_mpesa_weekly_comparison(
+        scoped_prepared,
+        as_of_date=as_of_date,
+        date_start=date_start,
+        comparison_period=comparison_period,
+        turbo_events=operation_journal["events"],
+        turbo_transaction_lines=operation_journal["lines"],
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
     max_entries=8,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
@@ -523,6 +731,7 @@ def _build_mpesa_statistics_report_cached(
     date_start: object,
     date_end: object,
     frequency: str,
+    comparison_period: str,
 ) -> dict[str, Any]:
     operation_journal = _build_turbo_operation_events_cached(prepared)
     scoped_prepared = _prepared_data_as_of(prepared, date_end)
@@ -531,6 +740,7 @@ def _build_mpesa_statistics_report_cached(
         date_start=date_start,
         date_end=date_end,
         frequency=frequency,
+        comparison_period=comparison_period,
         turbo_events=operation_journal["events"],
         turbo_transaction_lines=operation_journal["lines"],
     )
@@ -2079,6 +2289,22 @@ def _render_dat_repayment_schedule(prepared: MpesaPreparedData) -> None:
     except (TypeError, ValueError):
         annual_interest_rate_pct = DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT
 
+    weekly_analysis_date = min(
+        pd.Timestamp(analysis_date).normalize(),
+        _latest_complete_turbo_date(prepared),
+    )
+    dat_weekly_comparison = _build_mpesa_weekly_comparison_cached(
+        prepared,
+        weekly_analysis_date,
+        _selected_mpesa_comparison_period(),
+    )
+    _render_weekly_comparison(
+        dat_weekly_comparison,
+        blocks=["Comptes"],
+        indicator_keys=["nouveaux_dat", "depots_dat"],
+        title="Évolution comparative des DAT [Turbo]",
+    )
+
     maturity_report = _build_mpesa_dat_maturity_analysis_cached(
         prepared,
         analysis_date,
@@ -2909,6 +3135,24 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         f"{len(filtered_g2)} operation(s) [{source_label}] dans le perimetre "
         f"{period_text} - {direction_label.lower()}."
     )
+    latest_complete_turbo_date = _latest_complete_turbo_date(prepared)
+    weekly_g2_dat_end = (
+        min(pd.Timestamp(date_end).normalize(), latest_complete_turbo_date)
+        if date_end is not None
+        else latest_complete_turbo_date
+    )
+    g2_dat_weekly_comparison = _build_mpesa_weekly_comparison_cached(
+        prepared,
+        weekly_g2_dat_end,
+        _selected_mpesa_comparison_period(),
+        date_start,
+    )
+    _render_weekly_comparison(
+        g2_dat_weekly_comparison,
+        blocks=["Comptes", "Transactions"],
+        indicator_keys=["nouveaux_dat", "depots_dat", "operations_turbo", "volume_transactions"],
+        title="Comparaison temporelle utile au contrôle G2 / DAT [Turbo]",
+    )
     if filtered_g2.empty:
         st.warning(
             f"Aucune operation {source_label} ne correspond a la periode et au sens selectionnes."
@@ -3637,7 +3881,11 @@ def _filter_pilotage_currencies(report: dict[str, Any], currencies: list[str]) -
     filtered: dict[str, Any] = {}
     for key, value in report.items():
         if isinstance(value, pd.DataFrame) and "currency_code" in value.columns:
-            filtered[key] = value.loc[value["currency_code"].astype("string").isin(currencies)].reset_index(drop=True)
+            currency = value["currency_code"].astype("string").fillna("")
+            currency_mask = currency.isin(currencies)
+            if key == "comparaison_hebdomadaire":
+                currency_mask |= currency.eq("")
+            filtered[key] = value.loc[currency_mask].reset_index(drop=True)
         else:
             filtered[key] = value
     return filtered
@@ -4072,6 +4320,21 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
 
 @st.fragment
 def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) -> None:
+    loans_weekly_comparison = _build_mpesa_weekly_comparison_cached(
+        prepared,
+        _latest_complete_turbo_date(prepared),
+        _selected_mpesa_comparison_period(),
+    )
+    _render_weekly_comparison(
+        loans_weekly_comparison,
+        blocks=["Credits"],
+        indicator_keys=[
+            "nouveaux_credits",
+            "montant_nouveaux_credits",
+            "remboursements_credits",
+        ],
+        title="Évolution comparative des crédits [Turbo]",
+    )
     if report is not None:
         render_panel_title("Credits du client [Turbo]")
         credits_view = _apply_local_multiselect_filters(
@@ -4525,6 +4788,12 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             date_start,
             date_end,
         )
+        weekly_comparison = _build_mpesa_weekly_comparison_cached(
+            prepared,
+            date_end,
+            _selected_mpesa_comparison_period(),
+            date_start,
+        )
 
     currency_options: set[str] = set()
     for current_report in (report, accounting_report):
@@ -4553,6 +4822,11 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         f"Periode analysee : {pd.Timestamp(date_start):%d/%m/%Y} au "
         f"{pd.Timestamp(date_end):%d/%m/%Y} | Frequence : {frequency}. "
         "Les positions de portefeuille restent des instantanes Turbo."
+    )
+    _render_weekly_comparison(
+        weekly_comparison,
+        blocks=["Clients", "Comptes", "Credits", "Transactions"],
+        selected_currencies=selected_currencies,
     )
     sources = report_view.get("sources", pd.DataFrame())
     if not sources.empty:
@@ -5419,6 +5693,11 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
     minimum_date = combined_dates.min().date()
     maximum_date = combined_dates.max().date()
     default_end = maximum_date
+    latest_statistical_timestamp = pd.Timestamp(combined_dates.max())
+    if minimum_date < maximum_date and latest_statistical_timestamp.hour < 18:
+        default_end = (
+            latest_statistical_timestamp.normalize() - pd.Timedelta(days=1)
+        ).date()
     default_start = max(
         minimum_date,
         (pd.Timestamp(default_end) - pd.Timedelta(days=90)).date(),
@@ -5497,6 +5776,7 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
     selected_end_date = applied_filters.get("date_fin", default_end)
     frequency = applied_filters.get("frequence", "Mois")
     top_n_clients = int(applied_filters.get("top_n_clients", 50) or 50)
+    comparison_period = _selected_mpesa_comparison_period()
 
     if selected_start_date > selected_end_date:
         st.error("La date de debut doit etre anterieure ou egale a la date de fin.", icon=":material/error:")
@@ -5507,7 +5787,8 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
             (
                 "Statistiques actualisees pour la periode "
                 f"{pd.Timestamp(selected_start_date):%d/%m/%Y} - {pd.Timestamp(selected_end_date):%d/%m/%Y}, "
-                f"frequence {frequency}, top {top_n_clients} clients."
+                f"frequence {frequency}, top {top_n_clients} clients, "
+                f"comparaison {comparison_period}."
             ),
             icon=":material/check_circle:",
         )
@@ -5516,7 +5797,7 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
             (
                 f"Dernier perimetre applique : {pd.Timestamp(selected_start_date):%d/%m/%Y} - "
                 f"{pd.Timestamp(selected_end_date):%d/%m/%Y}, frequence {frequency}, "
-                f"top {top_n_clients} clients."
+                f"top {top_n_clients} clients, comparaison {comparison_period}."
             )
         )
     else:
@@ -5524,9 +5805,15 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
             (
                 f"Perimetre applique par defaut : {pd.Timestamp(selected_start_date):%d/%m/%Y} - "
                 f"{pd.Timestamp(selected_end_date):%d/%m/%Y}, frequence {frequency}, "
-                f"top {top_n_clients} clients."
+                f"top {top_n_clients} clients, comparaison {comparison_period}."
             )
         )
+    st.caption(
+        "La période principale pilote tous les KPI et tableaux. Les cartes de "
+        "comparaison utilisent l'horizon choisi dans la barre latérale; "
+        "`Période filtrée` compare exactement Date de début - Date de fin à la "
+        "période immédiatement précédente de même durée."
+    )
 
     with st.spinner("Construction des statistiques Turbo..."):
         report = _build_mpesa_statistics_report_cached(
@@ -5534,6 +5821,7 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
             selected_start_date,
             selected_end_date,
             frequency,
+            comparison_period,
         )
 
     currency_options: set[str] = set()
@@ -5562,6 +5850,12 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
     credit_summary = report_view.get("credit_synthese", pd.DataFrame())
     top_clients = report_view.get("clients_volume_top", pd.DataFrame())
     source_priority = report_view.get("priorite_sources", pd.DataFrame())
+    weekly_comparison = report_view.get("comparaison_hebdomadaire", pd.DataFrame())
+    g2_coverage = report_view.get("g2_couverture", pd.DataFrame())
+    g2_quality = report_view.get("g2_qualite_rapprochement", pd.DataFrame())
+    g2_statuses = report_view.get("g2_statuts", pd.DataFrame())
+    g2_unmatched = report_view.get("g2_non_rapprochees", pd.DataFrame())
+    g2_weekly = report_view.get("g2_comparaison_hebdomadaire", pd.DataFrame())
 
     def _sum_column(frame: pd.DataFrame, column: str) -> float:
         if frame.empty or column not in frame.columns:
@@ -5598,6 +5892,12 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
     with st.expander("1. Clients", expanded=True):
         st.caption(
             "Ce bloc mesure la base client Turbo : clients connus, clients actifs et evolution des creations."
+        )
+        _render_weekly_comparison(
+            weekly_comparison,
+            blocks=["Clients"],
+            selected_currencies=selected_currencies,
+            title="Comparaison des clients [Turbo]",
         )
         first_row = overview.iloc[0] if not overview.empty else pd.Series(dtype=object)
         known_clients = _scalar_number(first_row.get("clients_turbo_connus", 0))
@@ -5670,6 +5970,12 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
         st.caption(
             "Ce bloc suit les positions d'epargne Turbo : comptes ouverts, DAT/comptes bloques, soldes et clients concernes."
         )
+        _render_weekly_comparison(
+            weekly_comparison,
+            blocks=["Comptes"],
+            selected_currencies=selected_currencies,
+            title="Comparaison des comptes [Turbo]",
+        )
         if portfolio.empty:
             st.info("Savings Account [Turbo] est requis pour analyser les comptes ouverts et bloques.")
         else:
@@ -5727,6 +6033,12 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
         st.caption(
             "Ce bloc suit le portefeuille credit Turbo : credits accordes, encours, remboursements et risque observe."
         )
+        _render_weekly_comparison(
+            weekly_comparison,
+            blocks=["Credits"],
+            selected_currencies=selected_currencies,
+            title="Comparaison des crédits [Turbo]",
+        )
         if credit_summary.empty:
             st.info("Loans Account [Turbo] est requis pour analyser les credits.")
         else:
@@ -5778,6 +6090,12 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
     with st.expander("4. Transactions", expanded=False):
         st.caption(
             "Ce bloc analyse l'activite transactionnelle Turbo : volume, chiffre d'affaires observe, operations et concentration client."
+        )
+        _render_weekly_comparison(
+            weekly_comparison,
+            blocks=["Transactions"],
+            selected_currencies=selected_currencies,
+            title="Comparaison des transactions [Turbo]",
         )
         total_operations = _sum_column(overview, "operations")
         transaction_cards: list[tuple[str, str, str, str]] = [
@@ -5859,13 +6177,205 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
                 },
             )
 
+        with st.container(border=True):
+            render_panel_title("Qualité du rapprochement G2")
+            coverage_label = (
+                str(g2_coverage.iloc[0].get("couverture_g2", "G2 absent"))
+                if isinstance(g2_coverage, pd.DataFrame) and not g2_coverage.empty
+                else "G2 absent"
+            )
+            st.caption(
+                f"Couverture : {coverage_label}. "
+                "G2 enrichit l'identité du client et contrôle les écritures; "
+                "les montants et les KPI financiers restent calculés exclusivement depuis Turbo."
+            )
+            if not isinstance(g2_quality, pd.DataFrame) or g2_quality.empty:
+                st.info(
+                    "Chargez les relevés G2 1441 et 15558 pour mesurer la qualité "
+                    "du rapprochement des entrées et des sorties."
+                )
+            else:
+                comparable_categories = [
+                    "Entrées et remboursements [1441]",
+                    "Sorties B2C [15558]",
+                ]
+                comparable = g2_quality.loc[
+                    g2_quality["categorie"].astype(str).isin(comparable_categories)
+                ]
+                completed_count = _sum_column(comparable, "operations_terminees")
+                matched_count = _sum_column(comparable, "operations_rapprochees")
+                entry_quality = comparable.loc[
+                    comparable["categorie"].astype(str).eq(
+                        "Entrées et remboursements [1441]"
+                    )
+                ]
+                output_quality = comparable.loc[
+                    comparable["categorie"].astype(str).eq(
+                        "Sorties B2C [15558]"
+                    )
+                ]
+                entry_completed = _sum_column(entry_quality, "operations_terminees")
+                entry_matched = _sum_column(entry_quality, "operations_rapprochees")
+                output_completed = _sum_column(output_quality, "operations_terminees")
+                output_matched = _sum_column(output_quality, "operations_rapprochees")
+                loan_requests = _sum_column(
+                    g2_quality.loc[
+                        g2_quality["categorie"].astype(str).eq(
+                            "Versements de prêts [15558]"
+                        )
+                    ],
+                    "operations_terminees",
+                )
+                render_kpi_cards(
+                    [
+                        (
+                            "Opérations G2 terminées",
+                            _format_count(completed_count),
+                            "Entrées/remboursements 1441 et sorties B2C 15558 comparables",
+                            "navy",
+                        ),
+                        (
+                            "Taux de rapprochement global",
+                            _safe_rate(matched_count, completed_count),
+                            "Opérations comparables retrouvées dans Turbo",
+                            "green",
+                        ),
+                        (
+                            "Rapprochement des entrées",
+                            _safe_rate(entry_matched, entry_completed),
+                            "Receipt No. G2 = ref_no Turbo",
+                            "blue",
+                        ),
+                        (
+                            "Rapprochement des sorties B2C",
+                            _safe_rate(output_matched, output_completed),
+                            "Téléphone + devise + montant + heure Turbo",
+                            "orange",
+                        ),
+                        (
+                            "Versements de prêts G2",
+                            _format_count(loan_requests),
+                            "Contrôle séparé : brut Turbo, intérêt observé et net G2",
+                            "navy",
+                        ),
+                    ]
+                )
+                _render_weekly_comparison(
+                    g2_weekly,
+                    blocks=["Qualité G2"],
+                    selected_currencies=selected_currencies,
+                    title="Évolution comparative de la qualité G2",
+                )
+                st.markdown("**Qualité par circuit et par devise**")
+                st.dataframe(
+                    g2_quality,
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "categorie": st.column_config.TextColumn(
+                            "Circuit G2",
+                            pinned=True,
+                        ),
+                        "currency_code": st.column_config.TextColumn("Devise"),
+                        "operations_g2": st.column_config.NumberColumn(
+                            "Opérations",
+                            format="%d",
+                        ),
+                        "operations_terminees": st.column_config.NumberColumn(
+                            "Terminées",
+                            format="%d",
+                        ),
+                        "operations_rapprochees": st.column_config.NumberColumn(
+                            "Rapprochées",
+                            format="%d",
+                        ),
+                        "operations_non_rapprochees": st.column_config.NumberColumn(
+                            "Non rapprochées",
+                            format="%d",
+                        ),
+                        "taux_rapprochement_pct": st.column_config.NumberColumn(
+                            "Taux de rapprochement",
+                            format="%.2f%%",
+                        ),
+                        "controle_attendu": st.column_config.TextColumn(
+                            "Contrôle attendu"
+                        ),
+                    },
+                )
+                if isinstance(g2_statuses, pd.DataFrame) and not g2_statuses.empty:
+                    st.markdown("**Statuts G2 par devise**")
+                    st.dataframe(
+                        g2_statuses,
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "currency_code": st.column_config.TextColumn(
+                                "Devise",
+                                pinned=True,
+                            ),
+                            "statut_g2": st.column_config.TextColumn("Statut G2"),
+                            "nombre_operations": st.column_config.NumberColumn(
+                                "Opérations",
+                                format="%d",
+                            ),
+                            "part_pct": st.column_config.NumberColumn(
+                                "Part",
+                                format="%.2f%%",
+                            ),
+                        },
+                    )
+                if isinstance(g2_unmatched, pd.DataFrame) and not g2_unmatched.empty:
+                    _render_alert_banner(
+                        f"{len(g2_unmatched)} opération(s) G2 terminée(s) et "
+                        "comparable(s) reste(nt) à rapprocher avec Turbo."
+                    )
+                    st.dataframe(
+                        g2_unmatched.head(500),
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "date": st.column_config.DatetimeColumn(
+                                "Date G2",
+                                format="DD/MM/YYYY HH:mm:ss",
+                            ),
+                            "receipt_no": st.column_config.TextColumn(
+                                "Receipt No.",
+                                pinned=True,
+                            ),
+                            "categorie": st.column_config.TextColumn("Circuit"),
+                            "currency_code": st.column_config.TextColumn("Devise"),
+                            "opposite_party": st.column_config.TextColumn(
+                                "Contrepartie"
+                            ),
+                            "montant": st.column_config.NumberColumn(
+                                "Montant G2 de contrôle",
+                                format="%.2f",
+                            ),
+                            "statut_rapprochement": st.column_config.TextColumn(
+                                "Statut"
+                            ),
+                            "methode_rapprochement_turbo": st.column_config.TextColumn(
+                                "Méthode"
+                            ),
+                            "fichier_source_g2": st.column_config.TextColumn(
+                                "Fichier G2"
+                            ),
+                        },
+                    )
+                else:
+                    st.success(
+                        "Aucune opération G2 terminée et comparable ne reste "
+                        "non rapprochée dans le périmètre filtré.",
+                        icon=":material/check_circle:",
+                    )
+
     render_panel_title("Export")
     start_token = pd.Timestamp(selected_start_date).strftime("%Y%m%d")
     end_token = pd.Timestamp(selected_end_date).strftime("%Y%m%d")
     try:
         word_bytes = create_mpesa_statistics_word(report_view)
         st.download_button(
-            "Telecharger le rapport statistique Word [Turbo]",
+            "Telecharger le rapport statistiques Word [Turbo]",
             data=word_bytes,
             file_name=f"rapport_statistiques_solution_turbo_{start_token}_{end_token}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

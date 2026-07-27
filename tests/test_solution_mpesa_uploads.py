@@ -27,13 +27,13 @@ class _UploadedExcel:
 def test_finance_turbo_replaces_the_two_previous_main_tabs() -> None:
     assert MPESA_SOLUTION_TAB_LABELS == (
         "Importation",
-        "Finance Turbo",
         "Extrait client",
+        "Finance Turbo",
         "DAT",
         "G2 / DAT",
-        "Perfect_client",
         "Detail des credits",
-        "Controle des donnees",
+        "Perfect_client",
+        "Statistiques",
     )
     assert MPESA_FINANCE_TURBO_TAB_LABELS == (
         "Vue direction",

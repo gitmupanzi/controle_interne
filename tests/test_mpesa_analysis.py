@@ -26,7 +26,10 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_dat_maturity_analysis,
     build_mpesa_accounting_analysis,
     build_mpesa_management_dashboard,
+    build_mpesa_comparison_windows,
+    build_mpesa_g2_statistics_quality,
     build_mpesa_statistics_report,
+    build_mpesa_weekly_comparison,
     build_mpesa_turbo_financial_analysis,
     build_turbo_operation_events,
     build_loan_savings_reconciliation,
@@ -4709,6 +4712,154 @@ class MpesaAnalysisTests(unittest.TestCase):
             ],
         )
 
+    def test_mpesa_statistics_g2_quality_combines_1441_and_15558_without_using_loan_requests_as_b2c_anomalies(self) -> None:
+        turbo = prepare_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "id": 1,
+                        "customer_id": 100,
+                        "msisdn1": "243811111111",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "SA-ENTRY",
+                        "currency_code": "USD",
+                        "dr": 100,
+                        "cr": 0,
+                        "bal_before": 100,
+                        "bal_after": 0,
+                        "ref_no": "G2-ENTRY",
+                        "description": "Epargne depot",
+                        "created_at": "2026-07-20 09:00:00",
+                    },
+                    {
+                        "id": 2,
+                        "customer_id": 100,
+                        "msisdn1": "243811111111",
+                        "account_type": "NORMAL SAVINGS",
+                        "reference_id": "SA-OUTPUT",
+                        "currency_code": "USD",
+                        "dr": 200,
+                        "cr": 0,
+                        "bal_before": 300,
+                        "bal_after": 100,
+                        "ref_no": pd.NA,
+                        "description": "Retrait Vers M-Pesa",
+                        "created_at": "2026-07-21 10:00:00",
+                    },
+                    {
+                        "id": 3,
+                        "customer_id": 100,
+                        "msisdn1": "243811111111",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "SA-OUTPUT",
+                        "currency_code": "USD",
+                        "dr": 0,
+                        "cr": 200,
+                        "bal_before": 0,
+                        "bal_after": 200,
+                        "ref_no": pd.NA,
+                        "description": "Retrait Vers M-Pesa",
+                        "created_at": "2026-07-21 10:00:00",
+                    },
+                ]
+            )
+        )
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "Receipt No.": "G2-ENTRY",
+                        "Initiation Time": "2026-07-20 09:00:00",
+                        "Completion Time": "2026-07-20 09:00:00",
+                        "Details": "Bisou Bisou C2B",
+                        "Reason Type": "BisouBisouC2B",
+                        "Transaction Status": "Completed",
+                        "Currency": "USD",
+                        "Paid In": 100,
+                        "Withdrawn": 0,
+                        "Opposite Party": "243811111111 - CLIENT TEST",
+                        "fichier_source_g2": "ORG_1441__All.xlsx",
+                    },
+                    {
+                        "Receipt No.": "G2-ENTRY-DECLINED",
+                        "Initiation Time": "2026-07-20 09:05:00",
+                        "Completion Time": "2026-07-20 09:05:00",
+                        "Details": "Bisou Bisou C2B",
+                        "Reason Type": "BisouBisouC2B",
+                        "Transaction Status": "Declined",
+                        "Currency": "USD",
+                        "Paid In": 50,
+                        "Withdrawn": 0,
+                        "Opposite Party": "243811111111 - CLIENT TEST",
+                        "fichier_source_g2": "ORG_1441__All.xlsx",
+                    },
+                    {
+                        "Receipt No.": "G2-OUTPUT",
+                        "Initiation Time": "2026-07-21 10:00:00",
+                        "Completion Time": "2026-07-21 10:00:00",
+                        "Details": "Bisou Bisou B2C",
+                        "Reason Type": "BisouBisouB2C",
+                        "Transaction Status": "Completed",
+                        "Currency": "USD",
+                        "Paid In": 0,
+                        "Withdrawn": -200,
+                        "Opposite Party": "243811111111 - CLIENT TEST",
+                        "fichier_source_g2": "ORG_15558__All.xlsx",
+                    },
+                    {
+                        "Receipt No.": "G2-LOAN",
+                        "Initiation Time": "2026-07-22 11:00:00",
+                        "Completion Time": "2026-07-22 11:00:00",
+                        "Details": "Bisou Bisou Loan payment",
+                        "Reason Type": "BisouBisouLoanRequest",
+                        "Transaction Status": "Completed",
+                        "Currency": "USD",
+                        "Paid In": 0,
+                        "Withdrawn": -93,
+                        "Opposite Party": "243811111111 - CLIENT TEST",
+                        "fichier_source_g2": "ORG_15558__All.xlsx",
+                    },
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=turbo,
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+            g2_transactions=g2,
+        )
+
+        report = build_mpesa_g2_statistics_quality(
+            prepared,
+            date_start="2026-07-20",
+            date_end="2026-07-22",
+        )
+
+        coverage = report["couverture"].iloc[0]
+        self.assertEqual(
+            coverage["couverture_g2"],
+            "Complète - entrées 1441 et sorties 15558",
+        )
+        quality = report["qualite_rapprochement"].set_index("categorie")
+        entry = quality.loc["Entrées et remboursements [1441]"]
+        output = quality.loc["Sorties B2C [15558]"]
+        loan = quality.loc["Versements de prêts [15558]"]
+        self.assertEqual(int(entry["operations_terminees"]), 1)
+        self.assertEqual(int(entry["operations_rapprochees"]), 1)
+        self.assertEqual(float(entry["taux_rapprochement_pct"]), 100.0)
+        self.assertEqual(int(output["operations_terminees"]), 1)
+        self.assertEqual(int(output["operations_rapprochees"]), 1)
+        self.assertEqual(float(output["taux_rapprochement_pct"]), 100.0)
+        self.assertEqual(int(loan["operations_terminees"]), 1)
+        self.assertEqual(int(loan["operations_non_rapprochees"]), 0)
+        self.assertTrue(pd.isna(loan["taux_rapprochement_pct"]))
+        self.assertTrue(report["non_rapprochees"].empty)
+        statuses = report["statuts"].set_index("statut_g2")
+        self.assertEqual(int(statuses.loc["Completed", "nombre_operations"]), 3)
+        self.assertEqual(int(statuses.loc["Declined", "nombre_operations"]), 1)
+
     def test_mpesa_statistics_report_is_turbo_first_and_exports_word(self) -> None:
         from docx import Document
 
@@ -4755,6 +4906,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             date_start="2026-07-01",
             date_end="2026-07-05",
             frequency="Jour",
+            comparison_period="Période filtrée",
         )
 
         source_priority = report["priorite_sources"].set_index("source")
@@ -4792,16 +4944,226 @@ class MpesaAnalysisTests(unittest.TestCase):
                 for row in table.rows
             ]
         )
-        self.assertIn("Rapport statistique - Solution Numérique", word_text)
+        self.assertIn("Rapport statistiques - Solution Numérique", word_text)
         self.assertIn("1. Clients", word_text)
         self.assertIn("2. Comptes ouverts et comptes bloques", word_text)
         self.assertIn("3. Credits", word_text)
         self.assertIn("4. Transactions", word_text)
+        self.assertIn("4.1 Qualité du rapprochement G2", word_text)
         self.assertIn("Sources et importance", word_text)
         self.assertIn("Vue d'ensemble", word_text)
         self.assertIn("Chiffre d'affaires observe", word_text)
         self.assertIn("Turbo uniquement", word_text)
+        self.assertIn("Période filtrée", word_text)
         self.assertNotIn("Graphiques de synthese", word_text)
+
+    def test_mpesa_comparison_windows_support_microfinance_week_and_filtered_period(self) -> None:
+        microfinance = build_mpesa_comparison_windows(
+            date_end="2026-07-25",
+            date_start="2026-04-20",
+            comparison_period="Semaine microfinance (lundi)",
+        )
+        self.assertEqual(
+            microfinance["date_debut_periode_courante"],
+            pd.Timestamp("2026-07-20"),
+        )
+        self.assertEqual(
+            microfinance["date_fin_periode_courante"],
+            pd.Timestamp("2026-07-25"),
+        )
+        self.assertEqual(
+            microfinance["date_debut_periode_precedente"],
+            pd.Timestamp("2026-07-13"),
+        )
+        self.assertEqual(
+            microfinance["date_fin_periode_precedente"],
+            pd.Timestamp("2026-07-18"),
+        )
+
+        filtered = build_mpesa_comparison_windows(
+            date_end="2026-07-25",
+            date_start="2026-04-20",
+            comparison_period="Période filtrée",
+        )
+        self.assertEqual(
+            filtered["date_debut_periode_courante"],
+            pd.Timestamp("2026-04-20"),
+        )
+        self.assertEqual(
+            filtered["date_fin_periode_courante"],
+            pd.Timestamp("2026-07-25"),
+        )
+        self.assertEqual(
+            filtered["date_debut_periode_precedente"],
+            pd.Timestamp("2026-01-13"),
+        )
+        self.assertEqual(
+            filtered["date_fin_periode_precedente"],
+            pd.Timestamp("2026-04-19"),
+        )
+
+    def test_mpesa_weekly_comparison_uses_two_consecutive_weeks_and_keeps_currencies_separate(self) -> None:
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(
+                [
+                    {"savings_id": "OPEN-PREV", "customer_id": "C1", "created_at": "2026-07-14"},
+                    {"savings_id": "OPEN-CURR", "customer_id": "C2", "created_at": "2026-07-20"},
+                ]
+            ),
+            fixed_savings=pd.DataFrame(
+                [
+                    {"savings_id": "DAT-PREV", "customer_id": "C1", "date_activated": "2026-07-13"},
+                    {"savings_id": "DAT-CURR", "customer_id": "C2", "date_activated": "2026-07-21"},
+                ]
+            ),
+            loans=pd.DataFrame(
+                [
+                    {
+                        "loan_id": "LN-PREV",
+                        "customer_id": "C1",
+                        "currency_code": "CDF",
+                        "loan_amount": 100,
+                        "created_at": "2026-07-14",
+                    },
+                    {
+                        "loan_id": "LN-CURR-1",
+                        "customer_id": "C2",
+                        "currency_code": "CDF",
+                        "loan_amount": 200,
+                        "created_at": "2026-07-20",
+                    },
+                    {
+                        "loan_id": "LN-CURR-2",
+                        "customer_id": "C3",
+                        "currency_code": "CDF",
+                        "loan_amount": 300,
+                        "created_at": "2026-07-22",
+                    },
+                ]
+            ),
+            customers=pd.DataFrame(
+                [
+                    {"msisdn1": "243810000001", "created_at": "2026-07-14"},
+                    {"msisdn1": "243810000002", "created_at": "2026-07-20"},
+                    {"msisdn1": "243810000003", "created_at": "2026-07-22"},
+                ]
+            ),
+            load_report=pd.DataFrame(),
+        )
+        events = pd.DataFrame(
+            [
+                {
+                    "event_key": "EV-PREV",
+                    "customer_id": "C1",
+                    "currency_code": "CDF",
+                    "created_at": "2026-07-14 10:00:00",
+                    "montant_entree_bisou": 100,
+                    "montant_sortie_bisou": 0,
+                    "remboursement_mpesa": 10,
+                    "depot_dat_mpesa": 50,
+                },
+                {
+                    "event_key": "EV-CURR-1",
+                    "customer_id": "C2",
+                    "currency_code": "CDF",
+                    "created_at": "2026-07-20 10:00:00",
+                    "montant_entree_bisou": 200,
+                    "montant_sortie_bisou": 0,
+                    "remboursement_mpesa": 20,
+                    "depot_dat_mpesa": 100,
+                },
+                {
+                    "event_key": "EV-CURR-2",
+                    "customer_id": "C3",
+                    "currency_code": "CDF",
+                    "created_at": "2026-07-22 10:00:00",
+                    "montant_entree_bisou": 0,
+                    "montant_sortie_bisou": 100,
+                    "remboursement_mpesa": 0,
+                    "depot_dat_mpesa": 0,
+                },
+                {
+                    "event_key": "EV-CURR-USD",
+                    "customer_id": "C3",
+                    "currency_code": "USD",
+                    "created_at": "2026-07-22 11:00:00",
+                    "montant_entree_bisou": 5,
+                    "montant_sortie_bisou": 0,
+                    "remboursement_mpesa": 0,
+                    "depot_dat_mpesa": 0,
+                },
+            ]
+        )
+        lines = pd.DataFrame(
+            [
+                {
+                    "account_type": "BISOU COLLECTION",
+                    "currency_code": "CDF",
+                    "created_at": "2026-07-14",
+                    "dr": 10,
+                    "cr": 0,
+                },
+                {
+                    "account_type": "BISOU COLLECTION",
+                    "currency_code": "CDF",
+                    "created_at": "2026-07-20",
+                    "dr": 30,
+                    "cr": 0,
+                },
+                {
+                    "account_type": "BISOU COLLECTION",
+                    "currency_code": "USD",
+                    "created_at": "2026-07-22",
+                    "dr": 2,
+                    "cr": 0,
+                },
+            ]
+        )
+
+        comparison = build_mpesa_weekly_comparison(
+            prepared,
+            as_of_date="2026-07-22",
+            comparison_period="7 jours glissants",
+            turbo_events=events,
+            turbo_transaction_lines=lines,
+        )
+        indexed = comparison.set_index(["indicator_key", "currency_code"])
+
+        clients = indexed.loc[("clients_actifs", "")]
+        self.assertEqual(float(clients["valeur_semaine_courante"]), 2.0)
+        self.assertEqual(float(clients["valeur_semaine_precedente"]), 1.0)
+        self.assertEqual(float(clients["evolution_pct"]), 100.0)
+        self.assertEqual(
+            pd.Timestamp(clients["date_debut_semaine_courante"]),
+            pd.Timestamp("2026-07-16"),
+        )
+        self.assertEqual(
+            pd.Timestamp(clients["date_debut_semaine_precedente"]),
+            pd.Timestamp("2026-07-09"),
+        )
+
+        credits = indexed.loc[("nouveaux_credits", "")]
+        self.assertEqual(float(credits["valeur_semaine_courante"]), 2.0)
+        self.assertEqual(float(credits["valeur_semaine_precedente"]), 1.0)
+        credit_amount = indexed.loc[("montant_nouveaux_credits", "CDF")]
+        self.assertEqual(float(credit_amount["valeur_semaine_courante"]), 500.0)
+        self.assertEqual(float(credit_amount["valeur_semaine_precedente"]), 100.0)
+
+        volume_cdf = indexed.loc[("volume_transactions", "CDF")]
+        volume_usd = indexed.loc[("volume_transactions", "USD")]
+        self.assertEqual(float(volume_cdf["valeur_semaine_courante"]), 300.0)
+        self.assertEqual(float(volume_cdf["valeur_semaine_precedente"]), 100.0)
+        self.assertEqual(float(volume_usd["valeur_semaine_courante"]), 5.0)
+        self.assertEqual(float(volume_usd["valeur_semaine_precedente"]), 0.0)
+        self.assertTrue(pd.isna(volume_usd["evolution_pct"]))
+
+        turnover_cdf = indexed.loc[("chiffre_affaires_observe", "CDF")]
+        turnover_usd = indexed.loc[("chiffre_affaires_observe", "USD")]
+        self.assertEqual(float(turnover_cdf["valeur_semaine_courante"]), 30.0)
+        self.assertEqual(float(turnover_cdf["valeur_semaine_precedente"]), 10.0)
+        self.assertEqual(float(turnover_usd["valeur_semaine_courante"]), 2.0)
+        self.assertEqual(float(turnover_usd["valeur_semaine_precedente"]), 0.0)
 
     def test_mpesa_statistics_word_keeps_money_by_currency(self) -> None:
         from docx import Document
