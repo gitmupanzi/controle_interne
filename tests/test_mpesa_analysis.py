@@ -17,6 +17,7 @@ from credit_app.services.mpesa_analysis import (
     build_customer_matured_dat_interest_entries,
     build_customer_statement_elements,
     build_customer_transaction_analysis,
+    build_filtered_turbo_daily_balance_report,
     build_filtered_turbo_balance_report,
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
@@ -4574,6 +4575,91 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Clients :", normalized_pdf_text)
         self.assertIn("Périmètre :", normalized_pdf_text)
         self.assertIn("Devise(s) :", normalized_pdf_text)
+
+    def test_turbo_daily_balance_exports_one_row_per_date_client_currency(self) -> None:
+        from docx import Document
+        from pypdf import PdfReader
+
+        prepared = _sample_prepared_data()
+        report = build_mpesa_accounting_analysis(
+            prepared,
+            date_start="2026-07-01",
+            date_end="2026-07-02",
+        )
+        daily_report = build_filtered_turbo_daily_balance_report(
+            report,
+            report["balance_clients"],
+        )
+        daily = daily_report["balance_clients_par_date"]
+
+        self.assertEqual(len(daily), 2)
+        self.assertEqual(
+            daily["date_operation"].dt.strftime("%Y-%m-%d").tolist(),
+            ["2026-07-01", "2026-07-02"],
+        )
+        self.assertEqual(daily["currency_code"].unique().tolist(), ["CDF"])
+        summary = daily_report["synthese"].iloc[0]
+        self.assertEqual(int(summary["nombre_dates"]), 2)
+        self.assertEqual(int(summary["nombre_clients"]), 1)
+        self.assertEqual(float(summary["total_debit"]), 1000.0)
+        self.assertEqual(float(summary["total_credit"]), 3000.0)
+
+        word = create_turbo_balance_word(
+            daily_report,
+            period_start="2026-07-01",
+            period_end="2026-07-02",
+            generated_at=pd.Timestamp("2026-07-03 08:00:00"),
+            balance_by_date=True,
+        )
+        pdf = create_turbo_balance_pdf(
+            daily_report,
+            period_start="2026-07-01",
+            period_end="2026-07-02",
+            generated_at=pd.Timestamp("2026-07-03 08:00:00"),
+            balance_by_date=True,
+        )
+
+        document = Document(BytesIO(word))
+        self.assertLess(
+            document.sections[0].page_width,
+            document.sections[0].page_height,
+        )
+        word_text = "\n".join(
+            paragraph.text for paragraph in document.paragraphs
+        )
+        self.assertIn("Balance journalière observée", word_text)
+        criteria = document.tables[0].cell(1, 1).tables[0]
+        self.assertEqual(
+            [row.cells[0].text for row in criteria.rows],
+            [
+                "Date du :",
+                "Au :",
+                "Clients :",
+                "Dates avec mouvements :",
+                "Périmètre :",
+                "Devise(s) :",
+            ],
+        )
+        daily_table = next(
+            table
+            for table in document.tables
+            if table.rows[0].cells[0].text == "Date"
+        )
+        self.assertEqual(daily_table.rows[1].cells[0].text, "01/07/2026")
+        self.assertEqual(daily_table.rows[2].cells[0].text, "02/07/2026")
+
+        reader = PdfReader(BytesIO(pdf))
+        self.assertLess(
+            float(reader.pages[0].mediabox.width),
+            float(reader.pages[0].mediabox.height),
+        )
+        pdf_text = " ".join(
+            "\n".join(page.extract_text() or "" for page in reader.pages).split()
+        )
+        self.assertIn("Balance journalière observée", pdf_text)
+        self.assertIn("Balance par date et par client", pdf_text)
+        self.assertIn("01/07/2026", pdf_text)
+        self.assertIn("02/07/2026", pdf_text)
 
     def test_mpesa_management_dashboard_builds_actionable_microfinance_views(self) -> None:
         g2 = prepare_g2_transactions(

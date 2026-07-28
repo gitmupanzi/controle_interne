@@ -54,6 +54,7 @@ from credit_app.services.mpesa_analysis import (
     build_customer_statement_detail_with_covered_operations,
     build_customer_statement_detail_with_opening_balance,
     build_customer_statement_view,
+    build_filtered_turbo_daily_balance_report,
     build_filtered_turbo_balance_report,
     build_perfect_client_crosscheck,
     create_excel_export,
@@ -768,6 +769,34 @@ def _create_turbo_balance_pdf_cached(
         report,
         period_start=period_start,
         period_end=period_end,
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def _create_turbo_daily_balance_word_cached(
+    report: dict[str, pd.DataFrame],
+    period_start: object | None,
+    period_end: object | None,
+) -> bytes:
+    return create_turbo_balance_word(
+        report,
+        period_start=period_start,
+        period_end=period_end,
+        balance_by_date=True,
+    )
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def _create_turbo_daily_balance_pdf_cached(
+    report: dict[str, pd.DataFrame],
+    period_start: object | None,
+    period_end: object | None,
+) -> bytes:
+    return create_turbo_balance_pdf(
+        report,
+        period_start=period_start,
+        period_end=period_end,
+        balance_by_date=True,
     )
 
 
@@ -5687,6 +5716,105 @@ def _render_accounting_balances_and_journals(
             width="content",
             disabled=client_view.empty,
             key=f"mpesa_turbo_balance_pdf_{start_token}_{end_token}_{selection_token}",
+        )
+
+    render_panel_title("Export de la balance par date [Turbo]")
+    st.caption(
+        "Cette seconde restitution conserve les mêmes clients et devises filtrés, "
+        "mais présente une ligne par date, client et devise. Elle permet de suivre "
+        "les mouvements quotidiens compris dans la période sélectionnée."
+    )
+    daily_export_report = build_filtered_turbo_daily_balance_report(
+        report,
+        client_view,
+    )
+    daily_balance = daily_export_report.get(
+        "balance_clients_par_date",
+        pd.DataFrame(),
+    )
+    daily_date_count = (
+        pd.to_datetime(
+            daily_balance["date_operation"],
+            errors="coerce",
+        ).dt.normalize().nunique()
+        if not daily_balance.empty and "date_operation" in daily_balance.columns
+        else 0
+    )
+    st.caption(
+        f"Périmètre exporté : {len(daily_balance)} ligne(s) date × client × devise, "
+        f"répartie(s) sur {daily_date_count} date(s)."
+    )
+    with st.expander(
+        "Afficher l'aperçu de la balance par date",
+        expanded=False,
+    ):
+        daily_columns = [
+            "date_operation",
+            "customer_id",
+            "Nom_client",
+            "telephone",
+            "currency_code",
+            "nombre_operations",
+            "depots_epargne_observes",
+            "retraits_epargne_observes",
+            "mouvement_net_epargne_observe",
+            "total_debit",
+            "total_credit",
+        ]
+        daily_columns = [
+            column for column in daily_columns if column in daily_balance.columns
+        ]
+        st.dataframe(
+            daily_balance[daily_columns],
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "date_operation": st.column_config.DateColumn(
+                    "Date",
+                    format="DD/MM/YYYY",
+                ),
+            },
+        )
+    with st.container(horizontal=True, gap="small"):
+        st.download_button(
+            "Télécharger Word par date",
+            data=lambda: _create_turbo_daily_balance_word_cached(
+                daily_export_report,
+                date_start,
+                date_end,
+            ),
+            file_name=(
+                f"balance_par_date_turbo_{start_token}_{end_token}.docx"
+            ),
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            icon=":material/download:",
+            on_click="ignore",
+            width="content",
+            disabled=daily_balance.empty,
+            key=(
+                f"mpesa_turbo_daily_balance_word_{start_token}_"
+                f"{end_token}_{selection_token}"
+            ),
+        )
+        st.download_button(
+            "Télécharger PDF par date",
+            data=lambda: _create_turbo_daily_balance_pdf_cached(
+                daily_export_report,
+                date_start,
+                date_end,
+            ),
+            file_name=(
+                f"balance_par_date_turbo_{start_token}_{end_token}.pdf"
+            ),
+            mime="application/pdf",
+            icon=":material/download:",
+            on_click="ignore",
+            width="content",
+            disabled=daily_balance.empty,
+            key=(
+                f"mpesa_turbo_daily_balance_pdf_{start_token}_"
+                f"{end_token}_{selection_token}"
+            ),
         )
 
 

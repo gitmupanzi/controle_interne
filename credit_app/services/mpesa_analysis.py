@@ -6122,6 +6122,7 @@ def _empty_mpesa_accounting_analysis() -> dict[str, pd.DataFrame]:
         "periode": pd.DataFrame(),
         "synthese": pd.DataFrame(),
         "balance_clients": pd.DataFrame(),
+        "balance_clients_par_date": pd.DataFrame(),
         "balance_auxiliaire_clients": pd.DataFrame(),
         "balance_comptes": pd.DataFrame(),
         "journal_operations": pd.DataFrame(),
@@ -6302,6 +6303,76 @@ def build_mpesa_accounting_analysis(
         on=["customer_id", "currency_code"],
         how="left",
     )
+
+    daily_client_control = (
+        journal_operations.groupby(
+            ["date_operation", "customer_id", "currency_code"],
+            as_index=False,
+            dropna=False,
+        )
+        .agg(
+            nombre_operations=("cle_operation_turbo", "size"),
+            operations_a_verifier=(
+                "operation_symetrique",
+                lambda values: int((~values.astype(bool)).sum()),
+            ),
+        )
+    )
+    daily_savings_flows = (
+        scoped.groupby(
+            ["date_operation", "customer_id", "currency_code"],
+            as_index=False,
+            dropna=False,
+        )
+        .agg(
+            depots_epargne_observes=("depot_epargne_observe", "sum"),
+            retraits_epargne_observes=("retrait_epargne_observe", "sum"),
+        )
+    )
+    daily_client_balance = (
+        scoped.groupby(
+            ["date_operation", "customer_id", "currency_code"],
+            as_index=False,
+            dropna=False,
+        )
+        .agg(
+            Nom_client=("Nom_client", concat_unique),
+            telephone=("msisdn1", concat_unique),
+            total_debit=("dr", "sum"),
+            total_credit=("cr", "sum"),
+            nombre_lignes=("id", "size"),
+            nombre_types_comptes=("account_type", "nunique"),
+            premiere_ecriture=("created_at", "min"),
+            derniere_ecriture=("created_at", "max"),
+        )
+        .merge(
+            daily_client_control,
+            on=["date_operation", "customer_id", "currency_code"],
+            how="left",
+        )
+        .merge(
+            daily_savings_flows,
+            on=["date_operation", "customer_id", "currency_code"],
+            how="left",
+        )
+    )
+    daily_client_balance["ecart_debit_credit"] = (
+        daily_client_balance["total_debit"]
+        - daily_client_balance["total_credit"]
+    )
+    daily_client_balance["solde_debiteur_mouvement"] = daily_client_balance[
+        "ecart_debit_credit"
+    ].clip(lower=0)
+    daily_client_balance["solde_crediteur_mouvement"] = (
+        -daily_client_balance["ecart_debit_credit"]
+    ).clip(lower=0)
+    daily_client_balance["mouvement_net_epargne_observe"] = (
+        daily_client_balance["depots_epargne_observes"]
+        - daily_client_balance["retraits_epargne_observes"]
+    )
+    daily_client_balance = daily_client_balance.sort_values(
+        ["date_operation", "currency_code", "customer_id"]
+    ).reset_index(drop=True)
 
     balance_comptes = (
         scoped.groupby(["currency_code", "account_type"], as_index=False, dropna=False)
@@ -6728,6 +6799,7 @@ def build_mpesa_accounting_analysis(
             "periode": period,
             "synthese": summary.sort_values("currency_code").reset_index(drop=True),
             "balance_clients": balance_clients,
+            "balance_clients_par_date": daily_client_balance,
             "balance_auxiliaire_clients": auxiliary_balance,
             "balance_comptes": balance_comptes,
             "journal_operations": journal_operations,
@@ -16177,6 +16249,144 @@ def build_filtered_turbo_balance_report(
     }
 
 
+def build_filtered_turbo_daily_balance_report(
+    report: dict[str, Any],
+    filtered_client_balance: pd.DataFrame,
+) -> dict[str, pd.DataFrame]:
+    """Construit la balance journalière sur les clients et devises filtrés.
+
+    Le grain de restitution est ``date x customer_id x devise``. Les montants
+    sont les mouvements Turbo du jour et ne sont jamais additionnés entre
+    devises.
+    """
+    selected = (
+        filtered_client_balance.copy()
+        if isinstance(filtered_client_balance, pd.DataFrame)
+        else pd.DataFrame()
+    )
+    daily = report.get("balance_clients_par_date", pd.DataFrame())
+    daily = daily.copy() if isinstance(daily, pd.DataFrame) else pd.DataFrame()
+    period = report.get("periode", pd.DataFrame())
+    period = period.copy() if isinstance(period, pd.DataFrame) else pd.DataFrame()
+    empty_result = {
+        "periode": period,
+        "synthese": pd.DataFrame(),
+        "balance_clients": pd.DataFrame(),
+        "balance_clients_par_date": pd.DataFrame(),
+        "selection": pd.DataFrame(),
+    }
+    if selected.empty or daily.empty:
+        return empty_result
+
+    required_keys = {"customer_id", "currency_code"}
+    if not required_keys.issubset(selected.columns):
+        missing = ", ".join(sorted(required_keys.difference(selected.columns)))
+        raise ValueError(
+            f"Colonne(s) requise(s) absente(s) pour la balance par date : {missing}."
+        )
+    if not required_keys.union({"date_operation"}).issubset(daily.columns):
+        return empty_result
+
+    selected_keys = selected[["customer_id", "currency_code"]].drop_duplicates()
+    selected_keys["__customer_key"] = clean_identifier(
+        selected_keys["customer_id"]
+    )
+    selected_keys["__currency_key"] = clean_text(
+        selected_keys["currency_code"]
+    ).str.upper()
+    selected_keys = selected_keys[
+        ["__customer_key", "__currency_key"]
+    ].drop_duplicates()
+
+    daily["__customer_key"] = clean_identifier(daily["customer_id"])
+    daily["__currency_key"] = clean_text(daily["currency_code"]).str.upper()
+    daily = daily.merge(
+        selected_keys.assign(__selected=True),
+        on=["__customer_key", "__currency_key"],
+        how="inner",
+    ).drop(columns=["__customer_key", "__currency_key", "__selected"])
+    if daily.empty:
+        return empty_result
+
+    daily["date_operation"] = pd.to_datetime(
+        daily["date_operation"], errors="coerce"
+    ).dt.normalize()
+    daily = daily.dropna(subset=["date_operation"]).copy()
+    if daily.empty:
+        return empty_result
+
+    monetary_columns = [
+        "depots_epargne_observes",
+        "retraits_epargne_observes",
+        "mouvement_net_epargne_observe",
+        "total_debit",
+        "total_credit",
+        "solde_debiteur_mouvement",
+        "solde_crediteur_mouvement",
+    ]
+    count_columns = [
+        "nombre_operations",
+        "nombre_lignes",
+        "operations_a_verifier",
+    ]
+    for column in monetary_columns + count_columns:
+        if column not in daily.columns:
+            daily[column] = 0.0
+        daily[column] = pd.to_numeric(
+            daily[column], errors="coerce"
+        ).fillna(0.0)
+
+    summary_rows: list[dict[str, object]] = []
+    for currency, group in daily.groupby(
+        "currency_code", sort=True, dropna=False
+    ):
+        summary_rows.append(
+            {
+                "currency_code": currency,
+                "nombre_dates": int(group["date_operation"].nunique()),
+                "nombre_clients": int(
+                    clean_identifier(group["customer_id"]).nunique()
+                ),
+                "nombre_operations": int(group["nombre_operations"].sum()),
+                "nombre_lignes": int(group["nombre_lignes"].sum()),
+                **{
+                    column: float(group[column].sum())
+                    for column in monetary_columns
+                },
+                "source_mouvements": "Transactions M-PESA_Turbo",
+                "role_g2": "Nom client et controle uniquement",
+            }
+        )
+    summary = pd.DataFrame(summary_rows)
+    if not period.empty:
+        for column in ["date_debut", "date_fin"]:
+            if column in period.columns:
+                summary[column] = period.iloc[0].get(column)
+
+    daily = daily.sort_values(
+        ["date_operation", "currency_code", "customer_id"]
+    ).reset_index(drop=True)
+    selection = pd.DataFrame(
+        [
+            {
+                "nombre_lignes_date_client_devise": int(len(daily)),
+                "nombre_dates": int(daily["date_operation"].nunique()),
+                "nombre_clients": int(
+                    clean_identifier(daily["customer_id"]).nunique()
+                ),
+                "devises": concat_unique(daily["currency_code"]),
+            }
+        ]
+    )
+    return {
+        "periode": period,
+        "synthese": summary,
+        "balance_clients": daily,
+        "balance_clients_par_date": daily,
+        "selection": selection,
+    }
+
+
 def _turbo_balance_export_frames(
     report: dict[str, Any],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -16217,6 +16427,7 @@ def _turbo_balance_criteria_rows(
     *,
     start_text: str,
     end_text: str,
+    balance_by_date: bool = False,
 ) -> list[tuple[str, str]]:
     """Présente le périmètre filtré comme dans l'extrait client officiel."""
     customer_count = (
@@ -16236,16 +16447,28 @@ def _turbo_balance_criteria_rows(
     else:
         currencies = []
     currency_text = ", ".join(currencies) or "Non disponible"
-    return [
+    rows = [
         ("Date du :", start_text),
         ("Au :", end_text),
         ("Clients :", f"{customer_count} client(s)"),
         (
             "Périmètre :",
-            f"{len(client_balance)} ligne(s) client × devise",
+            (
+                f"{len(client_balance)} ligne(s) date × client × devise"
+                if balance_by_date
+                else f"{len(client_balance)} ligne(s) client × devise"
+            ),
         ),
         ("Devise(s) :", currency_text),
     ]
+    if balance_by_date and "date_operation" in client_balance.columns:
+        date_count = int(
+            pd.to_datetime(
+                client_balance["date_operation"], errors="coerce"
+            ).dt.normalize().nunique()
+        )
+        rows.insert(3, ("Dates avec mouvements :", f"{date_count} date(s)"))
+    return rows
 
 
 def create_turbo_balance_word(
@@ -16254,6 +16477,7 @@ def create_turbo_balance_word(
     period_start: object | None = None,
     period_end: object | None = None,
     generated_at: pd.Timestamp | None = None,
+    balance_by_date: bool = False,
 ) -> bytes:
     """Génère la balance observée Turbo en Word pour la Direction."""
     try:
@@ -16274,6 +16498,7 @@ def create_turbo_balance_word(
         client_balance,
         start_text=start_text,
         end_text=end_text,
+        balance_by_date=balance_by_date,
     )
     generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
 
@@ -16345,7 +16570,13 @@ def create_turbo_balance_word(
     title = document.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.paragraph_format.space_after = Pt(2)
-    title_run = title.add_run("Balance auxiliaire observée - Solution M_PESA")
+    title_run = title.add_run(
+        (
+            "Balance journalière observée - Solution M_PESA"
+            if balance_by_date
+            else "Balance auxiliaire observée - Solution M_PESA"
+        )
+    )
     title_run.bold = True
     title_run.font.size = Pt(16)
     title_run.font.color.rgb = RGBColor(18, 56, 95)
@@ -16388,7 +16619,11 @@ def create_turbo_balance_word(
             row_decimals = 0 if row_currency == "CDF" else 2
             for index, column in enumerate(present):
                 value = row.get(column)
-                if column in {"premiere_ecriture", "derniere_ecriture"}:
+                if column in {
+                    "date_operation",
+                    "premiere_ecriture",
+                    "derniere_ecriture",
+                }:
                     parsed = pd.to_datetime(value, errors="coerce")
                     text = f"{parsed:%d/%m/%Y}" if pd.notna(parsed) else "-"
                 elif column.endswith("_pct"):
@@ -16412,47 +16647,104 @@ def create_turbo_balance_word(
                         run.font.size = Pt(6.2)
 
     add_heading("Synthèse par devise")
-    add_table(
-        summary,
-        [
-            "currency_code", "nombre_clients",
-            "depots_epargne_observes", "retraits_epargne_observes",
-            "mouvement_net_epargne_observe", "avoirs_epargne_observes",
-            "encours_principal_observe",
-        ],
-        {
-            "currency_code": "Devise",
-            "nombre_clients": "Clients",
-            "depots_epargne_observes": "Dépôts épargne",
-            "retraits_epargne_observes": "Retraits épargne",
-            "mouvement_net_epargne_observe": "Mouvement net épargne",
-            "avoirs_epargne_observes": "Avoirs épargne observés",
-            "encours_principal_observe": "Encours principal observé",
-        },
-    )
-    add_heading("Balance par client")
-    add_table(
-        client_balance,
-        [
-            "customer_id", "Nom_client", "telephone", "currency_code",
-            "depots_epargne_observes", "retraits_epargne_observes",
-            "mouvement_net_epargne_observe",
-            "solde_epargne_courante_observe", "solde_dat_observe",
-            "encours_principal_observe",
-        ],
-        {
-            "customer_id": "Client",
-            "Nom_client": "Nom du client",
-            "telephone": "Téléphone",
-            "currency_code": "Devise",
-            "depots_epargne_observes": "Dépôts épargne",
-            "retraits_epargne_observes": "Retraits épargne",
-            "mouvement_net_epargne_observe": "Mouvement net épargne",
-            "solde_epargne_courante_observe": "Épargne courante",
-            "solde_dat_observe": "DAT",
-            "encours_principal_observe": "Principal crédit",
-        },
-    )
+    if balance_by_date:
+        add_table(
+            summary,
+            [
+                "currency_code",
+                "nombre_dates",
+                "nombre_clients",
+                "nombre_operations",
+                "depots_epargne_observes",
+                "retraits_epargne_observes",
+                "mouvement_net_epargne_observe",
+                "total_debit",
+                "total_credit",
+            ],
+            {
+                "currency_code": "Devise",
+                "nombre_dates": "Dates",
+                "nombre_clients": "Clients",
+                "nombre_operations": "Opérations",
+                "depots_epargne_observes": "Dépôts épargne",
+                "retraits_epargne_observes": "Retraits épargne",
+                "mouvement_net_epargne_observe": "Mouvement net épargne",
+                "total_debit": "Total débit",
+                "total_credit": "Total crédit",
+            },
+        )
+        add_heading("Balance par date et par client")
+        add_table(
+            client_balance,
+            [
+                "date_operation",
+                "customer_id",
+                "Nom_client",
+                "telephone",
+                "currency_code",
+                "nombre_operations",
+                "depots_epargne_observes",
+                "retraits_epargne_observes",
+                "mouvement_net_epargne_observe",
+                "total_debit",
+                "total_credit",
+            ],
+            {
+                "date_operation": "Date",
+                "customer_id": "Client",
+                "Nom_client": "Nom du client",
+                "telephone": "Téléphone",
+                "currency_code": "Devise",
+                "nombre_operations": "Opérations",
+                "depots_epargne_observes": "Dépôts épargne",
+                "retraits_epargne_observes": "Retraits épargne",
+                "mouvement_net_epargne_observe": "Mouvement net épargne",
+                "total_debit": "Total débit",
+                "total_credit": "Total crédit",
+            },
+        )
+    else:
+        add_table(
+            summary,
+            [
+                "currency_code", "nombre_clients",
+                "depots_epargne_observes", "retraits_epargne_observes",
+                "mouvement_net_epargne_observe", "avoirs_epargne_observes",
+                "encours_principal_observe",
+            ],
+            {
+                "currency_code": "Devise",
+                "nombre_clients": "Clients",
+                "depots_epargne_observes": "Dépôts épargne",
+                "retraits_epargne_observes": "Retraits épargne",
+                "mouvement_net_epargne_observe": "Mouvement net épargne",
+                "avoirs_epargne_observes": "Avoirs épargne observés",
+                "encours_principal_observe": "Encours principal observé",
+            },
+        )
+        add_heading("Balance par client")
+        add_table(
+            client_balance,
+            [
+                "customer_id", "Nom_client", "telephone", "currency_code",
+                "depots_epargne_observes", "retraits_epargne_observes",
+                "mouvement_net_epargne_observe",
+                "solde_epargne_courante_observe", "solde_dat_observe",
+                "encours_principal_observe",
+            ],
+            {
+                "customer_id": "Client",
+                "Nom_client": "Nom du client",
+                "telephone": "Téléphone",
+                "currency_code": "Devise",
+                "depots_epargne_observes": "Dépôts épargne",
+                "retraits_epargne_observes": "Retraits épargne",
+                "mouvement_net_epargne_observe": "Mouvement net épargne",
+                "solde_epargne_courante_observe": "Épargne courante",
+                "solde_dat_observe": "DAT",
+                "encours_principal_observe": "Principal crédit",
+            },
+        )
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer_run = footer.add_run(
@@ -16462,7 +16754,11 @@ def create_turbo_balance_word(
     footer_run.font.size = Pt(7)
     footer_run.font.color.rgb = RGBColor(110, 125, 140)
     document.core_properties.title = (
-        f"Balance observée Turbo - {start_text} au {end_text}"
+        (
+            f"Balance journalière observée Turbo - {start_text} au {end_text}"
+            if balance_by_date
+            else f"Balance observée Turbo - {start_text} au {end_text}"
+        )
     )
     document.core_properties.subject = "Balance auxiliaire observée destinée à la Direction"
     document.core_properties.author = "Solution Controle Interne"
@@ -16478,6 +16774,7 @@ def create_turbo_balance_pdf(
     period_start: object | None = None,
     period_end: object | None = None,
     generated_at: pd.Timestamp | None = None,
+    balance_by_date: bool = False,
 ) -> bytes:
     """Génère la balance observée Turbo en PDF natif pour la Direction."""
     try:
@@ -16498,6 +16795,7 @@ def create_turbo_balance_pdf(
         client_balance,
         start_text=start_text,
         end_text=end_text,
+        balance_by_date=balance_by_date,
     )
     generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
     styles = getSampleStyleSheet()
@@ -16553,7 +16851,11 @@ def create_turbo_balance_pdf(
         rightMargin=0.8 * cm,
         topMargin=0.7 * cm,
         bottomMargin=1.0 * cm,
-        title=f"Balance observée Turbo - {start_text} au {end_text}",
+        title=(
+            f"Balance journalière observée Turbo - {start_text} au {end_text}"
+            if balance_by_date
+            else f"Balance observée Turbo - {start_text} au {end_text}"
+        ),
         author="Solution Controle Interne",
     )
     story: list[Any] = []
@@ -16582,7 +16884,16 @@ def create_turbo_balance_pdf(
     masthead = Table([[logo, criteria]], colWidths=[10.0 * cm, 8.0 * cm])
     masthead.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
     story.extend([masthead, Spacer(1, 0.15 * cm)])
-    story.append(Paragraph("Balance auxiliaire observée - Solution M_PESA", title_style))
+    story.append(
+        Paragraph(
+            (
+                "Balance journalière observée - Solution M_PESA"
+                if balance_by_date
+                else "Balance auxiliaire observée - Solution M_PESA"
+            ),
+            title_style,
+        )
+    )
 
     def append_table(
         title: str,
@@ -16608,7 +16919,16 @@ def create_turbo_balance_pdf(
                         "depot", "retrait", "mouvement",
                     ]
                 )
-                if column.endswith("_pct"):
+                if column in {
+                    "date_operation",
+                    "premiere_ecriture",
+                    "derniere_ecriture",
+                }:
+                    parsed = pd.to_datetime(value, errors="coerce")
+                    text_value = (
+                        f"{parsed:%d/%m/%Y}" if pd.notna(parsed) else "-"
+                    )
+                elif column.endswith("_pct"):
                     numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
                     text_value = f"{numeric_value:.1f}%" if pd.notna(numeric_value) else "-"
                 elif monetary:
@@ -16635,46 +16955,106 @@ def create_turbo_balance_pdf(
         ]))
         story.append(table)
 
-    append_table(
-        "Synthèse par devise",
-        summary,
-        [
-            "currency_code", "nombre_clients",
-            "depots_epargne_observes", "retraits_epargne_observes",
-            "mouvement_net_epargne_observe", "avoirs_epargne_observes",
-            "encours_principal_observe",
-        ],
-        {
-            "currency_code": "Devise", "nombre_clients": "Clients",
-            "depots_epargne_observes": "Dépôts épargne",
-            "retraits_epargne_observes": "Retraits épargne",
-            "mouvement_net_epargne_observe": "Mouvement net épargne",
-            "avoirs_epargne_observes": "Avoirs épargne",
-            "encours_principal_observe": "Encours principal",
-        },
-        [1.2, 1.2, 2.5, 2.5, 2.7, 3.1, 3.1],
-    )
-    append_table(
-        "Balance par client",
-        client_balance,
-        [
-            "customer_id", "Nom_client", "telephone", "currency_code",
-            "depots_epargne_observes", "retraits_epargne_observes",
-            "mouvement_net_epargne_observe",
-            "solde_epargne_courante_observe", "solde_dat_observe",
-            "encours_principal_observe",
-        ],
-        {
-            "customer_id": "Client", "Nom_client": "Nom du client", "telephone": "Téléphone",
-            "currency_code": "Devise",
-            "depots_epargne_observes": "Dépôts épargne",
-            "retraits_epargne_observes": "Retraits épargne",
-            "mouvement_net_epargne_observe": "Mouvement net épargne",
-            "solde_epargne_courante_observe": "Épargne courante",
-            "solde_dat_observe": "DAT", "encours_principal_observe": "Principal crédit",
-        },
-        [1.2, 2.4, 2.0, 0.9, 1.5, 1.5, 1.6, 1.7, 1.3, 1.7],
-    )
+    if balance_by_date:
+        append_table(
+            "Synthèse par devise",
+            summary,
+            [
+                "currency_code",
+                "nombre_dates",
+                "nombre_clients",
+                "nombre_operations",
+                "depots_epargne_observes",
+                "retraits_epargne_observes",
+                "mouvement_net_epargne_observe",
+                "total_debit",
+                "total_credit",
+            ],
+            {
+                "currency_code": "Devise",
+                "nombre_dates": "Dates",
+                "nombre_clients": "Clients",
+                "nombre_operations": "Opérations",
+                "depots_epargne_observes": "Dépôts épargne",
+                "retraits_epargne_observes": "Retraits épargne",
+                "mouvement_net_epargne_observe": "Mouvement net épargne",
+                "total_debit": "Total débit",
+                "total_credit": "Total crédit",
+            },
+            [1.0, 0.8, 0.9, 1.0, 2.2, 2.2, 2.4, 2.0, 2.0],
+        )
+        append_table(
+            "Balance par date et par client",
+            client_balance,
+            [
+                "date_operation",
+                "customer_id",
+                "Nom_client",
+                "telephone",
+                "currency_code",
+                "nombre_operations",
+                "depots_epargne_observes",
+                "retraits_epargne_observes",
+                "mouvement_net_epargne_observe",
+                "total_debit",
+                "total_credit",
+            ],
+            {
+                "date_operation": "Date",
+                "customer_id": "Client",
+                "Nom_client": "Nom du client",
+                "telephone": "Téléphone",
+                "currency_code": "Devise",
+                "nombre_operations": "Opérations",
+                "depots_epargne_observes": "Dépôts épargne",
+                "retraits_epargne_observes": "Retraits épargne",
+                "mouvement_net_epargne_observe": "Mouvement net épargne",
+                "total_debit": "Total débit",
+                "total_credit": "Total crédit",
+            },
+            [1.25, 1.15, 2.2, 1.75, 0.75, 0.85, 1.45, 1.45, 1.55, 1.35, 1.35],
+        )
+    else:
+        append_table(
+            "Synthèse par devise",
+            summary,
+            [
+                "currency_code", "nombre_clients",
+                "depots_epargne_observes", "retraits_epargne_observes",
+                "mouvement_net_epargne_observe", "avoirs_epargne_observes",
+                "encours_principal_observe",
+            ],
+            {
+                "currency_code": "Devise", "nombre_clients": "Clients",
+                "depots_epargne_observes": "Dépôts épargne",
+                "retraits_epargne_observes": "Retraits épargne",
+                "mouvement_net_epargne_observe": "Mouvement net épargne",
+                "avoirs_epargne_observes": "Avoirs épargne",
+                "encours_principal_observe": "Encours principal",
+            },
+            [1.2, 1.2, 2.5, 2.5, 2.7, 3.1, 3.1],
+        )
+        append_table(
+            "Balance par client",
+            client_balance,
+            [
+                "customer_id", "Nom_client", "telephone", "currency_code",
+                "depots_epargne_observes", "retraits_epargne_observes",
+                "mouvement_net_epargne_observe",
+                "solde_epargne_courante_observe", "solde_dat_observe",
+                "encours_principal_observe",
+            ],
+            {
+                "customer_id": "Client", "Nom_client": "Nom du client", "telephone": "Téléphone",
+                "currency_code": "Devise",
+                "depots_epargne_observes": "Dépôts épargne",
+                "retraits_epargne_observes": "Retraits épargne",
+                "mouvement_net_epargne_observe": "Mouvement net épargne",
+                "solde_epargne_courante_observe": "Épargne courante",
+                "solde_dat_observe": "DAT", "encours_principal_observe": "Principal crédit",
+            },
+            [1.2, 2.4, 2.0, 0.9, 1.5, 1.5, 1.6, 1.7, 1.3, 1.7],
+        )
     def draw_footer(canvas: Any, doc: Any) -> None:
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
