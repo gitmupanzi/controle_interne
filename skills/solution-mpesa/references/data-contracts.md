@@ -87,7 +87,9 @@ L'interface Streamlit utilise désormais ce parcours :
 
 `Customers with Current Savings Account` et `Customers with Fixed Savings Account` n'ont pas de widgets séparés. Ils peuvent être sélectionnés ensemble dans l'emplacement multiple `Savings Account` lorsque la source complète n'est pas disponible. L'interface doit alors avertir que seuls les soldes positifs sont couverts. Si le fichier complet est aussi présent, il est seul retenu. Les quatre emplacements Turbo principaux doivent produire les mêmes comptes, soldes, devises, statuts et dates que la source maître validée lorsque celle-ci est fournie.
 
-Les sous-onglets principaux de Solution M-PESA suivent l'ordre `Importation`, `Extrait client`, `Finance Turbo`, `DAT`, `G2 / DAT`, `Detail des credits`, `Perfect_client`, `Statistiques`. `Controle des donnees` est integre dans `Importation` afin de regrouper chargement, validation des colonnes, composition Savings Account et anomalies Transactions [Turbo].
+Les sous-onglets principaux de Solution M-PESA suivent l'ordre `Importation`, `Extrait client`, `Finance Turbo`, `DAT`, `G2 / DAT`, `Detail des credits`, `Perfect_client`, `Statistiques`, `Prévisions Turbo`. `Controle des donnees` est integre dans `Importation` afin de regrouper chargement, validation des colonnes, composition Savings Account et anomalies Transactions [Turbo].
+
+Le contrat de `Prévisions Turbo` reste strictement Turbo-first. Les séries monétaires sont construites et évaluées par `currency_code`; aucune prévision CDF et USD ne peut être totalisée. Les événements de Transactions [Turbo] alimentent clients actifs, opérations, volumes, décaissements et remboursements; Customers alimente les créations de clients; Savings Account alimente les créations de comptes et l'échéancier DAT; Loans Account alimente les créations et montants de crédits. G2 et Perfect restent exclus du modèle. Les échéances DAT sont des calculs contractuels déterministes. Les positions de solde et d'encours provenant d'instantanés ne sont pas extrapolées sans historique de plusieurs arrêtés.
 
 Règles de montant et de sens :
 

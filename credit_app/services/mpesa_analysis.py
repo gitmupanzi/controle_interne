@@ -39,6 +39,8 @@ PERFECT_CLIENTS_REQUIRED_COLUMNS = set(PERFECT_CLIENTS_SCHEMA.required)
 DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT = 11.0
 DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS = 30
 DEFAULT_LOAN_INTEREST_RATE_PCT = 7.0
+MPESA_FORECAST_HORIZON_OPTIONS = (7, 15, 30, 60, 90)
+MPESA_FORECAST_CONFIDENCE_OPTIONS = (80, 95)
 
 CUSTOMER_STATEMENT_COLUMNS = [
     "date",
@@ -7973,6 +7975,552 @@ def build_mpesa_weekly_comparison(
         )
 
     return pd.DataFrame(rows, columns=MPESA_WEEKLY_COMPARISON_COLUMNS)
+
+
+MPESA_FORECAST_HISTORY_COLUMNS = [
+    "date",
+    "bloc",
+    "indicator_key",
+    "indicateur",
+    "currency_code",
+    "valeur",
+    "unite",
+    "source",
+]
+
+MPESA_FORECAST_COLUMNS = [
+    "date",
+    "bloc",
+    "indicator_key",
+    "indicateur",
+    "currency_code",
+    "prevision",
+    "borne_basse",
+    "borne_haute",
+    "unite",
+    "source",
+]
+
+MPESA_FORECAST_SUMMARY_COLUMNS = [
+    "bloc",
+    "indicator_key",
+    "indicateur",
+    "currency_code",
+    "valeur_prevue_horizon",
+    "valeur_periode_precedente",
+    "evolution_prevue_pct",
+    "mae",
+    "wape_pct",
+    "qualite_modele",
+    "agregation_horizon",
+    "unite",
+    "source",
+    "nombre_jours_historique",
+]
+
+
+def _forecast_daily_series(
+    daily_values: pd.Series,
+    *,
+    reference_date: pd.Timestamp,
+    horizon_days: int,
+    confidence_level: int,
+) -> dict[str, Any]:
+    """Prévoit une série quotidienne avec un modèle saisonnier transparent.
+
+    Le niveau prévu combine la moyenne des huit derniers jours comparables
+    (même jour de semaine) et la moyenne des 28 derniers jours. Une tendance
+    récente bornée évite qu'un pic isolé soit extrapolé sans limite.
+    """
+    values = pd.to_numeric(daily_values, errors="coerce").fillna(0.0)
+    if values.empty:
+        return {"status": "Non calculable"}
+    values.index = pd.to_datetime(values.index, errors="coerce").normalize()
+    values = values.loc[values.index.notna()]
+    if values.empty:
+        return {"status": "Non calculable"}
+    values = values.groupby(level=0).sum().sort_index()
+    calendar = pd.date_range(values.index.min(), reference_date, freq="D")
+    values = values.reindex(calendar, fill_value=0.0).astype(float)
+    if len(values) < 28 or int(values.gt(0).sum()) < 4:
+        return {
+            "status": "Historique insuffisant",
+            "history": values,
+            "nombre_jours_historique": int(len(values)),
+        }
+
+    def predict_from_history(history: pd.Series, future_dates: pd.DatetimeIndex) -> np.ndarray:
+        history = history.astype(float)
+        recent_28 = history.tail(28)
+        previous_28 = history.iloc[-56:-28] if len(history) >= 56 else history.iloc[:-28]
+        recent_mean = float(recent_28.mean()) if not recent_28.empty else 0.0
+        previous_mean = (
+            float(previous_28.mean()) if not previous_28.empty else recent_mean
+        )
+        if previous_mean > 0:
+            trend_factor = float(np.clip(recent_mean / previous_mean, 0.75, 1.25))
+        else:
+            trend_factor = 1.0
+        predictions: list[float] = []
+        for step, future_date in enumerate(future_dates, start=1):
+            same_weekday = history.loc[history.index.weekday == future_date.weekday()].tail(8)
+            seasonal_level = (
+                float(same_weekday.mean()) if not same_weekday.empty else recent_mean
+            )
+            base_level = 0.7 * seasonal_level + 0.3 * recent_mean
+            progressive_trend = 1.0 + (trend_factor - 1.0) * min(step, 28) / 28.0
+            predictions.append(max(0.0, base_level * progressive_trend))
+        return np.asarray(predictions, dtype=float)
+
+    holdout_days = min(28, max(7, len(values) // 5))
+    training = values.iloc[:-holdout_days]
+    holdout = values.iloc[-holdout_days:]
+    if len(training) >= 28:
+        backtest_predictions = predict_from_history(training, holdout.index)
+        residuals = holdout.to_numpy(dtype=float) - backtest_predictions
+        mae = float(np.mean(np.abs(residuals)))
+        actual_total = float(np.abs(holdout.to_numpy(dtype=float)).sum())
+        wape = 100.0 * float(np.abs(residuals).sum()) / actual_total if actual_total > 0 else np.nan
+    else:
+        residuals = np.asarray([], dtype=float)
+        mae = np.nan
+        wape = np.nan
+
+    future_dates = pd.date_range(
+        reference_date + pd.Timedelta(days=1),
+        periods=horizon_days,
+        freq="D",
+    )
+    predictions = predict_from_history(values, future_dates)
+    if residuals.size >= 4:
+        error_margin = float(
+            np.quantile(np.abs(residuals), confidence_level / 100.0)
+        )
+    else:
+        scale = float(values.tail(28).std(ddof=0))
+        multiplier = 1.282 if confidence_level == 80 else 1.96
+        error_margin = multiplier * scale
+    lower = np.clip(predictions - error_margin, 0.0, None)
+    upper = predictions + error_margin
+    quality = (
+        "Bonne"
+        if pd.notna(wape) and wape <= 20
+        else "Acceptable"
+        if pd.notna(wape) and wape <= 35
+        else "Prudence"
+    )
+    return {
+        "status": "Calculée",
+        "history": values,
+        "dates": future_dates,
+        "forecast": predictions,
+        "lower": lower,
+        "upper": upper,
+        "mae": mae,
+        "wape_pct": wape,
+        "qualite_modele": quality,
+        "nombre_jours_historique": int(len(values)),
+    }
+
+
+def build_mpesa_forecast_report(
+    prepared: MpesaPreparedData,
+    *,
+    reference_date: Any | None = None,
+    horizon_days: int = 30,
+    confidence_level: int = 80,
+    annual_interest_rate_pct: float = DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+    turbo_events: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    """Construit des prévisions opérationnelles Turbo à court terme.
+
+    Les montants restent strictement séparés par devise. Les échéances DAT sont
+    un calendrier contractuel déterministe et ne sont jamais présentées comme
+    une prédiction issue du machine learning.
+    """
+    horizon = int(horizon_days)
+    if horizon not in MPESA_FORECAST_HORIZON_OPTIONS:
+        raise ValueError(
+            f"Horizon non pris en charge : {horizon}. "
+            f"Valeurs admises : {MPESA_FORECAST_HORIZON_OPTIONS}."
+        )
+    confidence = int(confidence_level)
+    if confidence not in MPESA_FORECAST_CONFIDENCE_OPTIONS:
+        raise ValueError(
+            f"Niveau de confiance non pris en charge : {confidence}."
+        )
+    analysis_date = _mpesa_analysis_date(prepared, reference_date)
+    events = (
+        turbo_events.copy()
+        if isinstance(turbo_events, pd.DataFrame)
+        else build_turbo_operation_events(prepared.transactions)["events"]
+    )
+    history_parts: list[pd.DataFrame] = []
+
+    def add_daily_metric(
+        frame: pd.DataFrame,
+        *,
+        date_values: pd.Series,
+        bloc: str,
+        indicator_key: str,
+        label: str,
+        unit: str,
+        source: str,
+        value_values: pd.Series | None = None,
+        currency_values: pd.Series | None = None,
+        unique_values: pd.Series | None = None,
+    ) -> None:
+        if frame.empty:
+            return
+        temp = pd.DataFrame(index=frame.index)
+        temp["date"] = pd.to_datetime(date_values, errors="coerce").dt.normalize()
+        temp = temp.loc[temp["date"].notna() & temp["date"].le(analysis_date)].copy()
+        if temp.empty:
+            return
+        if currency_values is None:
+            temp["currency_code"] = ""
+        else:
+            temp["currency_code"] = (
+                clean_text(currency_values.loc[temp.index])
+                .str.upper()
+                .replace("", "NON RENSEIGNEE")
+            )
+        if unique_values is not None:
+            temp["unique_value"] = clean_identifier(unique_values.loc[temp.index])
+            grouped = (
+                temp.loc[temp["unique_value"].ne("")]
+                .groupby(["date", "currency_code"], as_index=False, dropna=False)
+                .agg(valeur=("unique_value", "nunique"))
+            )
+        else:
+            temp["value"] = (
+                pd.to_numeric(value_values.loc[temp.index], errors="coerce")
+                .fillna(0.0)
+                if value_values is not None
+                else 1.0
+            )
+            grouped = (
+                temp.groupby(["date", "currency_code"], as_index=False, dropna=False)
+                .agg(valeur=("value", "sum"))
+            )
+        grouped["bloc"] = bloc
+        grouped["indicator_key"] = indicator_key
+        grouped["indicateur"] = label
+        grouped["unite"] = unit
+        grouped["source"] = source
+        history_parts.append(grouped[MPESA_FORECAST_HISTORY_COLUMNS])
+
+    if not events.empty and "created_at" in events.columns:
+        event_dates = pd.to_datetime(events["created_at"], errors="coerce")
+        customer_values = events.get(
+            "customer_id", pd.Series("", index=events.index)
+        )
+        add_daily_metric(
+            events,
+            date_values=event_dates,
+            bloc="Clients et comptes",
+            indicator_key="clients_actifs",
+            label="Clients actifs par jour",
+            unit="nombre",
+            source="Transactions [Turbo]",
+            unique_values=customer_values,
+        )
+        event_keys = events.get(
+            "event_key", pd.Series(events.index.astype(str), index=events.index)
+        )
+        add_daily_metric(
+            events,
+            date_values=event_dates,
+            bloc="Transactions et activité",
+            indicator_key="operations_turbo",
+            label="Opérations Turbo",
+            unit="nombre",
+            source="Transactions [Turbo]",
+            unique_values=event_keys,
+        )
+        currencies = events.get(
+            "currency_code", pd.Series("", index=events.index)
+        )
+        monetary_specs = [
+            (
+                "volume_transactions",
+                "Volume des transactions",
+                numeric_column(events, "montant_entree_bisou")
+                + numeric_column(events, "montant_sortie_bisou"),
+                "Transactions et activité",
+            ),
+            (
+                "remboursements_credits",
+                "Remboursements observés",
+                numeric_column(events, "remboursement_mpesa")
+                .where(
+                    numeric_column(events, "remboursement_mpesa").gt(0),
+                    numeric_column(events, "remboursement_compte_ouvert"),
+                ),
+                "Crédits et remboursements",
+            ),
+            (
+                "credits_decaissements",
+                "Décaissements de crédit observés",
+                numeric_column(events, "montant_decaisse_client"),
+                "Crédits et remboursements",
+            ),
+        ]
+        for indicator_key, label, values, bloc in monetary_specs:
+            add_daily_metric(
+                events,
+                date_values=event_dates,
+                bloc=bloc,
+                indicator_key=indicator_key,
+                label=label,
+                unit="montant",
+                source="Transactions [Turbo]",
+                value_values=values,
+                currency_values=currencies,
+            )
+
+    customer_reference = _mpesa_customer_reference(prepared)
+    if not customer_reference.empty:
+        add_daily_metric(
+            customer_reference,
+            date_values=customer_reference["date_creation"],
+            bloc="Clients et comptes",
+            indicator_key="nouveaux_clients",
+            label="Nouveaux clients",
+            unit="nombre",
+            source="Customers [Turbo]",
+            unique_values=customer_reference["client_key"],
+        )
+
+    for account_frame, key, label in [
+        (prepared.current_savings, "nouveaux_comptes_ouverts", "Nouveaux comptes ouverts"),
+        (prepared.fixed_savings, "nouveaux_dat", "Nouveaux comptes bloqués / DAT"),
+    ]:
+        if not isinstance(account_frame, pd.DataFrame) or account_frame.empty:
+            continue
+        account_dates = pd.Series(pd.NaT, index=account_frame.index, dtype="datetime64[ns]")
+        for date_column in ["date_activated", "date_approved", "created_at"]:
+            if date_column in account_frame.columns:
+                account_dates = account_dates.combine_first(
+                    pd.to_datetime(account_frame[date_column], errors="coerce")
+                )
+        identifier = account_frame.get(
+            "savings_id",
+            account_frame.get("id", pd.Series(account_frame.index.astype(str), index=account_frame.index)),
+        )
+        add_daily_metric(
+            account_frame,
+            date_values=account_dates,
+            bloc="Clients et comptes",
+            indicator_key=key,
+            label=label,
+            unit="nombre",
+            source="Savings Account [Turbo]",
+            unique_values=identifier,
+            currency_values=account_frame.get(
+                "currency_code", pd.Series("", index=account_frame.index)
+            ),
+        )
+
+    loans = prepared.loans if isinstance(prepared.loans, pd.DataFrame) else pd.DataFrame()
+    if not loans.empty and "created_at" in loans.columns:
+        loan_dates = pd.to_datetime(loans["created_at"], errors="coerce")
+        loan_currencies = loans.get(
+            "currency_code", pd.Series("", index=loans.index)
+        )
+        loan_ids = loans.get(
+            "loan_id", pd.Series(loans.index.astype(str), index=loans.index)
+        )
+        add_daily_metric(
+            loans,
+            date_values=loan_dates,
+            bloc="Crédits et remboursements",
+            indicator_key="nouveaux_credits",
+            label="Nouveaux crédits",
+            unit="nombre",
+            source="Loans Account [Turbo]",
+            unique_values=loan_ids,
+            currency_values=loan_currencies,
+        )
+        add_daily_metric(
+            loans,
+            date_values=loan_dates,
+            bloc="Crédits et remboursements",
+            indicator_key="montant_nouveaux_credits",
+            label="Montant des nouveaux crédits",
+            unit="montant",
+            source="Loans Account [Turbo]",
+            value_values=numeric_column(loans, "loan_amount"),
+            currency_values=loan_currencies,
+        )
+
+    history = (
+        pd.concat(history_parts, ignore_index=True)
+        if history_parts
+        else pd.DataFrame(columns=MPESA_FORECAST_HISTORY_COLUMNS)
+    )
+    forecast_parts: list[pd.DataFrame] = []
+    summary_rows: list[dict[str, Any]] = []
+    non_calculable_rows: list[dict[str, Any]] = []
+    if not history.empty:
+        group_columns = [
+            "bloc",
+            "indicator_key",
+            "indicateur",
+            "currency_code",
+            "unite",
+            "source",
+        ]
+        for keys, group in history.groupby(group_columns, dropna=False):
+            bloc, indicator_key, label, currency, unit, source = keys
+            series = group.set_index("date")["valeur"]
+            result = _forecast_daily_series(
+                series,
+                reference_date=analysis_date,
+                horizon_days=horizon,
+                confidence_level=confidence,
+            )
+            if result.get("status") != "Calculée":
+                non_calculable_rows.append(
+                    {
+                        "bloc": bloc,
+                        "indicateur": label,
+                        "currency_code": currency,
+                        "motif": result.get("status", "Non calculable"),
+                        "nombre_jours_historique": result.get(
+                            "nombre_jours_historique", 0
+                        ),
+                    }
+                )
+                continue
+            prediction_frame = pd.DataFrame(
+                {
+                    "date": result["dates"],
+                    "bloc": bloc,
+                    "indicator_key": indicator_key,
+                    "indicateur": label,
+                    "currency_code": currency,
+                    "prevision": result["forecast"],
+                    "borne_basse": result["lower"],
+                    "borne_haute": result["upper"],
+                    "unite": unit,
+                    "source": source,
+                }
+            )
+            forecast_parts.append(prediction_frame[MPESA_FORECAST_COLUMNS])
+            aggregation = "moyenne" if indicator_key == "clients_actifs" else "somme"
+            forecast_value = (
+                float(np.mean(result["forecast"]))
+                if aggregation == "moyenne"
+                else float(np.sum(result["forecast"]))
+            )
+            historical_values = result["history"].tail(horizon)
+            previous_value = (
+                float(historical_values.mean())
+                if aggregation == "moyenne"
+                else float(historical_values.sum())
+            )
+            evolution = (
+                100.0 * (forecast_value - previous_value) / previous_value
+                if previous_value != 0
+                else np.nan
+            )
+            summary_rows.append(
+                {
+                    "bloc": bloc,
+                    "indicator_key": indicator_key,
+                    "indicateur": label,
+                    "currency_code": currency,
+                    "valeur_prevue_horizon": forecast_value,
+                    "valeur_periode_precedente": previous_value,
+                    "evolution_prevue_pct": evolution,
+                    "mae": result["mae"],
+                    "wape_pct": result["wape_pct"],
+                    "qualite_modele": result["qualite_modele"],
+                    "agregation_horizon": aggregation,
+                    "unite": unit,
+                    "source": source,
+                    "nombre_jours_historique": result["nombre_jours_historique"],
+                }
+            )
+    forecast = (
+        pd.concat(forecast_parts, ignore_index=True)
+        if forecast_parts
+        else pd.DataFrame(columns=MPESA_FORECAST_COLUMNS)
+    )
+    summary = pd.DataFrame(summary_rows, columns=MPESA_FORECAST_SUMMARY_COLUMNS)
+    non_calculable = pd.DataFrame(non_calculable_rows)
+
+    dat_report = build_mpesa_dat_maturity_analysis(
+        prepared.fixed_savings,
+        as_of_date=analysis_date,
+        annual_interest_rate_pct=annual_interest_rate_pct,
+        preparation_horizon_days=horizon,
+    )
+    dat_detail = dat_report["detail"].copy()
+    if not dat_detail.empty:
+        dat_detail["maturity_date"] = pd.to_datetime(
+            dat_detail["maturity_date"], errors="coerce"
+        )
+        dat_detail = dat_detail.loc[
+            dat_detail["maturity_date"].gt(analysis_date)
+            & dat_detail["maturity_date"].le(
+                analysis_date + pd.Timedelta(days=horizon)
+            )
+        ].copy()
+    coverage_rows = [
+        {
+            "source": "Transactions [Turbo]",
+            "nombre_lignes": int(len(prepared.transactions)),
+            "date_min": (
+                pd.to_datetime(prepared.transactions["created_at"], errors="coerce").min()
+                if not prepared.transactions.empty
+                and "created_at" in prepared.transactions.columns
+                else pd.NaT
+            ),
+            "date_max": (
+                pd.to_datetime(prepared.transactions["created_at"], errors="coerce").max()
+                if not prepared.transactions.empty
+                and "created_at" in prepared.transactions.columns
+                else pd.NaT
+            ),
+            "alerte_couverture": (
+                "Le fichier contient exactement 100 000 lignes : vérifier si l'export Turbo est plafonné."
+                if len(prepared.transactions) == 100_000
+                else ""
+            ),
+        },
+        {
+            "source": "Savings Account [Turbo]",
+            "nombre_lignes": int(len(prepared.current_savings) + len(prepared.fixed_savings)),
+            "date_min": pd.NaT,
+            "date_max": pd.NaT,
+            "alerte_couverture": "Instantané : les soldes futurs ne sont pas prédits.",
+        },
+        {
+            "source": "Loans Account [Turbo]",
+            "nombre_lignes": int(len(prepared.loans)),
+            "date_min": pd.NaT,
+            "date_max": pd.NaT,
+            "alerte_couverture": "Instantané : l'encours futur n'est pas prédit.",
+        },
+    ]
+    return {
+        "date_reference": analysis_date,
+        "date_fin_prevision": analysis_date + pd.Timedelta(days=horizon),
+        "horizon_jours": horizon,
+        "niveau_confiance_pct": confidence,
+        "historique": history.sort_values(
+            ["bloc", "indicator_key", "currency_code", "date"]
+        ).reset_index(drop=True)
+        if not history.empty
+        else history,
+        "previsions": forecast,
+        "synthese": summary,
+        "non_calculable": non_calculable,
+        "dat_echeancier": dat_detail.reset_index(drop=True),
+        "couverture": pd.DataFrame(coverage_rows),
+    }
 
 
 def build_mpesa_year_over_year_comparison(

@@ -25,6 +25,8 @@ from credit_app.services.mpesa_analysis import (
     G2_TRANSACTION_REQUIRED_COLUMNS,
     LOAN_USEFUL_COLUMNS,
     MPESA_COMPARISON_PERIOD_OPTIONS,
+    MPESA_FORECAST_CONFIDENCE_OPTIONS,
+    MPESA_FORECAST_HORIZON_OPTIONS,
     MPESA_YEAR_SCOPE_MODES,
     PERFECT_CLIENTS_REQUIRED_COLUMNS,
     TRANSACTION_REQUIRED_COLUMNS,
@@ -43,6 +45,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_dat_maturity_analysis,
     build_loan_savings_reconciliation,
     build_mpesa_management_dashboard,
+    build_mpesa_forecast_report,
     build_mpesa_statistics_report,
     build_mpesa_weekly_comparison,
     build_turbo_operation_events,
@@ -114,6 +117,7 @@ MPESA_SOLUTION_TAB_LABELS = (
     "Detail des credits",
     "Perfect_client",
     "Statistiques",
+    "Prévisions Turbo",
 )
 
 
@@ -960,6 +964,30 @@ def _build_mpesa_statistics_report_cached(
 
 @st.cache_data(
     show_spinner=False,
+    max_entries=12,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _build_mpesa_forecast_report_cached(
+    prepared: MpesaPreparedData,
+    reference_date: object,
+    horizon_days: int,
+    confidence_level: int,
+    annual_interest_rate_pct: float,
+) -> dict[str, Any]:
+    operation_journal = _build_turbo_operation_events_cached(prepared)
+    scoped_prepared = _prepared_data_as_of(prepared, reference_date)
+    return build_mpesa_forecast_report(
+        scoped_prepared,
+        reference_date=reference_date,
+        horizon_days=horizon_days,
+        confidence_level=confidence_level,
+        annual_interest_rate_pct=annual_interest_rate_pct,
+        turbo_events=operation_journal["events"],
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
     max_entries=16,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
@@ -1351,6 +1379,11 @@ def _filter_statement(
                 "Devise",
                 ["Toutes"] + currencies,
                 key=f"{key_prefix}_currency",
+                help=(
+                    "Choisissez une devise pour limiter le relevé. `Toutes` "
+                    "conserve CDF et USD dans le même document, mais les montants "
+                    "et les soldes restent présentés séparément par devise."
+                ),
             )
             context["currency"] = selected_currency
             if selected_currency != "Toutes":
@@ -1416,6 +1449,12 @@ def _filter_statement(
         ref_query = st.text_input(
             "Référence Turbo, DAT ou crédit",
             key=f"{key_prefix}_reference",
+            help=(
+                "Filtre facultatif permettant de retrouver une opération à partir "
+                "de tout ou partie de sa référence Turbo, de la référence du DAT "
+                "ou de celle du crédit. Laissez vide pour conserver toutes les "
+                "références."
+            ),
         ).strip()
     context["reference_query"] = ref_query
     if ref_query:
@@ -2083,7 +2122,11 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
     render_panel_title("1. Rechercher et sélectionner un client")
     st.caption(search_help)
     query_label = "Customer ID, téléphone ou nom" if has_g2_names else "Customer ID ou téléphone"
-    query = st.text_input(query_label, key="mpesa_customer_query")
+    query = st.text_input(
+        query_label,
+        key="mpesa_customer_query",
+        help=search_help,
+    )
     if not query.strip():
         st.info("Saisissez une valeur de recherche pour commencer l'analyse du client.")
         return None
@@ -2131,6 +2174,11 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
             match_options,
             format_func=lambda customer_id: candidate_labels.get(str(customer_id), str(customer_id)),
             key="mpesa_selected_customer",
+            help=(
+                "Plusieurs clients correspondent à la recherche. Sélectionnez la "
+                "fiche exacte à utiliser pour l'aperçu, les contrôles et tous les "
+                "exports de l'extrait."
+            ),
         )
     with st.expander(f"Voir les {len(candidates)} client(s) correspondant(s)", expanded=False):
         st.dataframe(candidates, width="stretch", hide_index=True)
@@ -2184,6 +2232,12 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
                     step=100.0 if str(currency_code).upper() == "CDF" else 1.0,
                     format=decimals_format,
                     key=f"mpesa_statement_opening_balance_{selected_customer}_{currency_code}",
+                    help=(
+                        "Saisissez le solde réel du compte ouvert juste avant la "
+                        "date de début du relevé. Il sert à calculer le solde après "
+                        "chaque mouvement et le solde de clôture; il ne crée aucune "
+                        "transaction. Laissez 0 si ce solde n'est pas disponible."
+                    ),
                 )
 
     try:
@@ -3347,6 +3401,10 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                 value=time(0, 0, 0),
                 step=60,
                 key=f"mpesa_g2_completion_start_time_{completion_key}",
+                help=(
+                    "Première heure incluse le jour de début. `00:00:00` "
+                    "conserve la journée depuis son commencement."
+                ),
             )
         with date_columns[1]:
             date_end = st.date_input(
@@ -3363,6 +3421,10 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                 value=time(23, 59, 59),
                 step=60,
                 key=f"mpesa_g2_completion_end_time_{completion_key}",
+                help=(
+                    "Dernière heure incluse le jour de fin. `23:59:59` conserve "
+                    "la journée entière."
+                ),
             )
         if default_completion_date < completion_times.max().date():
             st.caption(
@@ -4040,6 +4102,11 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
         "Rechercher par telephone, Customer ID ou nom",
         key="mpesa_perfect_client_search",
         placeholder="Ex. 243..., Customer ID, nom Turbo/G2 ou nom Perfect",
+        help=(
+            "Recherche dans les téléphones normalisés, les identifiants Turbo "
+            "et Perfect ainsi que les noms disponibles. Ce filtre facilite la "
+            "consultation et ne modifie aucun montant."
+        ),
     ).strip()
     summary_view = _apply_local_multiselect_filters(
         summary,
@@ -4790,12 +4857,23 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 options=status_options,
                 default=status_options,
                 key="mpesa_loan_savings_statuses",
+                help=(
+                    "Filtre les résultats du contrôle entre Loans Account et "
+                    "Savings Account. `Conforme` indique une liaison retrouvée; "
+                    "`À revoir` signale une absence, une ambiguïté ou une "
+                    "incohérence à vérifier. Ce statut ne modifie pas les soldes."
+                ),
             )
         with filter_right:
             client_query = st.text_input(
                 "Rechercher un client, telephone, nom ou savings_id",
                 key="mpesa_loan_savings_client_query",
                 placeholder="Ex. customer_id, 243..., nom ou SAV-...",
+                help=(
+                    "Recherche dans l'identifiant client, le téléphone, le nom "
+                    "et le `savings_id`, qui est l'identifiant du compte d'épargne "
+                    "rattaché au crédit. Laissez vide pour afficher tous les clients."
+                ),
             ).strip()
         if selected_statuses:
             clients_view = clients_view.loc[
@@ -5010,6 +5088,11 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
                 "Frequence d'evolution",
                 ["Jour", "Semaine", "Mois"],
                 key="mpesa_finance_turbo_frequency",
+                help=(
+                    "Regroupe les mouvements dans les graphiques par jour, semaine "
+                    "ou mois. Ce choix ne change pas la période analysée ni les "
+                    "totaux; il modifie seulement le niveau de détail temporel."
+                ),
             )
         st.caption(
             "Seuils de controle proposes depuis les analyses prioritaires Perfect Vision; ils restent propres a chaque devise."
@@ -5021,6 +5104,12 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             value=14_000_000.0,
             step=100_000.0,
             key="mpesa_fractionation_cdf",
+            help=(
+                "Seuil de contrôle en CDF. Une alerte apparaît lorsqu'un même "
+                "client réalise, le même jour, au moins deux opérations qui sont "
+                "chacune sous ce seuil mais dont le cumul atteint ou dépasse le "
+                "seuil. L'alerte demande une vérification; elle ne prouve pas une fraude."
+            ),
         )
         fractionation_usd = threshold_columns[1].number_input(
             "Fractionnement USD",
@@ -5028,6 +5117,10 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             value=5_000.0,
             step=100.0,
             key="mpesa_fractionation_usd",
+            help=(
+                "Même contrôle que `Fractionnement CDF`, appliqué uniquement aux "
+                "opérations USD du même client et du même jour."
+            ),
         )
         important_cdf = threshold_columns[2].number_input(
             "Transaction importante CDF",
@@ -5035,6 +5128,11 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             value=28_000_000.0,
             step=100_000.0,
             key="mpesa_important_cdf",
+            help=(
+                "Montant à partir duquel une opération individuelle en CDF est "
+                "signalée comme importante pour revue. Le signal n'annule pas "
+                "l'opération et ne signifie pas qu'elle est incorrecte."
+            ),
         )
         important_usd = threshold_columns[3].number_input(
             "Transaction importante USD",
@@ -5042,6 +5140,10 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             value=10_000.0,
             step=100.0,
             key="mpesa_important_usd",
+            help=(
+                "Montant à partir duquel une opération individuelle en USD est "
+                "signalée comme importante pour revue."
+            ),
         )
         st.form_submit_button("Actualiser l'analyse Turbo", type="primary")
 
@@ -6130,6 +6232,10 @@ def _render_statistics_tab(
                 max_value=maximum_date,
                 key=start_widget_key,
                 format="DD/MM/YYYY",
+                help=(
+                    "Première journée incluse dans les statistiques, les "
+                    "comparaisons, les graphiques, les tableaux et le rapport Word."
+                ),
             )
         with end_col:
             st.date_input(
@@ -6138,12 +6244,20 @@ def _render_statistics_tab(
                 max_value=maximum_date,
                 key=end_widget_key,
                 format="DD/MM/YYYY",
+                help=(
+                    "Dernière journée incluse. Lorsque la journée la plus récente "
+                    "semble incomplète, la dernière journée complète est proposée."
+                ),
             )
         with frequency_col:
             st.selectbox(
                 "Frequence",
                 ["Jour", "Semaine", "Mois"],
                 key="mpesa_statistics_frequency",
+                help=(
+                    "Regroupe les évolutions par jour, semaine ou mois sans changer "
+                    "la période ni les totaux calculés."
+                ),
             )
         with top_col:
             st.number_input(
@@ -6152,6 +6266,11 @@ def _render_statistics_tab(
                 max_value=200,
                 step=5,
                 key="mpesa_statistics_top_n_clients",
+                help=(
+                    "Nombre maximal de clients conservés dans les classements. "
+                    "Ce réglage limite seulement les tableaux et graphiques de "
+                    "classement; il ne réduit pas les KPI globaux."
+                ),
             )
         statistics_submitted = st.form_submit_button("Actualiser les statistiques", type="primary")
 
@@ -6831,6 +6950,554 @@ def _render_statistics_tab(
         st.warning(str(exc))
 
 
+def _forecast_period_label(frequency: str) -> str:
+    return {
+        "Jour": "D",
+        "Semaine": "W-SUN",
+        "Mois": "MS",
+    }.get(frequency, "D")
+
+
+def _aggregate_forecast_chart(
+    history: pd.DataFrame,
+    forecast: pd.DataFrame,
+    *,
+    frequency: str,
+    indicator_key: str,
+    currency: str,
+    reference_date: pd.Timestamp,
+    horizon_days: int,
+) -> pd.DataFrame:
+    history_view = history.loc[
+        history["indicator_key"].eq(indicator_key)
+        & history["currency_code"].astype(str).eq(currency)
+    ].copy()
+    forecast_view = forecast.loc[
+        forecast["indicator_key"].eq(indicator_key)
+        & forecast["currency_code"].astype(str).eq(currency)
+    ].copy()
+    if history_view.empty and forecast_view.empty:
+        return pd.DataFrame()
+    history_view["date"] = pd.to_datetime(history_view["date"], errors="coerce")
+    forecast_view["date"] = pd.to_datetime(forecast_view["date"], errors="coerce")
+    history_start = reference_date - pd.Timedelta(days=max(90, horizon_days * 2))
+    history_view = history_view.loc[history_view["date"].ge(history_start)]
+    aggregation = "mean" if indicator_key == "clients_actifs" else "sum"
+    frequency_code = _forecast_period_label(frequency)
+
+    def aggregate(
+        frame: pd.DataFrame,
+        value_columns: list[str],
+        series_label: str,
+    ) -> pd.DataFrame:
+        if frame.empty:
+            return pd.DataFrame()
+        indexed = frame.set_index("date")[value_columns].sort_index()
+        grouped = (
+            indexed.resample(frequency_code).mean()
+            if aggregation == "mean"
+            else indexed.resample(frequency_code).sum()
+        )
+        grouped = grouped.reset_index()
+        grouped["serie"] = series_label
+        return grouped
+
+    actual = aggregate(history_view, ["valeur"], "Historique").rename(
+        columns={"valeur": "valeur_graphique"}
+    )
+    predicted = aggregate(
+        forecast_view,
+        ["prevision", "borne_basse", "borne_haute"],
+        "Prévision",
+    ).rename(columns={"prevision": "valeur_graphique"})
+    return pd.concat([actual, predicted], ignore_index=True, sort=False)
+
+
+@st.fragment
+def _render_forecast_tab(prepared: MpesaPreparedData) -> None:
+    render_summary_box(
+        "Prévisions Turbo",
+        [
+            "Ce module estime l'activité à court terme à partir des historiques Turbo uniquement.",
+            "Les montants CDF et USD restent toujours séparés. G2 n'intervient dans aucun calcul de prévision.",
+            "Les échéances DAT proviennent des dates contractuelles : il s'agit d'un calendrier certain sous réserve de la qualité des données, pas d'une prédiction.",
+        ],
+    )
+    transaction_dates = (
+        pd.to_datetime(prepared.transactions["created_at"], errors="coerce").dropna()
+        if not prepared.transactions.empty and "created_at" in prepared.transactions.columns
+        else pd.Series(dtype="datetime64[ns]")
+    )
+    if transaction_dates.empty:
+        st.info(
+            "Chargez Transactions [Turbo] pour calculer les prévisions d'activité. "
+            "Savings Account et Loans Account complètent ensuite les comptes, les crédits et les échéances DAT."
+        )
+        return
+
+    minimum_date = transaction_dates.min().date()
+    maximum_timestamp = pd.Timestamp(transaction_dates.max())
+    maximum_date = maximum_timestamp.normalize().date()
+    default_reference = maximum_date
+    if minimum_date < maximum_date and maximum_timestamp.hour < 18:
+        default_reference = (
+            maximum_timestamp.normalize() - pd.Timedelta(days=1)
+        ).date()
+    scope_key = f"{minimum_date:%Y%m%d}_{maximum_date:%Y%m%d}_{len(transaction_dates)}"
+    reference_key = f"mpesa_forecast_reference_{scope_key}"
+    applied_key = f"mpesa_forecast_applied_{scope_key}"
+    st.session_state.setdefault(reference_key, default_reference)
+    st.session_state.setdefault("mpesa_forecast_horizon", 30)
+    st.session_state.setdefault("mpesa_forecast_frequency", "Semaine")
+    st.session_state.setdefault("mpesa_forecast_confidence", 80)
+    st.session_state.setdefault("mpesa_forecast_dat_rate", DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT)
+    st.session_state.setdefault(
+        applied_key,
+        {
+            "reference_date": st.session_state[reference_key],
+            "horizon_days": st.session_state["mpesa_forecast_horizon"],
+            "frequency": st.session_state["mpesa_forecast_frequency"],
+            "confidence_level": st.session_state["mpesa_forecast_confidence"],
+            "annual_interest_rate_pct": st.session_state["mpesa_forecast_dat_rate"],
+        },
+    )
+
+    with st.form(f"mpesa_forecast_filters_{scope_key}", border=True):
+        reference_col, horizon_col, frequency_col, confidence_col, rate_col = st.columns(
+            [1.25, 1.0, 1.0, 1.0, 1.0]
+        )
+        with reference_col:
+            st.date_input(
+                "Date de référence",
+                min_value=minimum_date,
+                max_value=maximum_date,
+                key=reference_key,
+                format="DD/MM/YYYY",
+                help="La prévision commence le lendemain de cette date.",
+            )
+        with horizon_col:
+            st.selectbox(
+                "Horizon",
+                list(MPESA_FORECAST_HORIZON_OPTIONS),
+                format_func=lambda value: f"{value} jours",
+                key="mpesa_forecast_horizon",
+                help=(
+                    "L'horizon indique le nombre de jours à prévoir après la "
+                    "date de référence. Par exemple, un horizon de 30 jours "
+                    "produit des estimations pour les 30 jours suivants. Une "
+                    "prévision courte est généralement plus fiable; plus "
+                    "l'horizon s'allonge, plus l'incertitude augmente."
+                ),
+            )
+        with frequency_col:
+            st.selectbox(
+                "Affichage",
+                ["Jour", "Semaine", "Mois"],
+                key="mpesa_forecast_frequency",
+                help=(
+                    "L'affichage détermine uniquement le regroupement des "
+                    "résultats dans le graphique : une valeur par jour, par "
+                    "semaine ou par mois. Il ne change ni la date de référence, "
+                    "ni l'horizon, ni le modèle de prévision. Les nombres sont "
+                    "additionnés sur la période; les clients actifs sont "
+                    "présentés en moyenne."
+                ),
+            )
+        with confidence_col:
+            st.selectbox(
+                "Intervalle",
+                list(MPESA_FORECAST_CONFIDENCE_OPTIONS),
+                format_func=lambda value: f"{value} %",
+                key="mpesa_forecast_confidence",
+                help=(
+                    "L'intervalle de prévision représente la zone d'incertitude "
+                    "autour de la valeur prévue. À 80 %, le modèle propose une "
+                    "fourchette plus resserrée : dans des conditions historiques "
+                    "comparables, environ 8 valeurs réelles sur 10 devraient se "
+                    "situer entre la borne basse et la borne haute. À 95 %, la "
+                    "fourchette est plus large et plus prudente. Cet intervalle "
+                    "n'est pas une garantie, surtout lorsque l'activité change "
+                    "brutalement ou que l'historique est insuffisant."
+                ),
+            )
+        with rate_col:
+            st.number_input(
+                "Taux annuel DAT (%)",
+                min_value=0.0,
+                max_value=100.0,
+                step=0.25,
+                key="mpesa_forecast_dat_rate",
+                help=(
+                    "Taux annuel utilisé pour estimer l'intérêt simple des DAT "
+                    "arrivant à échéance. Il est fixé à 11 % par défaut. Ce taux "
+                    "alimente uniquement l'échéancier DAT et ne modifie pas le "
+                    "modèle de prévision ni les écritures Turbo."
+                ),
+            )
+        submitted = st.form_submit_button(
+            "Actualiser les prévisions",
+            type="primary",
+            icon=":material/refresh:",
+        )
+    if submitted:
+        st.session_state[applied_key] = {
+            "reference_date": st.session_state[reference_key],
+            "horizon_days": st.session_state["mpesa_forecast_horizon"],
+            "frequency": st.session_state["mpesa_forecast_frequency"],
+            "confidence_level": st.session_state["mpesa_forecast_confidence"],
+            "annual_interest_rate_pct": st.session_state["mpesa_forecast_dat_rate"],
+        }
+
+    filters = st.session_state[applied_key]
+    reference_date = pd.Timestamp(filters["reference_date"]).normalize()
+    horizon_days = int(filters["horizon_days"])
+    frequency = str(filters["frequency"])
+    confidence_level = int(filters["confidence_level"])
+    annual_interest_rate_pct = float(filters["annual_interest_rate_pct"])
+    if submitted:
+        st.success(
+            f"Prévisions actualisées du {(reference_date + pd.Timedelta(days=1)):%d/%m/%Y} "
+            f"au {(reference_date + pd.Timedelta(days=horizon_days)):%d/%m/%Y}.",
+            icon=":material/check_circle:",
+        )
+    else:
+        st.caption(
+            f"Périmètre appliqué : référence au {reference_date:%d/%m/%Y}, "
+            f"horizon {horizon_days} jours, intervalle {confidence_level} %."
+        )
+
+    with st.expander("Mini-cours : comprendre la prévision", expanded=False):
+        st.markdown(
+            """
+**Le machine learning**, ou apprentissage automatique, consiste ici à laisser
+l'ordinateur repérer des habitudes dans les données passées. Le modèle observe
+notamment le niveau des 28 derniers jours et compare les mêmes jours de la
+semaine. Par exemple, il peut apprendre qu'un lundi est habituellement plus
+actif qu'un dimanche.
+
+**Une prévision n'est pas une certitude.** La ligne centrale représente le
+scénario le plus probable selon l'historique. Les bornes basse et haute
+forment un intervalle d'incertitude : plus il est large, plus la prudence est
+nécessaire.
+
+**Le test rétrospectif** cache volontairement les derniers jours connus, les
+prévoit, puis compare les prévisions aux valeurs réellement observées.
+
+**MAE — Mean Absolute Error**, traduit par **erreur absolue moyenne**, indique
+l'écart moyen entre une prévision et la valeur réellement observée. Elle
+s'exprime dans la même unité que l'indicateur. Une MAE de 5 signifie donc un
+écart moyen de 5 clients, 5 opérations ou 5 unités monétaires selon la série.
+
+**WAPE — Weighted Absolute Percentage Error**, traduit par **erreur absolue
+pondérée en pourcentage**, rapporte la somme des écarts absolus à la somme des
+valeurs réellement observées. Un WAPE de 20 % signifie que l'erreur cumulée
+représente environ 20 % du volume réellement observé. Plus le WAPE est proche
+de 0 %, plus la prévision a été précise. Il devient non calculable lorsque le
+volume réellement observé est nul.
+
+**L'échéancier DAT n'est pas du machine learning.** Il applique simplement les
+dates d'échéance et le taux annuel aux comptes bloqués disponibles.
+            """
+        )
+        st.info(
+            "Une tendance aide à préparer une décision; elle ne remplace ni le jugement du gestionnaire, "
+            "ni la validation comptable, ni l'analyse d'un événement exceptionnel."
+        )
+
+    with st.spinner("Calcul des prévisions Turbo et du test rétrospectif..."):
+        report = _build_mpesa_forecast_report_cached(
+            prepared,
+            reference_date,
+            horizon_days,
+            confidence_level,
+            annual_interest_rate_pct,
+        )
+    history = report.get("historique", pd.DataFrame())
+    forecast = report.get("previsions", pd.DataFrame())
+    summary = report.get("synthese", pd.DataFrame())
+    dat_schedule = report.get("dat_echeancier", pd.DataFrame())
+    coverage = report.get("couverture", pd.DataFrame())
+    non_calculable = report.get("non_calculable", pd.DataFrame())
+
+    if not coverage.empty:
+        alerts = coverage.loc[
+            coverage["alerte_couverture"].astype(str).str.strip().ne("")
+        ]
+        for message in alerts["alerte_couverture"].astype(str).unique():
+            st.warning(message, icon=":material/info:")
+    if summary.empty:
+        st.warning(
+            "L'historique disponible est insuffisant pour produire une prévision testable. "
+            "Il faut au minimum 28 jours calendaires et plusieurs jours d'activité."
+        )
+        if not non_calculable.empty:
+            st.dataframe(non_calculable, hide_index=True, width="stretch")
+        return
+
+    currency_options = sorted(
+        value
+        for value in summary["currency_code"].dropna().astype(str).unique()
+        if value.strip()
+    )
+    selected_currencies = st.pills(
+        "Devises affichées",
+        options=currency_options,
+        default=currency_options,
+        selection_mode="multi",
+        key=f"mpesa_forecast_currencies_{scope_key}",
+        help="Les indicateurs monétaires ne sont jamais additionnés entre devises.",
+    )
+    selected_currency_set = set(selected_currencies or currency_options)
+    summary_view = summary.loc[
+        summary["currency_code"].astype(str).isin(selected_currency_set)
+        | summary["currency_code"].astype(str).eq("")
+    ].copy()
+
+    block_order = [
+        "Clients et comptes",
+        "Crédits et remboursements",
+        "Transactions et activité",
+    ]
+    for block_index, block in enumerate(block_order, start=1):
+        block_summary = summary_view.loc[summary_view["bloc"].eq(block)].copy()
+        if block_summary.empty:
+            continue
+        with st.expander(f"{block_index}. {block}", expanded=block_index == 1):
+            cards: list[tuple[str, str, str, str]] = []
+            for _, row in block_summary.iterrows():
+                currency = str(row.get("currency_code", "")).strip()
+                unit = str(row.get("unite", ""))
+                predicted_value = float(row.get("valeur_prevue_horizon", 0.0))
+                value_text = (
+                    _format_amount(predicted_value)
+                    if unit == "montant"
+                    else f"{predicted_value:,.1f}".replace(",", " ")
+                )
+                label = str(row.get("indicateur", "Indicateur"))
+                if currency:
+                    label += f" [{currency}]"
+                evolution = row.get("evolution_prevue_pct", pd.NA)
+                evolution_text = (
+                    f"{float(evolution):+.1f} % vs {horizon_days} jours précédents"
+                    if pd.notna(evolution)
+                    else "Comparaison précédente non calculable"
+                )
+                cards.append(
+                    (
+                        label,
+                        value_text,
+                        f"{evolution_text} · qualité {row.get('qualite_modele', 'Prudence')}",
+                        "blue" if unit == "nombre" else "navy",
+                    )
+                )
+            render_kpi_cards(cards)
+
+            chart_options = {
+                (
+                    str(row["indicator_key"]),
+                    str(row["indicateur"]),
+                    str(row["currency_code"]),
+                )
+                for _, row in block_summary.iterrows()
+            }
+            selected_chart = st.selectbox(
+                "Indicateur du graphique",
+                options=sorted(chart_options, key=lambda item: (item[1], item[2])),
+                format_func=lambda item: f"{item[1]} [{item[2]}]" if item[2] else item[1],
+                key=f"mpesa_forecast_chart_{scope_key}_{block_index}",
+                help=(
+                    "Choisissez la série à visualiser dans ce bloc. Ce contrôle "
+                    "change uniquement le graphique affiché; toutes les prévisions "
+                    "du bloc restent calculées et disponibles dans le tableau."
+                ),
+            )
+            indicator_key, indicator_label, currency = selected_chart
+            chart_data = _aggregate_forecast_chart(
+                history,
+                forecast,
+                frequency=frequency,
+                indicator_key=indicator_key,
+                currency=currency,
+                reference_date=reference_date,
+                horizon_days=horizon_days,
+            )
+            if not chart_data.empty:
+                chart_title = (
+                    f"{indicator_label}{f' [{currency}]' if currency else ''}"
+                )
+                st.markdown(f"**{chart_title}**")
+                st.caption(
+                    f"Historique observé et prévision à {horizon_days} jours. "
+                    f"La zone rouge représente l'intervalle de prévision à "
+                    f"{confidence_level} %."
+                )
+                fig = px.line(
+                    chart_data,
+                    x="date",
+                    y="valeur_graphique",
+                    color="serie",
+                    markers=True,
+                    color_discrete_map={
+                        "Historique": "#0b4ea2",
+                        "Prévision": "#e63946",
+                    },
+                    labels={
+                        "date": "Période",
+                        "valeur_graphique": "Valeur",
+                        "serie": "Série",
+                    },
+                )
+                fig = style_standard_line(fig, height=350, tickangle=-20)
+                prediction_band = chart_data.loc[
+                    chart_data["serie"].eq("Prévision")
+                    & chart_data["borne_basse"].notna()
+                    & chart_data["borne_haute"].notna()
+                ].sort_values("date")
+                if not prediction_band.empty:
+                    fig.add_scatter(
+                        x=prediction_band["date"],
+                        y=prediction_band["borne_haute"],
+                        mode="lines",
+                        line={"width": 0},
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                    fig.add_scatter(
+                        x=prediction_band["date"],
+                        y=prediction_band["borne_basse"],
+                        mode="lines",
+                        line={"width": 0},
+                        fill="tonexty",
+                        fillcolor="rgba(230, 57, 70, 0.14)",
+                        name=f"Intervalle {confidence_level} %",
+                        hovertemplate="Borne basse : %{y:,.2f}<extra></extra>",
+                    )
+                st_plot(
+                    fig,
+                    key=f"mpesa_forecast_plot_{scope_key}_{block_index}_{indicator_key}_{currency}",
+                    source_note=str(block_summary.iloc[0].get("source", "")),
+                    annotate_values=False,
+                )
+            table = block_summary[
+                [
+                    "indicateur",
+                    "currency_code",
+                    "valeur_prevue_horizon",
+                    "valeur_periode_precedente",
+                    "evolution_prevue_pct",
+                    "mae",
+                    "wape_pct",
+                    "qualite_modele",
+                    "nombre_jours_historique",
+                ]
+            ]
+            st.dataframe(
+                table,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "indicateur": st.column_config.TextColumn("Indicateur", pinned=True),
+                    "currency_code": st.column_config.TextColumn("Devise"),
+                    "valeur_prevue_horizon": st.column_config.NumberColumn(
+                        "Prévision sur l'horizon", format="%.2f"
+                    ),
+                    "valeur_periode_precedente": st.column_config.NumberColumn(
+                        "Période précédente", format="%.2f"
+                    ),
+                    "evolution_prevue_pct": st.column_config.NumberColumn(
+                        "Évolution prévue", format="%.1f %%"
+                    ),
+                    "mae": st.column_config.NumberColumn(
+                        "Erreur moyenne (MAE)",
+                        format="%.2f",
+                        help=(
+                            "MAE = Mean Absolute Error, soit erreur absolue moyenne. "
+                            "Elle mesure l'écart moyen dans l'unité de l'indicateur."
+                        ),
+                    ),
+                    "wape_pct": st.column_config.NumberColumn(
+                        "Erreur pondérée (WAPE)",
+                        format="%.1f %%",
+                        help=(
+                            "WAPE = Weighted Absolute Percentage Error, soit erreur "
+                            "absolue pondérée en pourcentage. Plus elle est proche de "
+                            "0 %, plus la prévision rétrospective est précise."
+                        ),
+                    ),
+                    "qualite_modele": st.column_config.TextColumn("Lecture"),
+                    "nombre_jours_historique": st.column_config.NumberColumn(
+                        "Historique (jours)", format="%d"
+                    ),
+                },
+            )
+
+    with st.expander("4. Échéancier prévisionnel DAT", expanded=False):
+        st.caption(
+            "Ce tableau liste les DAT qui arrivent contractuellement à échéance dans l'horizon choisi. "
+            "Il ne dépend pas du modèle prédictif."
+        )
+        if dat_schedule.empty:
+            st.info("Aucun DAT positif n'arrive à échéance dans cet horizon.")
+        else:
+            dat_view = dat_schedule.loc[
+                dat_schedule["currency_code"].astype(str).isin(selected_currency_set)
+            ].copy()
+            dat_columns = [
+                "savings_id",
+                "customer_id",
+                "currency_code",
+                "date_approved",
+                "maturity_date",
+                "jours_avant_echeance",
+                "balance",
+                "interet_estime_echeance",
+                "capital_plus_interet_estime",
+            ]
+            st.dataframe(
+                dat_view[[column for column in dat_columns if column in dat_view.columns]],
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "savings_id": st.column_config.TextColumn("DAT", pinned=True),
+                    "customer_id": st.column_config.TextColumn("Client"),
+                    "currency_code": st.column_config.TextColumn("Devise"),
+                    "date_approved": st.column_config.DatetimeColumn(
+                        "Souscription", format="DD/MM/YYYY HH:mm"
+                    ),
+                    "maturity_date": st.column_config.DatetimeColumn(
+                        "Échéance", format="DD/MM/YYYY HH:mm"
+                    ),
+                    "jours_avant_echeance": st.column_config.NumberColumn(
+                        "Jours restants", format="%d"
+                    ),
+                    "balance": st.column_config.NumberColumn(
+                        "Capital bloqué", format="%.2f"
+                    ),
+                    "interet_estime_echeance": st.column_config.NumberColumn(
+                        "Intérêt estimé", format="%.2f"
+                    ),
+                    "capital_plus_interet_estime": st.column_config.NumberColumn(
+                        "Capital + intérêt estimé", format="%.2f"
+                    ),
+                },
+            )
+
+    with st.expander("Qualité et limites du modèle", expanded=False):
+        st.markdown(
+            """
+- Le **WAPE — Weighted Absolute Percentage Error**, ou **erreur absolue pondérée en pourcentage**, compare l'erreur cumulée au volume réellement observé.
+- Une qualité **Bonne** correspond à un WAPE inférieur ou égal à 20 % sur le test rétrospectif.
+- Une qualité **Acceptable** correspond à un WAPE supérieur à 20 % et inférieur ou égal à 35 %.
+- **Prudence** signifie que l'erreur dépasse 35 %, que l'activité est très irrégulière ou que la série est peu dense.
+- Le modèle ne prévoit pas les soldes futurs d'épargne, l'encours futur des crédits, le défaut individuel ni un chiffre d'affaires certifié à partir d'un seul instantané.
+            """
+        )
+        st.dataframe(coverage, hide_index=True, width="stretch")
+        if not non_calculable.empty:
+            st.caption("Indicateurs non calculables avec l'historique actuel")
+            st.dataframe(non_calculable, hide_index=True, width="stretch")
+
+
 def render_solution_mpesa_tab() -> None:
     render_panel_title("Solution M-PESA")
     render_summary_box(
@@ -7103,3 +7770,5 @@ def render_solution_mpesa_tab() -> None:
         _render_perfect_client_tab(analysis_prepared)
     with sub_tabs[7]:
         _render_statistics_tab(analysis_prepared, historical_prepared=prepared)
+    with sub_tabs[8]:
+        _render_forecast_tab(analysis_prepared)

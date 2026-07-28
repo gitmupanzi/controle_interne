@@ -28,6 +28,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_accounting_analysis,
     build_mpesa_management_dashboard,
     build_mpesa_comparison_windows,
+    build_mpesa_forecast_report,
     build_mpesa_g2_statistics_quality,
     build_mpesa_statistics_report,
     build_mpesa_weekly_comparison,
@@ -6807,6 +6808,171 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(diagnostics.loc["DAT - echeance anterieure a l'approbation", "statut"], "A surveiller")
         self.assertEqual(int(diagnostics.loc["DAT echus avec solde positif", "valeur"]), 1)
         self.assertEqual(diagnostics.loc["DAT echus avec solde positif", "statut"], "Controle metier")
+
+    def test_mpesa_forecast_keeps_currencies_separate_and_backtests(self) -> None:
+        dates = pd.date_range("2026-01-01", periods=120, freq="D")
+        events = pd.DataFrame(
+            [
+                {
+                    "created_at": date,
+                    "event_key": f"{currency}-{index}",
+                    "customer_id": f"C-{index % 10}",
+                    "currency_code": currency,
+                    "montant_entree_bisou": entry,
+                    "montant_sortie_bisou": exit_amount,
+                    "remboursement_mpesa": repayment,
+                    "remboursement_compte_ouvert": 0.0,
+                    "montant_decaisse_client": credit,
+                }
+                for index, date in enumerate(dates)
+                for currency, entry, exit_amount, repayment, credit in [
+                    ("CDF", 100.0, 50.0, 20.0, 30.0),
+                    ("USD", 1.0, 0.5, 0.2, 0.3),
+                ]
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+        )
+
+        report = build_mpesa_forecast_report(
+            prepared,
+            reference_date=dates.max(),
+            horizon_days=30,
+            confidence_level=80,
+            turbo_events=events,
+        )
+
+        summary = report["synthese"].set_index(
+            ["indicator_key", "currency_code"]
+        )
+        cdf_volume = summary.loc[("volume_transactions", "CDF")]
+        usd_volume = summary.loc[("volume_transactions", "USD")]
+        self.assertAlmostEqual(float(cdf_volume["valeur_prevue_horizon"]), 4_500.0)
+        self.assertAlmostEqual(float(usd_volume["valeur_prevue_horizon"]), 45.0)
+        self.assertLess(float(cdf_volume["wape_pct"]), 0.01)
+        self.assertEqual(cdf_volume["qualite_modele"], "Bonne")
+        volume_forecast = report["previsions"].loc[
+            report["previsions"]["indicator_key"].eq("volume_transactions")
+        ]
+        self.assertEqual(
+            volume_forecast.groupby("currency_code")["date"].nunique().to_dict(),
+            {"CDF": 30, "USD": 30},
+        )
+        self.assertTrue(
+            volume_forecast["borne_basse"].le(volume_forecast["prevision"]).all()
+        )
+        self.assertTrue(
+            volume_forecast["borne_haute"].ge(volume_forecast["prevision"]).all()
+        )
+
+    def test_mpesa_forecast_dat_schedule_is_deterministic(self) -> None:
+        dates = pd.date_range("2026-01-01", periods=120, freq="D")
+        events = pd.DataFrame(
+            [
+                {
+                    "created_at": date,
+                    "event_key": f"EV-{index}",
+                    "customer_id": f"C-{index % 5}",
+                    "currency_code": "USD",
+                    "montant_entree_bisou": 10.0,
+                    "montant_sortie_bisou": 0.0,
+                    "remboursement_mpesa": 0.0,
+                    "remboursement_compte_ouvert": 0.0,
+                    "montant_decaisse_client": 0.0,
+                }
+                for index, date in enumerate(dates)
+            ]
+        )
+        fixed = pd.DataFrame(
+            [
+                {
+                    "savings_id": "DAT-1",
+                    "customer_id": "C-1",
+                    "currency_code": "USD",
+                    "balance": 100.0,
+                    "date_approved": "2026-01-01",
+                    "maturity_date": "2026-05-15",
+                    "status": "Active",
+                },
+                {
+                    "savings_id": "DAT-2",
+                    "customer_id": "C-2",
+                    "currency_code": "CDF",
+                    "balance": 200.0,
+                    "date_approved": "2026-01-01",
+                    "maturity_date": "2026-08-15",
+                    "status": "Active",
+                },
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(),
+            fixed_savings=fixed,
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+        )
+
+        report = build_mpesa_forecast_report(
+            prepared,
+            reference_date="2026-04-30",
+            horizon_days=30,
+            confidence_level=95,
+            turbo_events=events,
+        )
+
+        schedule = report["dat_echeancier"]
+        self.assertEqual(schedule["savings_id"].tolist(), ["DAT-1"])
+        self.assertEqual(float(schedule.iloc[0]["balance"]), 100.0)
+        self.assertGreater(
+            float(schedule.iloc[0]["capital_plus_interet_estime"]),
+            100.0,
+        )
+
+    def test_mpesa_forecast_reports_insufficient_history(self) -> None:
+        events = pd.DataFrame(
+            [
+                {
+                    "created_at": date,
+                    "event_key": f"EV-{index}",
+                    "customer_id": "C-1",
+                    "currency_code": "CDF",
+                    "montant_entree_bisou": 10.0,
+                    "montant_sortie_bisou": 0.0,
+                    "remboursement_mpesa": 0.0,
+                    "remboursement_compte_ouvert": 0.0,
+                    "montant_decaisse_client": 0.0,
+                }
+                for index, date in enumerate(
+                    pd.date_range("2026-07-01", periods=10, freq="D")
+                )
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+        )
+
+        report = build_mpesa_forecast_report(
+            prepared,
+            reference_date="2026-07-10",
+            horizon_days=7,
+            turbo_events=events,
+        )
+
+        self.assertTrue(report["synthese"].empty)
+        self.assertFalse(report["non_calculable"].empty)
+        self.assertTrue(
+            report["non_calculable"]["motif"].eq("Historique insuffisant").all()
+        )
 
 
 class TestLoanSavingsReconciliation(unittest.TestCase):

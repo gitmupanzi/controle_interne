@@ -655,8 +655,10 @@ def main() -> None:
             format="%.2f",
             key="mpesa_dat_annual_interest_rate_pct",
             help=(
-                "Utilisé par Solution M-PESA pour estimer l'intérêt simple du DAT entre "
-                "date_approved et maturity_date. La valeur 0 désactive l'estimation."
+                "Taux annuel utilisé pour estimer l'intérêt simple entre la date "
+                "d'approbation du DAT et sa date d'échéance. Le taux Bisou Bisou "
+                "proposé par défaut est 11 %. La valeur 0 désactive l'estimation; "
+                "ce réglage ne crée ni ne modifie aucune écriture comptable."
             ),
         )
         st.session_state.setdefault(
@@ -707,6 +709,10 @@ def main() -> None:
                 max_value=current_year + 1,
                 step=1,
                 key="mpesa_year_scope_start",
+                help=(
+                    "Première année incluse dans le périmètre annuel des analyses "
+                    "M_PESA. Les fichiers chargés restent complets en mémoire."
+                ),
             )
             st.number_input(
                 "Année de fin M_PESA",
@@ -714,6 +720,11 @@ def main() -> None:
                 max_value=current_year + 1,
                 step=1,
                 key="mpesa_year_scope_end",
+                help=(
+                    "Dernière année incluse dans le périmètre annuel. Si elle est "
+                    "antérieure à l'année de début, l'application remet "
+                    "automatiquement les deux années dans l'ordre."
+                ),
             )
             selected_start_year = int(st.session_state["mpesa_year_scope_start"])
             selected_end_year = int(st.session_state["mpesa_year_scope_end"])
