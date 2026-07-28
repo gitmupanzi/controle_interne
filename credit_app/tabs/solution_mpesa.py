@@ -320,6 +320,146 @@ def _render_weekly_comparison(
                     )
 
 
+def _render_year_over_year_charts(
+    comparison: pd.DataFrame,
+    *,
+    block: str,
+    selected_currencies: list[str] | None = None,
+) -> None:
+    """Affiche des histogrammes N/N-1 sans mélanger unités ni devises."""
+    if not isinstance(comparison, pd.DataFrame) or comparison.empty:
+        return
+    view = comparison.loc[
+        comparison["bloc"].astype(str).eq(block)
+    ].copy()
+    if selected_currencies:
+        currencies = view.get(
+            "currency_code",
+            pd.Series("", index=view.index),
+        ).astype("string").fillna("")
+        view = view.loc[
+            currencies.eq("") | currencies.isin(selected_currencies)
+        ].copy()
+    if view.empty:
+        return
+
+    current_start = pd.to_datetime(
+        view.iloc[0].get("date_debut_semaine_courante"),
+        errors="coerce",
+    )
+    current_end = pd.to_datetime(
+        view.iloc[0].get("date_fin_semaine_courante"),
+        errors="coerce",
+    )
+    previous_start = pd.to_datetime(
+        view.iloc[0].get("date_debut_semaine_precedente"),
+        errors="coerce",
+    )
+    previous_end = pd.to_datetime(
+        view.iloc[0].get("date_fin_semaine_precedente"),
+        errors="coerce",
+    )
+    current_label = (
+        f"{current_start:%d/%m/%Y} - {current_end:%d/%m/%Y}"
+        if pd.notna(current_start) and pd.notna(current_end)
+        else "Période analysée"
+    )
+    previous_label = (
+        f"{previous_start:%d/%m/%Y} - {previous_end:%d/%m/%Y}"
+        if pd.notna(previous_start) and pd.notna(previous_end)
+        else "Même période N-1"
+    )
+
+    complete = view.loc[
+        view.get("couverture", pd.Series("", index=view.index))
+        .astype(str)
+        .eq("Complete")
+    ].copy()
+    if complete.empty:
+        st.info(
+            "L'historique de l'année précédente est absent ou incomplet pour "
+            "construire un graphique annuel comparable."
+        )
+        return
+    if len(complete) < len(view):
+        st.caption(
+            "Le graphique conserve uniquement les indicateurs dont les deux "
+            "périodes sont entièrement couvertes."
+        )
+
+    def _draw(frame: pd.DataFrame, *, unit: str, currency: str = "") -> None:
+        if frame.empty:
+            return
+        chart_rows: list[dict[str, Any]] = []
+        for _, row in frame.iterrows():
+            for period_label, value_column in [
+                (current_label, "valeur_semaine_courante"),
+                (previous_label, "valeur_semaine_precedente"),
+            ]:
+                value = pd.to_numeric(row.get(value_column), errors="coerce")
+                if pd.isna(value):
+                    continue
+                chart_rows.append(
+                    {
+                        "Indicateur": str(row.get("indicateur", "")),
+                        "Période": period_label,
+                        "Valeur": float(value),
+                    }
+                )
+        chart_data = pd.DataFrame(chart_rows)
+        if chart_data.empty:
+            return
+        figure = px.bar(
+            chart_data,
+            x="Indicateur",
+            y="Valeur",
+            color="Période",
+            barmode="group",
+            labels={"Valeur": "Nombre" if unit == "nombre" else "Montant"},
+        )
+        style_standard_vertical_bar(figure, height=390, tickangle=-18)
+        suffix = f" [{currency}]" if currency else ""
+        chart_title = f"Comparaison annuelle des {block.lower()}{suffix}"
+        st.markdown(f"**{chart_title}**")
+        st.caption(
+            "Période analysée et mêmes dates de l'année précédente."
+        )
+        st_plot(
+            figure,
+            key=(
+                f"mpesa_statistics_yoy_{re.sub(r'[^0-9A-Za-z]+', '_', block).strip('_').lower()}_"
+                f"{unit}_{currency or 'global'}"
+            ),
+            height=390,
+            source_note=(
+                "Source : Turbo uniquement. Les montants sont présentés "
+                "séparément par devise."
+            ),
+        )
+
+    count_rows = complete.loc[complete["unite"].astype(str).eq("nombre")]
+    _draw(count_rows, unit="nombre")
+
+    amount_rows = complete.loc[complete["unite"].astype(str).eq("montant")]
+    for currency in sorted(
+        amount_rows.get(
+            "currency_code",
+            pd.Series(dtype="string"),
+        )
+        .dropna()
+        .astype(str)
+        .loc[lambda series: series.str.strip().ne("")]
+        .unique()
+    ):
+        _draw(
+            amount_rows.loc[
+                amount_rows["currency_code"].astype(str).eq(currency)
+            ],
+            unit="montant",
+            currency=currency,
+        )
+
+
 def _latest_complete_turbo_date(prepared: MpesaPreparedData) -> pd.Timestamp:
     """Propose la derniere journee Turbo complete pour une comparaison hebdomadaire."""
     candidates: list[pd.Series] = []
@@ -469,8 +609,11 @@ def _uploaded_files_fingerprint(**sources: Any) -> str:
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
-def _create_excel_export_cached(export_report: dict[str, Any]) -> bytes:
-    return create_excel_export(export_report)
+def _create_excel_export_cached(
+    export_report: dict[str, Any],
+    print_orientation: str | None = None,
+) -> bytes:
+    return create_excel_export(export_report, print_orientation=print_orientation)
 
 
 @st.cache_data(show_spinner=False, max_entries=12)
@@ -757,13 +900,21 @@ def _build_mpesa_management_dashboard_cached(
 )
 def _build_mpesa_statistics_report_cached(
     prepared: MpesaPreparedData,
+    historical_prepared: MpesaPreparedData,
     date_start: object,
     date_end: object,
     frequency: str,
     comparison_period: str,
 ) -> dict[str, Any]:
     operation_journal = _build_turbo_operation_events_cached(prepared)
+    historical_operation_journal = _build_turbo_operation_events_cached(
+        historical_prepared
+    )
     scoped_prepared = _prepared_data_as_of(prepared, date_end)
+    scoped_historical_prepared = _prepared_data_as_of(
+        historical_prepared,
+        date_end,
+    )
     return build_mpesa_statistics_report(
         scoped_prepared,
         date_start=date_start,
@@ -772,6 +923,9 @@ def _build_mpesa_statistics_report_cached(
         comparison_period=comparison_period,
         turbo_events=operation_journal["events"],
         turbo_transaction_lines=operation_journal["lines"],
+        historical_prepared=scoped_historical_prepared,
+        historical_turbo_events=historical_operation_journal["events"],
+        historical_turbo_transaction_lines=historical_operation_journal["lines"],
     )
 
 
@@ -1567,6 +1721,67 @@ def _render_customer_statement_elements_preview(
     st.dataframe(display, width="stretch", hide_index=True)
 
 
+def _render_customer_dat_returns_preview(
+    analysis_report: dict[str, Any],
+    *,
+    currency: str,
+) -> None:
+    returns = analysis_report.get("mouvements_internes_turbo", pd.DataFrame())
+    if not isinstance(returns, pd.DataFrame) or returns.empty:
+        return
+    display = returns.copy()
+    if "currency_code" in display.columns:
+        display = display.loc[
+            display["currency_code"]
+            .astype("string")
+            .str.upper()
+            .eq(str(currency).upper())
+        ].copy()
+    columns = [
+        "date_creation_dat",
+        "date_fin_dat",
+        "event_reference",
+        "currency_code",
+        "transfert_dat_sortie",
+        "transfert_epargne_entree",
+        "descriptions",
+    ]
+    columns = [column for column in columns if column in display.columns]
+    if display.empty or not columns:
+        return
+    number_format = "%.0f" if str(currency).upper() == "CDF" else "%.2f"
+    st.markdown("##### Retours du capital mis en DAT")
+    st.dataframe(
+        display[columns],
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "date_creation_dat": st.column_config.DatetimeColumn(
+                "Date et heure de création du DAT",
+                format="DD/MM/YYYY HH:mm",
+            ),
+            "date_fin_dat": st.column_config.DatetimeColumn(
+                "Date et heure de fin du DAT",
+                format="DD/MM/YYYY HH:mm",
+            ),
+            "event_reference": st.column_config.TextColumn(
+                "Référence",
+                pinned=True,
+            ),
+            "currency_code": st.column_config.TextColumn("Devise"),
+            "transfert_dat_sortie": st.column_config.NumberColumn(
+                "Capital DAT restitué",
+                format=number_format,
+            ),
+            "transfert_epargne_entree": st.column_config.NumberColumn(
+                "Entrée compte ouvert",
+                format=number_format,
+            ),
+            "descriptions": st.column_config.TextColumn("Description"),
+        },
+    )
+
+
 def _render_customer_statement_preview(
     statement: pd.DataFrame,
     *,
@@ -1699,6 +1914,10 @@ def _render_customer_statement_preview(
                 hide_index=True,
             )
         _render_customer_statement_elements_preview(
+            analysis_report,
+            currency=currency,
+        )
+        _render_customer_dat_returns_preview(
             analysis_report,
             currency=currency,
         )
@@ -2717,7 +2936,7 @@ def _render_g2_report_export(
                 "g2_dat": g2_dat,
             }
         )
-    report_bytes = _create_excel_export_cached(export_report)
+    report_bytes = _create_excel_export_cached(export_report, print_orientation="portrait")
     word_report = dict(export_report)
     word_report["statuts_g2"] = daily_statuts
     word_report["rapport_journalier_anomalies"] = daily_anomalies
@@ -2751,8 +2970,9 @@ def _render_g2_report_export(
                 width="stretch",
             )
     st.caption(
-        "Le Word reprend le tableau Transactions dans le meme ordre sur une page paysage; "
-        "l'Excel conserve uniquement les syntheses, comptages, details et controles indispensables."
+        "Le Word est entierement en A4 portrait, annexe Transactions comprise; "
+        "l'Excel conserve uniquement les syntheses, comptages, details et controles indispensables "
+        "avec une mise en page d'impression en portrait."
     )
 
 
@@ -3068,6 +3288,8 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     date_end = None
     time_start = None
     time_end = None
+    period_start = None
+    period_end = None
     render_panel_title(f"1. Periode analysee ({source_date_label}) [{source_label}]")
     if not completion_times.empty:
         completion_key = f"{completion_times.min():%Y%m%d}_{completion_times.max():%Y%m%d}_{len(completion_times)}"
@@ -3507,8 +3729,8 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             g2_dat=g2_dat,
             retention_report=retention_report,
             transaction_time_report=transaction_time_report,
-            date_start=date_start,
-            date_end=date_end,
+            date_start=period_start,
+            date_end=period_end,
             direction_suffix=direction_suffix,
             period_text=period_text,
             direction_label=direction_label,
@@ -3639,8 +3861,8 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         g2_dat=g2_dat,
         retention_report=retention_report,
         transaction_time_report=transaction_time_report,
-        date_start=date_start,
-        date_end=date_end,
+        date_start=period_start,
+        date_end=period_end,
         direction_suffix=direction_suffix,
         period_text=period_text,
         direction_label=direction_label,
@@ -3918,7 +4140,10 @@ def _filter_pilotage_currencies(report: dict[str, Any], currencies: list[str]) -
         if isinstance(value, pd.DataFrame) and "currency_code" in value.columns:
             currency = value["currency_code"].astype("string").fillna("")
             currency_mask = currency.isin(currencies)
-            if key == "comparaison_hebdomadaire":
+            if key in {
+                "comparaison_hebdomadaire",
+                "comparaison_annee_precedente",
+            }:
                 currency_mask |= currency.eq("")
             filtered[key] = value.loc[currency_mask].reset_index(drop=True)
         else:
@@ -5696,13 +5921,18 @@ def _render_diagnostics_tab(prepared: MpesaPreparedData, report: dict[str, Any] 
 
 
 @st.fragment
-def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
+def _render_statistics_tab(
+    prepared: MpesaPreparedData,
+    historical_prepared: MpesaPreparedData | None = None,
+) -> None:
+    historical_prepared = historical_prepared or prepared
     render_summary_box(
         "Statistiques Turbo",
         [
             "Les statistiques financieres et commerciales sont calculees depuis les sources Turbo.",
             "Transactions [G2] et Clients_Perfect restent facultatifs : ils enrichissent ou controlent, sans modifier les montants.",
             "Le chiffre d'affaires affiche est observe et non certifie : il reprend les produits financiers Turbo detectables, separes par devise.",
+            "La tendance annuelle compare automatiquement la periode filtree aux memes dates de l'annee precedente lorsqu'elles sont disponibles; elle n'attribue pas seule une variation a un evenement externe.",
         ],
     )
 
@@ -5847,12 +6077,16 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
         "La période principale pilote tous les KPI et tableaux. Les cartes de "
         "comparaison utilisent l'horizon choisi dans la barre latérale; "
         "`Période filtrée` compare exactement Date de début - Date de fin à la "
-        "période immédiatement précédente de même durée."
+        "période immédiatement précédente de même durée. Une seconde lecture "
+        "compare automatiquement ces dates à la même période de l'année "
+        "précédente. Une seule année de référence indique une tendance; elle "
+        "ne suffit pas à définir une norme saisonnière ni une causalité."
     )
 
     with st.spinner("Construction des statistiques Turbo..."):
         report = _build_mpesa_statistics_report_cached(
             prepared,
+            historical_prepared,
             selected_start_date,
             selected_end_date,
             frequency,
@@ -5886,6 +6120,10 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
     top_clients = report_view.get("clients_volume_top", pd.DataFrame())
     source_priority = report_view.get("priorite_sources", pd.DataFrame())
     weekly_comparison = report_view.get("comparaison_hebdomadaire", pd.DataFrame())
+    annual_comparison = report_view.get(
+        "comparaison_annee_precedente",
+        pd.DataFrame(),
+    )
     g2_coverage = report_view.get("g2_couverture", pd.DataFrame())
     g2_quality = report_view.get("g2_qualite_rapprochement", pd.DataFrame())
     g2_statuses = report_view.get("g2_statuts", pd.DataFrame())
@@ -5933,6 +6171,17 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
             blocks=["Clients"],
             selected_currencies=selected_currencies,
             title="Comparaison des clients [Turbo]",
+        )
+        _render_weekly_comparison(
+            annual_comparison,
+            blocks=["Clients"],
+            selected_currencies=selected_currencies,
+            title="Tendance annuelle des clients [Turbo]",
+        )
+        _render_year_over_year_charts(
+            annual_comparison,
+            block="Clients",
+            selected_currencies=selected_currencies,
         )
         first_row = overview.iloc[0] if not overview.empty else pd.Series(dtype=object)
         known_clients = _scalar_number(first_row.get("clients_turbo_connus", 0))
@@ -6011,6 +6260,17 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
             selected_currencies=selected_currencies,
             title="Comparaison des comptes [Turbo]",
         )
+        _render_weekly_comparison(
+            annual_comparison,
+            blocks=["Comptes"],
+            selected_currencies=selected_currencies,
+            title="Tendance annuelle des comptes [Turbo]",
+        )
+        _render_year_over_year_charts(
+            annual_comparison,
+            block="Comptes",
+            selected_currencies=selected_currencies,
+        )
         if portfolio.empty:
             st.info("Savings Account [Turbo] est requis pour analyser les comptes ouverts et bloques.")
         else:
@@ -6074,6 +6334,17 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
             selected_currencies=selected_currencies,
             title="Comparaison des crédits [Turbo]",
         )
+        _render_weekly_comparison(
+            annual_comparison,
+            blocks=["Credits"],
+            selected_currencies=selected_currencies,
+            title="Tendance annuelle des crédits [Turbo]",
+        )
+        _render_year_over_year_charts(
+            annual_comparison,
+            block="Credits",
+            selected_currencies=selected_currencies,
+        )
         if credit_summary.empty:
             st.info("Loans Account [Turbo] est requis pour analyser les credits.")
         else:
@@ -6131,6 +6402,17 @@ def _render_statistics_tab(prepared: MpesaPreparedData) -> None:
             blocks=["Transactions"],
             selected_currencies=selected_currencies,
             title="Comparaison des transactions [Turbo]",
+        )
+        _render_weekly_comparison(
+            annual_comparison,
+            blocks=["Transactions"],
+            selected_currencies=selected_currencies,
+            title="Tendance annuelle des transactions [Turbo]",
+        )
+        _render_year_over_year_charts(
+            annual_comparison,
+            block="Transactions",
+            selected_currencies=selected_currencies,
         )
         total_operations = _sum_column(overview, "operations")
         transaction_cards: list[tuple[str, str, str, str]] = [
@@ -6692,4 +6974,4 @@ def render_solution_mpesa_tab() -> None:
     with sub_tabs[6]:
         _render_perfect_client_tab(analysis_prepared)
     with sub_tabs[7]:
-        _render_statistics_tab(analysis_prepared)
+        _render_statistics_tab(analysis_prepared, historical_prepared=prepared)

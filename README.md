@@ -430,6 +430,8 @@ Dans `Contrôle des données`, le tableau `Anomalies Transactions [Turbo]` affic
 
 ### Restitutions disponibles
 
+Le sous-onglet `Statistiques` compare également la période filtrée aux mêmes dates de l'année précédente pour les clients, comptes, crédits et transactions. Les cartes, histogrammes et le rapport Word affichent la valeur courante, la référence N-1, l'écart, le pourcentage et la couverture disponible. Les montants CDF et USD restent séparés. Cette lecture décrit une tendance saisonnière indicative et ne transforme jamais un événement externe en cause démontrée.
+
 Le sous-onglet principal `Finance Turbo` réunit le pilotage financier et la comptabilité observée avec une période et un filtre de devises communs. Ses six volets sont `Vue direction`, `Flux et activité`, `Crédit, épargne et DAT`, `Balances et journaux`, `Risques et contrôles` et `Export`. Le volet `Balances et journaux` construit notamment les analyses financières observables directement dans Transactions M-PESA_Turbo :
 
 - une synthèse séparée par devise avec écritures, clients, opérations, débits, crédits et taux de symétrie
@@ -445,7 +447,7 @@ Le sous-onglet principal `Finance Turbo` réunit le pilotage financier et la com
 
 Cette restitution est une balance observée des sous-registres Turbo. Sans plan comptable complet et soldes d'ouverture officiels, elle n'est pas présentée comme une balance générale certifiée, un bilan ou un compte de résultat officiel. CDF et USD ne sont jamais additionnés.
 
-Le volet `Balances et journaux` propose aussi une exportation Word et PDF compacte destinée à la direction. Les documents intègrent le logo Bisou Bisou, la période, la synthèse par devise, la balance client et la balance des mouvements par type de compte; ils restent explicitement qualifiés de balances observées Turbo.
+Le volet `Balances et journaux` propose aussi une exportation Word et PDF compacte destinée à la direction. Les documents intègrent le logo Bisou Bisou, la période, la synthèse par devise et la balance client. Le paragraphe explicatif sur la source et la certification ainsi que la balance des mouvements par type de compte sont réservés à l'analyse technique à l'écran et ne figurent pas dans ces documents.
 
 #### Cas de validation comptable du 16 juillet 2026
 
@@ -502,7 +504,7 @@ Le sous-onglet `G2 / DAT` produit, depuis G2 lorsqu'il est chargé ou depuis le 
 - un tableau d'anomalies conservant les références non rapprochées, doublons et écarts
 - un export Excel du rapport journalier
 - un rapport de fidélisation mensuelle M+1 et à 90 jours, séparé par devise et type d'opération
-- un export Word modifiable avec `Synthese des flux G2 par devise` ou `Synthese des flux Turbo par devise` selon la source effective, la synthèse exécutive et, en annexe paysage, le même tableau `Transactions` que l'écran
+- un export Word modifiable entièrement en A4 portrait avec le logo Bisou Bisou, un bandeau de critères et une mise en forme institutionnelle cohérente avec l'Extrait client; il reprend `Synthese des flux G2 par devise` ou `Synthese des flux Turbo par devise` selon la source effective, la synthèse exécutive et, en annexe, le même tableau `Transactions` que l'écran; les feuilles Excel du même bloc utilisent aussi une mise en page d'impression portrait
 - dans ce Word, `Activite`, les flux, les principales opérations, la fréquence temporelle, la fidélisation et l'annexe sont recalculés sur le filtre actif de date, heure et sens; seules les transactions `Completed` alimentent ces analyses, tandis que les autres statuts restent comptés comme lignes de contrôle
 
 Le sous-onglet `Perfect_client` produit trois populations inclusives au grain d'un téléphone normalisé :

@@ -30,6 +30,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_g2_statistics_quality,
     build_mpesa_statistics_report,
     build_mpesa_weekly_comparison,
+    build_mpesa_year_over_year_comparison,
     build_mpesa_turbo_financial_analysis,
     build_turbo_operation_events,
     build_loan_savings_reconciliation,
@@ -265,6 +266,7 @@ def _sample_customer_transaction_analysis_data() -> MpesaPreparedData:
     fixed = pd.DataFrame(
         [
             {
+                "savings_id": "DAT-1",
                 "customer_id": "CLIENT-ANALYSE",
                 "msisdn": "0812345678",
                 "product_name": "DAT",
@@ -273,6 +275,7 @@ def _sample_customer_transaction_analysis_data() -> MpesaPreparedData:
                 "currency_code": "CDF",
                 "date_approved": "2026-07-02",
                 "maturity_date": "2026-10-02",
+                "created_at": "2026-07-02 07:45:00",
             }
         ]
     )
@@ -1559,6 +1562,15 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(internal), 1)
         self.assertEqual(internal.iloc[0]["type_operation"], "Transfert DAT vers epargne courante")
         self.assertEqual(float(internal.iloc[0]["montant_operation"]), 20.0)
+        self.assertEqual(internal.iloc[0]["reference_dat"], "DAT-1")
+        self.assertEqual(
+            pd.Timestamp(internal.iloc[0]["date_creation_dat"]),
+            pd.Timestamp("2026-07-02 07:45:00"),
+        )
+        self.assertEqual(
+            pd.Timestamp(internal.iloc[0]["date_fin_dat"]),
+            pd.Timestamp("2026-07-05 08:00:00"),
+        )
 
         positions = analysis["positions_turbo"].set_index("famille_position")
         self.assertEqual(float(positions.loc["Epargne courante", "solde_transactions_observe"]), 120.0)
@@ -3017,10 +3029,46 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("Positions observees et rapprochement des soldes", text)
         self.assertNotIn("Jalons du parcours financier", text)
         self.assertIn("Retours du capital mis en DAT", text)
+        return_table = next(
+            table
+            for table in document.tables
+            if [cell.text for cell in table.rows[0].cells]
+            == [
+                "Création du DAT",
+                "Fin du DAT",
+                "Référence",
+                "Devise",
+                "Capital DAT restitué",
+                "Entrée compte ouvert",
+                "Description",
+            ]
+        )
+        self.assertEqual(return_table.rows[1].cells[0].text, "02/07/2026 07:45")
+        self.assertEqual(return_table.rows[1].cells[1].text, "05/07/2026 08:00")
         self.assertIn("Detail des transactions", text)
         self.assertNotIn("[Turbo]", text)
         self.assertIn("Solution Bisou Bisou Digital", footer_text)
         self.assertNotIn("Solution Controle Interne", footer_text)
+
+        from pypdf import PdfReader
+
+        pdf = create_customer_statement_pdf(
+            report["extrait"],
+            analysis_report=analysis,
+            customer_id="CLIENT-ANALYSE",
+            customer_name="CLIENT ANALYSE",
+            telephone="243812345678",
+            currency="CDF",
+            entry_account_number="1441",
+            output_account_number="15558",
+        )
+        pdf_text = "\n".join(
+            page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
+        )
+        self.assertIn("Création du DAT", pdf_text)
+        self.assertIn("Fin du DAT", pdf_text)
+        self.assertIn("02/07/2026 07:45", pdf_text)
+        self.assertIn("05/07/2026 08:00", pdf_text)
 
     def test_customer_statement_word_all_keeps_currency_totals_separate(self) -> None:
         from docx import Document
@@ -4480,7 +4528,9 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertLess(document.sections[0].page_width, document.sections[0].page_height)
         word_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
         self.assertIn("Balance auxiliaire observée", word_text)
-        self.assertIn("balance générale certifiée", word_text)
+        self.assertNotIn("Source des montants", word_text)
+        self.assertNotIn("balance générale certifiée", word_text)
+        self.assertNotIn("Balance des mouvements par type de compte", word_text)
         criteria_header = document.tables[0]
         self.assertEqual(criteria_header.cell(0, 1).text, "Critères")
         criteria = criteria_header.cell(1, 1).tables[0]
@@ -4516,8 +4566,10 @@ class MpesaAnalysisTests(unittest.TestCase):
         first_pdf_page = PdfReader(BytesIO(pdf)).pages[0]
         self.assertLess(float(first_pdf_page.mediabox.width), float(first_pdf_page.mediabox.height))
         self.assertIn("Balance auxiliaire observée", normalized_pdf_text)
-        self.assertIn("balance générale certifiée", normalized_pdf_text)
-        self.assertIn("Type de compte Turbo", normalized_pdf_text)
+        self.assertNotIn("Source des montants", normalized_pdf_text)
+        self.assertNotIn("balance générale certifiée", normalized_pdf_text)
+        self.assertNotIn("Balance des mouvements par type de compte", normalized_pdf_text)
+        self.assertNotIn("Type de compte Turbo", normalized_pdf_text)
         self.assertIn("Critères", normalized_pdf_text)
         self.assertIn("Clients :", normalized_pdf_text)
         self.assertIn("Périmètre :", normalized_pdf_text)
@@ -4952,13 +5004,31 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("3. Credits", word_text)
         self.assertIn("4. Transactions", word_text)
         self.assertIn("4.1 Qualité du rapprochement G2", word_text)
-        self.assertIn("Sources et importance", word_text)
-        self.assertIn("Vue d'ensemble", word_text)
+        self.assertNotIn("Sources et importance", word_text)
+        self.assertIn("Annexe 1. Vue d'ensemble", word_text)
+        self.assertNotIn("Annexe 3. Definitions", word_text)
         self.assertIn("Chiffre d'affaires observe", word_text)
         self.assertIn("Turbo uniquement", word_text)
         self.assertIn("Période filtrée", word_text)
+        self.assertIn(
+            "Comparaison avec la même période de l'année précédente",
+            word_text,
+        )
+        self.assertIn("comparaison_annee_precedente", report)
         self.assertIn("Ensemble des années", document._element.xml)
         self.assertNotIn("Graphiques de synthese", word_text)
+        client_growth_tables = [
+            table
+            for table in document.tables
+            if {"Periode", "Nouveaux clients", "Clients cumules"}.issubset(
+                {cell.text for cell in table.rows[0].cells}
+            )
+        ]
+        self.assertEqual(len(client_growth_tables), 1)
+        self.assertNotIn(
+            "Source",
+            {cell.text for cell in client_growth_tables[0].rows[0].cells},
+        )
 
     def test_year_scope_filters_flows_and_preserves_snapshot_positions(self) -> None:
         prepared = MpesaPreparedData(
@@ -5263,6 +5333,161 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(turnover_cdf["valeur_semaine_precedente"]), 10.0)
         self.assertEqual(float(turnover_usd["valeur_semaine_courante"]), 2.0)
         self.assertEqual(float(turnover_usd["valeur_semaine_precedente"]), 0.0)
+
+    def test_mpesa_year_over_year_comparison_uses_same_calendar_dates(self) -> None:
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(
+                [
+                    {
+                        "savings_id": "OPEN-2025",
+                        "customer_id": "C1",
+                        "created_at": "2025-09-01",
+                    },
+                    {
+                        "savings_id": "OPEN-2026",
+                        "customer_id": "C2",
+                        "created_at": "2026-09-30",
+                    },
+                ]
+            ),
+            fixed_savings=pd.DataFrame(
+                [
+                    {
+                        "savings_id": "DAT-2025",
+                        "customer_id": "C1",
+                        "date_activated": "2025-09-01",
+                    },
+                    {
+                        "savings_id": "DAT-2026",
+                        "customer_id": "C2",
+                        "date_activated": "2026-09-30",
+                    },
+                ]
+            ),
+            loans=pd.DataFrame(
+                [
+                    {
+                        "loan_id": "LN-2025",
+                        "customer_id": "C1",
+                        "currency_code": "CDF",
+                        "loan_amount": 100,
+                        "created_at": "2025-09-01",
+                    },
+                    {
+                        "loan_id": "LN-2026",
+                        "customer_id": "C2",
+                        "currency_code": "CDF",
+                        "loan_amount": 150,
+                        "created_at": "2026-09-30",
+                    },
+                ]
+            ),
+            customers=pd.DataFrame(
+                [
+                    {
+                        "msisdn1": "243810000001",
+                        "created_at": "2025-09-01",
+                    },
+                    {
+                        "msisdn1": "243810000002",
+                        "created_at": "2026-09-30",
+                    },
+                ]
+            ),
+            load_report=pd.DataFrame(),
+        )
+        events = pd.DataFrame(
+            [
+                {
+                    "event_key": "EV-2025-CDF",
+                    "customer_id": "C1",
+                    "currency_code": "CDF",
+                    "created_at": "2025-09-01 10:00:00",
+                    "montant_entree_bisou": 100,
+                    "montant_sortie_bisou": 0,
+                    "remboursement_mpesa": 10,
+                    "depot_dat_mpesa": 20,
+                },
+                {
+                    "event_key": "EV-2026-CDF",
+                    "customer_id": "C2",
+                    "currency_code": "CDF",
+                    "created_at": "2026-09-30 10:00:00",
+                    "montant_entree_bisou": 160,
+                    "montant_sortie_bisou": 0,
+                    "remboursement_mpesa": 15,
+                    "depot_dat_mpesa": 25,
+                },
+                {
+                    "event_key": "EV-2026-USD",
+                    "customer_id": "C3",
+                    "currency_code": "USD",
+                    "created_at": "2026-09-30 11:00:00",
+                    "montant_entree_bisou": 10,
+                    "montant_sortie_bisou": 0,
+                    "remboursement_mpesa": 0,
+                    "depot_dat_mpesa": 0,
+                },
+            ]
+        )
+        lines = pd.DataFrame(
+            [
+                {
+                    "account_type": "BISOU COLLECTION",
+                    "currency_code": "CDF",
+                    "created_at": "2025-09-01",
+                    "dr": 10,
+                    "cr": 0,
+                },
+                {
+                    "account_type": "BISOU COLLECTION",
+                    "currency_code": "CDF",
+                    "created_at": "2026-09-30",
+                    "dr": 15,
+                    "cr": 0,
+                },
+            ]
+        )
+
+        comparison = build_mpesa_year_over_year_comparison(
+            prepared,
+            date_start="2026-09-01",
+            date_end="2026-09-30",
+            turbo_events=events,
+            turbo_transaction_lines=lines,
+        )
+        indexed = comparison.set_index(["indicator_key", "currency_code"])
+
+        clients = indexed.loc[("clients_actifs", "")]
+        self.assertEqual(float(clients["valeur_semaine_courante"]), 2.0)
+        self.assertEqual(float(clients["valeur_semaine_precedente"]), 1.0)
+        self.assertEqual(float(clients["evolution_pct"]), 100.0)
+        self.assertEqual(
+            pd.Timestamp(clients["date_debut_semaine_courante"]),
+            pd.Timestamp("2026-09-01"),
+        )
+        self.assertEqual(
+            pd.Timestamp(clients["date_debut_semaine_precedente"]),
+            pd.Timestamp("2025-09-01"),
+        )
+        self.assertEqual(
+            pd.Timestamp(clients["date_fin_semaine_precedente"]),
+            pd.Timestamp("2025-09-30"),
+        )
+        cdf_volume = indexed.loc[("volume_transactions", "CDF")]
+        usd_volume = indexed.loc[("volume_transactions", "USD")]
+        self.assertEqual(float(cdf_volume["valeur_semaine_courante"]), 160.0)
+        self.assertEqual(float(cdf_volume["valeur_semaine_precedente"]), 100.0)
+        self.assertEqual(float(cdf_volume["evolution_pct"]), 60.0)
+        self.assertEqual(float(usd_volume["valeur_semaine_courante"]), 10.0)
+        self.assertEqual(float(usd_volume["valeur_semaine_precedente"]), 0.0)
+        self.assertTrue(pd.isna(usd_volume["evolution_pct"]))
+        self.assertTrue(
+            comparison["periode_comparaison"]
+            .eq("Même période de l'année précédente")
+            .all()
+        )
 
     def test_mpesa_statistics_word_keeps_money_by_currency(self) -> None:
         from docx import Document
@@ -5706,6 +5931,8 @@ class MpesaAnalysisTests(unittest.TestCase):
             "g2_dat": pd.DataFrame([{"customer_id_dat": "1001", "phone_prefixe": "243811111111"}]),
             "retention_mensuelle": monthly,
             "retention_operations": pd.DataFrame(),
+            "analysis_date_start": pd.Timestamp("2026-01-01 08:00:00"),
+            "analysis_date_end": pd.Timestamp("2026-05-31 17:30:45"),
         }
 
         html = build_g2_dat_pdf_html(
@@ -5722,6 +5949,42 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("243811111111", html)
         self.assertNotIn("Questions ouvertes", html)
         self.assertNotIn("Hypotheses et limites", html)
+        self.assertIn("@page { size: A4 portrait;", html)
+        self.assertIn('class="report-logo"', html)
+        self.assertIn("data:image/png;base64,", html)
+        self.assertIn("Critères", html)
+        self.assertIn("<th>Date du :</th><td>01/01/2026 08:00:00</td>", html)
+        self.assertIn("<th>Au :</th><td>31/05/2026 17:30:45</td>", html)
+
+    def test_g2_dat_excel_uses_portrait_print_layout(self) -> None:
+        from openpyxl import load_workbook
+
+        content = create_excel_export(
+            {
+                "rapport_journalier_synthese": pd.DataFrame(
+                    [
+                        {
+                            "currency_code": "CDF",
+                            "sens_flux": "Entree",
+                            "details_rapport": "DAT",
+                            "nombre": 4,
+                            "montant": 5000,
+                        }
+                    ]
+                ),
+                "turbo_dat": pd.DataFrame(
+                    [{"customer_id_dat": "1001", "statut_rapprochement_dat": "Conforme"}]
+                ),
+            },
+            print_orientation="portrait",
+        )
+        workbook = load_workbook(BytesIO(content))
+
+        self.assertTrue(workbook.sheetnames)
+        for worksheet in workbook.worksheets:
+            self.assertEqual(worksheet.page_setup.orientation, "portrait")
+            self.assertEqual(worksheet.page_setup.fitToWidth, 1)
+            self.assertEqual(worksheet.print_title_rows, "$1:$1")
 
     def test_g2_dat_word_is_editable_and_uses_the_short_executive_structure(self) -> None:
         from docx import Document
@@ -5745,6 +6008,8 @@ class MpesaAnalysisTests(unittest.TestCase):
             ),
             "g2_dat": pd.DataFrame([{"customer_id_dat": "1001", "statut_rapprochement_dat": "Rapproche"}]),
             "retention_mensuelle": pd.DataFrame(),
+            "analysis_date_start": pd.Timestamp("2026-07-13 08:00:00"),
+            "analysis_date_end": pd.Timestamp("2026-07-13 18:00:00"),
             "rapport_journalier_detail": pd.DataFrame(
                 [
                     {
@@ -5844,7 +6109,24 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("Questions ouvertes", text)
         self.assertGreaterEqual(len(document.tables), 3)
         self.assertGreaterEqual(len(document.sections), 2)
-        self.assertEqual(document.sections[-1].orientation, WD_ORIENT.LANDSCAPE)
+        self.assertGreaterEqual(len(document.inline_shapes), 1)
+        self.assertIn("Critères", table_text)
+        criteria_table = document.tables[0].cell(1, 1).tables[0]
+        criteria_labels = [row.cells[0].text for row in criteria_table.rows]
+        criteria_values = [row.cells[1].text for row in criteria_table.rows]
+        self.assertEqual(
+            criteria_labels,
+            ["Date du :", "Au :", "Sens :", "Source :", "Généré le :"],
+        )
+        self.assertEqual(criteria_values[0], "13/07/2026 08:00:00")
+        self.assertEqual(criteria_values[1], "13/07/2026 18:00:00")
+        self.assertIn("Sens :", criteria_labels)
+        self.assertTrue(
+            all(section.orientation == WD_ORIENT.PORTRAIT for section in document.sections)
+        )
+        self.assertTrue(
+            all(section.page_height > section.page_width for section in document.sections)
+        )
 
         multi_day_report = dict(report)
         multi_day_detail = pd.concat(

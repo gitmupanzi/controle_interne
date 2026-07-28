@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field, replace
 from html import escape
 from io import BytesIO
@@ -6958,6 +6959,7 @@ MPESA_COMPARISON_PERIOD_OPTIONS = [
     "Période filtrée",
 ]
 DEFAULT_MPESA_COMPARISON_PERIOD = MPESA_COMPARISON_PERIOD_OPTIONS[0]
+MPESA_YEAR_OVER_YEAR_LABEL = "Même période de l'année précédente"
 
 
 def build_mpesa_comparison_windows(
@@ -7502,6 +7504,7 @@ def build_mpesa_weekly_comparison(
     comparison_period: str = DEFAULT_MPESA_COMPARISON_PERIOD,
     turbo_events: pd.DataFrame | None = None,
     turbo_transaction_lines: pd.DataFrame | None = None,
+    comparison_windows: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     """Compare les indicateurs Turbo sur deux périodes consécutives comparables.
 
@@ -7511,17 +7514,30 @@ def build_mpesa_weekly_comparison(
     fichiers Turbo chargés sont des instantanés. Tous les montants restent
     séparés par devise.
     """
-    analysis_end = _mpesa_analysis_date(prepared, as_of_date)
-    comparison_windows = build_mpesa_comparison_windows(
-        date_start=date_start,
-        date_end=analysis_end,
-        comparison_period=comparison_period,
+    resolved_windows = comparison_windows
+    if resolved_windows is None:
+        analysis_end = _mpesa_analysis_date(prepared, as_of_date)
+        resolved_windows = build_mpesa_comparison_windows(
+            date_start=date_start,
+            date_end=analysis_end,
+            comparison_period=comparison_period,
+        )
+    current_start = pd.Timestamp(
+        resolved_windows["date_debut_periode_courante"]
+    ).normalize()
+    current_end = pd.Timestamp(
+        resolved_windows["date_fin_periode_courante"]
+    ).normalize()
+    previous_start = pd.Timestamp(
+        resolved_windows["date_debut_periode_precedente"]
+    ).normalize()
+    previous_end = pd.Timestamp(
+        resolved_windows["date_fin_periode_precedente"]
+    ).normalize()
+    comparison_label = str(
+        resolved_windows.get("periode_comparaison", comparison_period)
+        or comparison_period
     )
-    current_start = comparison_windows["date_debut_periode_courante"]
-    current_end = comparison_windows["date_fin_periode_courante"]
-    previous_start = comparison_windows["date_debut_periode_precedente"]
-    previous_end = comparison_windows["date_fin_periode_precedente"]
-    comparison_label = comparison_windows["periode_comparaison"]
 
     rows: list[dict[str, Any]] = []
 
@@ -7887,6 +7903,52 @@ def build_mpesa_weekly_comparison(
     return pd.DataFrame(rows, columns=MPESA_WEEKLY_COMPARISON_COLUMNS)
 
 
+def build_mpesa_year_over_year_comparison(
+    prepared: MpesaPreparedData,
+    *,
+    date_start: Any,
+    date_end: Any,
+    turbo_events: pd.DataFrame | None = None,
+    turbo_transaction_lines: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Compare une période aux mêmes dates calendaires de l'année précédente.
+
+    Cette lecture mesure une tendance saisonnière indicative. Elle ne qualifie
+    pas automatiquement une variation de normale ou d'anormale et n'attribue
+    aucune causalité à un événement externe. Les montants restent séparés par
+    devise et les instantanés sont comparés uniquement sur leurs créations ou
+    activations observables.
+    """
+    current_start = pd.Timestamp(
+        pd.to_datetime(date_start, errors="raise")
+    ).normalize()
+    current_end = pd.Timestamp(
+        pd.to_datetime(date_end, errors="raise")
+    ).normalize()
+    if current_start > current_end:
+        current_start, current_end = current_end, current_start
+
+    previous_start = current_start - pd.DateOffset(years=1)
+    previous_end = current_end - pd.DateOffset(years=1)
+    comparison_windows = {
+        "periode_comparaison": MPESA_YEAR_OVER_YEAR_LABEL,
+        "date_debut_periode_courante": current_start,
+        "date_fin_periode_courante": current_end,
+        "date_debut_periode_precedente": previous_start,
+        "date_fin_periode_precedente": previous_end,
+        "nombre_jours": int((current_end - current_start).days) + 1,
+    }
+    return build_mpesa_weekly_comparison(
+        prepared,
+        as_of_date=current_end,
+        date_start=current_start,
+        comparison_period=MPESA_YEAR_OVER_YEAR_LABEL,
+        turbo_events=turbo_events,
+        turbo_transaction_lines=turbo_transaction_lines,
+        comparison_windows=comparison_windows,
+    )
+
+
 def build_mpesa_statistics_report(
     prepared: MpesaPreparedData,
     *,
@@ -7896,6 +7958,9 @@ def build_mpesa_statistics_report(
     comparison_period: str = DEFAULT_MPESA_COMPARISON_PERIOD,
     turbo_events: pd.DataFrame | None = None,
     turbo_transaction_lines: pd.DataFrame | None = None,
+    historical_prepared: MpesaPreparedData | None = None,
+    historical_turbo_events: pd.DataFrame | None = None,
+    historical_turbo_transaction_lines: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Construit le cockpit statistique Turbo-first de la Solution M-PESA.
 
@@ -8144,6 +8209,30 @@ def build_mpesa_statistics_report(
         turbo_events=turbo_events,
         turbo_transaction_lines=turbo_transaction_lines,
     )
+    annual_comparison_source = (
+        historical_prepared
+        if isinstance(historical_prepared, MpesaPreparedData)
+        else prepared
+    )
+    annual_comparison = build_mpesa_year_over_year_comparison(
+        annual_comparison_source,
+        date_start=start_date,
+        date_end=end_date,
+        turbo_events=(
+            historical_turbo_events
+            if isinstance(historical_turbo_events, pd.DataFrame)
+            else turbo_events
+            if historical_prepared is None
+            else None
+        ),
+        turbo_transaction_lines=(
+            historical_turbo_transaction_lines
+            if isinstance(historical_turbo_transaction_lines, pd.DataFrame)
+            else turbo_transaction_lines
+            if historical_prepared is None
+            else None
+        ),
+    )
     g2_quality = build_mpesa_g2_statistics_quality(
         prepared,
         date_start=start_date,
@@ -8170,6 +8259,7 @@ def build_mpesa_statistics_report(
         "clients_volume_top": finance.get("concentration_transactions_clients", pd.DataFrame()),
         "operations_turbo": events,
         "comparaison_hebdomadaire": weekly_comparison,
+        "comparaison_annee_precedente": annual_comparison,
         "g2_couverture": g2_quality["couverture"],
         "g2_qualite_rapprochement": g2_quality["qualite_rapprochement"],
         "g2_statuts": g2_quality["statuts"],
@@ -8205,6 +8295,15 @@ def build_mpesa_statistics_report(
                         "30 jours glissants, ou toute la période filtrée. Les comptes et crédits "
                         "sont comparés sur leur création/activation; les soldes instantanés ne "
                         "sont pas historisés."
+                    ),
+                    "source": "Sources Turbo uniquement",
+                },
+                {
+                    "indicateur": "Comparaison annuelle",
+                    "definition": (
+                        "Même période calendaire de l'année précédente. Cette lecture "
+                        "mesure une tendance saisonnière indicative; elle ne démontre "
+                        "ni une normalité statistique ni la causalité d'un événement externe."
                     ),
                     "source": "Sources Turbo uniquement",
                 },
@@ -8315,13 +8414,14 @@ def create_mpesa_statistics_word(
     for run in criteria_title.paragraphs[0].runs:
         run.bold = True
         run.font.color.rgb = RGBColor(255, 255, 255)
-    criteria = header.cell(1, 1).add_table(rows=5, cols=2)
+    criteria = header.cell(1, 1).add_table(rows=6, cols=2)
     for row_index, (label, value) in enumerate(
         [
             ("Periode :", period_text),
             ("Perimetre annuel :", annual_scope_text),
             ("Frequence :", frequency_text),
             ("Comparaison :", comparison_period_text),
+            ("Comparaison annuelle :", MPESA_YEAR_OVER_YEAR_LABEL),
             ("Source des montants :", "Turbo uniquement"),
         ]
     ):
@@ -8496,6 +8596,10 @@ def create_mpesa_statistics_word(
         "g2_comparaison_hebdomadaire",
         pd.DataFrame(),
     )
+    annual_comparison_frame = statistics_report.get(
+        "comparaison_annee_precedente",
+        pd.DataFrame(),
+    )
     add_text(
         "Principe de lecture : les nombres de clients ou d'operations peuvent etre consolides, "
         "mais aucun montant n'est totalise entre devises. Les volumes, soldes, credits et chiffre d'affaires "
@@ -8637,6 +8741,148 @@ def create_mpesa_statistics_word(
             max_rows=40,
         )
 
+    def _comparison_value(value: Any, unit: str, coverage: str) -> str:
+        parsed = pd.to_numeric(value, errors="coerce")
+        if coverage == "Non calculable" or pd.isna(parsed):
+            return "-"
+        return _pdf_number(parsed, decimals=0 if unit == "nombre" else 2)
+
+    def _annual_evolution_text(row: pd.Series) -> str:
+        coverage = str(row.get("couverture", "") or "")
+        current_value = pd.to_numeric(
+            row.get("valeur_semaine_courante"),
+            errors="coerce",
+        )
+        previous_value = pd.to_numeric(
+            row.get("valeur_semaine_precedente"),
+            errors="coerce",
+        )
+        evolution = pd.to_numeric(row.get("evolution_pct"), errors="coerce")
+        if coverage == "Non calculable" or pd.isna(previous_value):
+            return "Référence N-1 indisponible"
+        if coverage != "Complete":
+            return "Couverture N-1 partielle"
+        if float(previous_value) == 0:
+            if pd.notna(current_value) and float(current_value) > 0:
+                return "Nouvelle activité"
+            return "Stable"
+        if pd.isna(evolution):
+            return "Non calculable"
+        return f"{float(evolution):+.1f} %"
+
+    if (
+        isinstance(annual_comparison_frame, pd.DataFrame)
+        and not annual_comparison_frame.empty
+    ):
+        annual_current_start = pd.to_datetime(
+            annual_comparison_frame.iloc[0].get("date_debut_semaine_courante"),
+            errors="coerce",
+        )
+        annual_current_end = pd.to_datetime(
+            annual_comparison_frame.iloc[0].get("date_fin_semaine_courante"),
+            errors="coerce",
+        )
+        annual_previous_start = pd.to_datetime(
+            annual_comparison_frame.iloc[0].get("date_debut_semaine_precedente"),
+            errors="coerce",
+        )
+        annual_previous_end = pd.to_datetime(
+            annual_comparison_frame.iloc[0].get("date_fin_semaine_precedente"),
+            errors="coerce",
+        )
+        add_title("Comparaison avec la même période de l'année précédente")
+        if all(
+            pd.notna(value)
+            for value in [
+                annual_current_start,
+                annual_current_end,
+                annual_previous_start,
+                annual_previous_end,
+            ]
+        ):
+            add_text(
+                f"Période analysée : {annual_current_start:%d/%m/%Y} au "
+                f"{annual_current_end:%d/%m/%Y}. Même période N-1 : "
+                f"{annual_previous_start:%d/%m/%Y} au "
+                f"{annual_previous_end:%d/%m/%Y}."
+            )
+        add_text(
+            "Cette comparaison mesure une tendance saisonnière indicative. "
+            "Une seule année de référence ne suffit pas à définir une norme; "
+            "un événement social, politique ou environnemental reste une "
+            "hypothèse de contexte tant que son effet n'est pas validé."
+        )
+        annual_rows: list[dict[str, Any]] = []
+        for _, row in annual_comparison_frame.iterrows():
+            unit = str(row.get("unite", "") or "")
+            coverage = str(row.get("couverture", "") or "")
+            currency = (
+                _currency_label(row.get("currency_code", ""))
+                if str(row.get("currency_code", "") or "").strip()
+                else "-"
+            )
+            annual_rows.append(
+                {
+                    "bloc": row.get("bloc", ""),
+                    "indicateur": row.get("indicateur", ""),
+                    "devise": currency,
+                    "periode_courante": _comparison_value(
+                        row.get("valeur_semaine_courante"),
+                        unit,
+                        coverage,
+                    ),
+                    "periode_n_1": _comparison_value(
+                        row.get("valeur_semaine_precedente"),
+                        unit,
+                        coverage,
+                    ),
+                    "evolution": _annual_evolution_text(row),
+                }
+            )
+        add_table(
+            pd.DataFrame(annual_rows),
+            {
+                "bloc": "Bloc",
+                "indicateur": "Indicateur",
+                "devise": "Devise",
+                "periode_courante": "Période analysée",
+                "periode_n_1": "Même période N-1",
+                "evolution": "Tendance",
+            },
+            max_rows=40,
+        )
+
+    def add_annual_block_analysis(block: str) -> None:
+        if (
+            not isinstance(annual_comparison_frame, pd.DataFrame)
+            or annual_comparison_frame.empty
+        ):
+            return
+        block_rows = annual_comparison_frame.loc[
+            annual_comparison_frame["bloc"].astype(str).eq(block)
+        ]
+        for _, row in block_rows.iterrows():
+            coverage = str(row.get("couverture", "") or "")
+            unit = str(row.get("unite", "") or "")
+            currency = str(row.get("currency_code", "") or "").strip()
+            indicator = str(row.get("indicateur", "") or "")
+            label = f"{indicator} [{currency}]" if currency else indicator
+            current_text = _comparison_value(
+                row.get("valeur_semaine_courante"),
+                unit,
+                coverage,
+            )
+            previous_text = _comparison_value(
+                row.get("valeur_semaine_precedente"),
+                unit,
+                coverage,
+            )
+            add_bullet(
+                f"Tendance annuelle — {label} : {current_text} sur la période "
+                f"analysée contre {previous_text} aux mêmes dates N-1; "
+                f"{_annual_evolution_text(row)}."
+            )
+
     add_title("1. Clients")
     known_clients = _first_number(overview, "clients_turbo_connus")
     active_clients = _first_number(overview, "clients_turbo_actifs")
@@ -8646,6 +8892,7 @@ def create_mpesa_statistics_word(
         "Lecture : la base client est analysee a partir de Customers [Turbo] lorsqu'il est charge; "
         "a defaut, elle est degradee depuis les clients observes dans les sources Turbo."
     )
+    add_annual_block_analysis("Clients")
     add_bullet(
         f"Clients Turbo connus : {_pdf_number(known_clients, decimals=0)}. "
         f"Clients actifs sur la periode : {_pdf_number(active_clients, decimals=0)}, "
@@ -8672,7 +8919,6 @@ def create_mpesa_statistics_word(
             "periode": "Periode",
             "nouveaux_clients_turbo": "Nouveaux clients",
             "clients_turbo_cumules": "Clients cumules",
-            "source_principale": "Source",
         },
         max_rows=60,
     )
@@ -8687,6 +8933,7 @@ def create_mpesa_statistics_word(
         "Lecture : les comptes ouverts correspondent aux comptes d'epargne courante. "
         "Les comptes bloques correspondent aux DAT. Les soldes proviennent de Savings Account [Turbo]."
     )
+    add_annual_block_analysis("Comptes")
     add_bullet(
         f"Comptes ouverts : {_pdf_number(open_count, decimals=0)} compte(s), soit {_percent(open_count, total_accounts)} "
         f"du nombre de comptes d'epargne observes."
@@ -8728,6 +8975,7 @@ def create_mpesa_statistics_word(
         "Lecture : le credit est restitue depuis Loans Account [Turbo]. L'encours et le PAR restent des positions "
         "observees et doivent etre lus separement par devise."
     )
+    add_annual_block_analysis("Credits")
     add_bullet(
         f"Nombre de credits : {_pdf_number(credit_count, decimals=0)} pour "
         f"{_pdf_number(credit_clients, decimals=0)} client(s)."
@@ -8765,6 +9013,7 @@ def create_mpesa_statistics_word(
         "Lecture : les transactions proviennent exclusivement de Transactions [Turbo]. "
         "Le chiffre d'affaires observe est prudent et non certifie : interets + penalites + part Bisou detectes."
     )
+    add_annual_block_analysis("Transactions")
     add_bullet(
         f"Operations consolidees : {_pdf_number(total_operations, decimals=0)}. "
         "Les volumes et chiffres d'affaires ci-dessous restent separes par devise."
@@ -8932,20 +9181,7 @@ def create_mpesa_statistics_word(
             "Aucune opération G2 exploitable n'est comprise dans la période filtrée."
         )
 
-    add_title("Annexe 1. Sources et importance")
-    add_table(
-        statistics_report.get("priorite_sources", pd.DataFrame()),
-        {
-            "rang_importance": "Priorite",
-            "source": "Fichier",
-            "niveau_importance": "Importance",
-            "disponible": "Charge",
-            "nombre_lignes": "Lignes",
-            "role_statistique": "Role statistique",
-        },
-        max_rows=10,
-    )
-    add_title("Annexe 2. Vue d'ensemble")
+    add_title("Annexe 1. Vue d'ensemble")
     add_table(
         statistics_report.get("vue_ensemble", pd.DataFrame()),
         {
@@ -8958,16 +9194,6 @@ def create_mpesa_statistics_word(
             "chiffre_affaires_observe": "Chiffre d'affaires observe",
         },
     )
-    add_title("Annexe 3. Definitions")
-    add_table(
-        statistics_report.get("definitions", pd.DataFrame()),
-        {
-            "indicateur": "Indicateur",
-            "definition": "Definition",
-            "source": "Source",
-        },
-    )
-
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer_run = footer.add_run(
@@ -11102,6 +11328,163 @@ def build_customer_statement_elements(
     return {"detail": detail, "synthese": summary}
 
 
+def _enrich_customer_dat_return_dates(
+    internal_returns: pd.DataFrame,
+    transaction_lines: pd.DataFrame,
+    fixed_savings: pd.DataFrame,
+    *,
+    customer_id: object,
+) -> pd.DataFrame:
+    """Ajoute le cycle de vie du DAT aux retours de capital observés dans Turbo.
+
+    La référence du DAT est l'identifiant porté par la ligne ``FIXED SAVINGS``
+    de l'événement de retour. La date de création vient d'abord du compte
+    ``Savings Account`` correspondant, puis du dépôt bloqué Turbo portant la
+    même référence. Un repli sur Savings Account n'est accepté que lorsqu'un
+    seul DAT du client et de la devise peut correspondre.
+    """
+    result = (
+        internal_returns.copy()
+        if isinstance(internal_returns, pd.DataFrame)
+        else pd.DataFrame()
+    )
+    result["date_creation_dat"] = pd.NaT
+    result["date_fin_dat"] = pd.to_datetime(
+        result.get("created_at", pd.Series(pd.NaT, index=result.index)),
+        errors="coerce",
+    )
+    result["reference_dat"] = ""
+    if result.empty:
+        return result
+
+    lines = (
+        transaction_lines.copy()
+        if isinstance(transaction_lines, pd.DataFrame)
+        else pd.DataFrame()
+    )
+    if not lines.empty:
+        lines["created_at"] = pd.to_datetime(
+            lines.get("created_at", pd.Series(pd.NaT, index=lines.index)),
+            errors="coerce",
+        )
+        lines["account_type"] = clean_text(
+            lines.get("account_type", pd.Series("", index=lines.index))
+        ).str.upper()
+        lines["reference_id"] = clean_identifier(
+            lines.get("reference_id", pd.Series("", index=lines.index))
+        )
+
+    savings = (
+        fixed_savings.copy()
+        if isinstance(fixed_savings, pd.DataFrame)
+        else pd.DataFrame()
+    )
+    if not savings.empty:
+        if "customer_id" in savings.columns:
+            savings = savings.loc[
+                clean_identifier(savings["customer_id"]).eq(str(customer_id).strip())
+            ].copy()
+        savings["currency_code"] = clean_text(
+            savings.get("currency_code", pd.Series("", index=savings.index))
+        ).str.upper()
+        reference_columns = [
+            column
+            for column in ["savings_id", "id"]
+            if column in savings.columns
+        ]
+        for column in reference_columns:
+            savings[column] = clean_identifier(savings[column])
+
+    def first_savings_creation(frame: pd.DataFrame) -> pd.Timestamp | pd.NaT:
+        for column in ["created_at", "date_approved", "date_activated"]:
+            if column not in frame.columns:
+                continue
+            values = pd.to_datetime(frame[column], errors="coerce").dropna()
+            if not values.empty:
+                return pd.Timestamp(values.min())
+        return pd.NaT
+
+    for index, return_row in result.iterrows():
+        finish = pd.to_datetime(return_row.get("created_at"), errors="coerce")
+        currency_code = str(return_row.get("currency_code", "")).strip().upper()
+        event_key = str(return_row.get("event_key", "")).strip()
+        event_lines = lines
+        if not lines.empty and event_key and "event_key" in lines.columns:
+            event_lines = lines.loc[lines["event_key"].astype(str).eq(event_key)].copy()
+        fixed_event_lines = (
+            event_lines.loc[event_lines["account_type"].eq("FIXED SAVINGS")].copy()
+            if not event_lines.empty and "account_type" in event_lines.columns
+            else pd.DataFrame()
+        )
+        dat_references = (
+            fixed_event_lines["reference_id"].replace("", pd.NA).dropna().astype(str).unique().tolist()
+            if not fixed_event_lines.empty and "reference_id" in fixed_event_lines.columns
+            else []
+        )
+        result.at[index, "reference_dat"] = " | ".join(dat_references)
+
+        creation = pd.NaT
+        scoped_savings = savings
+        if not scoped_savings.empty and currency_code:
+            scoped_savings = scoped_savings.loc[
+                scoped_savings["currency_code"].eq(currency_code)
+            ].copy()
+        if not scoped_savings.empty and dat_references:
+            exact_savings_mask = pd.Series(False, index=scoped_savings.index)
+            for column in ["savings_id", "id"]:
+                if column in scoped_savings.columns:
+                    exact_savings_mask |= scoped_savings[column].isin(dat_references)
+            exact_savings = scoped_savings.loc[exact_savings_mask].copy()
+            if not exact_savings.empty:
+                creation = first_savings_creation(exact_savings)
+
+        if pd.isna(creation) and not lines.empty and dat_references:
+            prior_fixed = lines.loc[
+                lines["account_type"].eq("FIXED SAVINGS")
+                & lines["reference_id"].isin(dat_references)
+            ].copy()
+            if pd.notna(finish):
+                prior_fixed = prior_fixed.loc[prior_fixed["created_at"].le(finish)].copy()
+            deposit_component = pd.to_numeric(
+                prior_fixed.get(
+                    "depot_dat_compte",
+                    pd.Series(0.0, index=prior_fixed.index),
+                ),
+                errors="coerce",
+            ).fillna(0.0)
+            credit_amount = pd.to_numeric(
+                prior_fixed.get("cr", pd.Series(0.0, index=prior_fixed.index)),
+                errors="coerce",
+            ).fillna(0.0)
+            descriptions = clean_text(
+                prior_fixed.get("description", pd.Series("", index=prior_fixed.index))
+            ).map(normalize_label)
+            prior_fixed = prior_fixed.loc[
+                deposit_component.gt(0)
+                | (
+                    credit_amount.gt(0)
+                    & descriptions.str.contains("depot bloque", na=False)
+                )
+            ].copy()
+            prior_dates = pd.to_datetime(
+                prior_fixed.get("created_at", pd.Series(pd.NaT, index=prior_fixed.index)),
+                errors="coerce",
+            ).dropna()
+            if not prior_dates.empty:
+                creation = pd.Timestamp(prior_dates.min())
+
+        if pd.isna(creation) and len(scoped_savings) == 1:
+            creation = first_savings_creation(scoped_savings)
+
+        result.at[index, "date_creation_dat"] = creation
+
+    result["date_creation_dat"] = pd.to_datetime(
+        result["date_creation_dat"], errors="coerce"
+    )
+    result["date_fin_dat"] = pd.to_datetime(result["date_fin_dat"], errors="coerce")
+    return result
+
+
 def build_customer_transaction_analysis(
     prepared: MpesaPreparedData,
     customer_id: object,
@@ -11178,6 +11561,12 @@ def build_customer_transaction_analysis(
     base_event_keys = set(base["event_key"].astype(str))
     base_lines = lines.loc[lines["event_key"].astype(str).isin(base_event_keys)].copy()
     internal = base.loc[base["type_operation"].eq("Transfert DAT vers epargne courante")].copy()
+    internal = _enrich_customer_dat_return_dates(
+        internal,
+        lines,
+        prepared.fixed_savings,
+        customer_id=customer_id,
+    )
 
     selected_types = [str(value) for value in (operation_types or []) if str(value).strip()]
     scoped = base.loc[base["type_operation"].isin(selected_types)].copy() if selected_types else base.copy()
@@ -11316,7 +11705,8 @@ def build_customer_transaction_analysis(
         "statut_controle_turbo", "observation_controle_turbo",
     ]
     internal_columns = [
-        "created_at", "currency_code", "event_reference", "type_operation", "montant_operation",
+        "created_at", "date_creation_dat", "date_fin_dat", "reference_dat",
+        "currency_code", "event_reference", "type_operation", "montant_operation",
         "transfert_dat_sortie", "transfert_epargne_entree", "account_types", "descriptions",
         "statut_controle_turbo", "observation_controle_turbo",
     ]
@@ -13739,6 +14129,37 @@ def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _g2_report_period_boundary_texts(report: dict[str, Any]) -> tuple[str, str]:
+    """Formate séparément les bornes de début et de fin du rapport G2/DAT."""
+    start = pd.to_datetime(report.get("analysis_date_start"), errors="coerce")
+    end = pd.to_datetime(report.get("analysis_date_end"), errors="coerce")
+    detail = report.get("rapport_journalier_detail", pd.DataFrame())
+    if (
+        (pd.isna(start) or pd.isna(end))
+        and isinstance(detail, pd.DataFrame)
+        and not detail.empty
+    ):
+        observed = pd.to_datetime(
+            detail.get("date", pd.Series(pd.NaT, index=detail.index)),
+            errors="coerce",
+        ).dropna()
+        if not observed.empty:
+            if pd.isna(start):
+                start = observed.min()
+            if pd.isna(end):
+                end = observed.max()
+
+    def format_boundary(value: object) -> str:
+        parsed = pd.to_datetime(value, errors="coerce")
+        return (
+            f"{parsed:%d/%m/%Y %H:%M:%S}"
+            if pd.notna(parsed)
+            else "Non disponible"
+        )
+
+    return format_boundary(start), format_boundary(end)
+
+
 def build_g2_dat_pdf_html(
     report: dict[str, Any],
     *,
@@ -13751,6 +14172,7 @@ def build_g2_dat_pdf_html(
     daily_synthese = report.get("rapport_journalier_synthese", pd.DataFrame())
     generated_at = generated_at if generated_at is not None else pd.Timestamp.now()
     context = _g2_executive_context(report)
+    period_start_text, period_end_text = _g2_report_period_boundary_texts(report)
 
     flow_table = _html_table(
         daily_pivot,
@@ -13783,18 +14205,37 @@ def build_g2_dat_pdf_html(
         if context["has_retention"]
         else f'<div class="note"><strong>Point de vigilance.</strong> {escape(context["attention_text"])}</div>'
     )
+    logo_html = '<div class="brand-fallback">IMF Microfinance<br>Bisou Bisou</div>'
+    if CUSTOMER_STATEMENT_LOGO_PATH.is_file():
+        try:
+            logo_payload = base64.b64encode(CUSTOMER_STATEMENT_LOGO_PATH.read_bytes()).decode("ascii")
+            logo_html = (
+                '<img class="report-logo" alt="Logo Bisou Bisou" '
+                f'src="data:image/png;base64,{logo_payload}">'
+            )
+        except OSError:
+            pass
 
     return f"""<!doctype html>
 <html lang="fr"><head><meta charset="utf-8"><title>Rapport M-PESA - G2/DAT</title>
 <style>
-@page {{ size: A4; margin: 12mm; }}
+@page {{ size: A4 portrait; margin: 12mm; }}
 * {{ box-sizing: border-box; }}
 body {{ font-family: Arial, Helvetica, sans-serif; color: #18314f; margin: 0; font-size: 9.5pt; line-height: 1.3; }}
-h1 {{ font-size: 22pt; color: #12385f; margin: 0 0 3px; }}
+h1 {{ font-size: 20pt; color: #12385f; margin: 10px 0 3px; text-align: center; }}
 h2 {{ font-size: 13.5pt; color: #12385f; margin: 14px 0 6px; border-bottom: 2px solid #dbe6f1; padding-bottom: 3px; page-break-after: avoid; }}
 h3 {{ font-size: 11pt; color: #173f73; margin: 10px 0 5px; page-break-after: avoid; }}
 p {{ margin: 4px 0 7px; }}
-.meta {{ color: #5d7187; margin-bottom: 10px; }}
+.report-header {{ display: grid; grid-template-columns: 1.05fr 0.95fr; border: 1px solid #ccd8e5; min-height: 35mm; page-break-inside: avoid; }}
+.brand-panel {{ display: flex; align-items: center; padding: 5mm; background: #ffffff; }}
+.report-logo {{ display: block; width: 42mm; max-height: 29mm; object-fit: contain; }}
+.brand-fallback {{ color: #12385f; font-size: 17pt; font-weight: 700; line-height: 1.05; }}
+.criteria-panel {{ border-left: 1px solid #ccd8e5; }}
+.criteria-title {{ background: #1f2937; color: #ffffff; font-weight: 700; text-align: center; padding: 2.5mm; font-size: 10pt; }}
+.criteria-table {{ width: 100%; border-collapse: collapse; }}
+.criteria-table th, .criteria-table td {{ padding: 1.7mm 2.3mm; border-bottom: 1px solid #e0e7ef; vertical-align: top; }}
+.criteria-table th {{ width: 36%; color: #18314f; text-align: left; font-weight: 700; }}
+.meta {{ color: #5d7187; margin: 0 0 10px; text-align: center; }}
 .summary {{ background: #edf5fb; border-left: 5px solid #2b6ea6; padding: 8px 12px; border-radius: 4px; }}
 .summary h2 {{ border: 0; margin: 0 0 5px; font-size: 12.5pt; }}
 .summary ul {{ margin: 2px 0; padding-left: 18px; }}
@@ -13811,8 +14252,21 @@ p {{ margin: 4px 0 7px; }}
 .empty {{ color: #6c7d8c; font-style: italic; }}
 .footer-note {{ color: #60758a; font-size: 8pt; margin-top: 10px; }}
 </style></head><body>
+<header class="report-header">
+  <div class="brand-panel">{logo_html}</div>
+  <div class="criteria-panel">
+    <div class="criteria-title">Critères</div>
+    <table class="criteria-table">
+      <tr><th>Date du :</th><td>{escape(period_start_text)}</td></tr>
+      <tr><th>Au :</th><td>{escape(period_end_text)}</td></tr>
+      <tr><th>Sens</th><td>{escape(direction_label)}</td></tr>
+      <tr><th>Source</th><td>{escape(str(report.get("analysis_source_label", "G2") or "G2"))}</td></tr>
+      <tr><th>Généré le</th><td>{generated_at:%d/%m/%Y}</td></tr>
+    </table>
+  </div>
+</header>
 <h1>Rapport M-PESA - G2/DAT</h1>
-<p class="meta">{escape(period_text)} | Sens : {escape(direction_label)} | {generated_at:%d/%m/%Y}</p>
+<p class="meta">Rapport d'analyse des flux et contrôles DAT</p>
 <section class="summary"><h2>Synthese executive</h2><ul>
 <li><strong>Activite.</strong> {escape(context["active_text"])}</li>
 {f'<li><strong>Perimetre des statuts.</strong> {escape(context["status_text"])}</li>' if context["status_text"] else ''}
@@ -14218,6 +14672,8 @@ def create_customer_statement_word(
                     "maturity_date",
                     "date_situation",
                     "date_ecriture_turbo",
+                    "date_creation_dat",
+                    "date_fin_dat",
                 }:
                     parsed = pd.to_datetime(value, errors="coerce")
                     text = f"{parsed:%d/%m/%Y %H:%M}" if pd.notna(parsed) else "-"
@@ -14330,7 +14786,8 @@ def create_customer_statement_word(
         add_analysis_table(
             internal,
             [
-                "created_at",
+                "date_creation_dat",
+                "date_fin_dat",
                 "event_reference",
                 "currency_code",
                 "transfert_dat_sortie",
@@ -14338,14 +14795,15 @@ def create_customer_statement_word(
                 "descriptions",
             ],
             {
-                "created_at": "Date",
+                "date_creation_dat": "Création du DAT",
+                "date_fin_dat": "Fin du DAT",
                 "event_reference": "Référence",
                 "currency_code": "Devise",
                 "transfert_dat_sortie": "Capital DAT restitué",
                 "transfert_epargne_entree": "Entrée compte ouvert",
                 "descriptions": "Description",
             },
-            [2.5, 3.0, 1.2, 2.8, 2.8, 5.4],
+            [2.4, 2.4, 2.4, 1.1, 2.3, 2.3, 5.2],
         )
 
     dat_interest_entries = analysis_frame("interets_dat_credites_client")
@@ -14712,6 +15170,8 @@ def create_customer_statement_pdf(
                     "maturity_date",
                     "date_ecriture_turbo",
                     "date_approved",
+                    "date_creation_dat",
+                    "date_fin_dat",
                 }:
                     parsed = pd.to_datetime(value, errors="coerce")
                     text_value = f"{parsed:%d/%m/%Y %H:%M}" if pd.notna(parsed) else "-"
@@ -14907,7 +15367,8 @@ def create_customer_statement_pdf(
             "Retours du capital mis en DAT",
             internal,
             [
-                "created_at",
+                "date_creation_dat",
+                "date_fin_dat",
                 "event_reference",
                 "currency_code",
                 "transfert_dat_sortie",
@@ -14915,14 +15376,15 @@ def create_customer_statement_pdf(
                 "descriptions",
             ],
             {
-                "created_at": "Date",
+                "date_creation_dat": "Création du DAT",
+                "date_fin_dat": "Fin du DAT",
                 "event_reference": "Référence",
                 "currency_code": "Devise",
                 "transfert_dat_sortie": "Capital DAT restitué",
                 "transfert_epargne_entree": "Entrée compte ouvert",
                 "descriptions": "Description",
             },
-            [2.4, 3.0, 1.2, 2.7, 2.7, 6.0],
+            [2.3, 2.3, 2.4, 1.1, 2.3, 2.3, 5.5],
         )
 
         dat_interest_entries = analysis_frame("interets_dat_credites_client")
@@ -15717,25 +16179,19 @@ def build_filtered_turbo_balance_report(
 
 def _turbo_balance_export_frames(
     report: dict[str, Any],
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Normalise les trois tables publiques de la balance observée Turbo."""
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Normalise les deux tables retenues dans la balance exportée."""
     summary = report.get("synthese", pd.DataFrame())
     client_balance = report.get("balance_clients", pd.DataFrame())
-    account_balance = report.get("balance_comptes", pd.DataFrame())
     summary = summary.copy() if isinstance(summary, pd.DataFrame) else pd.DataFrame()
     client_balance = (
         client_balance.copy()
         if isinstance(client_balance, pd.DataFrame)
         else pd.DataFrame()
     )
-    account_balance = (
-        account_balance.copy()
-        if isinstance(account_balance, pd.DataFrame)
-        else pd.DataFrame()
-    )
     if client_balance.empty:
         raise ValueError("Aucune balance client Turbo n'est disponible pour l'export.")
-    return summary, client_balance, account_balance
+    return summary, client_balance
 
 
 def _turbo_balance_period_text(
@@ -15810,7 +16266,7 @@ def create_turbo_balance_word(
     except ImportError as exc:
         raise RuntimeError("La dépendance python-docx est requise pour générer la balance Word.") from exc
 
-    summary, client_balance, account_balance = _turbo_balance_export_frames(report)
+    summary, client_balance = _turbo_balance_export_frames(report)
     start_text, end_text = _turbo_balance_period_text(
         report, period_start, period_end
     )
@@ -15893,16 +16349,6 @@ def create_turbo_balance_word(
     title_run.bold = True
     title_run.font.size = Pt(16)
     title_run.font.color.rgb = RGBColor(18, 56, 95)
-    source_note = document.add_paragraph()
-    source_note.paragraph_format.space_after = Pt(5)
-    source_note.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    note_run = source_note.add_run(
-        "Source des montants : Transactions M-PESA_Turbo. G2 complète uniquement le nom du client et le contrôle. "
-        "Cette restitution est une balance observée et non une balance générale certifiée."
-    )
-    note_run.italic = True
-    note_run.font.size = Pt(7.5)
-    note_run.font.color.rgb = RGBColor(91, 107, 124)
 
     def add_heading(text: str) -> None:
         paragraph = document.add_paragraph()
@@ -16007,25 +16453,6 @@ def create_turbo_balance_word(
             "encours_principal_observe": "Principal crédit",
         },
     )
-    add_heading("Balance des mouvements par type de compte")
-    add_table(
-        account_balance,
-        [
-            "currency_code", "account_type", "nombre_operations",
-            "total_debit", "total_credit",
-            "solde_debiteur_mouvement", "solde_crediteur_mouvement",
-        ],
-        {
-            "currency_code": "Devise",
-            "account_type": "Type de compte Turbo",
-            "nombre_operations": "Opérations",
-            "total_debit": "Débit",
-            "total_credit": "Crédit",
-            "solde_debiteur_mouvement": "Solde débiteur",
-            "solde_crediteur_mouvement": "Solde créditeur",
-        },
-    )
-
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     footer_run = footer.add_run(
@@ -16063,7 +16490,7 @@ def create_turbo_balance_pdf(
     except ImportError as exc:
         raise RuntimeError("La dépendance reportlab est requise pour générer la balance PDF.") from exc
 
-    summary, client_balance, account_balance = _turbo_balance_export_frames(report)
+    summary, client_balance = _turbo_balance_export_frames(report)
     start_text, end_text = _turbo_balance_period_text(
         report, period_start, period_end
     )
@@ -16118,15 +16545,6 @@ def create_turbo_balance_pdf(
     amount_style = ParagraphStyle(
         "TurboBalanceAmount", parent=body_style, alignment=TA_RIGHT
     )
-    note_style = ParagraphStyle(
-        "TurboBalanceNote",
-        parent=styles["BodyText"],
-        fontName="Helvetica-Oblique",
-        fontSize=7,
-        leading=8.5,
-        textColor=colors.HexColor("#5B6B7C"),
-        alignment=TA_CENTER,
-    )
     buffer = BytesIO()
     document = SimpleDocTemplate(
         buffer,
@@ -16165,11 +16583,6 @@ def create_turbo_balance_pdf(
     masthead.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
     story.extend([masthead, Spacer(1, 0.15 * cm)])
     story.append(Paragraph("Balance auxiliaire observée - Solution M_PESA", title_style))
-    story.append(Paragraph(
-        "Source des montants : Transactions M-PESA_Turbo. G2 complète uniquement le nom du client et le contrôle. "
-        "Cette restitution est une balance observée et non une balance générale certifiée.",
-        note_style,
-    ))
 
     def append_table(
         title: str,
@@ -16262,24 +16675,6 @@ def create_turbo_balance_pdf(
         },
         [1.2, 2.4, 2.0, 0.9, 1.5, 1.5, 1.6, 1.7, 1.3, 1.7],
     )
-    append_table(
-        "Balance des mouvements par type de compte",
-        account_balance,
-        [
-            "currency_code", "account_type", "nombre_operations",
-            "total_debit", "total_credit", "solde_debiteur_mouvement",
-            "solde_crediteur_mouvement",
-        ],
-        {
-            "currency_code": "Devise", "account_type": "Type de compte Turbo",
-            "nombre_operations": "Opérations",
-            "total_debit": "Débit", "total_credit": "Crédit",
-            "solde_debiteur_mouvement": "Solde débiteur",
-            "solde_crediteur_mouvement": "Solde créditeur",
-        },
-        [1.1, 4.0, 1.5, 2.4, 2.4, 3.0, 3.0],
-    )
-
     def draw_footer(canvas: Any, doc: Any) -> None:
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
@@ -16340,6 +16735,7 @@ def create_g2_dat_word(
     word_report = dict(report)
     word_report["rapport_journalier_pivot"] = daily_pivot
     context = _g2_executive_context(word_report)
+    period_start_text, period_end_text = _g2_report_period_boundary_texts(word_report)
     transaction_detail = eligible_transaction_detail
 
     classified = daily_synthese.copy()
@@ -16350,6 +16746,9 @@ def create_g2_dat_word(
 
     document = Document()
     section = document.sections[0]
+    section.orientation = WD_ORIENT.PORTRAIT
+    section.page_width = Cm(21.0)
+    section.page_height = Cm(29.7)
     section.top_margin = Cm(1.2)
     section.bottom_margin = Cm(1.2)
     section.left_margin = Cm(1.25)
@@ -16366,12 +16765,78 @@ def create_g2_dat_word(
     styles["Heading 1"].font.size = Pt(14)
     styles["Heading 2"].font.size = Pt(11)
 
+    def set_cell_shading(cell: Any, fill: str) -> None:
+        cell_properties = cell._tc.get_or_add_tcPr()
+        shading = OxmlElement("w:shd")
+        shading.set(qn("w:fill"), fill)
+        cell_properties.append(shading)
+
+    header = document.add_table(rows=2, cols=2)
+    header.alignment = WD_TABLE_ALIGNMENT.CENTER
+    header.autofit = False
+    brand_cell = header.cell(0, 0).merge(header.cell(1, 0))
+    brand_cell.width = Cm(9.5)
+    brand_cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+    brand_paragraph = brand_cell.paragraphs[0]
+    brand_paragraph.paragraph_format.space_after = Pt(0)
+    if CUSTOMER_STATEMENT_LOGO_PATH.is_file():
+        try:
+            brand_paragraph.add_run().add_picture(
+                str(CUSTOMER_STATEMENT_LOGO_PATH), width=Cm(4.6)
+            )
+        except (OSError, ValueError):
+            brand_run = brand_paragraph.add_run("IMF Microfinance Bisou Bisou")
+            brand_run.bold = True
+            brand_run.font.size = Pt(16)
+    else:
+        brand_run = brand_paragraph.add_run("IMF Microfinance Bisou Bisou")
+        brand_run.bold = True
+        brand_run.font.size = Pt(16)
+
+    criteria_title = header.cell(0, 1)
+    criteria_title.width = Cm(8.5)
+    criteria_title.text = "Critères"
+    criteria_title.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    set_cell_shading(criteria_title, "1F2937")
+    for run in criteria_title.paragraphs[0].runs:
+        run.bold = True
+        run.font.size = Pt(10)
+        run.font.color.rgb = RGBColor(255, 255, 255)
+
+    criteria_cell = header.cell(1, 1)
+    criteria_cell.width = Cm(8.5)
+    criteria = criteria_cell.add_table(rows=5, cols=2)
+    criteria.autofit = False
+    criteria_rows = [
+        ("Date du :", period_start_text),
+        ("Au :", period_end_text),
+        ("Sens :", direction_label),
+        ("Source :", source_label),
+        ("Généré le :", f"{generated_at:%d/%m/%Y}"),
+    ]
+    for row_index, (label, value) in enumerate(criteria_rows):
+        criteria.cell(row_index, 0).text = label
+        criteria.cell(row_index, 1).text = str(value)
+        criteria.cell(row_index, 0).width = Cm(3.1)
+        criteria.cell(row_index, 1).width = Cm(5.4)
+        for run in criteria.cell(row_index, 0).paragraphs[0].runs:
+            run.bold = True
+            run.font.size = Pt(8)
+        for run in criteria.cell(row_index, 1).paragraphs[0].runs:
+            run.font.size = Pt(8)
+    criteria_cell.paragraphs[0].paragraph_format.space_after = Pt(0)
+
     title = document.add_paragraph(style="Title")
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.space_before = Pt(5)
     title.paragraph_format.space_after = Pt(2)
     title.add_run(f"Rapport M-PESA - {report_scope}")
     meta = document.add_paragraph()
+    meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
     meta.paragraph_format.space_after = Pt(7)
-    meta_run = meta.add_run(f"{period_text} | Sens : {direction_label} | {generated_at:%d/%m/%Y}")
+    meta_run = meta.add_run(
+        f"Rapport d'analyse des flux et contrôles DAT | Sens : {direction_label}"
+    )
     meta_run.font.size = Pt(8.5)
     meta_run.font.color.rgb = RGBColor(93, 113, 135)
 
@@ -16392,12 +16857,6 @@ def create_g2_dat_word(
     add_summary_bullet("Flux financiers", context["flow_text"])
     if context["control_text"]:
         add_summary_bullet("Controle", context["control_text"])
-
-    def set_cell_shading(cell: Any, fill: str) -> None:
-        cell_properties = cell._tc.get_or_add_tcPr()
-        shading = OxmlElement("w:shd")
-        shading.set(qn("w:fill"), fill)
-        cell_properties.append(shading)
 
     def add_table(
         frame: pd.DataFrame,
@@ -16503,35 +16962,33 @@ def create_g2_dat_word(
             ["currency_code", "date"], ascending=[True, False], na_position="last"
         ).reset_index(drop=True)
         detail_section = document.add_section(WD_SECTION.NEW_PAGE)
-        detail_section.orientation = WD_ORIENT.LANDSCAPE
-        detail_section.page_width, detail_section.page_height = (
-            detail_section.page_height,
-            detail_section.page_width,
-        )
+        detail_section.orientation = WD_ORIENT.PORTRAIT
+        detail_section.page_width = Cm(21.0)
+        detail_section.page_height = Cm(29.7)
         detail_section.top_margin = Cm(1.0)
         detail_section.bottom_margin = Cm(1.0)
-        detail_section.left_margin = Cm(0.5)
-        detail_section.right_margin = Cm(0.5)
+        detail_section.left_margin = Cm(0.6)
+        detail_section.right_margin = Cm(0.6)
         document.add_heading("Transactions", level=1)
         # detail_caption.paragraph_format.space_after = Pt(4)
         add_table(
             detail,
             G2_CLASSIFIED_TRANSACTION_COLUMNS,
             {column: column for column in G2_CLASSIFIED_TRANSACTION_COLUMNS},
-            font_size=5.5,
+            font_size=4.8,
             amount_decimals=2,
             column_widths_cm={
-                "date": 2.7,
-                "receipt_no": 2.1,
-                "currency_code": 1.4,
-                "details_rapport": 2.3,
-                "opposite_party": 6.2,
-                "duree": 1.6,
-                "compte_cree": 2.7,
-                "montant": 1.7,
-                "montant_entree": 1.7,
-                "montant_sortie": 1.7,
-                "balance_numeric": 1.9,
+                "date": 2.1,
+                "receipt_no": 1.55,
+                "currency_code": 1.05,
+                "details_rapport": 1.65,
+                "opposite_party": 4.0,
+                "duree": 1.05,
+                "compte_cree": 1.9,
+                "montant": 1.25,
+                "montant_entree": 1.25,
+                "montant_sortie": 1.25,
+                "balance_numeric": 1.35,
             },
         )
 
@@ -16543,7 +17000,9 @@ def create_g2_dat_word(
 
     footer = section.footer.paragraphs[0]
     footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    footer_run = footer.add_run("Solution Bisou Bisou Digital ")
+    footer_run = footer.add_run(
+        f"Rapport genere le {generated_at:%d/%m/%Y %H:%M} - Solution Bisou Bisou Digital"
+    )
     footer_run.font.size = Pt(8)
     footer_run.font.color.rgb = RGBColor(110, 125, 140)
 
@@ -16556,7 +17015,11 @@ def create_g2_dat_word(
     return buffer.getvalue()
 
 
-def create_excel_export(report: dict[str, Any]) -> bytes:
+def create_excel_export(
+    report: dict[str, Any],
+    *,
+    print_orientation: str | None = None,
+) -> bytes:
     sheet_contract = [
         ("synthese", "Synthese"),
         ("extrait", "Extrait_Turbo"),
@@ -16671,6 +17134,12 @@ def create_excel_export(report: dict[str, Any]) -> bytes:
             worksheet = writer.sheets[sheet_name[:31]]
             worksheet.freeze_panes = "A2"
             worksheet.auto_filter.ref = worksheet.dimensions
+            if print_orientation:
+                worksheet.page_setup.orientation = print_orientation
+                worksheet.page_setup.fitToWidth = 1
+                worksheet.page_setup.fitToHeight = 0
+                worksheet.sheet_properties.pageSetUpPr.fitToPage = True
+                worksheet.print_title_rows = "1:1"
             for cell in worksheet[1]:
                 cell.font = Font(bold=True, color="FFFFFF")
                 cell.fill = PatternFill(fill_type="solid", fgColor="1F4E78")
