@@ -1,0 +1,271 @@
+{
+  "version": "1.1.0",
+  "diagrams": [
+    {
+      "ordinal": 0,
+      "scrollPosition": {
+        "x": 0,
+        "y": 75
+      },
+      "nodes": [
+        {
+          "location": {
+            "x": 0,
+            "y": 618.81077713383218
+          },
+          "nodeIndex": "_Mesures",
+          "nodeLineageTag": "74bfb459-2ee8-4e61-af13-2768c78ac72f",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 20
+        },
+        {
+          "location": {
+            "x": 0,
+            "y": 242.03038875368452
+          },
+          "nodeIndex": "D_Agence",
+          "nodeLineageTag": "35b3bb9a-7782-4950-b432-5195058a0140",
+          "size": {
+            "height": 128,
+            "width": 234
+          },
+          "zIndex": 1
+        },
+        {
+          "location": {
+            "x": 0,
+            "y": 388.92717260894221
+          },
+          "nodeIndex": "D_Date",
+          "nodeLineageTag": "2cd07b6d-a0e3-4c5c-bdc5-ea8e85c7c475",
+          "size": {
+            "height": 200,
+            "width": 234
+          },
+          "zIndex": 2
+        },
+        {
+          "location": {
+            "x": 0,
+            "y": 0
+          },
+          "nodeIndex": "D_Devise",
+          "nodeLineageTag": "966fece7-c58a-4386-9fbb-563b67b240ce",
+          "size": {
+            "height": 200,
+            "width": 234
+          },
+          "zIndex": 3
+        },
+        {
+          "location": {
+            "x": 886.87544209031887,
+            "y": 11.463290227989319
+          },
+          "nodeIndex": "F_Credit_Decaissements",
+          "nodeLineageTag": "01439452-12f7-4a85-b62a-950e43dd2766",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 4
+        },
+        {
+          "location": {
+            "x": 451.37587356377162,
+            "y": 0
+          },
+          "nodeIndex": "F_Credit_Portefeuille",
+          "nodeLineageTag": "24143331-be3c-4dbf-8854-6104dcaeac20",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 5
+        },
+        {
+          "location": {
+            "x": 443.86890017396911,
+            "y": 330.62155426766435
+          },
+          "nodeIndex": "F_Epargne_Soldes",
+          "nodeLineageTag": "4779fc61-c5b2-44a0-ad1f-132808d1778e",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 6
+        },
+        {
+          "location": {
+            "x": 1242.0858101057511,
+            "y": 0
+          },
+          "nodeIndex": "F_Conformite",
+          "nodeLineageTag": "3442adef-2166-4a69-8a03-883ff25a82ed",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 7
+        },
+        {
+          "location": {
+            "x": 1511.0858101057511,
+            "y": 0
+          },
+          "nodeIndex": "F_Clients",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 8
+        },
+        {
+          "location": {
+            "x": 2045.3198764556032,
+            "y": 83
+          },
+          "nodeIndex": "F_Credit_Concentration",
+          "nodeLineageTag": "36261360-aec8-4040-9d13-42dd2f13be9f",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 9
+        },
+        {
+          "location": {
+            "x": 2359.5539428054553,
+            "y": 0
+          },
+          "nodeIndex": "F_Credit_Couverture",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 10
+        },
+        {
+          "location": {
+            "x": 2783.7880091553079,
+            "y": 0
+          },
+          "nodeIndex": "F_Credit_Duree",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 11
+        },
+        {
+          "location": {
+            "x": 3208.0220755051605,
+            "y": 0
+          },
+          "nodeIndex": "F_Credit_Echeances_Futures",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 12
+        },
+        {
+          "location": {
+            "x": 3632.2561418550126,
+            "y": 0
+          },
+          "nodeIndex": "F_Credit_PAR_Detail",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 13
+        },
+        {
+          "location": {
+            "x": 4056.4902082048648,
+            "y": 0
+          },
+          "nodeIndex": "F_Credit_Provisions_Detail",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 14
+        },
+        {
+          "location": {
+            "x": 4480.7242745547173,
+            "y": 0
+          },
+          "nodeIndex": "F_Credit_Retention",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 15
+        },
+        {
+          "location": {
+            "x": 4904.958340904569,
+            "y": 0
+          },
+          "nodeIndex": "F_Credit_Tendance_PAR",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 16
+        },
+        {
+          "location": {
+            "x": 5329.1924072544207,
+            "y": 0
+          },
+          "nodeIndex": "F_Credit_Top_Encours",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 17
+        },
+        {
+          "location": {
+            "x": 5753.4264736042733,
+            "y": 0
+          },
+          "nodeIndex": "F_Credit_Tranches",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 18
+        },
+        {
+          "location": {
+            "x": 6177.6605399541259,
+            "y": 0
+          },
+          "nodeIndex": "F_Credit_Vintage",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 19
+        }
+      ],
+      "name": "Toutes les tables",
+      "zoomValue": 100,
+      "pinKeyFieldsToTop": false,
+      "showExtraHeaderInfo": false,
+      "hideKeyFieldsWhenCollapsed": false,
+      "tablesLocked": false
+    }
+  ],
+  "selectedDiagram": "Toutes les tables",
+  "defaultDiagram": "Toutes les tables"
+}

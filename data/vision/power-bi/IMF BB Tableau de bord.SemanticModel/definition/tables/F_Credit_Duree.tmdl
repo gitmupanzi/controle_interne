@@ -1,0 +1,402 @@
+/// Durée et nombre d'échéances restantes des prêts actifs.
+table F_Credit_Duree
+	lineageTag: 808fae0d-afbb-4b32-a42b-9d89be5c77ad
+
+	column 'Date situation'
+		dataType: dateTime
+		lineageTag: dc82ce7b-0718-4aad-b20c-e18037b05c3b
+		summarizeBy: none
+		sourceColumn: date_situation
+
+	column 'Code agence'
+		dataType: string
+		lineageTag: c884a8a1-44f3-4a3e-aa40-698c8080d07e
+		summarizeBy: none
+		sourceColumn: code_agence_demande
+
+	column Agence
+		dataType: string
+		lineageTag: a3f53ab5-52d8-47f3-a495-4411fd9168ee
+		summarizeBy: none
+		sourceColumn: nom_agence_demande
+
+	column 'Produit crédit'
+		dataType: string
+		lineageTag: e72ccfc4-0c34-4162-8611-187a4a112896
+		summarizeBy: none
+		sourceColumn: produit
+
+	column Devise
+		dataType: string
+		lineageTag: 80ea5bfc-09a6-4e21-945f-7c22e1e74295
+		summarizeBy: none
+		sourceColumn: code_devise
+
+	column 'Numéro prêt'
+		dataType: string
+		lineageTag: 70fa0e87-8fb0-455e-96ab-17b1e2048a5a
+		summarizeBy: none
+		sourceColumn: numero_pret
+
+	column 'Code client'
+		dataType: string
+		lineageTag: b62d9fca-3e67-4f80-9b92-6e5d29957770
+		summarizeBy: none
+		sourceColumn: code_client
+
+	column 'Nom client'
+		dataType: string
+		lineageTag: 8631a151-8f37-49db-9f48-e6f5250129e0
+		summarizeBy: none
+		sourceColumn: nom_client
+
+	column 'Date effet'
+		dataType: dateTime
+		lineageTag: 9baed82f-0efe-4f6f-9b43-514e7b2a183c
+		summarizeBy: none
+		sourceColumn: date_effet
+
+	column 'Date fin échéance'
+		dataType: dateTime
+		lineageTag: d3efdcbf-d40f-421a-92fc-b31e139feef7
+		summarizeBy: none
+		sourceColumn: date_fin_echeance
+
+	column 'Montant initial'
+		dataType: double
+		lineageTag: 5a4866a2-bf3b-41b1-8970-0a7582a9b696
+		summarizeBy: none
+		sourceColumn: montant_initial
+
+	column 'Échéances totales'
+		dataType: int64
+		lineageTag: 0faa4019-2c4a-43f9-80d6-957662e09d06
+		summarizeBy: none
+		sourceColumn: nb_echeances_total
+
+	column 'Échéances restantes'
+		dataType: int64
+		lineageTag: 537300c4-96ab-49bf-add8-4b02b30bf041
+		summarizeBy: none
+		sourceColumn: nb_echeances_restantes
+
+	column 'Durée théorique mois'
+		dataType: int64
+		lineageTag: 0fde3a6c-a579-40a9-a949-267df2bba565
+		summarizeBy: none
+		sourceColumn: duree_theorique_mois
+
+	column 'Tranche échéances restantes'
+		dataType: string
+		lineageTag: dfee1474-2624-4aee-9dfb-89703e0c2fdf
+		summarizeBy: none
+		sourceColumn: tranche_echeances_restantes
+
+	column 'Tranche total échéances'
+		dataType: string
+		lineageTag: d0958cf5-85f2-4847-8bd8-89d3da4b11c4
+		summarizeBy: none
+		sourceColumn: tranche_total_echeances
+
+	column prenoms_client
+		dataType: string
+		lineageTag: f5a949d9-6327-45c0-bbe8-04d27ff9f17a
+		summarizeBy: none
+		sourceColumn: prenoms_client
+
+		annotation SummarizationSetBy = Automatic
+
+	partition F_Credit_Duree = m
+		mode: import
+		source =
+				let
+					Source = Sql.Database(pServeur, pBaseDonnees, [CreateNavigationProperties=false, CommandTimeout=#duration(0, 0, 10, 0)]),
+					SqlTexte = Text.Combine({
+					"SET NOCOUNT ON;",
+					"DECLARE @date_debut date = '" & Date.ToText(pDateDebut, [Format="yyyy-MM-dd", Culture="en-US"]) & "';",
+					"DECLARE @date_fin date = '" & Date.ToText(pDateFin, [Format="yyyy-MM-dd", Culture="en-US"]) & "';",
+					"WITH base_clients AS (",
+					"select a.ID_CATEGORIE_ADHERENT as code_categorie_client, a.id as id_client, a.code as code_client, a.num_manuel, p.nom as nom_client,",
+					"    p.prenoms as prenoms_client, a.id_agence as id_agence, ag.nom as nom_agence, ag.code as code_agence,",
+					"case when p.SEXE='SEXE_M' then 'M' when p.SEXE='SEXE_F' then 'F' else '' end as sexe,",
+					"case when p.CIVILITE='CIV_M' then 'M' when p.CIVILITE='CIV_MME' then 'Mme' when p.CIVILITE='CIV_MLLE' then 'Mlle' else '' end as civilite,",
+					"case when p.STATUT_MATRIMONIAL='ST_MATRI_M' then 'M' when p.STATUT_MATRIMONIAL='ST_MATRI_C' then 'C' when p.STATUT_MATRIMONIAL='ST_MATRI_D' then 'D'  when p.STATUT_MATRIMONIAL='ST_MATRI_V' then 'V' when p.STATUT_MATRIMONIAL='ST_MATRI_S' then 'S' else '' end as statut_matrimonial,",
+					"ad.TEL as telephone, a.DATE_INSCRIPTION as date_adhesion, p.DATE_NAISSANCE as date_naissance, p.LIEU_NAISSNACE as lieu_naissance,",
+					"py.LIBELLE as nationalite, pidt.CODE as code_type_piece, pidt.LIBELLE as type_piece_identite, pid.NUMERO_PIECE as numero_piece_identite,",
+					"ad.EMAIL as email, pr.code as code_profession, pr.libelle as profession,",
+					"ad.BP as bp, ad.VILLE as ville, ad.ADRESSE as adresse, ta.ID as code_type_client, ta.LIBELLE as type_client, ca.LIBELLE as categorie_client,",
+					"z.CODE as code_zone, z3.CODE as code_zone3, z2.CODE as code_zone2, z1.CODE as code_zone1,",
+					"z.LIBELLE as zone, z3.libelle as zone3, z2.libelle as zone2, z1.libelle as zone1,",
+					"p.ALPHABETISE as alphabetise, a.DIRIGEANT as dirigeant, i.PERSONNEL as personnel,",
+					"gs.NOM +' '+gs.PRENOMS as gestionnaire, case when p.SEXE='SEXE_M' then 1 else 0 end as nbre_homme, case when p.SEXE='SEXE_F' then 1 else 0 end as nbre_femme,",
+					"da.DATE_DEPART as date_depart, dad.LIBELLE as motif_depart, DATEDIFF(YEAR, p.DATE_NAISSANCE, a.DATE_INSCRIPTION) as age_adhesion,",
+					"a.DATE_LAST_MODIFIED as date_last_modified, a.EST_PERFECT as client_perfect, a.EST_TONTINE as client_tontine,",
+					"gsCol.NOM +' '+gsCol.PRENOMS as collecteur, zc.LIBELLE as zone_collecte",
+					" from adherents a",
+					" left join individus i on a.id=i.id",
+					" left join personnes p on i.id_personne=p.id",
+					" left join adresses ad on p.ID_ADRESSE=ad.id",
+					" left join PROFESSIONS pr on p.ID_PROFESSION=pr.id",
+					" left join DEPARTS_ADHERENT da on da.ID_ADHERENT = a.id",
+					" left join MOTIFS_DEPART dad on dad.ID = da.ID_MOTIF_DEPART",
+					" left join TYPES_ADHERENT ta on ta.id = a.ID_TYPE_ADHERENT",
+					" left join CATEGORIES_ADHERENT ca on ca.id = a.ID_CATEGORIE_ADHERENT",
+					" left join ZONES z on z.id = a.ID_ZONE",
+					" left join ZONES z3 on z3.id = z.ID_ZONE_PARENT",
+					" left join ZONES z2 on z2.id = z3.ID_ZONE_PARENT",
+					" left join ZONES z1 on z1.id = z2.ID_ZONE_PARENT",
+					" left join GESTIONNAIRES g on g.id = a.ID_GESTIONNAIRE",
+					" left join PERSONNES gs on gs.id = g.ID_PERSONNE",
+					" left join POINTS_SERVICE ag on ag.id = a.ID_AGENCE",
+					" left join PAYS py on p.ID_NATIONALITE=py.id",
+					" left join PIECES_IDENTITE pid on p.ID_PIECE_IDENTITE=pid.id",
+					" left join TYPES_PIECE_IDENTITE pidt on pidt.ID = pid.ID_TYPE_PIECE",
+					"left join COLLECTEURS col on col.id = a.ID_COLLECTEUR",
+					"left join PERSONNES gsCol on gsCol.id = col.ID_PERSONNE",
+					"left join ZONES_COLLECTE zc on zc.id = a.ID_ZONE_COLLECTE",
+					"WHERE A.ID_CATEGORIE_ADHERENT = 'IND'",
+					"",
+					" union",
+					"",
+					" select a.ID_CATEGORIE_ADHERENT as code_categorie_client, a.id, a.code as code_client, a.NUM_MANUEL, a.nom_adherent as nom_du_client,",
+					"null  as prenoms_client, a.id_agence as id_agence, ag.nom as nom_agence, ag.code as code_agence,",
+					"case when gpe.TYPE_GRPE='TYPE_GP_M' then 'Masculin' when gpe.TYPE_GRPE='TYPE_GP_F' then 'Feminin'",
+					"when gpe.TYPE_GRPE='TYPE_GP_X' then 'Mixte' else '' end as sexe, '' as civilite, '' as statut_matrimonial,",
+					"ad.TEL as TELEPHONE, a.DATE_INSCRIPTION as date_adhesion, gpe.DATE_CREATION as date_naissance, gpe.LIEU_RENCONTRE as lieu_naissance,",
+					"'' as nationalite, '' as code_type_piece, '' as type_piece_identite, ''  as numero_piece_identite, ad.EMAIL as E_MAIL",
+					", s.code as code_profession, s.libelle as profession,",
+					"ad.BP as bp, ad.VILLE as ville, ad.ADRESSE as adresse, ta.ID as code_type_client, ta.LIBELLE as type_client, ca.LIBELLE as categorie_client,",
+					"z.CODE as code_zone, z3.CODE as code_zone3, z2.CODE as code_zone2, z1.CODE as code_zone1,",
+					"z.LIBELLE as zone, z3.libelle as zone3, z2.libelle as zone2, z1.libelle as zone1,",
+					"null as alphabetise, a.DIRIGEANT as dirigeant, null as personnel,",
+					"gs.NOM +' '+gs.PRENOMS as gestionnaire, gpe.NBRE_HOMME as nbre_homme, gpe.NBRE_FEMME as nbre_femme,",
+					"da.DATE_DEPART as date_depart, dad.LIBELLE as motif_depart, DATEDIFF(YEAR, gpe.DATE_CREATION, a.DATE_INSCRIPTION) as age_adhesion,",
+					"a.DATE_LAST_MODIFIED as date_last_modified, a.EST_PERFECT as client_perfect, a.EST_TONTINE as client_tontine,",
+					"gsCol.NOM +' '+gsCol.PRENOMS as collecteur, zc.LIBELLE as zone_collecte",
+					" from adherents a",
+					" left join groupes gpe on a.id=gpe.id",
+					" left join adresses ad on gpe.ID_ADRESSE=ad.id",
+					" left join SECTEURS_ACTIVITE s on s.ID=gpe.ID_SECTEUR",
+					" left join DEPARTS_ADHERENT da on da.ID_ADHERENT = a.id",
+					" left join MOTIFS_DEPART dad on dad.ID = da.ID_MOTIF_DEPART",
+					" left join TYPES_ADHERENT ta on ta.id = a.ID_TYPE_ADHERENT",
+					" left join CATEGORIES_ADHERENT ca on ca.id = a.ID_CATEGORIE_ADHERENT",
+					" left join ZONES z on z.id = a.ID_ZONE",
+					" left join ZONES z3 on z3.id = z.ID_ZONE_PARENT",
+					" left join ZONES z2 on z2.id = z3.ID_ZONE_PARENT",
+					" left join ZONES z1 on z1.id = z2.ID_ZONE_PARENT",
+					" left join GESTIONNAIRES g on g.id = a.ID_GESTIONNAIRE",
+					" left join PERSONNES gs on gs.id = g.ID_PERSONNE",
+					" left join POINTS_SERVICE ag on ag.id = a.ID_AGENCE",
+					"left join COLLECTEURS col on col.id = a.ID_COLLECTEUR",
+					"left join PERSONNES gsCol on gsCol.id = col.ID_PERSONNE",
+					"left join ZONES_COLLECTE zc on zc.id = a.ID_ZONE_COLLECTE",
+					"WHERE A.ID_CATEGORIE_ADHERENT = 'GPE'",
+					"",
+					"union",
+					"",
+					"select a.ID_CATEGORIE_ADHERENT as code_categorie_client, a.id, a.code as code_client, a.NUM_MANUEL, a.nom_adherent as nom_du_client,",
+					"null  as prenoms_client, a.id_agence as id_agence, ag.nom as nom_agence, ag.code as code_agence,",
+					"'' as sexe, '' as civilite, '' as statut_matrimonial,",
+					"ad.TEL as TELEPHONE, a.DATE_INSCRIPTION as date_adhesion, en.DATE_CREATION as date_naissance, en.SIEGE_SOCIAL as lieu_naissance,",
+					"'' as nationalite, '' as code_type_piece, 'Carte operateur' as type_piece_identite, en.NUM_CARTE_OPERATEUR as numero_piece_identite,",
+					"ad.EMAIL as E_MAIL, s.code as code_profession, s.libelle as profession,",
+					"ad.BP as bp, ad.VILLE as ville, ad.ADRESSE as adresse, ta.ID as code_type_client, ta.LIBELLE as type_client, ca.LIBELLE as categorie_client,",
+					"z.CODE as code_zone, z3.CODE as code_zone3, z2.CODE as code_zone2, z1.CODE as code_zone1,",
+					"z.LIBELLE as zone, z3.libelle as zone3, z2.libelle as zone2, z1.libelle as zone1,",
+					"null as alphabetise, a.DIRIGEANT as dirigeant, null as personnel,",
+					"gs.NOM +' '+gs.PRENOMS as gestionnaire, 0 as nbre_homme, 0 as nbre_femme,",
+					"da.DATE_DEPART as date_depart, dad.LIBELLE as motif_depart, DATEDIFF(YEAR, en.DATE_CREATION, a.DATE_INSCRIPTION) as age_adhesion,",
+					"a.DATE_LAST_MODIFIED as date_last_modified, a.EST_PERFECT as client_perfect, a.EST_TONTINE as client_tontine,",
+					"gsCol.NOM +' '+gsCol.PRENOMS as collecteur, zc.LIBELLE as zone_collecte",
+					"from adherents a",
+					"left join entreprises en on a.id=en.id",
+					"left join adresses ad on en.ID_ADRESSE=ad.id",
+					"left join SECTEURS_ACTIVITE s on s.ID=en.ID_SECTEUR_ACTIVITE",
+					"left join DEPARTS_ADHERENT da on da.ID_ADHERENT = a.id",
+					" left join MOTIFS_DEPART dad on dad.ID = da.ID_MOTIF_DEPART",
+					" left join TYPES_ADHERENT ta on ta.id = a.ID_TYPE_ADHERENT",
+					" left join CATEGORIES_ADHERENT ca on ca.id = a.ID_CATEGORIE_ADHERENT",
+					" left join ZONES z on z.id = a.ID_ZONE",
+					" left join ZONES z3 on z3.id = z.ID_ZONE_PARENT",
+					" left join ZONES z2 on z2.id = z3.ID_ZONE_PARENT",
+					" left join ZONES z1 on z1.id = z2.ID_ZONE_PARENT",
+					" left join GESTIONNAIRES g on g.id = a.ID_GESTIONNAIRE",
+					" left join PERSONNES gs on gs.id = g.ID_PERSONNE",
+					" left join POINTS_SERVICE ag on ag.id = a.ID_AGENCE",
+					"left join COLLECTEURS col on col.id = a.ID_COLLECTEUR",
+					"left join PERSONNES gsCol on gsCol.id = col.ID_PERSONNE",
+					"left join ZONES_COLLECTE zc on zc.id = a.ID_ZONE_COLLECTE",
+					"WHERE A.ID_CATEGORIE_ADHERENT = 'SCE'",
+					"",
+					"union",
+					"",
+					"select a.ID_CATEGORIE_ADHERENT as code_categorie_client, a.id, a.code as code_client, a.NUM_MANUEL, a.nom_adherent as nom_du_client,",
+					"null  as prenoms_client, a.id_agence as id_agence, ag.nom as nom_agence, ag.code as code_agence,",
+					"'' as sexe, '' as civilite, '' as statut_matrimonial,",
+					"ad.TEL as TELEPHONE, a.DATE_INSCRIPTION as date_adhesion, en.DATE_CREATION as date_naissance, en.SIEGE as lieu_naissance,",
+					"'' as nationalite, '' as code_type_piece, 'Num agrement' as type_piece_identite, en.NUM_AGREMENT as numero_piece_identite,",
+					"ad.EMAIL as E_MAIL, '' as code_profession, '' as profession,",
+					"ad.BP as bp, ad.VILLE as ville, ad.ADRESSE as adresse, ta.ID as code_type_client, ta.LIBELLE as type_client, ca.LIBELLE as categorie_client,",
+					"z.CODE as code_zone, z3.CODE as code_zone3, z2.CODE as code_zone2, z1.CODE as code_zone1,",
+					"z.LIBELLE as zone, z3.libelle as zone3, z2.libelle as zone2, z1.libelle as zone1,",
+					"null as alphabetise, a.DIRIGEANT as dirigeant, null as personnel,",
+					"gs.NOM +' '+gs.PRENOMS as gestionnaire, 0 as nbre_homme, 0 as nbre_femme,",
+					"da.DATE_DEPART as date_depart, dad.LIBELLE as motif_depart, DATEDIFF(YEAR, en.DATE_CREATION, a.DATE_INSCRIPTION) as age_adhesion,",
+					"a.DATE_LAST_MODIFIED as date_last_modified, a.EST_PERFECT as client_perfect, a.EST_TONTINE as client_tontine,",
+					"gsCol.NOM +' '+gsCol.PRENOMS as collecteur, zc.LIBELLE as zone_collecte",
+					"from adherents a",
+					"left join IMFS en on a.id=en.id",
+					"left join adresses ad on en.ID_ADRESSE=ad.id",
+					"left join DEPARTS_ADHERENT da on da.ID_ADHERENT = a.id",
+					" left join MOTIFS_DEPART dad on dad.ID = da.ID_MOTIF_DEPART",
+					" left join TYPES_ADHERENT ta on ta.id = a.ID_TYPE_ADHERENT",
+					" left join CATEGORIES_ADHERENT ca on ca.id = a.ID_CATEGORIE_ADHERENT",
+					" left join ZONES z on z.id = a.ID_ZONE",
+					" left join ZONES z3 on z3.id = z.ID_ZONE_PARENT",
+					" left join ZONES z2 on z2.id = z3.ID_ZONE_PARENT",
+					" left join ZONES z1 on z1.id = z2.ID_ZONE_PARENT",
+					" left join GESTIONNAIRES g on g.id = a.ID_GESTIONNAIRE",
+					" left join PERSONNES gs on gs.id = g.ID_PERSONNE",
+					" left join POINTS_SERVICE ag on ag.id = a.ID_AGENCE",
+					"left join COLLECTEURS col on col.id = a.ID_COLLECTEUR",
+					"left join PERSONNES gsCol on gsCol.id = col.ID_PERSONNE",
+					"left join ZONES_COLLECTE zc on zc.id = a.ID_ZONE_COLLECTE",
+					"WHERE A.ID_CATEGORIE_ADHERENT = 'IMF'",
+					"),",
+					"base_credits AS (",
+					"SELECT",
+					"a.*,",
+					"C.ID as id_pret, c.ID_DOSSIER_CREDIT as id_dossier, ca.ID_DEMANDE,",
+					"CY.ID as id_cycle_pret,",
+					"C.NUMERO_PRET as numero_pret,",
+					"C.NUMERO_CONTRAT as numero_contrat,",
+					"C.ID_COMPTE_CREDIT as id_compte_credit,",
+					"cpteC.NUM_CPTE as num_compte_credit,",
+					"C.ID_COMPTE_SAIN as id_compte_sain,",
+					"cpteS.NUM_CPTE as num_compte_sain,",
+					"ae.NOM + ' ' + ae.PRENOMS as gestionnaire_pret,",
+					"ca.NUM_DOSSIER as numero_dossier,",
+					"dd.REF_DEMANDE as reference_demande,",
+					"dd.NUM_DEMANDE as numero_demande,",
+					"dd.DATE_RECEPTION as date_demande,",
+					"dd.ID_AGENCE as id_agence_demande,",
+					"xx.NOM as nom_agence_demande,  xx.code as code_agence_demande,",
+					"dd.NBRE_BENEFICIAIRE as NBRE_BENEFICIAIRE,",
+					"d.SYMBOLE as devise,",
+					"d.id as id_devise,",
+					"d.code as code_devise, d.arrondi AS arrondi, C.TYPE_DUREE_CREDIT as terme_credit,",
+					"ca.NBRE_ECHEANCE as nb_echeance, ca.TAUX_ANNUEL as taux, ca.ID_PERIODICITE, tt.CLE_LIBELLE as periodicite,",
+					"CY.MONTANT as mtt_pret, c.DATE_EFFET as date_effet, cy.FIN_ECHEANCE as date_fin_echeance, cy.NUM_CYCLE as numero_cycle,",
+					"aq.NOM + ' ' + aq.PRENOMS as superviseur, dd.ID_PRODUIT_CREDIT as id_produit, w.LIBELLE as produit, ca.ID_PRDT_CRD_TRANCHE as id_produit_tranche, ca.ID_OBJET_FIN as id_objet_fin,",
+					"ob.LIBELLE as objet_fin, sc.LIBELLE as secteur_activite, sf.id as id_source_fin, sf.NOM_SOURCE_FIN as source_fin,",
+					"case when sf.TYPE = 'SRC_AFF' then 'A' else 'O' end as type_source_fin,",
+					"c.teg, c.date_perte, C.date_solde, C.DATE_REECH, CY.DATE_DEBUT as date_debut_cycle, CY.DATE_CLOTURE as date_cloture_cycle,",
+					"c.date_decaissement, (select min(date_echeance) from TABAMOR tb where tb.id_cycle_pret = CY.ID) as date_premiere_echeance",
+					"",
+					"",
+					"from CYCLES_PRET CY",
+					"inner join PRETS C on CY.ID_PRET = C.ID",
+					"inner join DEVISES d on c.ID_DEVISE = d.id",
+					"inner join DOSSIERS_CREDIT ca on ca.id = c.ID_DOSSIER_CREDIT",
+					"left join PERIODICITES tt on tt.id = ca.ID_PERIODICITE",
+					"left join GESTIONNAIRES g on g.id = ca.ID_GESTIONNAIRE",
+					"left join PERSONNES ae on ae.id = g.ID_PERSONNE",
+					"inner join DEMANDES_CREDIT dd on dd.id = ca.ID_DEMANDE",
+					"left join base_clients a on a.id_client = dd.ID_ADHERENT",
+					"left join SUPERVISEUR g2 on g2.id = g.ID_SUPERVISEUR",
+					"left join PERSONNES aq on aq.id = g2.ID_PERSONNE",
+					"left join PRODUITS_CRD w on w.id = dd.ID_PRODUIT_CREDIT",
+					"left join OBJETS_FIN ob on ob.id = ca.ID_OBJET_FIN",
+					"left join SECTEURS_ACTIVITE_CREDIT sc on sc.id = ob.ID_SECTEUR",
+					"left join SOURCES_FIN sf on sf.id = c.ID_SOURCE_FIN",
+					"left join POINTS_SERVICE xx on xx.id = dd.ID_AGENCE",
+					"left join COMPTES cpteC on cpteC.id = C.ID_COMPTE_CREDIT",
+					"left join COMPTES cpteS on cpteS.id = C.ID_COMPTE_SAIN",
+					"",
+					"where a.client_perfect = 1",
+					"),",
+					"echeances AS (",
+					"  SELECT",
+					"    cp.ID_PRET AS ID_PRET,",
+					"    COUNT(t.ID) AS nb_echeances_total,",
+					"    SUM(CASE WHEN t.DATE_ECHEANCE > @date_fin THEN 1 ELSE 0 END) AS nb_echeances_restantes,",
+					"    MIN(t.DATE_ECHEANCE) AS premiere_echeance,",
+					"    MAX(t.DATE_ECHEANCE) AS derniere_echeance",
+					"  FROM dbo.CYCLES_PRET AS cp",
+					"  INNER JOIN dbo.TABAMOR AS t",
+					"    ON t.ID_CYCLE_PRET = cp.ID",
+					"  GROUP BY",
+					"    cp.ID_PRET",
+					"), credits_uniques AS (",
+					"  SELECT",
+					"    ecv.*,",
+					"    ROW_NUMBER() OVER (",
+					"      PARTITION BY ecv.id_pret",
+					"      ORDER BY ecv.date_debut_cycle DESC, ecv.id_cycle_pret DESC",
+					"    ) AS rn",
+					"  FROM base_credits AS ecv",
+					")",
+					"SELECT",
+					"  @date_fin AS date_situation,",
+					"  cu.code_agence_demande,",
+					"  cu.nom_agence_demande,",
+					"  cu.produit,",
+					"  cu.code_devise,",
+					"  cu.numero_pret,",
+					"  cu.code_client,",
+					"  cu.nom_client,",
+					"  cu.prenoms_client,",
+					"  cu.date_effet,",
+					"  cu.date_fin_echeance,",
+					"  cu.mtt_pret AS montant_initial,",
+					"  e.nb_echeances_total,",
+					"  e.nb_echeances_restantes,",
+					"  DATEDIFF(MONTH, CAST(cu.date_effet AS DATETIME2), CAST(cu.date_fin_echeance AS DATETIME2)) AS duree_theorique_mois,",
+					"  CASE",
+					"    WHEN e.nb_echeances_restantes <= 0",
+					"    THEN '0'",
+					"    WHEN e.nb_echeances_restantes <= 3",
+					"    THEN '1 a 3'",
+					"    WHEN e.nb_echeances_restantes <= 6",
+					"    THEN '4 a 6'",
+					"    WHEN e.nb_echeances_restantes <= 12",
+					"    THEN '7 a 12'",
+					"    ELSE '13 et plus'",
+					"  END AS tranche_echeances_restantes,",
+					"  CASE",
+					"    WHEN e.nb_echeances_total <= 6",
+					"    THEN '0 a 6'",
+					"    WHEN e.nb_echeances_total <= 12",
+					"    THEN '7 a 12'",
+					"    WHEN e.nb_echeances_total <= 18",
+					"    THEN '13 a 18'",
+					"    WHEN e.nb_echeances_total <= 24",
+					"    THEN '19 a 24'",
+					"    ELSE '25 et plus'",
+					"  END AS tranche_total_echeances",
+					"FROM credits_uniques AS cu",
+					"LEFT JOIN echeances AS e",
+					"  ON e.ID_PRET = cu.id_pret",
+					"WHERE",
+					"  cu.rn = 1",
+					"  AND cu.date_effet <= @date_fin",
+					"  AND (",
+					"    cu.date_solde IS NULL OR cu.date_solde > @date_fin",
+					"  )",
+					"  AND (",
+					"    cu.date_perte IS NULL OR cu.date_perte > @date_fin",
+					"  )",
+					"ORDER BY",
+					"  cu.nom_agence_demande,",
+					"  cu.produit,",
+					"  e.nb_echeances_restantes DESC;"
+					}, "#(lf)"),
+					Resultat = Value.NativeQuery(Source, SqlTexte, null, [EnableFolding=false])
+				in
+					Resultat
+
+	annotation RequetePerfectVision = 108
+
+	annotation SourceLocale = BB_VISION_PRO_TEST
+

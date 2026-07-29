@@ -1,0 +1,20 @@
+expression pServeur = "CDBBIMFL065" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: 163c1606-275d-474a-a61d-99f3343d0b8c
+
+	annotation PBI_ResultType = Text
+
+expression pBaseDonnees = "BB_VISION_PRO_TEST" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: 5d3ac564-7965-4cfb-83fb-c21def039d71
+
+	annotation PBI_ResultType = Text
+
+expression pDateDebut = #date(2026, 6, 1) meta [IsParameterQuery=true, Type="Date", IsParameterQueryRequired=true]
+	lineageTag: 56cee3b6-3fd3-4373-8768-fb0ee4dacff9
+
+	annotation PBI_ResultType = Date
+
+expression pDateFin = #date(2026, 6, 30) meta [IsParameterQuery=true, Type="Date", IsParameterQueryRequired=true]
+	lineageTag: 9ffb769c-0af9-4a3b-95f3-18423df0ce26
+
+	annotation PBI_ResultType = Date
+

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Perfect Power BI"
+  short_description: "Construire Power BI depuis Perfect Vision"
+  default_prompt: "Utilise $perfect-power-bi pour concevoir et valider un tableau de bord Power BI alimenté par Perfect Vision."

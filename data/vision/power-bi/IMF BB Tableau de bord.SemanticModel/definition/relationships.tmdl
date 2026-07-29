@@ -1,0 +1,188 @@
+relationship 'Crédit portefeuille - Date'
+	fromColumn: F_Credit_Portefeuille.'Date situation'
+	toColumn: D_Date.Date
+
+relationship 'Décaissements - Date'
+	fromColumn: F_Credit_Decaissements.'Mois décaissement'
+	toColumn: D_Date.Date
+
+relationship 'Épargne - Date'
+	fromColumn: F_Epargne_Soldes.Mois
+	toColumn: D_Date.Date
+
+relationship 'Crédit portefeuille - Devise'
+	fromColumn: F_Credit_Portefeuille.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Décaissements - Devise'
+	fromColumn: F_Credit_Decaissements.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Épargne - Devise'
+	fromColumn: F_Epargne_Soldes.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Crédit portefeuille - Agence'
+	fromColumn: F_Credit_Portefeuille.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Décaissements - Agence'
+	fromColumn: F_Credit_Decaissements.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Épargne - Agence'
+	fromColumn: F_Epargne_Soldes.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Conformité - Date'
+	fromColumn: F_Conformite.'Date fin'
+	toColumn: D_Date.Date
+
+relationship 'Conformité - Devise'
+	fromColumn: F_Conformite.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'PAR détail - Date'
+	fromColumn: F_Credit_PAR_Detail.'Date situation'
+	toColumn: D_Date.Date
+
+relationship 'Top encours - Date'
+	fromColumn: F_Credit_Top_Encours.'Date situation'
+	toColumn: D_Date.Date
+
+relationship 'Échéances futures - Date'
+	fromColumn: F_Credit_Echeances_Futures.'Mois échéance'
+	toColumn: D_Date.Date
+
+relationship 'Rétention - Date'
+	fromColumn: F_Credit_Retention.'Mois solde'
+	toColumn: D_Date.Date
+
+relationship 'Vintage - Date'
+	fromColumn: F_Credit_Vintage.'Cohorte décaissement'
+	toColumn: D_Date.Date
+
+relationship 'Tranches - Date'
+	fromColumn: F_Credit_Tranches.'Date situation'
+	toColumn: D_Date.Date
+
+relationship 'Concentration - Date'
+	fromColumn: F_Credit_Concentration.'Date situation'
+	toColumn: D_Date.Date
+
+relationship 'Couverture crédit - Date'
+	fromColumn: F_Credit_Couverture.'Date situation'
+	toColumn: D_Date.Date
+
+relationship 'Provisions détail - Date'
+	fromColumn: F_Credit_Provisions_Detail.'Date situation'
+	toColumn: D_Date.Date
+
+relationship 'Durée crédit - Date'
+	fromColumn: F_Credit_Duree.'Date situation'
+	toColumn: D_Date.Date
+
+relationship 'Tendance PAR - Date'
+	fromColumn: F_Credit_Tendance_PAR.'Date situation'
+	toColumn: D_Date.Date
+
+relationship 'Clients - Date'
+	fromColumn: F_Clients.'Date fin'
+	toColumn: D_Date.Date
+
+relationship 'PAR détail - Devise'
+	fromColumn: F_Credit_PAR_Detail.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Top encours - Devise'
+	fromColumn: F_Credit_Top_Encours.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Échéances futures - Devise'
+	fromColumn: F_Credit_Echeances_Futures.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Rétention - Devise'
+	fromColumn: F_Credit_Retention.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Vintage - Devise'
+	fromColumn: F_Credit_Vintage.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Tranches - Devise'
+	fromColumn: F_Credit_Tranches.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Concentration - Devise'
+	fromColumn: F_Credit_Concentration.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Couverture crédit - Devise'
+	fromColumn: F_Credit_Couverture.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Provisions détail - Devise'
+	fromColumn: F_Credit_Provisions_Detail.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Durée crédit - Devise'
+	fromColumn: F_Credit_Duree.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Tendance PAR - Devise'
+	fromColumn: F_Credit_Tendance_PAR.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'Clients - Devise'
+	fromColumn: F_Clients.Devise
+	toColumn: D_Devise.Devise
+
+relationship 'PAR détail - Agence'
+	fromColumn: F_Credit_PAR_Detail.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Top encours - Agence'
+	fromColumn: F_Credit_Top_Encours.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Échéances futures - Agence'
+	fromColumn: F_Credit_Echeances_Futures.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Rétention - Agence'
+	fromColumn: F_Credit_Retention.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Vintage - Agence'
+	fromColumn: F_Credit_Vintage.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Tranches - Agence'
+	fromColumn: F_Credit_Tranches.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Concentration - Agence'
+	fromColumn: F_Credit_Concentration.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Couverture crédit - Agence'
+	fromColumn: F_Credit_Couverture.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Provisions détail - Agence'
+	fromColumn: F_Credit_Provisions_Detail.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Durée crédit - Agence'
+	fromColumn: F_Credit_Duree.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Tendance PAR - Agence'
+	fromColumn: F_Credit_Tendance_PAR.'Code agence'
+	toColumn: D_Agence.'Code agence'
+
+relationship 'Clients - Agence'
+	fromColumn: F_Clients.'Code agence'
+	toColumn: D_Agence.'Code agence'
+

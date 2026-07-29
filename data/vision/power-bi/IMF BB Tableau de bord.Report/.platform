@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Report",
+    "displayName": "IMF BB Tableau de bord"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "a9f2c9a6-e83c-4d32-bc06-497d5854b7da"
+  }
+}

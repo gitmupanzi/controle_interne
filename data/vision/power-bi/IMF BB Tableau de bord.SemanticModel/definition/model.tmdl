@@ -1,0 +1,38 @@
+model Model
+	culture: fr-FR
+	defaultPowerBIDataSourceVersion: powerBI_V3
+	sourceQueryCulture: fr-FR
+	valueFilterBehavior: independent
+	dataAccessOptions
+		legacyRedirects
+		returnErrorValuesAsNull
+
+annotation __PBI_TimeIntelligenceEnabled = 0
+
+annotation PBI_ProTooling = ["DevMode"]
+
+annotation PBI_QueryOrder = ["F_Credit_Portefeuille","F_Credit_Decaissements","F_Epargne_Soldes","F_Conformite","F_Credit_PAR_Detail","F_Credit_Top_Encours","F_Credit_Echeances_Futures","F_Credit_Retention","F_Credit_Vintage","F_Credit_Tranches","F_Credit_Concentration","F_Credit_Couverture","F_Credit_Provisions_Detail","F_Credit_Duree","F_Credit_Tendance_PAR","F_Clients","pServeur","pBaseDonnees","pDateDebut","pDateFin"]
+
+ref table F_Credit_Portefeuille
+ref table F_Credit_Decaissements
+ref table F_Epargne_Soldes
+ref table D_Date
+ref table D_Devise
+ref table D_Agence
+ref table _Mesures
+ref table F_Conformite
+ref table F_Credit_PAR_Detail
+ref table F_Credit_Top_Encours
+ref table F_Credit_Echeances_Futures
+ref table F_Credit_Retention
+ref table F_Credit_Vintage
+ref table F_Credit_Tranches
+ref table F_Credit_Concentration
+ref table F_Credit_Couverture
+ref table F_Credit_Provisions_Detail
+ref table F_Credit_Duree
+ref table F_Credit_Tendance_PAR
+ref table F_Clients
+
+ref cultureInfo fr-FR
+

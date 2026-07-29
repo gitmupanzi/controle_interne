@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "SemanticModel",
+    "displayName": "IMF BB Tableau de bord"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "5522ce5b-e43b-488a-9623-322380dad077"
+  }
+}

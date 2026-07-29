@@ -1,0 +1,16 @@
+/// Référentiel des devises utilisées dans le reporting, sans conversion ni totalisation implicite.
+table D_Devise
+	lineageTag: 966fece7-c58a-4386-9fbb-563b67b240ce
+
+	column Devise
+		dataType: string
+		lineageTag: 5f69500d-9f6e-473c-b70d-db06f8fb894f
+		summarizeBy: none
+		sourceColumn: [Devise]
+
+	partition D_Devise = calculated
+		mode: import
+		source = DATATABLE("Devise", STRING, {{"CDF"}, {"USD"}})
+
+	annotation PBI_ResultType = Table
+

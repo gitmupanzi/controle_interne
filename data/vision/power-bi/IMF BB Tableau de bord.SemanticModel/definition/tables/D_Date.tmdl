@@ -1,0 +1,53 @@
+/// Calendrier commun construit sur la plage réellement chargée dans les faits.
+table D_Date
+	lineageTag: 2cd07b6d-a0e3-4c5c-bdc5-ea8e85c7c475
+
+	column Date
+		dataType: dateTime
+		formatString: yyyy-MM-dd
+		lineageTag: 5e1bcc8e-45ee-4b1b-899a-2985e6ecd309
+		summarizeBy: none
+		sourceColumn: [Date]
+
+	column Année
+		dataType: int64
+		lineageTag: ebf83d9a-e0b5-46fc-bacd-1b27888ff792
+		summarizeBy: none
+		sourceColumn: [Année]
+
+	column 'Numéro mois'
+		dataType: int64
+		isHidden
+		lineageTag: c096dea4-4345-45e5-8d4d-2856d6e24d97
+		summarizeBy: none
+		sourceColumn: [Numéro mois]
+
+	column Mois
+		dataType: string
+		lineageTag: 8b8d37b8-be2f-4cd4-939b-ffbd0f44e551
+		summarizeBy: none
+		sourceColumn: [Mois]
+		sortByColumn: 'Numéro mois'
+
+	column Année-mois
+		dataType: string
+		lineageTag: cce9187e-be15-4e45-9316-46a2e1d464c0
+		summarizeBy: none
+		sourceColumn: [Année-mois]
+
+	partition D_Date = calculated
+		mode: import
+		source =
+				VAR DateMin = MINX(F_Clients, F_Clients[Date début])
+				VAR DateMax = MAXX(F_Clients, F_Clients[Date fin])
+				RETURN
+					ADDCOLUMNS(
+						CALENDAR(DateMin, DateMax),
+						"Année", YEAR([Date]),
+						"Numéro mois", MONTH([Date]),
+						"Mois", FORMAT([Date], "mmmm", "fr-FR"),
+						"Année-mois", FORMAT([Date], "yyyy-MM")
+					)
+
+	annotation PBI_ResultType = Table
+

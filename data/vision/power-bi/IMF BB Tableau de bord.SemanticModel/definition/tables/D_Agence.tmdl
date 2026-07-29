@@ -1,0 +1,31 @@
+/// Référentiel partagé des agences présentes dans les faits crédit et épargne.
+table D_Agence
+	lineageTag: 35b3bb9a-7782-4950-b432-5195058a0140
+
+	column 'Code agence'
+		dataType: string
+		lineageTag: 528e68bd-0fae-4386-bfec-dab1173108b8
+		summarizeBy: none
+		sourceColumn: [Code agence]
+
+	column Agence
+		dataType: string
+		lineageTag: 9b7527e8-0070-4d7a-bc16-c063d35ef156
+		summarizeBy: none
+		sourceColumn: [Agence]
+
+	partition D_Agence = calculated
+		mode: import
+		source =
+				VAR Agences =
+					UNION(
+						SELECTCOLUMNS(F_Credit_Portefeuille, "Code agence", F_Credit_Portefeuille[Code agence], "Agence", F_Credit_Portefeuille[Agence]),
+						SELECTCOLUMNS(F_Credit_Decaissements, "Code agence", F_Credit_Decaissements[Code agence], "Agence", F_Credit_Decaissements[Agence]),
+						SELECTCOLUMNS(F_Epargne_Soldes, "Code agence", F_Epargne_Soldes[Code agence], "Agence", F_Epargne_Soldes[Agence]),
+						SELECTCOLUMNS(F_Clients, "Code agence", F_Clients[Code agence], "Agence", F_Clients[Agence])
+					)
+				RETURN
+					FILTER(DISTINCT(Agences), NOT ISBLANK([Code agence]))
+
+	annotation PBI_ResultType = Table
+

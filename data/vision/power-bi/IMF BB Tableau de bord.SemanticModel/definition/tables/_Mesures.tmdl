@@ -1,0 +1,399 @@
+/// Mesures de pilotage. Les montants CDF et USD restent toujours séparés.
+table _Mesures
+	lineageTag: 74bfb459-2ee8-4e61-af13-2768c78ac72f
+
+	/// Nombre de prêts actifs à la date de situation.
+	measure 'Prêts actifs' = SUM(F_Credit_Portefeuille[Prêts actifs])
+		formatString: #,##0
+		lineageTag: 6d99b154-e198-4c06-a257-d839cf970518
+
+	/// Encours du portefeuille exprimé uniquement en CDF.
+	measure 'Encours CDF' = CALCULATE(SUM(F_Credit_Portefeuille[Encours]), KEEPFILTERS(D_Devise[Devise] = "CDF"))
+		formatString: #,##0" CDF"
+		lineageTag: b6a044a9-ecdb-4596-b9a8-ca6b898ca830
+
+	/// Encours du portefeuille exprimé uniquement en USD.
+	measure 'Encours USD' = CALCULATE(SUM(F_Credit_Portefeuille[Encours]), KEEPFILTERS(D_Devise[Devise] = "USD"))
+		formatString: #,##0.00" USD"
+		lineageTag: e9b6a789-7260-41bd-a0c4-c8a7dd71f16a
+
+	/// Montant du portefeuille à risque de 30 jours et plus, uniquement en CDF.
+	measure 'PAR 30 CDF' = CALCULATE(SUM(F_Credit_Portefeuille[PAR 30+]), KEEPFILTERS(D_Devise[Devise] = "CDF"))
+		formatString: #,##0" CDF"
+		lineageTag: c9cbea86-1d2c-4640-9cdf-f28597f0834b
+
+	/// Montant du portefeuille à risque de 30 jours et plus, uniquement en USD.
+	measure 'PAR 30 USD' = CALCULATE(SUM(F_Credit_Portefeuille[PAR 30+]), KEEPFILTERS(D_Devise[Devise] = "USD"))
+		formatString: #,##0.00" USD"
+		lineageTag: 5a6d36c6-a904-41eb-a9eb-cde94d55f793
+
+	/// PAR 30+ divisé par l'encours CDF.
+	measure 'Taux PAR 30 CDF' = DIVIDE([PAR 30 CDF], [Encours CDF])
+		formatString: 0.00%
+		lineageTag: 766f6dab-3a51-4b03-850f-e22f7903bc5d
+
+	/// PAR 30+ divisé par l'encours USD.
+	measure 'Taux PAR 30 USD' = DIVIDE([PAR 30 USD], [Encours USD])
+		formatString: 0.00%
+		lineageTag: e410578c-3240-4e55-8bed-44445ff4984d
+
+	/// Provisions sur crédits exprimées uniquement en CDF.
+	measure 'Provision CDF' = CALCULATE(SUM(F_Credit_Portefeuille[Provision]), KEEPFILTERS(D_Devise[Devise] = "CDF"))
+		formatString: #,##0" CDF"
+		lineageTag: 34a0bf79-9ebc-41e0-be15-8d34800eeaeb
+
+	/// Provisions sur crédits exprimées uniquement en USD.
+	measure 'Provision USD' = CALCULATE(SUM(F_Credit_Portefeuille[Provision]), KEEPFILTERS(D_Devise[Devise] = "USD"))
+		formatString: #,##0.00" USD"
+		lineageTag: 2e33d0ce-91da-48d6-804d-0195fd5541b3
+
+	/// Montant décaissé sur la période, uniquement en CDF.
+	measure 'Décaissements CDF' = CALCULATE(SUM(F_Credit_Decaissements[Montant décaissé]), KEEPFILTERS(D_Devise[Devise] = "CDF"))
+		formatString: #,##0" CDF"
+		lineageTag: b19abd91-3ae4-42b5-9084-847aceafd8c5
+
+	/// Montant décaissé sur la période, uniquement en USD.
+	measure 'Décaissements USD' = CALCULATE(SUM(F_Credit_Decaissements[Montant décaissé]), KEEPFILTERS(D_Devise[Devise] = "USD"))
+		formatString: #,##0.00" USD"
+		lineageTag: fd5e0100-4dda-4c35-8127-fbe82c0c7962
+
+	/// Solde d'épargne exprimé uniquement en CDF.
+	measure 'Épargne CDF' = CALCULATE(SUM(F_Epargne_Soldes[Solde épargne]), KEEPFILTERS(D_Devise[Devise] = "CDF"))
+		formatString: #,##0" CDF"
+		lineageTag: 2235a543-930a-48e5-877e-e1ea414c1b5c
+
+	/// Solde d'épargne exprimé uniquement en USD.
+	measure 'Épargne USD' = CALCULATE(SUM(F_Epargne_Soldes[Solde épargne]), KEEPFILTERS(D_Devise[Devise] = "USD"))
+		formatString: #,##0.00" USD"
+		lineageTag: 80c38841-a1e7-4a92-b4d5-24be2387027a
+
+	/// Nombre de clients épargne dans le contexte de filtre actif.
+	measure 'Clients épargne' = SUM(F_Epargne_Soldes[Clients])
+		formatString: #,##0
+		lineageTag: cffc59ed-9af9-46e1-9dc8-dc65eeb9bc6e
+
+	/// Nombre de comptes épargne dans le contexte de filtre actif.
+	measure 'Comptes épargne' = SUM(F_Epargne_Soldes[Comptes])
+		formatString: #,##0
+		lineageTag: fcd6ca94-7c43-4aa1-8091-ad6dac78cbf6
+
+	/// Nombre de comptes épargne libellés en CDF.
+	measure 'Comptes CDF' = CALCULATE(SUM(F_Epargne_Soldes[Comptes]), KEEPFILTERS(D_Devise[Devise] = "CDF"))
+		formatString: #,##0
+		lineageTag: 92cca52e-b6e3-4b2c-be23-52748b4aa1e0
+
+	/// Nombre de comptes épargne libellés en USD.
+	measure 'Comptes USD' = CALCULATE(SUM(F_Epargne_Soldes[Comptes]), KEEPFILTERS(D_Devise[Devise] = "USD"))
+		formatString: #,##0
+		lineageTag: 41875be2-1164-4c17-b3ef-36e81241dc54
+
+	/// Solde épargne CDF divisé par le nombre de comptes CDF.
+	measure 'Solde moyen CDF' = DIVIDE([Épargne CDF], [Comptes CDF])
+		formatString: #,##0" CDF"
+		lineageTag: 57de684a-4596-46d2-812f-032a1f7a6849
+
+	/// Solde épargne USD divisé par le nombre de comptes USD.
+	measure 'Solde moyen USD' = DIVIDE([Épargne USD], [Comptes USD])
+		formatString: #,##0.00" USD"
+		lineageTag: a031eaee-1108-4fc3-ad82-67a1fc54ff49
+
+	/// Montant du portefeuille à risque de 1 jour et plus, uniquement en CDF.
+	measure 'PAR 1 CDF' = CALCULATE(SUM(F_Credit_Portefeuille[PAR 1+]), KEEPFILTERS(D_Devise[Devise] = "CDF"))
+		formatString: #,##0" CDF"
+		lineageTag: afb08598-c6c5-4e6c-a36d-bf0dd50c08de
+
+	/// Montant du portefeuille à risque de 1 jour et plus, uniquement en USD.
+	measure 'PAR 1 USD' = CALCULATE(SUM(F_Credit_Portefeuille[PAR 1+]), KEEPFILTERS(D_Devise[Devise] = "USD"))
+		formatString: #,##0.00" USD"
+		lineageTag: b6885c3b-e46f-44b8-a90e-ae35b8b81afd
+
+	/// Montant du portefeuille à risque de 90 jours et plus, uniquement en CDF.
+	measure 'PAR 90 CDF' = CALCULATE(SUM(F_Credit_Portefeuille[PAR 90+]), KEEPFILTERS(D_Devise[Devise] = "CDF"))
+		formatString: #,##0" CDF"
+		lineageTag: 0379db4f-13b9-4b6c-b2fc-89185d80a423
+
+	/// Montant du portefeuille à risque de 90 jours et plus, uniquement en USD.
+	measure 'PAR 90 USD' = CALCULATE(SUM(F_Credit_Portefeuille[PAR 90+]), KEEPFILTERS(D_Devise[Devise] = "USD"))
+		formatString: #,##0.00" USD"
+		lineageTag: abdf09c1-58a2-45c0-80b4-b43e68e2ac8c
+
+	/// PAR 1+ divisé par l'encours CDF.
+	measure 'Taux PAR 1 CDF' = DIVIDE([PAR 1 CDF], [Encours CDF])
+		formatString: 0.00%
+		lineageTag: 4e5a60ff-c713-4067-92bd-080a1aee44da
+
+	/// PAR 1+ divisé par l'encours USD.
+	measure 'Taux PAR 1 USD' = DIVIDE([PAR 1 USD], [Encours USD])
+		formatString: 0.00%
+		lineageTag: 371ca29b-fb52-4fcf-928c-5c2d6261b355
+
+	/// PAR 90+ divisé par l'encours CDF.
+	measure 'Taux PAR 90 CDF' = DIVIDE([PAR 90 CDF], [Encours CDF])
+		formatString: 0.00%
+		lineageTag: 47637bd2-63dd-42aa-aad0-9e8aa7456478
+
+	/// PAR 90+ divisé par l'encours USD.
+	measure 'Taux PAR 90 USD' = DIVIDE([PAR 90 USD], [Encours USD])
+		formatString: 0.00%
+		lineageTag: 3f6d1b2f-f35b-425c-a786-959fe8359dc9
+
+	/// Nombre de prêts décaissés sur la période dans le contexte de filtre actif.
+	measure 'Prêts décaissés' = SUM(F_Credit_Decaissements[Prêts décaissés])
+		formatString: #,##0
+		lineageTag: 18803aa4-4820-4d4a-96af-db220086bf1c
+
+	/// Nombre de lignes de contrôle qualité présentes dans le socle unique.
+	measure 'Contrôles qualité' = COALESCE(CALCULATE(COUNTROWS(F_Conformite), KEEPFILTERS(F_Conformite[Type élément] = "Controle qualite")), 0)
+		formatString: #,##0
+		lineageTag: 5a737e24-5c71-49d2-bb6b-d105cd5b408d
+
+	/// Somme du champ Nombre de la requête 156 ; à lire dans le grain et la rubrique affichés.
+	measure 'Nombre déclaré' = SUM(F_Conformite[Nombre])
+		formatString: #,##0
+		lineageTag: 0e9227ba-958c-4b9f-9c4c-b2900aa55ce6
+
+	/// Nombre de lignes du socle unique de conformité dans le contexte de filtre actif.
+	measure 'Lignes 156' = COUNTROWS(F_Conformite)
+		formatString: #,##0
+		lineageTag: dd361ab5-8e0f-4ff7-a1b6-4810beb525ef
+
+	/// Nombre de lignes ayant un niveau de sévérité renseigné.
+	measure 'Lignes sévérité' = CALCULATE(COUNTROWS(F_Conformite), KEEPFILTERS(NOT ISBLANK(F_Conformite[Sévérité])))
+		formatString: #,##0
+		lineageTag: 42990448-05ce-4856-bada-9a8f3baf13b6
+
+	/// Nombre d'analyses de conformité distinctes présentes dans le socle unique.
+	measure 'Analyses LBC-FT' = DISTINCTCOUNT(F_Conformite[Analyse])
+		formatString: #,##0
+		lineageTag: becb585e-3aa8-473c-9104-9bc7651a5795
+
+	/// Nombre de lignes de type alerte dans le socle unique.
+	measure Alertes = COALESCE(CALCULATE(COUNTROWS(F_Conformite), KEEPFILTERS(F_Conformite[Type élément] = "Alerte")), 0)
+		formatString: #,##0
+		lineageTag: 75f8287b-0787-4824-92bb-dc681e9ee0f4
+
+	/// Nombre de déclarations de soupçon ou CENTIF présentes dans le socle unique.
+	measure CENTIF = COALESCE(CALCULATE(COUNTROWS(F_Conformite), KEEPFILTERS(F_Conformite[Type élément] = "Declaration")), 0)
+		formatString: #,##0
+		lineageTag: d6247abf-eff3-4ba0-9959-74e17d4fc17f
+
+	/// Nombre de profils de risque présents dans le socle unique.
+	measure 'Profils risque' = COALESCE(CALCULATE(COUNTROWS(F_Conformite), KEEPFILTERS(F_Conformite[Type élément] = "Profil de risque")), 0)
+		formatString: #,##0
+		lineageTag: 273f7a58-f1e6-46e8-a89c-06f5a9370f3e
+
+	/// Nombre de réactivations de comptes dormants présentes dans le socle unique.
+	measure Réactivations = COALESCE(CALCULATE(COUNTROWS(F_Conformite), KEEPFILTERS(F_Conformite[Type élément] = "Reactivation de compte")), 0)
+		formatString: #,##0
+		lineageTag: eba62b7b-f484-4b4f-8f78-997ebb280ae4
+
+	/// Nombre de lignes de couverture au statut NON_COUVERT.
+	measure 'Non couverts' = COALESCE(CALCULATE(COUNTROWS(F_Conformite), KEEPFILTERS(F_Conformite[Statut couverture] = "NON_COUVERT")), 0)
+		formatString: #,##0
+		lineageTag: 6c978d74-9069-4cd3-a3b0-ddb2846ead9e
+
+	/// Nombre de lignes de couverture au statut PARTIEL.
+	measure Partiels = COALESCE(CALCULATE(COUNTROWS(F_Conformite), KEEPFILTERS(F_Conformite[Statut couverture] = "PARTIEL")), 0)
+		formatString: #,##0
+		lineageTag: c5ebeffd-b604-4d18-b020-2642d181a986
+
+	/// Nombre de lignes de couverture au statut COUVERT.
+	measure Couverts = COALESCE(CALCULATE(COUNTROWS(F_Conformite), KEEPFILTERS(F_Conformite[Statut couverture] = "COUVERT")), 0)
+		formatString: #,##0
+		lineageTag: 467a27db-ba54-446f-90ea-f068b0bf1798
+
+	/// Nombre de lignes de conformité classées CRITIQUE.
+	measure Critiques = COALESCE(CALCULATE(COUNTROWS(F_Conformite), KEEPFILTERS(F_Conformite[Sévérité] = "CRITIQUE")), 0)
+		formatString: #,##0
+		lineageTag: 282fb1e6-13af-4da9-8a40-0e51f7d3aa71
+
+	/// Nombre de lignes actionnables de surveillance : alertes, déclarations, profils de risque, réactivations, fractionnements et gros mouvements.
+	measure 'Lignes surveillance' = CALCULATE(COUNTROWS(F_Conformite), KEEPFILTERS(F_Conformite[Type élément] IN {"Alerte", "Declaration", "Profil de risque", "Reactivation de compte", "Fractionnement", "Gros mouvement agrege"}))
+		formatString: #,##0
+		lineageTag: 5e709e54-85f0-4b12-9483-61b663220ece
+
+	/// Nombre de cas actionnables de surveillance dans le contexte de filtre actif.
+	measure 'Cas surveillance' = COALESCE([Lignes surveillance], 0)
+		formatString: #,##0
+		lineageTag: e636cb6f-7ca2-41b7-bf46-447870f40837
+
+	/// Nombre de cas de surveillance ayant le statut A_REVOIR.
+	measure 'Dossiers à revoir' = COALESCE(CALCULATE([Lignes surveillance], KEEPFILTERS(F_Conformite[Statut revue] = "A_REVOIR")), 0)
+		formatString: #,##0
+		lineageTag: 064fa351-f7ed-4d33-996b-48c0596fe64a
+
+	/// Nombre de clients distincts rattachés aux cas actionnables de surveillance.
+	measure 'Clients surveillés' = COALESCE(CALCULATE(DISTINCTCOUNT(F_Conformite[Code client]), KEEPFILTERS(F_Conformite[Type élément] IN {"Alerte", "Declaration", "Profil de risque", "Reactivation de compte", "Fractionnement", "Gros mouvement agrege"}), KEEPFILTERS(NOT ISBLANK(F_Conformite[Code client]))), 0)
+		formatString: #,##0
+		lineageTag: 3b0aa919-b8ec-445a-a32f-cdd0a469bb68
+
+	/// Nombre de cas actionnables de surveillance ayant une sévérité renseignée.
+	measure 'Lignes surveillance sévérité' = CALCULATE([Lignes surveillance], KEEPFILTERS(NOT ISBLANK(F_Conformite[Sévérité])))
+		formatString: #,##0
+		lineageTag: 028a1c26-5b8b-4d21-a063-a382af39dd50
+
+	/// Nombre de clients distincts dans le socle client-devise.
+	measure Clients = DISTINCTCOUNT(F_Clients[Code client])
+		formatString: #,##0
+		lineageTag: c4d33a1f-8b77-4ec2-8271-a01e9e0cd717
+
+	/// Nombre de clients distincts répondant à la définition opérationnelle d'un client actif.
+	measure 'Clients actifs' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Client actif] = 1))
+		formatString: #,##0
+		lineageTag: 4e9e08b5-b2e2-443c-b751-8783728cc440
+
+	/// Nombre de clients distincts ayant au moins un compte ouvert.
+	measure 'Clients comptes ouverts' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec compte ouvert] = 1))
+		formatString: #,##0
+		lineageTag: 245d5d32-37e1-4c4a-b5c7-4b2c15a405e9
+
+	/// Nombre de clients distincts ayant au moins un compte explicitement codé bloqué ou gelé.
+	measure 'Clients comptes bloqués' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec compte bloqué] = 1))
+		formatString: #,##0
+		lineageTag: c4d3abb2-0506-447d-8caa-6d09984a73cd
+
+	/// Nombre de clients distincts ayant au moins un compte ouvert sans mouvement depuis 24 mois.
+	measure 'Clients comptes dormants' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec compte dormant] = 1))
+		formatString: #,##0
+		lineageTag: e51e653d-32d0-434a-a3ac-272eb2b8a9c1
+
+	/// Nombre de clients distincts ayant une échéance de crédit dans la période.
+	measure 'Clients crédit à rembourser' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec crédit à rembourser] = 1))
+		formatString: #,##0
+		lineageTag: e5c6eee0-cc3c-43d5-9df6-eedca0cfb4da
+
+	/// Nombre de clients distincts ayant reçu un intérêt d'épargne ou de DAT pendant la période.
+	measure 'Clients intérêt épargne' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Bénéficiaire intérêt épargne] = 1))
+		formatString: #,##0
+		lineageTag: d25e9572-992a-4313-a916-55e1ca1a74ea
+
+	/// Nombre de clients distincts dont un DAT arrive à échéance dans la période.
+	measure 'Clients DAT à échéance' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec DAT à échéance] = 1))
+		formatString: #,##0
+		lineageTag: b0946f71-bf73-4260-a6b1-9a48b9ea2ace
+
+	/// Montant total des échéances de crédit prévues dans la période.
+	measure 'Montant crédit à rembourser' = SUM(F_Clients[Montant crédit à rembourser])
+		formatString: #,##0.00
+		lineageTag: bd533855-c96a-46bc-89fb-e30f9542acc2
+
+	/// Montant initial des DAT arrivant à échéance dans la période.
+	measure 'Montant DAT à échéance' = SUM(F_Clients[Montant DAT à échéance])
+		formatString: #,##0.00
+		lineageTag: f8cf58f6-2fca-4047-b858-7fbba53d1c06
+
+	/// Nombre de clients distincts présents dans le détail du portefeuille à risque.
+	measure 'Clients PAR' = DISTINCTCOUNT(F_Credit_PAR_Detail[Code client])
+		formatString: #,##0
+		lineageTag: 370ac181-ceca-4dcc-a617-a82430a4262b
+
+	/// Montant total des arriérés du détail PAR.
+	measure 'Arriéré crédit' = SUM(F_Credit_PAR_Detail[Arriéré])
+		formatString: #,##0.00
+		lineageTag: 4fbd2d90-9321-4766-868d-9f7a4678db28
+
+	/// Exposition de crédit non couverte après épargne, caution et garantie.
+	measure 'Exposition nette' = SUM(F_Credit_Couverture[Exposition nette])
+		formatString: #,##0.00
+		lineageTag: 742808dc-ad10-42b1-beaf-89252fcf5786
+
+	/// Part de l'encours portée par les dix pour cent de prêts les plus importants.
+	measure 'Part encours top 10%' = DIVIDE(SUM(F_Credit_Concentration[Encours top 10%]), SUM(F_Credit_Concentration[Encours]))
+		formatString: 0.00%
+		lineageTag: 937e9f8c-fd52-4686-b2b7-06ca73fa14e9
+
+	/// Montant total attendu sur les échéances futures.
+	measure 'Échéances futures' = SUM(F_Credit_Echeances_Futures[Total attendu])
+		formatString: #,##0.00
+		lineageTag: 54656675-e82d-4cef-9302-7b45a053d2e2
+
+	/// Clients renouvelés divisés par les clients arrivés à échéance.
+	measure 'Taux rétention crédit' = DIVIDE(SUM(F_Credit_Retention[Clients renouvelés]), SUM(F_Credit_Retention[Clients arrivés échéance]))
+		formatString: 0.00%
+		lineageTag: d6005237-2fdf-440b-8f17-cd03ef46b4f2
+
+	/// Somme des provisions du détail sur les trois derniers mois.
+	measure 'Provision détaillée' = SUM(F_Credit_Provisions_Detail[Provision])
+		formatString: #,##0.00
+		lineageTag: d9a71d72-3633-46d7-9a2a-937787360ba4
+
+	/// Nombre moyen d'échéances restantes sur les prêts actifs.
+	measure 'Échéances restantes moyennes' = AVERAGE(F_Credit_Duree[Échéances restantes])
+		formatString: 0.0
+		lineageTag: c07d6f8f-9ac9-4e43-a3c6-75126b3d8242
+
+	/// Encours issu de la série mensuelle de la requête 109.
+	measure 'Encours tendance' = SUM(F_Credit_Tendance_PAR[Encours])
+		formatString: #,##0.00
+		lineageTag: 9c5bf655-79e2-45ab-be08-479fe41da247
+
+	/// PAR 30+ issu de la série mensuelle de la requête 109.
+	measure 'PAR 30 tendance' = SUM(F_Credit_Tendance_PAR[PAR 30+])
+		formatString: #,##0.00
+		lineageTag: 9807064e-e39e-41c5-a534-c26108d061ac
+
+	/// Encours des principaux clients sélectionnés par la requête 98.
+	measure 'Encours top clients' = SUM(F_Credit_Top_Encours[Encours])
+		formatString: #,##0.00
+		lineageTag: 36002470-ff2a-4b46-b4b3-8936a77f20d3
+
+	/// Encours agrégé selon les tranches de montant initial de la requête 104.
+	measure 'Encours par tranche' = SUM(F_Credit_Tranches[Encours])
+		formatString: #,##0.00
+		lineageTag: f3215333-413d-40db-b1dc-4ccaf98c71aa
+
+	/// PAR 30+ agrégé selon les tranches de montant initial.
+	measure 'PAR 30 par tranche' = SUM(F_Credit_Tranches[PAR 30+])
+		formatString: #,##0.00
+		lineageTag: b7784cee-62b7-4237-a739-fc4a5ee62a42
+
+	/// PAR 30+ agrégé par cohorte de décaissement.
+	measure 'PAR 30 vintage' = SUM(F_Credit_Vintage[PAR 30+])
+		formatString: #,##0.00
+		lineageTag: 7ff5709e-7eb5-4665-a407-7cdbb3414071
+
+	/// Nombre de prêts distincts dans les tranches d'échéances restantes.
+	measure 'Prêts par durée' = DISTINCTCOUNT(F_Credit_Duree[Numéro prêt])
+		formatString: #,##0
+		lineageTag: c201ae3f-d7bb-4f0d-8cc7-520714c1b169
+
+	/// Libellé de la période actuellement sélectionnée dans le rapport.
+	measure 'Période sélectionnée' =
+			VAR DateDebut = MIN(D_Date[Date])
+			VAR DateFin = MAX(D_Date[Date])
+			RETURN
+				IF(
+					ISBLANK(DateDebut) || ISBLANK(DateFin),
+					"Aucune période",
+					FORMAT(DateDebut, "dd/MM/yyyy") & " – " & FORMAT(DateFin, "dd/MM/yyyy")
+				)
+		lineageTag: 67289416-42bf-4e06-9d88-c7c108bc547d
+
+	/// Libellé des devises actuellement sélectionnées sans produire de total monétaire multidevise.
+	measure 'Devise sélectionnée' =
+			IF(
+				NOT ISFILTERED(D_Devise[Devise]),
+				"Toutes",
+				CONCATENATEX(VALUES(D_Devise[Devise]), D_Devise[Devise], ", ", D_Devise[Devise], ASC)
+			)
+		lineageTag: fbe838b2-92dc-4bd7-b3d4-9e23e9c3914a
+
+	/// Date maximale disponible dans la dimension Date du chargement courant.
+	measure 'Dernière date disponible' =
+			VAR DateMax = MAXX(ALL(D_Date), D_Date[Date])
+			RETURN IF(ISBLANK(DateMax), "Non disponible", FORMAT(DateMax, "dd/MM/yyyy"))
+		lineageTag: 2dbbabd0-a706-4f22-b7e9-42d3525c14cc
+
+	column Technique
+		dataType: string
+		isHidden
+		lineageTag: 81cbabbb-7424-4a07-9155-ef495ee7509a
+		summarizeBy: none
+		sourceColumn: [Technique]
+
+	partition _Mesures = calculated
+		mode: import
+		source = ROW("Technique", BLANK())
+
+	annotation PBI_ResultType = Table
+
