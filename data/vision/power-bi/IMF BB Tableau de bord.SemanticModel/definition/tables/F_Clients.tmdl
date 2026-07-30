@@ -4,15 +4,21 @@ table F_Clients
 
 	column 'Date début'
 		dataType: dateTime
+		formatString: Long Date
 		lineageTag: c210d1a9-8e96-4b84-88b2-4b129ae95da0
 		summarizeBy: none
 		sourceColumn: date_debut
 
+		annotation UnderlyingDateTimeDataType = Date
+
 	column 'Date fin'
 		dataType: dateTime
+		formatString: Long Date
 		lineageTag: ffd912ea-5bb4-495e-898e-000e33b64a87
 		summarizeBy: none
 		sourceColumn: date_fin
+
+		annotation UnderlyingDateTimeDataType = Date
 
 	column 'Code client'
 		dataType: string
@@ -46,9 +52,12 @@ table F_Clients
 
 	column 'Date adhésion'
 		dataType: dateTime
+		formatString: Long Date
 		lineageTag: 7ffeb26a-141e-42b0-a442-ea0669b2bf37
 		summarizeBy: none
 		sourceColumn: date_adhesion
+
+		annotation UnderlyingDateTimeDataType = Date
 
 	column Devise
 		dataType: string
@@ -63,10 +72,13 @@ table F_Clients
 		sourceColumn: statut_client
 
 	column 'Client actif'
-		dataType: int64
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
 		lineageTag: 5d87a527-69e2-41f9-aa9e-a382e4b6321d
 		summarizeBy: none
 		sourceColumn: client_actif
+
+		annotation SummarizationSetBy = Automatic
 
 	column Comptes
 		dataType: int64
@@ -106,9 +118,12 @@ table F_Clients
 
 	column 'Dernière opération'
 		dataType: dateTime
+		formatString: Long Date
 		lineageTag: e901f5c2-d1d2-4dd2-a8c8-3724ffb67c8f
 		summarizeBy: none
 		sourceColumn: date_derniere_operation
+
+		annotation UnderlyingDateTimeDataType = Date
 
 	column 'Solde épargne'
 		dataType: double
@@ -190,574 +205,98 @@ table F_Clients
 
 	column 'Première échéance DAT'
 		dataType: dateTime
+		formatString: Long Date
 		lineageTag: 1c6a0bcd-4166-4977-a473-7ea017d217ba
 		summarizeBy: none
 		sourceColumn: premiere_echeance_dat
 
+		annotation UnderlyingDateTimeDataType = Date
+
 	column 'Dernière échéance DAT'
 		dataType: dateTime
+		formatString: Long Date
 		lineageTag: ac5dc311-5253-4c5c-bb9f-e8ad0f7b338f
 		summarizeBy: none
 		sourceColumn: derniere_echeance_dat
 
+		annotation UnderlyingDateTimeDataType = Date
+
 	column 'Avec compte ouvert'
-		dataType: int64
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
 		lineageTag: 0f5de2d8-bb45-4e23-a983-548877d25aa9
 		summarizeBy: none
 		sourceColumn: client_avec_compte_ouvert
 
+		annotation SummarizationSetBy = Automatic
+
 	column 'Avec compte bloqué'
-		dataType: int64
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
 		lineageTag: 67416b6b-2c4a-49c2-8fe9-65114f80c614
 		summarizeBy: none
 		sourceColumn: client_avec_compte_bloque
 
+		annotation SummarizationSetBy = Automatic
+
 	column 'Avec compte dormant'
-		dataType: int64
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
 		lineageTag: 8a3f3aec-f2b9-4147-98ef-4a7dfd6411e1
 		summarizeBy: none
 		sourceColumn: client_avec_compte_dormant
 
+		annotation SummarizationSetBy = Automatic
+
 	column 'Avec crédit à rembourser'
-		dataType: int64
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
 		lineageTag: 723927dd-6723-4302-a89b-0605b2742357
 		summarizeBy: none
 		sourceColumn: client_avec_credit_a_rembourser
 
+		annotation SummarizationSetBy = Automatic
+
 	column 'Avec intérêt crédit à rembourser'
-		dataType: int64
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
 		lineageTag: 3e663d96-df06-4704-b19e-49eb3d47db69
 		summarizeBy: none
 		sourceColumn: client_avec_interet_credit_a_rembourser
 
+		annotation SummarizationSetBy = Automatic
+
 	column 'Bénéficiaire intérêt épargne'
-		dataType: int64
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
 		lineageTag: 276ab7e3-edff-4143-adb1-fc340cdbbde0
 		summarizeBy: none
 		sourceColumn: client_beneficiaire_interet_epargne
 
+		annotation SummarizationSetBy = Automatic
+
 	column 'Avec DAT à échéance'
-		dataType: int64
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
 		lineageTag: 15d03558-80e9-4a0e-a0db-12081f2d7952
 		summarizeBy: none
 		sourceColumn: client_avec_dat_a_echeance
+
+		annotation SummarizationSetBy = Automatic
 
 	partition F_Clients = m
 		mode: import
 		source =
 				let
-					Source = Sql.Database(pServeur, pBaseDonnees, [CreateNavigationProperties=false, CommandTimeout=#duration(0, 0, 10, 0)]),
-					SqlTexte = Text.Combine({
-					"SET NOCOUNT ON;",
-					"DECLARE @date_debut date = '" & Date.ToText(pDateDebut, [Format="yyyy-MM-dd", Culture="en-US"]) & "';",
-					"DECLARE @date_fin date = '" & Date.ToText(pDateFin, [Format="yyyy-MM-dd", Culture="en-US"]) & "';",
-					"DECLARE @id_devise_reporting int = NULL;",
-					"WITH clients AS (",
-					"  SELECT",
-					"    a.ID AS id_client,",
-					"    a.CODE AS code_client,",
-					"    a.NOM_ADHERENT AS nom_client,",
-					"    ta.LIBELLE AS type_client,",
-					"    a.DATE_INSCRIPTION AS date_adhesion,",
-					"    a.EST_PERFECT AS client_perfect,",
-					"    a.EST_VALIDE AS client_valide,",
-					"    ps.CODE AS code_agence,",
-					"    ps.NOM AS agence",
-					"  FROM dbo.ADHERENTS AS a",
-					"  LEFT JOIN dbo.TYPES_ADHERENT AS ta",
-					"    ON ta.ID = a.ID_TYPE_ADHERENT",
-					"  LEFT JOIN dbo.POINTS_SERVICE AS ps",
-					"    ON ps.ID = COALESCE(a.ID_POINT_SERVICE, a.ID_AGENCE)",
-					"  WHERE",
-					"    a.DATE_INSCRIPTION <= @date_fin",
-					"    AND ISNULL(a.EST_PERFECT, 0) = 1",
-					"), departs_actifs AS (",
-					"  SELECT",
-					"    da.ID_ADHERENT AS id_client,",
-					"    MAX(da.DATE_DEPART) AS date_depart",
-					"  FROM dbo.DEPARTS_ADHERENT AS da",
-					"  WHERE",
-					"    da.DATE_DEPART <= @date_fin",
-					"    AND (",
-					"      da.DATE_RETOUR IS NULL OR da.DATE_RETOUR > @date_fin",
-					"    )",
-					"  GROUP BY",
-					"    da.ID_ADHERENT",
-					"), devises_client AS (",
-					"  SELECT",
-					"    ca.ID_ADHERENT AS id_client,",
-					"    c.ID_DEVISE AS id_devise",
-					"  FROM dbo.COMPTES_ADHERENT AS ca",
-					"  INNER JOIN dbo.COMPTES AS c",
-					"    ON c.ID = ca.ID",
-					"  WHERE",
-					"    c.DATE_OUVERTURE <= @date_fin",
-					"  UNION",
-					"  SELECT",
-					"    dem.ID_ADHERENT,",
-					"    p.ID_DEVISE",
-					"  FROM dbo.PRETS AS p",
-					"  INNER JOIN dbo.DOSSIERS_CREDIT AS dc",
-					"    ON dc.ID = p.ID_DOSSIER_CREDIT",
-					"  INNER JOIN dbo.DEMANDES_CREDIT AS dem",
-					"    ON dem.ID = dc.ID_DEMANDE",
-					"  WHERE",
-					"    p.DATE_EFFET <= @date_fin",
-					"  UNION",
-					"  SELECT",
-					"    dd.ID_ADHERENT,",
-					"    c.ID_DEVISE",
-					"  FROM dbo.DOSSIERS_DAT AS dd",
-					"  INNER JOIN dbo.COMPTES AS c",
-					"    ON c.ID = dd.ID_COMPTE_DAT",
-					"  WHERE",
-					"    dd.DATE_EFFET <= @date_fin",
-					"), grain_client_devise AS (",
-					"  SELECT",
-					"    c.id_client,",
-					"    dc.id_devise",
-					"  FROM clients AS c",
-					"  LEFT JOIN devises_client AS dc",
-					"    ON dc.id_client = c.id_client",
-					"  WHERE",
-					"    @id_devise_reporting IS NULL",
-					"    OR dc.id_devise = @id_devise_reporting",
-					"), cloture_compte AS (",
-					"  SELECT",
-					"    cc.ID_COMPTE AS id_compte,",
-					"    MAX(",
-					"      CASE",
-					"        WHEN cc.DATE_CLOTURE <= @date_fin",
-					"         AND (",
-					"           cc.DATE_REOUVERTURE IS NULL",
-					"           OR cc.DATE_REOUVERTURE > @date_fin",
-					"         )",
-					"        THEN 1",
-					"        ELSE 0",
-					"      END",
-					"    ) AS compte_cloture",
-					"  FROM dbo.CLOTURE_COMPTE AS cc",
-					"  GROUP BY",
-					"    cc.ID_COMPTE",
-					"), mouvements_comptes AS (",
-					"  SELECT",
-					"    m.ID_COMPTE AS id_compte,",
-					"    MAX(",
-					"      CASE",
-					"        WHEN ISNULL(m.ID_TYPE_OPERATION, '') <> 'REPR'",
-					"        THEN m.DATE_OPERATION",
-					"      END",
-					"    ) AS date_derniere_operation,",
-					"    SUM(",
-					"      CASE",
-					"        WHEN m.SENS = 'D' THEN -ISNULL(m.MONTANT_OPERATION, 0)",
-					"        WHEN m.SENS = 'C' THEN ISNULL(m.MONTANT_OPERATION, 0)",
-					"        ELSE 0",
-					"      END",
-					"    ) AS solde_compte",
-					"  FROM (",
-					"    SELECT",
-					"      h.ID_COMPTE,",
-					"      h.DATE_OPERATION,",
-					"      h.ID_TYPE_OPERATION,",
-					"      h.SENS,",
-					"      h.MONTANT_OPERATION",
-					"    FROM dbo.HDPM AS h",
-					"    WHERE",
-					"      h.DATE_OPERATION <= @date_fin",
-					"    UNION ALL",
-					"    SELECT",
-					"      h.ID_COMPTE,",
-					"      h.DATE_OPERATION,",
-					"      h.ID_TYPE_OPERATION,",
-					"      h.SENS,",
-					"      h.MONTANT_OPERATION",
-					"    FROM dbo.HDPM_API AS h",
-					"    WHERE",
-					"      h.DATE_OPERATION <= @date_fin",
-					"  ) AS m",
-					"  GROUP BY",
-					"    m.ID_COMPTE",
-					"), comptes_client AS (",
-					"  SELECT",
-					"    ca.ID_ADHERENT AS id_client,",
-					"    c.ID_DEVISE AS id_devise,",
-					"    COUNT(DISTINCT c.ID) AS nombre_comptes,",
-					"    COUNT(",
-					"      DISTINCT CASE",
-					"        WHEN c.DATE_OUVERTURE <= @date_fin",
-					"         AND ISNULL(cl.compte_cloture, 0) = 0",
-					"         AND UPPER(ISNULL(c.ETAT, 'O')) IN ('A', 'O', 'ACTIF', 'ACTIVE', 'OUVERT', 'OUVERTE', 'OPEN')",
-					"        THEN c.ID",
-					"      END",
-					"    ) AS nombre_comptes_ouverts,",
-					"    COUNT(",
-					"      DISTINCT CASE",
-					"        WHEN ISNULL(cl.compte_cloture, 0) = 1",
-					"          OR UPPER(ISNULL(c.ETAT, '')) IN ('C', 'CLOTURE', 'CLOTUREE', 'CLOSED')",
-					"        THEN c.ID",
-					"      END",
-					"    ) AS nombre_comptes_clotures,",
-					"    COUNT(",
-					"      DISTINCT CASE",
-					"        WHEN UPPER(ISNULL(c.ETAT, '')) IN ('B', 'BLOQUE', 'BLOQUEE', 'BLOCKED', 'G', 'GELE', 'GELEE')",
-					"          OR UPPER(ISNULL(cai.STATUT, '')) IN ('B', 'BLOQUE', 'BLOQUEE', 'BLOCKED', 'G', 'GELE', 'GELEE')",
-					"        THEN c.ID",
-					"      END",
-					"    ) AS nombre_comptes_bloques,",
-					"    COUNT(",
-					"      DISTINCT CASE",
-					"        WHEN c.DATE_OUVERTURE <= @date_fin",
-					"         AND ISNULL(cl.compte_cloture, 0) = 0",
-					"         AND UPPER(ISNULL(c.ETAT, 'O')) IN ('A', 'O', 'ACTIF', 'ACTIVE', 'OUVERT', 'OUVERTE', 'OPEN')",
-					"         AND DATEDIFF(",
-					"           MONTH,",
-					"           COALESCE(mc.date_derniere_operation, c.DATE_OUVERTURE, @date_debut),",
-					"           @date_fin",
-					"         ) >= 24",
-					"        THEN c.ID",
-					"      END",
-					"    ) AS nombre_comptes_dormants,",
-					"    COUNT(",
-					"      DISTINCT CASE",
-					"        WHEN c.DATE_OUVERTURE <= @date_fin",
-					"         AND ISNULL(cl.compte_cloture, 0) = 0",
-					"         AND UPPER(ISNULL(c.ETAT, 'O')) IN ('A', 'O', 'ACTIF', 'ACTIVE', 'OUVERT', 'OUVERTE', 'OPEN')",
-					"         AND DATEDIFF(",
-					"           MONTH,",
-					"           COALESCE(mc.date_derniere_operation, c.DATE_OUVERTURE, @date_debut),",
-					"           @date_fin",
-					"         ) BETWEEN 12 AND 23",
-					"        THEN c.ID",
-					"      END",
-					"    ) AS nombre_comptes_inactifs,",
-					"    SUM(",
-					"      CASE",
-					"        WHEN c.DATE_OUVERTURE <= @date_fin",
-					"         AND ISNULL(cl.compte_cloture, 0) = 0",
-					"         AND ca.TYPE_CPTE_ADH IN ('CAU', 'DAT', 'PLN', 'DAV', 'TNT')",
-					"        THEN ISNULL(mc.solde_compte, 0)",
-					"        ELSE 0",
-					"      END",
-					"    ) AS solde_epargne,",
-					"    MAX(mc.date_derniere_operation) AS date_derniere_operation",
-					"  FROM dbo.COMPTES_ADHERENT AS ca",
-					"  INNER JOIN dbo.COMPTES AS c",
-					"    ON c.ID = ca.ID",
-					"  LEFT JOIN dbo.COMPTES_ADHERENT_INFO AS cai",
-					"    ON cai.ID = c.ID",
-					"  LEFT JOIN cloture_compte AS cl",
-					"    ON cl.id_compte = c.ID",
-					"  LEFT JOIN mouvements_comptes AS mc",
-					"    ON mc.id_compte = c.ID",
-					"  WHERE",
-					"    c.DATE_OUVERTURE <= @date_fin",
-					"    AND (",
-					"      @id_devise_reporting IS NULL",
-					"      OR c.ID_DEVISE = @id_devise_reporting",
-					"    )",
-					"  GROUP BY",
-					"    ca.ID_ADHERENT,",
-					"    c.ID_DEVISE",
-					"), cycles_pret_classes AS (",
-					"  SELECT",
-					"    cp.ID,",
-					"    cp.ID_PRET,",
-					"    cp.DATE_DEBUT,",
-					"    cp.DATE_CLOTURE,",
-					"    ROW_NUMBER() OVER (",
-					"      PARTITION BY cp.ID_PRET",
-					"      ORDER BY",
-					"        cp.DATE_DEBUT DESC,",
-					"        cp.NUM_CYCLE DESC,",
-					"        cp.ID DESC",
-					"    ) AS rang_cycle",
-					"  FROM dbo.CYCLES_PRET AS cp",
-					"  WHERE",
-					"    cp.DATE_DEBUT <= @date_fin",
-					"), remboursements_echeance AS (",
-					"  SELECT",
-					"    rc.ID_TABAMORT AS id_echeance,",
-					"    SUM(ISNULL(rc.CAPITAL, 0)) AS capital_rembourse,",
-					"    SUM(ISNULL(rc.INTERET, 0)) AS interet_rembourse,",
-					"    SUM(ISNULL(rc.COMMISSION, 0)) AS commission_remboursee,",
-					"    SUM(ISNULL(rc.EPARGNE, 0)) AS epargne_remboursee",
-					"  FROM dbo.REMBOURS_CRD AS rc",
-					"  INNER JOIN dbo.OPERATIONS_CRD AS oc",
-					"    ON oc.ID = rc.ID_OPERATION_CRD",
-					"  INNER JOIN dbo.OPERATIONS AS o",
-					"    ON o.ID = oc.ID_OPERATION",
-					"  WHERE",
-					"    o.DATE_OPERATION <= @date_fin",
-					"    AND ISNULL(o.ANNULE, 0) = 0",
-					"  GROUP BY",
-					"    rc.ID_TABAMORT",
-					"), echeances_client AS (",
-					"  SELECT",
-					"    dem.ID_ADHERENT AS id_client,",
-					"    p.ID_DEVISE AS id_devise,",
-					"    COUNT(DISTINCT p.ID) AS nombre_credits_echeance,",
-					"    COUNT(DISTINCT t.ID) AS nombre_echeances_credit,",
-					"    SUM(ISNULL(t.CAPITAL, 0)) AS capital_prevu,",
-					"    SUM(ISNULL(t.INTERET, 0)) AS interet_credit_prevu,",
-					"    SUM(ISNULL(t.COMMISSION, 0)) AS commission_prevue,",
-					"    SUM(ISNULL(t.EPARGNE, 0)) AS epargne_prevue,",
-					"    SUM(",
-					"      ISNULL(t.CAPITAL, 0)",
-					"      + ISNULL(t.INTERET, 0)",
-					"      + ISNULL(t.COMMISSION, 0)",
-					"      + ISNULL(t.EPARGNE, 0)",
-					"    ) AS montant_echeances_prevues,",
-					"    SUM(",
-					"      CASE",
-					"        WHEN",
-					"          ISNULL(t.CAPITAL, 0)",
-					"          + ISNULL(t.INTERET, 0)",
-					"          + ISNULL(t.COMMISSION, 0)",
-					"          + ISNULL(t.EPARGNE, 0)",
-					"          > ISNULL(re.capital_rembourse, 0)",
-					"          + ISNULL(re.interet_rembourse, 0)",
-					"          + ISNULL(re.commission_remboursee, 0)",
-					"          + ISNULL(re.epargne_remboursee, 0)",
-					"        THEN",
-					"          ISNULL(t.CAPITAL, 0)",
-					"          + ISNULL(t.INTERET, 0)",
-					"          + ISNULL(t.COMMISSION, 0)",
-					"          + ISNULL(t.EPARGNE, 0)",
-					"          - ISNULL(re.capital_rembourse, 0)",
-					"          - ISNULL(re.interet_rembourse, 0)",
-					"          - ISNULL(re.commission_remboursee, 0)",
-					"          - ISNULL(re.epargne_remboursee, 0)",
-					"        ELSE 0",
-					"      END",
-					"    ) AS montant_restant_a_rembourser",
-					"  FROM cycles_pret_classes AS cp",
-					"  INNER JOIN dbo.PRETS AS p",
-					"    ON p.ID = cp.ID_PRET",
-					"  INNER JOIN dbo.DOSSIERS_CREDIT AS dc",
-					"    ON dc.ID = p.ID_DOSSIER_CREDIT",
-					"  INNER JOIN dbo.DEMANDES_CREDIT AS dem",
-					"    ON dem.ID = dc.ID_DEMANDE",
-					"  INNER JOIN dbo.TABAMOR AS t",
-					"    ON t.ID_CYCLE_PRET = cp.ID",
-					"  LEFT JOIN remboursements_echeance AS re",
-					"    ON re.id_echeance = t.ID",
-					"  WHERE",
-					"    cp.rang_cycle = 1",
-					"    AND t.DATE_ECHEANCE BETWEEN @date_debut AND @date_fin",
-					"    AND p.DATE_EFFET <= @date_fin",
-					"    AND (",
-					"      p.DATE_PERTE IS NULL OR p.DATE_PERTE > @date_fin",
-					"    )",
-					"    AND (",
-					"      @id_devise_reporting IS NULL",
-					"      OR p.ID_DEVISE = @id_devise_reporting",
-					"    )",
-					"  GROUP BY",
-					"    dem.ID_ADHERENT,",
-					"    p.ID_DEVISE",
-					"), credits_actifs AS (",
-					"  SELECT",
-					"    dem.ID_ADHERENT AS id_client,",
-					"    p.ID_DEVISE AS id_devise,",
-					"    COUNT(DISTINCT p.ID) AS nombre_credits_actifs",
-					"  FROM cycles_pret_classes AS cp",
-					"  INNER JOIN dbo.PRETS AS p",
-					"    ON p.ID = cp.ID_PRET",
-					"  INNER JOIN dbo.DOSSIERS_CREDIT AS dc",
-					"    ON dc.ID = p.ID_DOSSIER_CREDIT",
-					"  INNER JOIN dbo.DEMANDES_CREDIT AS dem",
-					"    ON dem.ID = dc.ID_DEMANDE",
-					"  WHERE",
-					"    cp.rang_cycle = 1",
-					"    AND p.DATE_EFFET <= @date_fin",
-					"    AND (",
-					"      p.DATE_SOLDE IS NULL OR p.DATE_SOLDE > @date_fin",
-					"    )",
-					"    AND (",
-					"      p.DATE_PERTE IS NULL OR p.DATE_PERTE > @date_fin",
-					"    )",
-					"    AND (",
-					"      cp.DATE_CLOTURE IS NULL OR cp.DATE_CLOTURE > @date_fin",
-					"    )",
-					"    AND (",
-					"      @id_devise_reporting IS NULL",
-					"      OR p.ID_DEVISE = @id_devise_reporting",
-					"    )",
-					"  GROUP BY",
-					"    dem.ID_ADHERENT,",
-					"    p.ID_DEVISE",
-					"), interets_epargne AS (",
-					"  SELECT",
-					"    ca.ID_ADHERENT AS id_client,",
-					"    oe.ID_DEVISE AS id_devise,",
-					"    SUM(ISNULL(ic.MONTANT, 0)) AS interet_epargne_credite",
-					"  FROM dbo.INTERETS_CREDITEUR AS ic",
-					"  INNER JOIN dbo.OPERATIONS_EPG AS oe",
-					"    ON oe.ID = ic.ID_OPERATION_EPG",
-					"  INNER JOIN dbo.OPERATIONS AS o",
-					"    ON o.ID = oe.ID_OPERATION",
-					"  INNER JOIN dbo.COMPTES_ADHERENT AS ca",
-					"    ON ca.ID = oe.ID_COMPTE_EPG",
-					"  WHERE",
-					"    o.DATE_OPERATION BETWEEN @date_debut AND @date_fin",
-					"    AND ISNULL(o.ANNULE, 0) = 0",
-					"    AND (",
-					"      @id_devise_reporting IS NULL",
-					"      OR oe.ID_DEVISE = @id_devise_reporting",
-					"    )",
-					"  GROUP BY",
-					"    ca.ID_ADHERENT,",
-					"    oe.ID_DEVISE",
-					"  UNION ALL",
-					"  SELECT",
-					"    dd.ID_ADHERENT,",
-					"    od.ID_DEVISE,",
-					"    SUM(ISNULL(idt.MONTANT, 0))",
-					"  FROM dbo.INTERETS_DAT AS idt",
-					"  INNER JOIN dbo.OPERATIONS AS o",
-					"    ON o.ID = idt.ID_OPERATION",
-					"  INNER JOIN dbo.OPERATIONS_DAT AS od",
-					"    ON od.ID_OPERATION = o.ID",
-					"    AND od.ID_CYCLE_DAT = idt.ID_CYCLE_DAT",
-					"  INNER JOIN dbo.CYCLES_DAT AS cd",
-					"    ON cd.ID = idt.ID_CYCLE_DAT",
-					"  INNER JOIN dbo.DOSSIERS_DAT AS dd",
-					"    ON dd.ID = cd.ID_DOSSIER_DAT",
-					"  WHERE",
-					"    o.DATE_OPERATION BETWEEN @date_debut AND @date_fin",
-					"    AND ISNULL(o.ANNULE, 0) = 0",
-					"    AND (",
-					"      @id_devise_reporting IS NULL",
-					"      OR od.ID_DEVISE = @id_devise_reporting",
-					"    )",
-					"  GROUP BY",
-					"    dd.ID_ADHERENT,",
-					"    od.ID_DEVISE",
-					"), interets_epargne_client AS (",
-					"  SELECT",
-					"    ie.id_client,",
-					"    ie.id_devise,",
-					"    SUM(ie.interet_epargne_credite) AS interet_epargne_credite",
-					"  FROM interets_epargne AS ie",
-					"  GROUP BY",
-					"    ie.id_client,",
-					"    ie.id_devise",
-					"), dat_echeance AS (",
-					"  SELECT",
-					"    dd.ID_ADHERENT AS id_client,",
-					"    c.ID_DEVISE AS id_devise,",
-					"    COUNT(DISTINCT cd.ID) AS nombre_dat_echeance,",
-					"    SUM(ISNULL(cd.MONTANT, 0)) AS montant_dat_echeance,",
-					"    MIN(cd.DATE_FIN) AS premiere_echeance_dat,",
-					"    MAX(cd.DATE_FIN) AS derniere_echeance_dat",
-					"  FROM dbo.CYCLES_DAT AS cd",
-					"  INNER JOIN dbo.DOSSIERS_DAT AS dd",
-					"    ON dd.ID = cd.ID_DOSSIER_DAT",
-					"  INNER JOIN dbo.COMPTES AS c",
-					"    ON c.ID = dd.ID_COMPTE_DAT",
-					"  WHERE",
-					"    cd.DATE_FIN BETWEEN @date_debut AND @date_fin",
-					"    AND (",
-					"      cd.DATE_CLOTURE IS NULL OR cd.DATE_CLOTURE >= cd.DATE_FIN",
-					"    )",
-					"    AND (",
-					"      dd.DATE_CLOTURE IS NULL OR dd.DATE_CLOTURE >= cd.DATE_FIN",
-					"    )",
-					"    AND (",
-					"      @id_devise_reporting IS NULL",
-					"      OR c.ID_DEVISE = @id_devise_reporting",
-					"    )",
-					"  GROUP BY",
-					"    dd.ID_ADHERENT,",
-					"    c.ID_DEVISE",
-					")",
-					"SELECT",
-					"  @date_debut AS date_debut,",
-					"  @date_fin AS date_fin,",
-					"  c.code_client,",
-					"  c.nom_client,",
-					"  c.type_client,",
-					"  c.code_agence,",
-					"  c.agence,",
-					"  c.date_adhesion,",
-					"  ISNULL(dv.CODE, 'Sans devise') AS devise,",
-					"  CASE",
-					"    WHEN da.id_client IS NOT NULL THEN 'Parti'",
-					"    WHEN ISNULL(c.client_valide, 0) = 0 THEN 'Non valide'",
-					"    WHEN ISNULL(cc.nombre_comptes_ouverts, 0) = 0 THEN 'Sans compte ouvert'",
-					"    ELSE 'Actif'",
-					"  END AS statut_client,",
-					"  CASE",
-					"    WHEN da.id_client IS NULL",
-					"     AND ISNULL(c.client_valide, 0) = 1",
-					"     AND ISNULL(cc.nombre_comptes_ouverts, 0) > 0",
-					"    THEN 1 ELSE 0",
-					"  END AS client_actif,",
-					"  ISNULL(cc.nombre_comptes, 0) AS nombre_comptes,",
-					"  ISNULL(cc.nombre_comptes_ouverts, 0) AS nombre_comptes_ouverts,",
-					"  ISNULL(cc.nombre_comptes_clotures, 0) AS nombre_comptes_clotures,",
-					"  ISNULL(cc.nombre_comptes_bloques, 0) AS nombre_comptes_bloques,",
-					"  ISNULL(cc.nombre_comptes_dormants, 0) AS nombre_comptes_dormants,",
-					"  ISNULL(cc.nombre_comptes_inactifs, 0) AS nombre_comptes_inactifs,",
-					"  cc.date_derniere_operation,",
-					"  ISNULL(cc.solde_epargne, 0) AS solde_epargne,",
-					"  ISNULL(ca.nombre_credits_actifs, 0) AS nombre_credits_actifs,",
-					"  ISNULL(ec.nombre_credits_echeance, 0) AS nombre_credits_a_rembourser,",
-					"  ISNULL(ec.nombre_echeances_credit, 0) AS nombre_echeances_credit,",
-					"  ISNULL(ec.capital_prevu, 0) AS capital_credit_prevu,",
-					"  ISNULL(ec.interet_credit_prevu, 0) AS interet_credit_a_rembourser,",
-					"  ISNULL(ec.commission_prevue, 0) AS commission_credit_prevue,",
-					"  ISNULL(ec.epargne_prevue, 0) AS epargne_credit_prevue,",
-					"  ISNULL(ec.montant_echeances_prevues, 0) AS montant_credit_a_rembourser,",
-					"  ISNULL(ec.montant_restant_a_rembourser, 0) AS montant_credit_restant,",
-					"  ISNULL(ie.interet_epargne_credite, 0) AS interet_epargne_credite,",
-					"  ISNULL(de.nombre_dat_echeance, 0) AS nombre_dat_echeance,",
-					"  ISNULL(de.montant_dat_echeance, 0) AS montant_dat_echeance,",
-					"  de.premiere_echeance_dat,",
-					"  de.derniere_echeance_dat,",
-					"  CASE WHEN ISNULL(cc.nombre_comptes_ouverts, 0) > 0 THEN 1 ELSE 0 END AS client_avec_compte_ouvert,",
-					"  CASE WHEN ISNULL(cc.nombre_comptes_bloques, 0) > 0 THEN 1 ELSE 0 END AS client_avec_compte_bloque,",
-					"  CASE WHEN ISNULL(cc.nombre_comptes_dormants, 0) > 0 THEN 1 ELSE 0 END AS client_avec_compte_dormant,",
-					"  CASE WHEN ISNULL(ec.nombre_credits_echeance, 0) > 0 THEN 1 ELSE 0 END AS client_avec_credit_a_rembourser,",
-					"  CASE WHEN ISNULL(ec.interet_credit_prevu, 0) > 0 THEN 1 ELSE 0 END AS client_avec_interet_credit_a_rembourser,",
-					"  CASE WHEN ISNULL(ie.interet_epargne_credite, 0) > 0 THEN 1 ELSE 0 END AS client_beneficiaire_interet_epargne,",
-					"  CASE WHEN ISNULL(de.nombre_dat_echeance, 0) > 0 THEN 1 ELSE 0 END AS client_avec_dat_a_echeance",
-					"FROM grain_client_devise AS gcd",
-					"INNER JOIN clients AS c",
-					"  ON c.id_client = gcd.id_client",
-					"LEFT JOIN departs_actifs AS da",
-					"  ON da.id_client = c.id_client",
-					"LEFT JOIN dbo.DEVISES AS dv",
-					"  ON dv.ID = gcd.id_devise",
-					"LEFT JOIN comptes_client AS cc",
-					"  ON cc.id_client = gcd.id_client",
-					"  AND (",
-					"    cc.id_devise = gcd.id_devise",
-					"    OR (cc.id_devise IS NULL AND gcd.id_devise IS NULL)",
-					"  )",
-					"LEFT JOIN credits_actifs AS ca",
-					"  ON ca.id_client = gcd.id_client",
-					"  AND ca.id_devise = gcd.id_devise",
-					"LEFT JOIN echeances_client AS ec",
-					"  ON ec.id_client = gcd.id_client",
-					"  AND ec.id_devise = gcd.id_devise",
-					"LEFT JOIN interets_epargne_client AS ie",
-					"  ON ie.id_client = gcd.id_client",
-					"  AND ie.id_devise = gcd.id_devise",
-					"LEFT JOIN dat_echeance AS de",
-					"  ON de.id_client = gcd.id_client",
-					"  AND de.id_devise = gcd.id_devise",
-					"ORDER BY",
-					"  c.nom_client,",
-					"  c.code_client,",
-					"  devise;"
-					}, "#(lf)"),
-					Resultat = Value.NativeQuery(Source, SqlTexte, null, [EnableFolding=false])
+					Source = Sql.Database(pServeur, pBaseReporting, [CreateNavigationProperties=false, CommandTimeout=#duration(0, 0, 10, 0)]),
+					TableSource = Source{[Schema="rpt", Item="f_clients"]}[Data],
+					FiltrePeriode = Table.SelectRows(TableSource, each [date_debut] = pDateDebut and [date_fin] = pDateFin),
+					ColonnesRenommees = Table.RenameColumns(FiltrePeriode, {{"comptes", "nombre_comptes"}, {"comptes_ouverts", "nombre_comptes_ouverts"}, {"comptes_clotures", "nombre_comptes_clotures"}, {"comptes_bloques", "nombre_comptes_bloques"}, {"comptes_dormants", "nombre_comptes_dormants"}, {"comptes_inactifs", "nombre_comptes_inactifs"}, {"derniere_operation", "date_derniere_operation"}, {"credits_actifs", "nombre_credits_actifs"}, {"credits_a_rembourser", "nombre_credits_a_rembourser"}, {"echeances_credit", "nombre_echeances_credit"}, {"dat_a_echeance", "nombre_dat_echeance"}, {"montant_dat_a_echeance", "montant_dat_echeance"}, {"avec_compte_ouvert", "client_avec_compte_ouvert"}, {"avec_compte_bloque", "client_avec_compte_bloque"}, {"avec_compte_dormant", "client_avec_compte_dormant"}, {"avec_credit_a_rembourser", "client_avec_credit_a_rembourser"}, {"avec_interet_credit_a_rembourser", "client_avec_interet_credit_a_rembourser"}, {"beneficiaire_interet_epargne", "client_beneficiaire_interet_epargne"}, {"avec_dat_a_echeance", "client_avec_dat_a_echeance"}}, MissingField.Ignore),
+					Resultat = Table.SelectColumns(ColonnesRenommees, {"date_debut", "date_fin", "code_client", "nom_client", "type_client", "code_agence", "agence", "date_adhesion", "devise", "statut_client", "client_actif", "nombre_comptes", "nombre_comptes_ouverts", "nombre_comptes_clotures", "nombre_comptes_bloques", "nombre_comptes_dormants", "nombre_comptes_inactifs", "date_derniere_operation", "solde_epargne", "nombre_credits_actifs", "nombre_credits_a_rembourser", "nombre_echeances_credit", "capital_credit_prevu", "interet_credit_a_rembourser", "commission_credit_prevue", "epargne_credit_prevue", "montant_credit_a_rembourser", "montant_credit_restant", "interet_epargne_credite", "nombre_dat_echeance", "montant_dat_echeance", "premiere_echeance_dat", "derniere_echeance_dat", "client_avec_compte_ouvert", "client_avec_compte_bloque", "client_avec_compte_dormant", "client_avec_credit_a_rembourser", "client_avec_interet_credit_a_rembourser", "client_beneficiaire_interet_epargne", "client_avec_dat_a_echeance"}, MissingField.UseNull)
 				in
 					Resultat
 
 	annotation RequetePerfectVision = 157
 
-	annotation SourceLocale = BB_VISION_PRO_TEST
+	annotation SourceLocale = BB_VISION_REPORTING.rpt navigation
 

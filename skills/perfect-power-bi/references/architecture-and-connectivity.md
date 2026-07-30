@@ -86,6 +86,44 @@ Dans Power BI Desktop :
 
 Sélectionner ensuite les tables de reporting préparées. Définir les relations dans le modèle et ne pas faire confiance aveuglément à la détection automatique.
 
+## Connexion au data mart reporting validée
+
+Lorsque `BB_VISION_REPORTING` est alimentée, les tables déjà matérialisées doivent être consommées depuis cette base plutôt que recalculées dans Power Query.
+
+Configuration validée localement :
+
+- Serveur : `CDBBIMFL065`
+- Base source opérationnelle de test : `BB_VISION_PRO_TEST`
+- Base reporting : `BB_VISION_REPORTING`
+- Mode Power BI : `Importer`
+- Authentification : Windows
+
+Dans le PBIP IMF BB, conserver deux paramètres de base :
+
+- `pBaseDonnees = "BB_VISION_PRO_TEST"` pour les tables non encore migrées vers le data mart ;
+- `pBaseReporting = "BB_VISION_REPORTING"` pour les faits matérialisés.
+
+Tables validées :
+
+- `F_Conformite` lit `BB_VISION_REPORTING.rpt.f_conformite` ;
+- `F_Clients` lit `BB_VISION_REPORTING.rpt.f_clients`.
+
+Power Query recommandé :
+
+```powerquery
+Source = Sql.Database(pServeur, pBaseReporting, [CreateNavigationProperties=false]),
+TableSource = Source{[Schema="rpt", Item="f_conformite"]}[Data],
+FiltrePeriode = Table.SelectRows(TableSource, each [date_debut] = pDateDebut and [date_fin] = pDateFin)
+```
+
+Éviter pour ces tables matérialisées :
+
+- `Value.NativeQuery` avec `SET NOCOUNT ON` ;
+- les blocs `DECLARE @date_debut ...` dans Power Query ;
+- les filtres de date construits par concaténation de chaînes.
+
+Ces formes peuvent échouer dans Power BI avec des erreurs OLE DB/ODBC de syntaxe ou de conversion de date.
+
 ## Passerelle et identités
 
 - Installer une passerelle locale en mode standard sur une machine toujours allumée.

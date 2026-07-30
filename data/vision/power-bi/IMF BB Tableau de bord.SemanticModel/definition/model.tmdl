@@ -11,7 +11,7 @@ annotation __PBI_TimeIntelligenceEnabled = 0
 
 annotation PBI_ProTooling = ["DevMode"]
 
-annotation PBI_QueryOrder = ["F_Credit_Portefeuille","F_Credit_Decaissements","F_Epargne_Soldes","F_Conformite","F_Credit_PAR_Detail","F_Credit_Top_Encours","F_Credit_Echeances_Futures","F_Credit_Retention","F_Credit_Vintage","F_Credit_Tranches","F_Credit_Concentration","F_Credit_Couverture","F_Credit_Provisions_Detail","F_Credit_Duree","F_Credit_Tendance_PAR","F_Clients","pServeur","pBaseDonnees","pDateDebut","pDateFin"]
+annotation PBI_QueryOrder = ["F_Credit_Portefeuille","F_Credit_Decaissements","F_Epargne_Soldes","F_Conformite","F_Credit_PAR_Detail","F_Credit_Top_Encours","F_Credit_Echeances_Futures","F_Credit_Retention","F_Credit_Vintage","F_Credit_Tranches","F_Credit_Concentration","F_Credit_Couverture","F_Credit_Provisions_Detail","F_Credit_Duree","F_Credit_Tendance_PAR","F_Clients","pServeur","pBaseDonnees","pBaseReporting","pDateDebut","pDateFin"]
 
 ref table F_Credit_Portefeuille
 ref table F_Credit_Decaissements

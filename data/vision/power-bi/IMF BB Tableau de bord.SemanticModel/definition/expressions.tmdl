@@ -18,3 +18,8 @@ expression pDateFin = #date(2026, 6, 30) meta [IsParameterQuery=true, Type="Date
 
 	annotation PBI_ResultType = Date
 
+expression pBaseReporting = "BB_VISION_REPORTING" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: 4e730474-27d7-4d03-83f4-9f1d42a6b801
+
+	annotation PBI_ResultType = Text
+

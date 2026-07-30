@@ -104,6 +104,7 @@ Utiliser `requetes.sql` comme catalogue de logique métier, pas comme une liste 
 - Matérialiser les faits et dimensions durables dans une base telle que `BB_VISION_REPORTING`.
 - Garder chaque alimentation SQL autonome ou explicitement dépendante d'une couche de reporting gouvernée.
 - Éviter les tables temporaires et les requêtes natives opaques comme sources finales du modèle Power BI.
+- Lorsque les données sont déjà matérialisées dans `BB_VISION_REPORTING`, faire lire Power BI sur les tables ou vues de reporting avec la navigation Power Query (`Sql.Database` puis `Source{[Schema=..., Item=...]}[Data]`) et filtrer avec de vrais paramètres de type Date. Éviter `Value.NativeQuery` avec `SET NOCOUNT ON`, `DECLARE` ou des dates transformées en texte, car Power BI/OLE DB peut encapsuler la requête et provoquer des erreurs de syntaxe ou de conversion de date.
 - Préserver le query folding pour les tables soumises au rafraîchissement incrémental.
 - Ajouter les index sur dates, devises, agences et clés de relation après observation des plans d'exécution.
 - Ne jamais modifier le schéma du progiciel en production sans validation de l'éditeur et de l'administrateur SQL.
@@ -120,6 +121,9 @@ Utiliser `requetes.sql` comme catalogue de logique métier, pas comme une liste 
 - Organiser les mesures dans des dossiers d'affichage et masquer les colonnes techniques.
 - Utiliser des pages de synthèse, tendance, diagnostic et détail plutôt qu'une page unique surchargée.
 - Pour les analyses complémentaires, lire la section `Analyses avancées après V1` dans `references/semantic-model-and-pages.md` et choisir uniquement les ajouts dont la source SQL, le grain, la devise, la période et le test de rapprochement sont identifiés.
+- Pour le projet IMF BB migré vers `BB_VISION_REPORTING`, conserver le paramètre `pBaseReporting = "BB_VISION_REPORTING"` et utiliser `pBaseDonnees` seulement pour les tables qui n'ont pas encore de fait matérialisé. Les tables `F_Conformite` et `F_Clients` doivent lire respectivement `rpt.f_conformite` et `rpt.f_clients`.
+- Si le modèle TMDL attend d'anciens `sourceColumn` techniques, renommer les colonnes dans Power Query après lecture de `rpt.*` plutôt que de modifier tous les visuels et mesures. Exemple : `comptes` peut être renommé en `nombre_comptes` pour rester compatible avec le modèle existant.
+- Ne pas remettre les longues requêtes 156 ou 157 directement dans Power Query lorsque les tables `rpt.f_conformite` et `rpt.f_clients` sont chargées : Power BI doit consommer le résultat matérialisé, pas recalculer Perfect Vision.
 
 ### 6 bis. Appliquer le système visuel IMF BB
 
