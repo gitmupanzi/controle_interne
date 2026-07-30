@@ -39,6 +39,8 @@ desktop.ini
 # line_list/*
 # !line_list/.gitkeep
 data/vision/*
+!data/vision/reporting_sql/
+!data/vision/reporting_sql/**
 !data/vision/power-bi/
 !data/vision/power-bi/**
 data/vision/power-bi/**/.pbi/
