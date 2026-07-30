@@ -113,10 +113,13 @@ Utiliser `requetes.sql` comme catalogue de logique métier, pas comme une liste 
 - Utiliser Power BI Desktop pour créer le fichier initial et la connexion.
 - Préférer un projet PBIP/TMDL versionnable lorsque l'équipe accepte les fonctions Preview ; sinon conserver le PBIX et versionner séparément SQL, M, DAX, thème et documentation.
 - Ne jamais inventer manuellement une structure PBIP non vérifiée. Partir d'un projet enregistré par Power BI Desktop ou d'un modèle existant qui s'ouvre correctement.
+- Avant d'ajouter une page, un visuel ou une mesure, inspecter le projet existant sous `../../data/vision/power-bi` lorsqu'il existe. Relever les pages, les tables de faits, les mesures et les visuels déjà présents afin de ne pas dupliquer une analyse couverte.
+- Dans le projet IMF BB actuel, considérer comme déjà prévues les pages `Paramétrage`, `Direction`, `Clients`, `Crédit`, `Risque crédit`, `Prévisions crédit`, `Épargne`, `Conformité` et `Surveillance`. Toute nouvelle analyse doit donc compléter une question métier manquante, pas recréer cette ossature.
 - Désactiver la date/heure automatique et utiliser une dimension Date officielle.
 - Définir les relations en sens unique par défaut et éviter les relations plusieurs-à-plusieurs sans justification.
 - Organiser les mesures dans des dossiers d'affichage et masquer les colonnes techniques.
 - Utiliser des pages de synthèse, tendance, diagnostic et détail plutôt qu'une page unique surchargée.
+- Pour les analyses complémentaires, lire la section `Analyses avancées après V1` dans `references/semantic-model-and-pages.md` et choisir uniquement les ajouts dont la source SQL, le grain, la devise, la période et le test de rapprochement sont identifiés.
 
 ### 6 bis. Appliquer le système visuel IMF BB
 

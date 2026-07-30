@@ -1,13 +1,13 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.9.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.11.0/schema.json",
   "name": "e1000000000000000011",
   "position": {
     "x": 440,
     "y": 488,
-    "z": 11,
+    "z": 10000,
     "height": 208,
     "width": 400,
-    "tabOrder": 11
+    "tabOrder": 10000
   },
   "visual": {
     "visualType": "barChart",

@@ -42,6 +42,8 @@ Ne pas fusionner ces grains dans une seule table large.
 
 ## Pages V1
 
+Avant de proposer une nouvelle page ou un nouveau visuel, inspecter le PBIP existant. Dans le projet IMF BB actuel, les pages `Paramétrage`, `Direction`, `Clients`, `Crédit`, `Risque crédit`, `Prévisions crédit`, `Épargne`, `Conformité` et `Surveillance` existent déjà. Les ajouts doivent donc enrichir une décision métier absente ou renforcer la traçabilité, pas répéter ces pages.
+
 ### Direction
 
 Sources principales : 97, 99, 103, 109 et 156.
@@ -116,6 +118,118 @@ Regrouper les anomalies prioritaires des contrôles, avec :
 - motif ;
 - sévérité ;
 - statut de traitement.
+
+## Analyses avancées après V1
+
+Ces analyses complètent la V1 du tableau de bord IMF BB. Ne les ajouter que si la source SQL, le grain, la devise, la période, la mesure DAX et le test de rapprochement sont clairement définis.
+
+### Rapprochement KPI avec SQL
+
+Objectif : rendre le tableau de bord audit-proof.
+
+Prévoir une matrice de rapprochement pour chaque KPI majeur :
+
+- nom de la mesure Power BI ;
+- page et visuel ;
+- requête SQL de référence dans `data/vision/requetes.sql` ;
+- table de fait utilisée ;
+- grain attendu ;
+- filtre de période ;
+- filtre de devise ;
+- exclusions ou statuts pris en compte ;
+- écart toléré ;
+- résultat du dernier rapprochement.
+
+Priorité : encours, prêts actifs, PAR1, PAR30, PAR90, provision, décaissements, épargne, comptes, clients actifs, alertes conformité, dossiers à revoir et lignes Q156.
+
+### Recouvrement opérationnel
+
+Objectif : aider les agents crédit à décider qui relancer et où récupérer une partie de l'impayé.
+
+Sources de référence : 91, 100, 136, 143, 145, 146 et surtout 147.
+
+Questions métier :
+
+- quels clients ont des échéances impayées ;
+- combien de jours de retard ;
+- quel montant est en arriéré ;
+- quel solde existe sur le compte ordinaire ou d'épargne ;
+- quel montant est récupérable estimé ;
+- quel reste impayé subsiste après récupération estimée ;
+- quels remboursements ont été encaissés mais mal imputés.
+
+Affichage recommandé : bloc dans `Risque crédit` ou page de détail `Recouvrement`, avec tableau exploitable par client, prêt, devise, impayé, solde disponible et action de suivi.
+
+### Épargne mobilisable face au crédit
+
+Objectif : rapprocher l'épargne disponible, les DAT et les crédits en cours sans compenser automatiquement les devises.
+
+Sources de référence : 110, 113, 144, 147 et 157.
+
+Questions métier :
+
+- quels clients en crédit disposent aussi d'une épargne disponible ;
+- quels clients ont un DAT sans crédit en cours ;
+- quels DAT arrivent à échéance sur la période ;
+- quels clients ont crédit à rembourser et solde positif dans la même devise ;
+- quels cas nécessitent une analyse juridique ou opérationnelle avant récupération.
+
+Règle : juxtaposer les positions sans assimilation automatique à une garantie et sans total nominal CDF + USD.
+
+### Qualité transversale des données
+
+Objectif : donner une vue consolidée des anomalies importantes des cycles crédit, épargne, clients et conformité.
+
+Sources de référence : requêtes de niveau d'importance 9 ou 10, notamment 24 à 28, 49 à 55, 60, 68 à 83, 122, 136 à 142 et 155.
+
+Questions métier :
+
+- combien d'anomalies par cycle ;
+- quelles anomalies sont critiques ;
+- quels clients, comptes, prêts ou opérations sont concernés ;
+- quel montant et quelle devise sont exposés ;
+- quelle requête source justifie le cas ;
+- quelles anomalies reviennent plusieurs mois de suite.
+
+Affichage recommandé : page `Surveillance` enrichie ou page `Qualité des données`, avec sévérité, cycle, requête source, statut de traitement et référence audit.
+
+### Suivi de traitement des anomalies
+
+Objectif : passer de la détection à la gestion opérationnelle.
+
+Prévoir, dans la couche de reporting ou dans un fichier de suivi gouverné, des champs de traitement :
+
+- statut de traitement ;
+- responsable ;
+- date d'affectation ;
+- date de justification ;
+- action menée ;
+- commentaire de clôture ;
+- preuve ou référence interne.
+
+Les statuts recommandés sont : `A_REVOIR`, `EN_COURS`, `JUSTIFIE`, `REGULARISE`, `NON_COUVERT`, `CLOS`.
+
+Ne pas stocker ces statuts dans la base Perfect Vision du progiciel. Utiliser une table de reporting ou une source gouvernée distincte.
+
+### Dictionnaire officiel des pages
+
+Objectif : stabiliser la maintenance du rapport.
+
+Pour chaque page Power BI, documenter :
+
+- objectif métier ;
+- audience ;
+- questions couvertes ;
+- tables de faits ;
+- mesures principales ;
+- dimensions et filtres obligatoires ;
+- requêtes SQL de rapprochement ;
+- niveau de détail attendu ;
+- données personnelles exposées ;
+- limites connues ;
+- tests à refaire après modification.
+
+Ce dictionnaire doit être mis à jour avant d'ajouter une nouvelle page ou de modifier une mesure partagée.
 
 ## Mesures
 

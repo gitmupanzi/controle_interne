@@ -4,10 +4,10 @@
   "position": {
     "x": 840,
     "y": 16,
-    "z": 3,
+    "z": 2000,
     "height": 80,
     "width": 256,
-    "tabOrder": 3
+    "tabOrder": 2000
   },
   "visual": {
     "visualType": "slicer",
@@ -38,6 +38,13 @@
       "data": [
         {
           "properties": {
+            "startDate": {
+              "expr": {
+                "Literal": {
+                  "Value": "datetime'2026-06-01T00:00:00'"
+                }
+              }
+            },
             "endDate": {
               "expr": {
                 "Literal": {
@@ -91,21 +98,45 @@
                 "Where": [
                   {
                     "Condition": {
-                      "Comparison": {
-                        "ComparisonKind": 3,
+                      "And": {
                         "Left": {
-                          "Column": {
-                            "Expression": {
-                              "SourceRef": {
-                                "Source": "d"
+                          "Comparison": {
+                            "ComparisonKind": 2,
+                            "Left": {
+                              "Column": {
+                                "Expression": {
+                                  "SourceRef": {
+                                    "Source": "d"
+                                  }
+                                },
+                                "Property": "Date"
                               }
                             },
-                            "Property": "Date"
+                            "Right": {
+                              "Literal": {
+                                "Value": "datetime'2026-06-01T00:00:00'"
+                              }
+                            }
                           }
                         },
                         "Right": {
-                          "Literal": {
-                            "Value": "datetime'2026-07-01T00:00:00'"
+                          "Comparison": {
+                            "ComparisonKind": 3,
+                            "Left": {
+                              "Column": {
+                                "Expression": {
+                                  "SourceRef": {
+                                    "Source": "d"
+                                  }
+                                },
+                                "Property": "Date"
+                              }
+                            },
+                            "Right": {
+                              "Literal": {
+                                "Value": "datetime'2026-07-01T00:00:00'"
+                              }
+                            }
                           }
                         }
                       }

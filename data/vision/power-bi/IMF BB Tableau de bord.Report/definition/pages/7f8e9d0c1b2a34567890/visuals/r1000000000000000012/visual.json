@@ -1,13 +1,13 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.9.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.11.0/schema.json",
   "name": "r1000000000000000012",
   "position": {
     "x": 24,
     "y": 488,
-    "z": 12,
+    "z": 11000,
     "height": 208,
     "width": 1232,
-    "tabOrder": 12
+    "tabOrder": 11000
   },
   "visual": {
     "visualType": "tableEx",
@@ -168,8 +168,7 @@
             },
             "direction": "Descending"
           }
-        ],
-        "isDefaultSort": true
+        ]
       }
     },
     "objects": {
@@ -362,6 +361,78 @@
                 }
               }
             }
+          }
+        }
+      ],
+      "columnWidth": [
+        {
+          "properties": {
+            "value": {
+              "expr": {
+                "Literal": {
+                  "Value": "132D"
+                }
+              }
+            }
+          },
+          "selector": {
+            "metadata": "F_Credit_PAR_Detail.Arriéré"
+          }
+        },
+        {
+          "properties": {
+            "value": {
+              "expr": {
+                "Literal": {
+                  "Value": "100D"
+                }
+              }
+            }
+          },
+          "selector": {
+            "metadata": "F_Credit_PAR_Detail.Encours"
+          }
+        },
+        {
+          "properties": {
+            "value": {
+              "expr": {
+                "Literal": {
+                  "Value": "170D"
+                }
+              }
+            }
+          },
+          "selector": {
+            "metadata": "F_Credit_PAR_Detail.Provision"
+          }
+        },
+        {
+          "properties": {
+            "value": {
+              "expr": {
+                "Literal": {
+                  "Value": "286D"
+                }
+              }
+            }
+          },
+          "selector": {
+            "metadata": "F_Credit_PAR_Detail.Nom client"
+          }
+        },
+        {
+          "properties": {
+            "value": {
+              "expr": {
+                "Literal": {
+                  "Value": "147D"
+                }
+              }
+            }
+          },
+          "selector": {
+            "metadata": "F_Credit_PAR_Detail.Code client"
           }
         }
       ]

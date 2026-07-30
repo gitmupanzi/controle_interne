@@ -1,13 +1,13 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.9.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.11.0/schema.json",
   "name": "s1000000000000000009",
   "position": {
     "x": 40,
     "y": 324,
-    "z": 9,
+    "z": 8000,
     "height": 96,
     "width": 300,
-    "tabOrder": 9
+    "tabOrder": 8000
   },
   "visual": {
     "visualType": "slicer",
@@ -67,12 +67,12 @@
             }
           }
         }
+      ],
+      "general": [
+        {
+          "properties": {}
+        }
       ]
-    },
-    "syncGroup": {
-      "groupName": "IMFBB_Clients_Statut",
-      "fieldChanges": true,
-      "filterChanges": true
     },
     "visualContainerObjects": {
       "background": [
@@ -191,6 +191,11 @@
           }
         }
       ]
+    },
+    "syncGroup": {
+      "groupName": "IMFBB_Clients_Statut",
+      "fieldChanges": true,
+      "filterChanges": true
     }
   }
 }
