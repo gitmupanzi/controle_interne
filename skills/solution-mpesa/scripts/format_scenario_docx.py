@@ -327,7 +327,7 @@ def _apply_business_corrections(document: Document) -> None:
         "entrées 15,00 USD, sorties 4,65 USD et flux net 10,35 USD ; "
         "situation de l'épargne : compte ouvert 0,00 USD et compte bloqué "
         "10,00 USD ; remboursement interne depuis le compte ouvert 5,00 USD "
-        "présenté séparément et exclu des entrées externes ; DAT FA9IQ86JE7 "
+        "présenté séparément et exclu des entrées externes ; DAT DAT_TEST_001 "
         "présenté En cours avec le taux annuel de 11 % dans les critères et "
         "un capital + intérêt estimé de 10,09 USD."
     )
@@ -352,7 +352,7 @@ def _apply_business_corrections(document: Document) -> None:
             _clear_paragraph(paragraph)
             paragraph.add_run(
                 "•  Fichier Transaction_Turbo : 12 écritures d'octroi à 16:17:16 "
-                "(reference_id : LN11FAEGXL). Le même reference_id apparaît sur "
+                "(reference_id : PRET_TEST_001). Le même reference_id apparaît sur "
                 "16 lignes au total, car 4 écritures supplémentaires correspondent "
                 "au remboursement à 16:26:43."
             )

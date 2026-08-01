@@ -29,6 +29,21 @@
               "queryRef": "_Mesures.Clients crédit à rembourser",
               "nativeQueryRef": "Clients crédit à rembourser",
               "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Part clients crédit à rembourser"
+                }
+              },
+              "queryRef": "_Mesures.Part clients crédit à rembourser",
+              "nativeQueryRef": "Part clients crédit à rembourser",
+              "active": true
             }
           ]
         }
@@ -105,7 +120,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "22D"
+                  "Value": "15D"
                 }
               }
             },

@@ -44,6 +44,51 @@
               "queryRef": "_Mesures.Comptes USD",
               "nativeQueryRef": "Comptes USD",
               "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Taux activité comptes"
+                }
+              },
+              "queryRef": "_Mesures.Taux activité comptes",
+              "nativeQueryRef": "Taux activité comptes",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Collecte nette CDF"
+                }
+              },
+              "queryRef": "_Mesures.Collecte nette CDF",
+              "nativeQueryRef": "Collecte nette CDF",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Collecte nette USD"
+                }
+              },
+              "queryRef": "_Mesures.Collecte nette USD",
+              "nativeQueryRef": "Collecte nette USD",
+              "active": true
             }
           ]
         }
@@ -120,7 +165,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "18D"
+                  "Value": "15D"
                 }
               }
             },
@@ -306,7 +351,7 @@
             "text": {
               "expr": {
                 "Literal": {
-                  "Value": "'Comptes d’épargne'"
+                  "Value": "'Comptes et collecte nette'"
                 }
               }
             },

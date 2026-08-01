@@ -1,6 +1,6 @@
 ---
 name: perfect-power-bi
-description: Concevoir, construire, tester et maintenir les tableaux de bord Microsoft Power BI alimentés par Perfect Vision et BB_VISION_PRO. Utiliser pour choisir entre Import, DirectQuery ou modèle composite, définir une base miroir ou un data mart, créer un modèle en étoile, des mesures DAX, des requêtes Power Query M, un projet PBIX/PBIP/TMDL, une passerelle, un rafraîchissement incrémental, une sécurité RLS, appliquer le système visuel IMF BB et ses formats monétaires, ou diagnostiquer les performances et rapprocher les chiffres Power BI avec data/vision/requetes.sql.
+description: Concevoir, construire, tester et maintenir les tableaux de bord Microsoft Power BI alimentés par Perfect Vision et le data mart BB_VISION_REPORTING. Utiliser pour choisir entre Import, DirectQuery ou modèle composite, définir une base miroir ou un data mart, créer un modèle en étoile, des mesures DAX, des requêtes Power Query M, un projet PBIX/PBIP/TMDL, une passerelle, un rafraîchissement incrémental, une sécurité RLS, appliquer le système visuel IMF BB et ses formats monétaires, ou diagnostiquer les performances et rapprocher les chiffres Power BI avec data/modelisation/requetes.sql.
 ---
 
 # Perfect Power BI
@@ -39,9 +39,9 @@ Ne jamais qualifier le projet de prêt pour la production tant qu'un de ces cont
 
 1. Lire entièrement `../perfect-vision/SKILL.md`, puis les références qu'il impose.
 2. Utiliser comme sources de vérité :
-   - `../../data/vision/BB_VISION_PRO.sql` pour le schéma ;
-   - `../../data/vision/requetes.sql` pour les contrôles et calculs métier ;
-   - `../../data/vision/Indicateurs_perfect_vision.xlsx` pour le catalogue d'indicateurs ;
+   - `../../data/modelisation/BB_VISION_PRO.sql` pour le schéma ;
+   - `../../data/modelisation/requetes.sql` pour les contrôles et calculs métier ;
+   - `../../data/modelisation/Indicateurs_perfect_vision.xlsx` pour le catalogue d'indicateurs, lorsqu'il est présent ;
    - `../../data/Rename_columns.xlsx` et `../../data/Replace_values.xlsx` pour les conventions de normalisation.
 3. Considérer les profils présents sous `../../reports/` comme des résultats de test datés, jamais comme le schéma canonique.
 4. Ne jamais inventer une table, une relation, une mesure ou une définition d'indicateur.
@@ -114,16 +114,17 @@ Utiliser `requetes.sql` comme catalogue de logique métier, pas comme une liste 
 - Utiliser Power BI Desktop pour créer le fichier initial et la connexion.
 - Préférer un projet PBIP/TMDL versionnable lorsque l'équipe accepte les fonctions Preview ; sinon conserver le PBIX et versionner séparément SQL, M, DAX, thème et documentation.
 - Ne jamais inventer manuellement une structure PBIP non vérifiée. Partir d'un projet enregistré par Power BI Desktop ou d'un modèle existant qui s'ouvre correctement.
-- Avant d'ajouter une page, un visuel ou une mesure, inspecter le projet existant sous `../../data/vision/power-bi` lorsqu'il existe. Relever les pages, les tables de faits, les mesures et les visuels déjà présents afin de ne pas dupliquer une analyse couverte.
+- Avant d'ajouter une page, un visuel ou une mesure, inspecter le projet existant sous `../../data/kpi_perfect/power-bi` lorsqu'il existe. Relever les pages, les tables de faits, les mesures et les visuels déjà présents afin de ne pas dupliquer une analyse couverte.
 - Dans le projet IMF BB actuel, considérer comme déjà prévues les pages `Paramétrage`, `Direction`, `Clients`, `Crédit`, `Risque crédit`, `Prévisions crédit`, `Épargne`, `Conformité` et `Surveillance`. Toute nouvelle analyse doit donc compléter une question métier manquante, pas recréer cette ossature.
 - Désactiver la date/heure automatique et utiliser une dimension Date officielle.
 - Définir les relations en sens unique par défaut et éviter les relations plusieurs-à-plusieurs sans justification.
 - Organiser les mesures dans des dossiers d'affichage et masquer les colonnes techniques.
 - Utiliser des pages de synthèse, tendance, diagnostic et détail plutôt qu'une page unique surchargée.
 - Pour les analyses complémentaires, lire la section `Analyses avancées après V1` dans `references/semantic-model-and-pages.md` et choisir uniquement les ajouts dont la source SQL, le grain, la devise, la période et le test de rapprochement sont identifiés.
-- Pour le projet IMF BB migré vers `BB_VISION_REPORTING`, conserver le paramètre `pBaseReporting = "BB_VISION_REPORTING"` et utiliser `pBaseDonnees` seulement pour les tables qui n'ont pas encore de fait matérialisé. Les tables `F_Conformite` et `F_Clients` doivent lire respectivement `rpt.f_conformite` et `rpt.f_clients`.
+- Pour le projet IMF BB migré vers `BB_VISION_REPORTING`, conserver le paramètre `pBaseReporting = "BB_VISION_REPORTING"` et utiliser `pBaseDonnees` seulement pour les tables qui n'ont pas encore de fait matérialisé. Les tables `F_Conformite`, `F_Clients`, `F_Credit_PAR_Detail` et `F_Credit_Portefeuille` doivent lire respectivement `rpt.f_conformite`, `rpt.f_clients`, `rpt.f_credit_par_detail` et `rpt.f_credit_portefeuille`.
+- Dans la phase locale actuelle, interdire toute connexion exécutable vers la base de production. Utiliser uniquement `BB_VISION_PRO_TEST` pour valider les règles sources et `BB_VISION_REPORTING` pour les consommations durables. Exécuter `data/kpi_perfect/reporting_sql/13_guard_no_production_reference.ps1` après toute modification de connexion.
 - Si le modèle TMDL attend d'anciens `sourceColumn` techniques, renommer les colonnes dans Power Query après lecture de `rpt.*` plutôt que de modifier tous les visuels et mesures. Exemple : `comptes` peut être renommé en `nombre_comptes` pour rester compatible avec le modèle existant.
-- Ne pas remettre les longues requêtes 156 ou 157 directement dans Power Query lorsque les tables `rpt.f_conformite` et `rpt.f_clients` sont chargées : Power BI doit consommer le résultat matérialisé, pas recalculer Perfect Vision.
+- Ne pas remettre les longues requêtes 96, 97, 156 ou 157 directement dans Power Query lorsque les tables de reporting correspondantes sont chargées : Power BI doit consommer le résultat matérialisé, pas recalculer Perfect Vision.
 
 ### 6 bis. Appliquer le système visuel IMF BB
 
@@ -184,6 +185,7 @@ Réutiliser ces règles sur les pages Direction, Crédit, Épargne, Conformité 
 #### Cartes et graphiques
 
 - Utiliser une barre d'accent en haut des cartes KPI, colorée selon la famille métier.
+- Dans les cartes KPI du rapport IMF BB, régler la taille de la valeur à `15` par défaut afin d'éviter les valeurs tronquées, notamment les montants avec suffixe et devise comme `135M CDF` ou `6,14M USD`.
 - Afficher un indicateur principal par zone lisible ; réduire la taille ou scinder une carte avant d'accepter des valeurs tronquées.
 - Ne jamais répéter la même question analytique sur une même page. Avant d'ajouter un visuel, comparer sa mesure, sa dimension et la décision qu'il éclaire avec les visuels existants. Si deux visuels expriment la même analyse, conserver le plus lisible et utiliser l'espace libéré pour une analyse complémentaire.
 - Une carte KPI et un graphique ne peuvent coexister sur le même sujet que s'ils répondent à deux questions distinctes, par exemple niveau actuel et évolution temporelle. Une simple répétition du même total par catégorie est interdite.
@@ -245,3 +247,40 @@ Selon la demande, produire :
 ## Format de réponse
 
 Commencer par la recommandation. Indiquer les sources, hypothèses, grain, fréquence, devise, sécurité, limites et tests. Distinguer clairement ce qui est proposé, créé, exécuté, ouvert dans Power BI Desktop et publié dans Power BI Service.
+## Regles projet ajoutees
+
+- Dans une meme feuille Power BI, ne jamais presenter deux visuels qui repondent a la meme question analytique avec le meme grain. Si deux graphiques sont identiques ou quasi identiques, en garder un seul et utiliser l'espace pour une analyse complementaire.
+- Les cartes KPI doivent rester lisibles : utiliser une taille de police `15` par defaut pour la valeur principale, sauf contrainte visuelle justifiee et testee dans Power BI Desktop.
+- Separer visuellement le nombre et la devise dans les libelles et formats : preferer `2,7M CDF` a `2,7MCDF`.
+- Les montants multi-devises ne doivent pas etre additionnes sans conversion validee. Les KPI CDF et USD restent separes.
+- Le filtre `Devise` remplace le filtre `Agence` lorsque l'IMF n'a qu'une seule agence operationnelle dans le jeu analyse.
+- Le chargement Power BI par defaut doit privilegier le mois en cours ou la periode parametree, puis laisser les segments de date elargir l'analyse.
+- Les faits Q99 et Q100 sont desormais materialises dans `BB_VISION_REPORTING` via `rpt.load_f_credit_flows` :
+  - Q99 -> `rpt.f_credit_decaissements` / `pbi.F_Credit_Decaissements` ;
+  - Q100 -> `rpt.f_credit_echeances_futures` / `pbi.F_Credit_Echeances_Futures`.
+- Pour les pages Direction, Credit et Previsions credit, utiliser ces tables reporting Q99/Q100 plutot que des requetes `Value.NativeQuery` directes vers la base Perfect Vision.
+- Sur la feuille Risque credit, prioriser les jalons PAR compacts `7`, `30` et `60` lorsque l'espace est limite. Garder `PAR 90` et `PAR 180` comme mesures disponibles ou analyses detaillees, mais ne pas les substituer aux jalons compacts sans demande explicite.
+- Le fait Q103 est desormais materialise dans `BB_VISION_REPORTING` via `rpt.load_f_epargne_soldes` :
+  - Q103 -> `rpt.f_epargne_soldes` / `pbi.F_Epargne_Soldes`.
+- Pour les pages Direction et Epargne, utiliser `F_Epargne_Soldes` depuis le reporting afin que les soldes epargne et les ratios credits/depots ne dependent plus d'une requete directe Perfect Vision.
+- Le lot credit analytique est desormais materialise dans `BB_VISION_REPORTING` via `rpt.load_f_credit_analytics` :
+  - Q98 -> `rpt.f_credit_top_encours` / `pbi.F_Credit_Top_Encours` ;
+  - Q101 -> `rpt.f_credit_retention` / `pbi.F_Credit_Retention` ;
+  - Q102 -> `rpt.f_credit_vintage` / `pbi.F_Credit_Vintage` ;
+  - Q104 -> `rpt.f_credit_tranches` / `pbi.F_Credit_Tranches` ;
+  - Q105 -> `rpt.f_credit_concentration` / `pbi.F_Credit_Concentration` ;
+  - Q106 -> `rpt.f_credit_couverture` / `pbi.F_Credit_Couverture` ;
+  - Q107 -> `rpt.f_credit_provisions_detail` / `pbi.F_Credit_Provisions_Detail` ;
+  - Q108 -> `rpt.f_credit_duree` / `pbi.F_Credit_Duree` ;
+  - Q109 -> `rpt.f_credit_tendance_par` / `pbi.F_Credit_Tendance_PAR`.
+- Les pages Credit, Risque credit et Previsions credit doivent lire ces tables reporting plutot que des requetes directes `Value.NativeQuery` vers Perfect Vision.
+- Quand le contexte devient court, reprendre la feuille de route dans `data/kpi_perfect/documentation/NEXT_STEPS_POWER_BI.md`. La sequence restante est : validation visuelle Power BI, rapprochement final Power BI vs SQL, optimisation SQL, parametrage mensuel, securite/RLS, passerelle/publication, puis enrichissements metier.
+- Le projet Power BI versionnable doit conserver les fichiers utiles du PBIP/TMDL (`.pbip`, `definition/`, tables, relations, mesures, pages et visuels), mais ne doit pas versionner les fichiers locaux regeneres par Power BI Desktop : dossiers `.pbi/`, `cache.abf`, `localSettings.json`, `editorSettings.json`, exports temporaires `.pbix` et `.pbit`.
+- Avant un push, nettoyer `data/kpi_perfect/power-bi` en retirant les caches/reglages locaux et verifier que `.gitignore` contient les exclusions `data/kpi_perfect/power-bi/**/.pbi/`, `**/*.abf`, `**/localSettings.json`, `**/*.pbix` et `**/*.pbit`.
+- Lorsque le dossier `data/kpi_perfect/reporting_sql` contient des scripts sensibles, locaux ou regenerables, le proteger aussi dans `.gitignore` avec `data/kpi_perfect/reporting_sql/*` et retirer les fichiers deja suivis avec `git rm --cached -r -- data/kpi_perfect/reporting_sql`.
+- Ne pas supprimer localement les scripts `data/kpi_perfect/reporting_sql/*.sql`, la documentation `data/kpi_perfect/documentation/*.md` ni les fichiers `definition/*.tmdl`/`visual.json` sous pretexte de nettoyage : ils restent utiles pour l'audit, la reprise et les tests, meme lorsqu'ils ne sont plus versionnes.
+- Les KPI cles clients, credit et epargne doivent etre visibles dans les feuilles metier correspondantes, pas seulement disponibles dans `_Mesures` :
+  - feuille `Clients` : `Taux clients actifs`, `Part clients comptes dormants`, `Part clients credit a rembourser`, `Taux activite comptes` ;
+  - feuille `Credit` : `Taux credits en retard`, `Taux couverture PAR30 CDF/USD`, `Montant moyen pret actif CDF/USD`, `Montant moyen pret decaisse CDF/USD` ;
+  - feuille `Epargne` : `Encours epargne courante CDF/USD`, `Encours DAT CDF/USD`, `Autres epargnes CDF/USD`, `Part DAT epargne CDF/USD`, `Solde moyen par epargnant CDF/USD`, `Collecte nette CDF/USD`.
+- Apres ajout ou deplacement de KPI dans les cartes, executer un controle JSON du PBIP et verifier que chaque mesure referencee dans les `visual.json` existe dans `IMF BB Tableau de bord.SemanticModel/definition/tables/_Mesures.tmdl`.

@@ -9,8 +9,8 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 
-ROOT = Path(r"C:\Users\Benjamin-mupanzi\Documents\GitHub\controle_interne")
-VISION_DIR = ROOT / "data" / "vision"
+ROOT = Path(__file__).resolve().parents[1]
+VISION_DIR = ROOT / "data" / "modelisation"
 SCHEMA_PATH = VISION_DIR / "BB_VISION_PRO.sql"
 DIAGRAM_PATH = VISION_DIR / "modelisation_visuelle_bb_vision_controle_interne.png"
 OUTPUT_PATH = VISION_DIR / "analyse_normalisation_merise_bb_vision_pro.docx"

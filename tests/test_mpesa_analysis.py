@@ -312,9 +312,9 @@ def _sample_seven_percent_loan_data() -> MpesaPreparedData:
     """Reproduit le pret de 5 USD du scenario Benjamin au grain Turbo."""
     common = {
         "customer_id": "37370",
-        "msisdn1": "243821064833",
+        "msisdn1": "243000000000",
         "currency_code": "USD",
-        "reference_id": "LN11FAEGXL",
+        "reference_id": "PRET_TEST_001",
     }
     rows: list[dict[str, object]] = []
 
@@ -360,7 +360,7 @@ def _sample_seven_percent_loan_data() -> MpesaPreparedData:
     add(98376, "VODA COLLECTION A/C", "Part Voda", origination, cr=1.00)
 
     repayment = "2026-07-22 16:26:43"
-    repayment_reference = "LRXAPRP29V"
+    repayment_reference = "RETRAIT_TEST_001"
     add(98385, "PRINCIPLE", "Remboursement du principal", repayment, cr=5.0, ref_no=repayment_reference)
     add(98386, "LOAN ACCOUNT", "Remboursement du Pret", repayment, dr=5.0, ref_no=repayment_reference)
     add(98387, "LOAN PORTFOLIO", "Portefeuille Pret Remboursement", repayment, dr=5.0, ref_no=repayment_reference)
@@ -372,7 +372,7 @@ def _sample_seven_percent_loan_data() -> MpesaPreparedData:
         pd.DataFrame(
             [
                 {
-                    "loan_id": "LN11FAEGXL",
+                    "loan_id": "PRET_TEST_001",
                     "customer_id": "37370",
                     "customer": "MUPANZI KITSHI BENJAMIN",
                     "currency_code": "USD",
@@ -385,7 +385,7 @@ def _sample_seven_percent_loan_data() -> MpesaPreparedData:
                     "status_name": "Matured",
                     "created_at": origination,
                     "updated_at": repayment,
-                    "msisdn1": "243821064833",
+                    "msisdn1": "243000000000",
                 }
             ]
         )
@@ -1735,30 +1735,30 @@ class MpesaAnalysisTests(unittest.TestCase):
                     {
                         "id": 1,
                         "customer_id": "37370",
-                        "msisdn1": "243821064833",
+                        "msisdn1": "243000000000",
                         "account_type": "MPESA ACCOUNT",
-                        "reference_id": "FA9IQ86JE7",
+                        "reference_id": "DAT_TEST_001",
                         "currency_code": "USD",
                         "dr": 10.0,
                         "cr": 0.0,
                         "bal_before": 0.0,
                         "bal_after": 10.0,
-                        "ref_no": "DGI967CPZ3V",
+                        "ref_no": "DAT_MOUVEMENT_TEST_001",
                         "description": "M-Pesa Compte",
                         "created_at": "2026-07-18 14:52:41",
                     },
                     {
                         "id": 2,
                         "customer_id": "37370",
-                        "msisdn1": "243821064833",
+                        "msisdn1": "243000000000",
                         "account_type": "FIXED SAVINGS",
-                        "reference_id": "FA9IQ86JE7",
+                        "reference_id": "DAT_TEST_001",
                         "currency_code": "USD",
                         "dr": 0.0,
                         "cr": 10.0,
                         "bal_before": 0.0,
                         "bal_after": 10.0,
-                        "ref_no": "DGI967CPZ3V",
+                        "ref_no": "DAT_MOUVEMENT_TEST_001",
                         "description": "Depot Bloque",
                         "created_at": "2026-07-18 14:52:41",
                     },
@@ -1793,7 +1793,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             "analysis_report": report,
             "customer_id": "37370",
             "customer_name": "MUPANZI KITSHI BENJAMIN",
-            "telephone": "243821064833",
+            "telephone": "243000000000",
             "currency": "USD",
             "period_start": "2026-07-18",
             "period_end": "2026-07-18",
@@ -1831,7 +1831,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
         )
         self.assertIn("Dépôt à terme (DAT)", pdf_text)
-        self.assertNotIn("DGI967CPZ3V", pdf_text)
+        self.assertNotIn("DAT_MOUVEMENT_TEST_001", pdf_text)
 
     def test_customer_bisou_statement_matches_benjamin_scenario(self) -> None:
         from docx import Document
@@ -1856,7 +1856,7 @@ class MpesaAnalysisTests(unittest.TestCase):
                 {
                     "id": len(rows) + 1,
                     "customer_id": "37370",
-                    "msisdn1": "243821064833",
+                    "msisdn1": "243000000000",
                     "account_type": account_type,
                     "reference_id": reference_id,
                     "currency_code": "USD",
@@ -1875,8 +1875,8 @@ class MpesaAnalysisTests(unittest.TestCase):
             "MPESA ACCOUNT",
             dr=10.0,
             bal_after=10.0,
-            ref_no="DGI967CPZ3V",
-            reference_id="FA9IQ86JE7",
+            ref_no="DAT_MOUVEMENT_TEST_001",
+            reference_id="DAT_TEST_001",
             description="M-Pesa Compte",
         )
         add(
@@ -1884,8 +1884,8 @@ class MpesaAnalysisTests(unittest.TestCase):
             "FIXED SAVINGS",
             cr=10.0,
             bal_after=10.0,
-            ref_no="DGI967CPZ3V",
-            reference_id="FA9IQ86JE7",
+            ref_no="DAT_MOUVEMENT_TEST_001",
+            reference_id="DAT_TEST_001",
             description="Depot Bloque",
         )
         add(
@@ -1893,7 +1893,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             "PRINCIPLE",
             dr=5.0,
             bal_after=5.0,
-            reference_id="LN11FAEGXL",
+            reference_id="PRET_TEST_001",
             description="Montant principal",
         )
         add(
@@ -1901,7 +1901,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             "LOAN ACCOUNT",
             cr=5.35,
             bal_after=5.35,
-            reference_id="LN11FAEGXL",
+            reference_id="PRET_TEST_001",
             description="Compte de pret",
         )
         add(
@@ -1909,7 +1909,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             "MPESA ACCOUNT",
             cr=5.0,
             bal_after=5.0,
-            reference_id="LN11FAEGXL",
+            reference_id="PRET_TEST_001",
             description="Montant pret",
         )
         add(
@@ -1917,7 +1917,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             "MPESA ACCOUNT",
             dr=0.35,
             bal_after=0.35,
-            reference_id="LN11FAEGXL",
+            reference_id="PRET_TEST_001",
             description="Compte du M-Pesa",
         )
         add(
@@ -1925,7 +1925,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             "MPESA ACCOUNT",
             dr=5.0,
             bal_after=5.0,
-            ref_no="DGM667X843U",
+            ref_no="DEPOT_TEST_001",
             description="M-Pesa Depot",
         )
         add(
@@ -1933,7 +1933,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             "NORMAL SAVINGS",
             cr=5.0,
             bal_after=5.0,
-            ref_no="DGM667X843U",
+            ref_no="DEPOT_TEST_001",
             description="Epargne depot",
         )
         for account_type, dr, cr, before, after, description in [
@@ -1952,9 +1952,9 @@ class MpesaAnalysisTests(unittest.TestCase):
                 cr=cr,
                 bal_before=before,
                 bal_after=after,
-                ref_no="LRXAPRP29V",
+                ref_no="RETRAIT_TEST_001",
                 reference_id=(
-                    "LN11FAEGXL"
+                    "PRET_TEST_001"
                     if account_type in {"PRINCIPLE", "LOAN ACCOUNT", "MPESA ACCOUNT"}
                     else ""
                 ),
@@ -1966,7 +1966,7 @@ class MpesaAnalysisTests(unittest.TestCase):
                 {
                     "savings_id": "SATXW2I7Y1",
                     "customer_id": "37370",
-                    "msisdn1": "243821064833",
+                    "msisdn1": "243000000000",
                     "product_name": "Open Savings",
                     "product_description": "Current account",
                     "currency_code": "CDF",
@@ -1978,7 +1978,7 @@ class MpesaAnalysisTests(unittest.TestCase):
                 {
                     "savings_id": "SADW5C1Z50",
                     "customer_id": "37370",
-                    "msisdn1": "243821064833",
+                    "msisdn1": "243000000000",
                     "product_name": "Open Savings",
                     "product_description": "Current account",
                     "currency_code": "USD",
@@ -1988,9 +1988,9 @@ class MpesaAnalysisTests(unittest.TestCase):
                     "updated_at": "2026-07-22 16:26:43",
                 },
                 {
-                    "savings_id": "FA9IQ86JE7",
+                    "savings_id": "DAT_TEST_001",
                     "customer_id": "37370",
-                    "msisdn1": "243821064833",
+                    "msisdn1": "243000000000",
                     "product_name": "1 Month",
                     "product_description": "1 Month Fixed Account",
                     "currency_code": "USD",
@@ -2030,7 +2030,7 @@ class MpesaAnalysisTests(unittest.TestCase):
 
         analysis = build_customer_transaction_analysis(prepared, "37370")
         active_dat = analysis["dat_en_cours_client"].iloc[0]
-        self.assertEqual(active_dat["savings_id"], "FA9IQ86JE7")
+        self.assertEqual(active_dat["savings_id"], "DAT_TEST_001")
         self.assertEqual(float(active_dat["balance"]), 10.0)
         self.assertAlmostEqual(float(active_dat["interet_estime_echeance"]), 0.09, places=2)
         self.assertEqual(active_dat["situation_dat_client"], "En cours")
@@ -2057,7 +2057,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             "analysis_report": export_report,
             "customer_id": "37370",
             "customer_name": "MUPANZI KITSHI BENJAMIN",
-            "telephone": "243821064833",
+            "telephone": "243000000000",
             "currency": "USD",
             "period_start": "2026-07-18",
             "period_end": "2026-07-22",
@@ -2084,7 +2084,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             word_text,
         )
         self.assertEqual(document.sections[0].orientation, WD_ORIENT.PORTRAIT)
-        self.assertIn("FA9IQ86JE7", word_text)
+        self.assertIn("DAT_TEST_001", word_text)
 
         financial_table = next(
             table
@@ -2133,10 +2133,10 @@ class MpesaAnalysisTests(unittest.TestCase):
         transaction_table_text = "\n".join(
             cell.text for row in transaction_table.rows for cell in row.cells
         )
-        self.assertIn("DGM667X843U", transaction_table_text)
-        self.assertIn("LRXAPRP29V", transaction_table_text)
-        self.assertNotIn("LN11FAEGXL", transaction_table_text)
-        self.assertNotIn("DGI967CPZ3V", transaction_table_text)
+        self.assertIn("DEPOT_TEST_001", transaction_table_text)
+        self.assertIn("RETRAIT_TEST_001", transaction_table_text)
+        self.assertNotIn("PRET_TEST_001", transaction_table_text)
+        self.assertNotIn("DAT_MOUVEMENT_TEST_001", transaction_table_text)
 
         pdf_reader = PdfReader(
             BytesIO(create_customer_statement_pdf(report["extrait"], **export_kwargs))
@@ -2158,7 +2158,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Cloture", pdf_text)
         self.assertIn("Taux annuel DAT", pdf_text)
         self.assertIn("Référence Turbo", pdf_text)
-        self.assertIn("FA9IQ86JE7", pdf_text)
+        self.assertIn("DAT_TEST_001", pdf_text)
         self.assertNotIn("sont présentés du point de vue de Bisou Bisou", pdf_text)
         minimal_pdf_reader = PdfReader(
             BytesIO(create_customer_statement_pdf(report["extrait"], **export_kwargs, minimal=True))
@@ -2399,7 +2399,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(int(origination_event["nombre_lignes"]), 12)
         self.assertEqual(int(repayment_event["nombre_lignes"]), 6)
         self.assertEqual(
-            int(prepared.transactions["reference_id"].eq("LN11FAEGXL").sum()),
+            int(prepared.transactions["reference_id"].eq("PRET_TEST_001").sum()),
             16,
         )
         self.assertEqual(float(origination_event["pret_brut_decaisse"]), 5.0)
@@ -2437,7 +2437,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         export_kwargs = {
             "customer_id": "37370",
             "customer_name": "MUPANZI KITSHI BENJAMIN",
-            "telephone": "243821064833",
+            "telephone": "243000000000",
             "currency": "USD",
             "entry_account_number": "1441",
             "output_account_number": "15558",
@@ -2486,7 +2486,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         interest_detail = accounting["produits_financiers_detail"].loc[
             accounting["produits_financiers_detail"]["account_type"].eq("INTEREST EARNED")
         ].iloc[0]
-        self.assertEqual(interest_detail["reference_id"], "LN11FAEGXL")
+        self.assertEqual(interest_detail["reference_id"], "PRET_TEST_001")
         self.assertEqual(float(interest_detail["montant_observe"]), 0.35)
 
     def test_customer_statement_filename_uses_turbo_identity_and_optional_g2_name(self) -> None:

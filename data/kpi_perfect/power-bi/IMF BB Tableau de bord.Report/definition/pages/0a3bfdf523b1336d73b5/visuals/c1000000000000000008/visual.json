@@ -74,6 +74,21 @@
               "queryRef": "_Mesures.Provision USD",
               "nativeQueryRef": "Provision USD",
               "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Taux couverture PAR30 USD"
+                }
+              },
+              "queryRef": "_Mesures.Taux couverture PAR30 USD",
+              "nativeQueryRef": "Taux couverture PAR30 USD",
+              "active": true
             }
           ]
         }
@@ -150,7 +165,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "14D"
+                  "Value": "15D"
                 }
               }
             },
@@ -336,7 +351,7 @@
             "text": {
               "expr": {
                 "Literal": {
-                  "Value": "'Qualité du portefeuille — USD'"
+                  "Value": "'Qualité et couverture — USD'"
                 }
               }
             },

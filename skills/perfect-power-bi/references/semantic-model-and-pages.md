@@ -131,7 +131,7 @@ Prévoir une matrice de rapprochement pour chaque KPI majeur :
 
 - nom de la mesure Power BI ;
 - page et visuel ;
-- requête SQL de référence dans `data/vision/requetes.sql` ;
+- requête SQL de référence dans `data/modelisation/requetes.sql` ;
 - table de fait utilisée ;
 - grain attendu ;
 - filtre de période ;

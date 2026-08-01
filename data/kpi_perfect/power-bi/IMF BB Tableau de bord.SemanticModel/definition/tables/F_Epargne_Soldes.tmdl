@@ -4,15 +4,21 @@ table F_Epargne_Soldes
 
 	column 'Date situation'
 		dataType: dateTime
+		formatString: Long Date
 		lineageTag: 0ec07486-4f08-4d5a-ba43-04d5cc9048d6
 		summarizeBy: none
 		sourceColumn: date_situation
 
+		annotation UnderlyingDateTimeDataType = Date
+
 	column Mois
 		dataType: dateTime
+		formatString: Long Date
 		lineageTag: f8d63486-20ba-4c02-80ba-25fb8a9d8b1a
 		summarizeBy: none
 		sourceColumn: mois
+
+		annotation UnderlyingDateTimeDataType = Date
 
 	column 'Code agence'
 		dataType: string
@@ -72,126 +78,29 @@ table F_Epargne_Soldes
 		mode: import
 		source =
 				let
-					Source = Sql.Database(pServeur, pBaseDonnees, [CreateNavigationProperties=false, CommandTimeout=#duration(0, 0, 10, 0)]),
-					SqlTexte = Text.Combine({
-					"SET NOCOUNT ON;",
-					"DECLARE @date_debut date = '" & Date.ToText(pDateDebut, [Format="yyyy-MM-dd", Culture="en-US"]) & "';",
-					"DECLARE @date_fin date = '" & Date.ToText(pDateFin, [Format="yyyy-MM-dd", Culture="en-US"]) & "';",
-					"WITH mouvements_comptables AS (",
-					"SELECT ID as ID, DATE_OPERATION, DESCRIPTION, ID_OPERATION, LETTRE, MONTANT_OPERATION,",
-					"        NUM_TRANSACTION, NUMERO_RECU, RAPPROCHEMENT, SENS, VENTILATION, NUM_MOUVEMENT,",
-					"        ID_COMPTE, ID_DEVISE, ID_JOURNAL, ID_POINT_SERVICE, ID_TYPE_OPERATION, DATE_SAISIE,",
-					"        DATE_VALEUR, NUM_LIGNE, MONTANT_REEL, REFERENCE_TIERS, ID_TIER",
-					"FROM hdpm",
-					"",
-					"UNION",
-					"",
-					"SELECT CODE as ID, DATE_OPERATION, DESCRIPTION, ID_OPERATION, LETTRE, MONTANT_OPERATION,",
-					"        NUM_TRANSACTION, NUMERO_RECU, RAPPROCHEMENT, SENS, VENTILATION, NUM_MOUVEMENT,",
-					"        ID_COMPTE, ID_DEVISE, ID_JOURNAL, ID_POINT_SERVICE, ID_TYPE_OPERATION, DATE_SAISIE,",
-					"        DATE_OPERATION as DATE_VALEUR, ID as NUM_LIGNE, MONTANT_OPERATION as MONTANT_REEL,",
-					"        NULL as REFERENCE_TIERS, NULL as ID_TIER",
-					"FROM hdpm_api",
-					"),",
-					"mois AS (",
-					"  SELECT",
-					"    EOMONTH(CAST(@date_debut AS DATE)) AS date_situation",
-					"  UNION ALL",
-					"  SELECT",
-					"    EOMONTH(CAST(DATEADD(MONTH, 1, date_situation) AS DATE))",
-					"  FROM mois",
-					"  WHERE",
-					"    EOMONTH(CAST(DATEADD(MONTH, 1, date_situation) AS DATE)) <= EOMONTH(CAST(@date_fin AS DATE))",
-					"), comptes_epargne AS (",
-					"  SELECT",
-					"    c.ID AS id_compte,",
-					"    c.NUM_CPTE AS NUM_CPTE,",
-					"    c.LIBELLE AS libelle_compte,",
-					"    c.DATE_OUVERTURE AS DATE_OUVERTURE,",
-					"    c.ID_POINT_SERVICE AS id_agence_compte,",
-					"    ps.CODE AS code_agence_compte,",
-					"    ps.NOM AS nom_agence_compte,",
-					"    ca.ID_ADHERENT AS id_client,",
-					"    ca.TYPE_CPTE_ADH AS type_compte_adherent,",
-					"    dv.CODE AS code_devise,",
-					"    pe.ID AS id_produit_epargne,",
-					"    ISNULL(pe.LIBELLE, c.LIBELLE) AS produit_epargne",
-					"  FROM dbo.COMPTES AS c",
-					"  INNER JOIN dbo.COMPTES_ADHERENT AS ca",
-					"    ON ca.id = c.ID",
-					"  LEFT JOIN dbo.COMPTES_ADHERENT_INFO AS cai",
-					"    ON cai.id = c.ID",
-					"  LEFT JOIN dbo.PRODUITS_EPG AS pe",
-					"    ON pe.ID = cai.ID_PRODUIT_EPG",
-					"  LEFT JOIN dbo.DEVISES AS dv",
-					"    ON dv.ID = c.ID_DEVISE",
-					"  LEFT JOIN dbo.POINTS_SERVICE AS ps",
-					"    ON ps.ID = c.ID_POINT_SERVICE",
-					"  WHERE",
-					"    ca.TYPE_CPTE_ADH IN ('CAU', 'DAT', 'PLN', 'DAV', 'TNT')",
-					"), soldes_mensuels AS (",
-					"  SELECT",
-					"    m.date_situation AS date_situation,",
-					"    ce.id_compte AS id_compte,",
-					"    SUM(CASE WHEN h.SENS = 'D' THEN -1 ELSE 1 END * ISNULL(h.MONTANT_OPERATION, 0)) AS solde_compte",
-					"  FROM mois AS m",
-					"  INNER JOIN comptes_epargne AS ce",
-					"    ON ce.DATE_OUVERTURE <= m.date_situation",
-					"  LEFT JOIN mouvements_comptables AS h",
-					"    ON h.ID_COMPTE = ce.id_compte AND h.DATE_OPERATION <= m.date_situation",
-					"  WHERE",
-					"    NOT EXISTS(",
-					"      SELECT",
-					"        1",
-					"      FROM dbo.CLOTURE_COMPTE AS cc",
-					"      WHERE",
-					"        cc.ID_COMPTE = ce.id_compte AND cc.DATE_CLOTURE <= m.date_situation",
-					"    )",
-					"  GROUP BY",
-					"    m.date_situation,",
-					"    ce.id_compte",
-					")",
-					"SELECT",
-					"  sm.date_situation,",
-					"  DATEFROMPARTS(YEAR(sm.date_situation), MONTH(sm.date_situation), 1) AS mois,",
-					"  ce.code_agence_compte,",
-					"  ce.nom_agence_compte,",
-					"  ce.produit_epargne,",
-					"  ce.type_compte_adherent,",
-					"  ce.code_devise,",
-					"  COUNT(DISTINCT ce.id_compte) AS nb_comptes,",
-					"  COUNT(DISTINCT ce.id_client) AS nb_clients,",
-					"  SUM(ISNULL(sm.solde_compte, 0)) AS solde_epargne,",
-					"  CASE",
-					"    WHEN COUNT(DISTINCT ce.id_compte) = 0",
-					"    THEN 0",
-					"    ELSE ROUND(SUM(ISNULL(sm.solde_compte, 0)) / COUNT(DISTINCT ce.id_compte), 2)",
-					"  END AS solde_moyen_compte",
-					"FROM soldes_mensuels AS sm",
-					"INNER JOIN comptes_epargne AS ce",
-					"  ON ce.id_compte = sm.id_compte",
-					"GROUP BY",
-					"  sm.date_situation,",
-					"  DATEFROMPARTS(YEAR(sm.date_situation), MONTH(sm.date_situation), 1),",
-					"  ce.id_agence_compte,",
-					"  ce.code_agence_compte,",
-					"  ce.nom_agence_compte,",
-					"  ce.id_produit_epargne,",
-					"  ce.produit_epargne,",
-					"  ce.type_compte_adherent,",
-					"  ce.code_devise",
-					"ORDER BY",
-					"  sm.date_situation,",
-					"  ce.nom_agence_compte,",
-					"  ce.produit_epargne OPTION(",
-					"    MAXRECURSION 0",
-					");"
-					}, "#(lf)"),
-					Resultat = Value.NativeQuery(Source, SqlTexte, null, [EnableFolding=false])
+					Source = Sql.Database(pServeur, pBaseReporting, [CreateNavigationProperties=false, CommandTimeout=#duration(0, 0, 10, 0)]),
+					TableSource = Source{[Schema="rpt", Item="f_epargne_soldes"]}[Data],
+					DateSituationDebut = Date.EndOfMonth(pDateDebut),
+					DateSituationFin = Date.EndOfMonth(pDateFin),
+					FiltrePeriode = Table.SelectRows(TableSource, each [date_situation] >= DateSituationDebut and [date_situation] <= DateSituationFin),
+					ColonnesModele = Table.SelectColumns(FiltrePeriode, {
+						"date_situation", "mois", "code_agence", "agence", "produit_epargne",
+						"type_compte", "devise", "comptes", "clients", "solde_epargne", "solde_moyen_compte"
+					}),
+					Resultat = Table.RenameColumns(ColonnesModele, {
+						{"code_agence", "code_agence_compte"},
+						{"agence", "nom_agence_compte"},
+						{"type_compte", "type_compte_adherent"},
+						{"devise", "code_devise"},
+						{"comptes", "nb_comptes"},
+						{"clients", "nb_clients"}
+					})
 				in
 					Resultat
 
 	annotation RequetePerfectVision = 103
 
-	annotation SourceLocale = BB_VISION_PRO_TEST
+	annotation SourceLocale = BB_VISION_REPORTING
+
+	annotation SourceReportingObject = rpt.f_epargne_soldes
 

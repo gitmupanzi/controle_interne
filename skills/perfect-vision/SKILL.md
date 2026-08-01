@@ -11,8 +11,8 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 
 1. Reformuler le besoin en cycle, période, population, mesure et exception recherchée.
 2. Lire [references/sources.md](references/sources.md) pour localiser les sources et connaître les garde-fous.
-3. Chercher d'abord une requête existante dans `data/vision/requetes.sql` avec `scripts/inspect_vision_sql.py --query "terme"`.
-4. Vérifier chaque table et colonne dans `data/vision/BB_VISION_PRO.sql` avec `--table NOM_TABLE` ou `--query NOM_COLONNE`.
+3. Chercher d'abord une requête existante dans `data/modelisation/requetes.sql` avec `scripts/inspect_vision_sql.py --query "terme"`.
+4. Vérifier chaque table et colonne dans `data/modelisation/BB_VISION_PRO.sql` avec `--table NOM_TABLE` ou `--query NOM_COLONNE`.
 5. Réutiliser la requête existante si elle répond au besoin. Sinon, produire une variante minimale et expliquer les adaptations.
 6. Afficher la requête complète avec `--number N`, puis vérifier séparément les colonnes techniques internes et les colonnes métier du `SELECT` final.
 7. Valider les paramètres de dates, devise, seuils et statut d'annulation avant toute exécution.
@@ -35,7 +35,7 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 
 ## Projection métier des exports
 
-- Considérer `data/vision/requetes.sql` comme le catalogue métier/export épuré de référence.
+- Considérer `data/modelisation/requetes.sql` comme le catalogue métier/export épuré de référence.
 - Simplifier uniquement le `SELECT` final; conserver les calculs et identifiants techniques nécessaires en amont.
 - Garder les références auditables : client, transaction, reçu, compte, prêt, demande ou dossier selon le contrôle.
 - Préférer les codes, numéros et libellés métier aux identifiants techniques redondants. Conserver un identifiant technique seulement s'il est la seule clé exploitable pour la revue.

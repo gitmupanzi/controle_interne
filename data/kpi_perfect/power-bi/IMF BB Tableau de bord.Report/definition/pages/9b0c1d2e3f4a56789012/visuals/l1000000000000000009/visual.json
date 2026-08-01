@@ -29,6 +29,21 @@
               "queryRef": "_Mesures.Clients comptes dormants",
               "nativeQueryRef": "Clients comptes dormants",
               "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Part clients comptes dormants"
+                }
+              },
+              "queryRef": "_Mesures.Part clients comptes dormants",
+              "nativeQueryRef": "Part clients comptes dormants",
+              "active": true
             }
           ]
         }
@@ -105,7 +120,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "22D"
+                  "Value": "15D"
                 }
               }
             },
@@ -291,7 +306,7 @@
             "text": {
               "expr": {
                 "Literal": {
-                  "Value": "'Avec compte dormant'"
+                  "Value": "'Comptes dormants'"
                 }
               }
             },

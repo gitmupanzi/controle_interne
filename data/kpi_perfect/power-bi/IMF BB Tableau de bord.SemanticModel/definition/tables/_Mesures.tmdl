@@ -303,7 +303,7 @@ table _Mesures
 		lineageTag: 937e9f8c-fd52-4686-b2b7-06ca73fa14e9
 
 	/// Montant total attendu sur les échéances futures.
-	measure 'Échéances futures' = SUM(F_Credit_Echeances_Futures[Total attendu])
+	measure 'Échéances futures' = CALCULATE(SUM(F_Credit_Echeances_Futures[Total attendu]), REMOVEFILTERS(D_Date))
 		formatString: #,##0.00
 		lineageTag: 54656675-e82d-4cef-9302-7b45a053d2e2
 
@@ -383,6 +383,270 @@ table _Mesures
 			VAR DateMax = MAXX(ALL(D_Date), D_Date[Date])
 			RETURN IF(ISBLANK(DateMax), "Non disponible", FORMAT(DateMax, "dd/MM/yyyy"))
 		lineageTag: 2dbbabd0-a706-4f22-b7e9-42d3525c14cc
+
+	/// Nombre de prêts ayant au moins un jour de retard à la date de situation.
+	measure 'Crédits en retard' = CALCULATE(DISTINCTCOUNT(F_Credit_PAR_Detail[Numéro prêt]), KEEPFILTERS(F_Credit_PAR_Detail[Jours retard] > 0))
+		formatString: #,##0
+		displayFolder: 05 - Risque crédit
+		lineageTag: 94ae7cf2-f4ab-4fc7-94af-2df97b3bfb85
+
+	/// Montant total des échéances impayées, uniquement en CDF.
+	measure 'Arriéré CDF' = CALCULATE(SUM(F_Credit_PAR_Detail[Arriéré]), KEEPFILTERS(D_Devise[Devise] = "CDF"))
+		formatString: #,##0" CDF"
+		displayFolder: 05 - Risque crédit
+		lineageTag: fa59e54b-1fe3-43f0-a75e-65c3d7f34f70
+
+	/// Montant total des échéances impayées, uniquement en USD.
+	measure 'Arriéré USD' = CALCULATE(SUM(F_Credit_PAR_Detail[Arriéré]), KEEPFILTERS(D_Devise[Devise] = "USD"))
+		formatString: #,##0.00" USD"
+		displayFolder: 05 - Risque crédit
+		lineageTag: a68d3115-580e-4228-a6bf-89d62d2d7c9e
+
+	/// Capital restant dû des prêts présentant plus de sept jours de retard, uniquement en CDF.
+	measure 'PAR 7 CDF' = CALCULATE(SUM(F_Credit_PAR_Detail[Encours]), KEEPFILTERS(F_Credit_PAR_Detail[Jours retard] > 7), KEEPFILTERS(D_Devise[Devise] = "CDF"))
+		formatString: #,##0" CDF"
+		displayFolder: 05 - Risque crédit
+		lineageTag: 75c72c95-11da-438b-98c0-54136e5bdeda
+
+	/// Capital restant dû des prêts présentant plus de sept jours de retard, uniquement en USD.
+	measure 'PAR 7 USD' = CALCULATE(SUM(F_Credit_PAR_Detail[Encours]), KEEPFILTERS(F_Credit_PAR_Detail[Jours retard] > 7), KEEPFILTERS(D_Devise[Devise] = "USD"))
+		formatString: #,##0.00" USD"
+		displayFolder: 05 - Risque crédit
+		lineageTag: 3217674c-ebfb-41f7-bfd6-eb3a83f0c9ae
+
+	/// Capital restant dû des prêts présentant plus de soixante jours de retard, uniquement en CDF.
+	measure 'PAR 60 CDF' = CALCULATE(SUM(F_Credit_PAR_Detail[Encours]), KEEPFILTERS(F_Credit_PAR_Detail[Jours retard] > 60), KEEPFILTERS(D_Devise[Devise] = "CDF"))
+		formatString: #,##0" CDF"
+		displayFolder: 05 - Risque crédit
+		lineageTag: 242d04b4-9780-4384-8747-a192279634e2
+
+	/// Capital restant dû des prêts présentant plus de soixante jours de retard, uniquement en USD.
+	measure 'PAR 60 USD' = CALCULATE(SUM(F_Credit_PAR_Detail[Encours]), KEEPFILTERS(F_Credit_PAR_Detail[Jours retard] > 60), KEEPFILTERS(D_Devise[Devise] = "USD"))
+		formatString: #,##0.00" USD"
+		displayFolder: 05 - Risque crédit
+		lineageTag: 3cd6d638-2a89-4707-a1a3-2fce3b38f4de
+
+	/// PAR7 divisé par l'encours brut CDF à la même date de situation.
+	measure 'Taux PAR 7 CDF' = DIVIDE([PAR 7 CDF], [Encours CDF])
+		formatString: 0.00%
+		displayFolder: 05 - Risque crédit
+		lineageTag: 46d705e7-372e-44c8-a8d5-45b19c263f4f
+
+	/// PAR7 divisé par l'encours brut USD à la même date de situation.
+	measure 'Taux PAR 7 USD' = DIVIDE([PAR 7 USD], [Encours USD])
+		formatString: 0.00%
+		displayFolder: 05 - Risque crédit
+		lineageTag: 31b47964-10ae-408e-89c3-9c41e66814ba
+
+	/// PAR60 divisé par l'encours brut CDF à la même date de situation.
+	measure 'Taux PAR 60 CDF' = DIVIDE([PAR 60 CDF], [Encours CDF])
+		formatString: 0.00%
+		displayFolder: 05 - Risque crédit
+		lineageTag: 43c71a7f-040d-4d05-a2f3-f2625f0f07a5
+
+	/// PAR60 divisé par l'encours brut USD à la même date de situation.
+	measure 'Taux PAR 60 USD' = DIVIDE([PAR 60 USD], [Encours USD])
+		formatString: 0.00%
+		displayFolder: 05 - Risque crédit
+		lineageTag: 1e16aacd-0101-4ce2-99bb-7835910571f6
+
+	/// PAR180 divise par l'encours brut CDF a la meme date de situation.
+	measure 'Taux PAR 180 CDF' = DIVIDE([PAR 180 CDF], [Encours CDF])
+		formatString: 0.00%
+		displayFolder: 05 - Risque crédit
+		lineageTag: b80f2088-a081-4396-9602-83b0893de79f
+
+	/// PAR180 divisé par l'encours brut USD à la même date de situation.
+	measure 'Taux PAR 180 USD' = DIVIDE([PAR 180 USD], [Encours USD])
+		formatString: 0.00%
+		displayFolder: 05 - Risque crédit
+		lineageTag: 97d60a42-0c16-411c-8a0e-c4b605ca69cc
+
+	/// Rapport entre l'encours brut de crédit et le solde d'épargne, calculé uniquement en CDF.
+	measure 'Ratio crédits/dépôts CDF' = DIVIDE([Encours CDF], [Épargne CDF])
+		formatString: 0.00%
+		displayFolder: 07 - Liquidité
+		lineageTag: 1db73c6b-8ab5-432e-88fa-af7a26783c83
+
+	/// Rapport entre l'encours brut de crédit et le solde d'épargne, calculé uniquement en USD.
+	measure 'Ratio crédits/dépôts USD' = DIVIDE([Encours USD], [Épargne USD])
+		formatString: 0.00%
+		displayFolder: 07 - Liquidité
+		lineageTag: 8ce68471-7f53-43e3-a422-0c8bc136b9ac
+
+	/// Montant PAR180, uniquement en CDF.
+	measure 'PAR 180 CDF' = CALCULATE(SUM(F_Credit_Portefeuille[PAR 180+]), KEEPFILTERS(D_Devise[Devise] = "CDF"))
+		formatString: #,##0" CDF"
+		displayFolder: 05 - Risque crédit
+		lineageTag: 5e563d3f-5f42-4bf7-8586-5d9d198df677
+
+	/// Montant PAR180, uniquement en USD.
+	measure 'PAR 180 USD' = CALCULATE(SUM(F_Credit_Portefeuille[PAR 180+]), KEEPFILTERS(D_Devise[Devise] = "USD"))
+		formatString: #,##0.00" USD"
+		displayFolder: 05 - Risque crédit
+		lineageTag: ed683a7d-0d64-4c45-9fda-d40d4cff4e7a
+
+	/// Clients actifs divisés par le total des clients du périmètre.
+	measure 'Taux clients actifs' = DIVIDE([Clients actifs], [Clients])
+		formatString: 0.00%
+		displayFolder: 02 - Clients
+		lineageTag: a7f1cc94-accc-46eb-90fd-255cf8545bb2
+
+	/// Clients ayant au moins un compte dormant divisés par le total des clients.
+	measure 'Part clients comptes dormants' = DIVIDE([Clients comptes dormants], [Clients])
+		formatString: 0.00%
+		displayFolder: 02 - Clients
+		lineageTag: c2b40585-ec4b-4ad4-832c-0c9a7259ad79
+
+	/// Clients ayant un crédit à rembourser divisés par les clients actifs.
+	measure 'Part clients crédit à rembourser' = DIVIDE([Clients crédit à rembourser], [Clients actifs])
+		formatString: 0.00%
+		displayFolder: 02 - Clients
+		lineageTag: afbe03df-5caa-4e7d-b375-a764182d736b
+
+	/// Nombre de crédits en retard divisé par le nombre de prêts actifs.
+	measure 'Taux crédits en retard' = DIVIDE([Crédits en retard], [Prêts actifs])
+		formatString: 0.00%
+		displayFolder: 05 - Risque crédit
+		lineageTag: 563f1a4a-5f0d-42ad-8ee7-532f2d9a0725
+
+	/// Provisions CDF divisées par le PAR30 CDF.
+	measure 'Taux couverture PAR30 CDF' = DIVIDE([Provision CDF], [PAR 30 CDF])
+		formatString: 0.00%
+		displayFolder: 05 - Risque crédit
+		lineageTag: 5c53c7d0-7f6f-40fb-addc-44f513fd6315
+
+	/// Provisions USD divisées par le PAR30 USD.
+	measure 'Taux couverture PAR30 USD' = DIVIDE([Provision USD], [PAR 30 USD])
+		formatString: 0.00%
+		displayFolder: 05 - Risque crédit
+		lineageTag: 5e7745f6-99ff-48cb-9a6b-0bcdd7193898
+
+	/// Encours CDF divisé par le nombre de prêts actifs.
+	measure 'Montant moyen prêt actif CDF' = DIVIDE([Encours CDF], CALCULATE([Prêts actifs], KEEPFILTERS(D_Devise[Devise] = "CDF")))
+		formatString: #,##0" CDF"
+		displayFolder: 03 - Crédit
+		lineageTag: 31b2219a-800d-466e-b05a-b3f1d5d974a2
+
+	/// Encours USD divisé par le nombre de prêts actifs.
+	measure 'Montant moyen prêt actif USD' = DIVIDE([Encours USD], CALCULATE([Prêts actifs], KEEPFILTERS(D_Devise[Devise] = "USD")))
+		formatString: #,##0.00" USD"
+		displayFolder: 03 - Crédit
+		lineageTag: a16a0e17-6f71-4c34-b6aa-5d54cd45b941
+
+	/// Montant décaissé CDF divisé par le nombre de prêts décaissés.
+	measure 'Montant moyen prêt décaissé CDF' = DIVIDE([Décaissements CDF], CALCULATE([Prêts décaissés], KEEPFILTERS(D_Devise[Devise] = "CDF")))
+		formatString: #,##0" CDF"
+		displayFolder: 03 - Crédit
+		lineageTag: 33536b84-679a-4c6e-834c-8218af7f80b4
+
+	/// Montant décaissé USD divisé par le nombre de prêts décaissés.
+	measure 'Montant moyen prêt décaissé USD' = DIVIDE([Décaissements USD], CALCULATE([Prêts décaissés], KEEPFILTERS(D_Devise[Devise] = "USD")))
+		formatString: #,##0.00" USD"
+		displayFolder: 03 - Crédit
+		lineageTag: 5ed1a3eb-1a1e-4cd3-b66f-be2a27534b25
+
+	/// Solde CDF des produits assimilés à l'épargne courante.
+	measure 'Encours épargne courante CDF' = CALCULATE(SUM(F_Epargne_Soldes[Solde épargne]), KEEPFILTERS(D_Devise[Devise] = "CDF"), FILTER(F_Epargne_Soldes, CONTAINSSTRING(UPPER(F_Epargne_Soldes[Produit épargne]), "COURANT") || CONTAINSSTRING(UPPER(F_Epargne_Soldes[Produit épargne]), "EPARGNE ORDINAIRE") || CONTAINSSTRING(UPPER(F_Epargne_Soldes[Produit épargne]), "ÉPARGNE ORDINAIRE")))
+		formatString: #,##0" CDF"
+		displayFolder: 04 - Épargne
+		lineageTag: 7b243f57-dbfe-459b-b52a-19b058c22af3
+
+	/// Solde USD des produits assimilés à l'épargne courante.
+	measure 'Encours épargne courante USD' = CALCULATE(SUM(F_Epargne_Soldes[Solde épargne]), KEEPFILTERS(D_Devise[Devise] = "USD"), FILTER(F_Epargne_Soldes, CONTAINSSTRING(UPPER(F_Epargne_Soldes[Produit épargne]), "COURANT") || CONTAINSSTRING(UPPER(F_Epargne_Soldes[Produit épargne]), "EPARGNE ORDINAIRE") || CONTAINSSTRING(UPPER(F_Epargne_Soldes[Produit épargne]), "ÉPARGNE ORDINAIRE")))
+		formatString: #,##0.00" USD"
+		displayFolder: 04 - Épargne
+		lineageTag: 5ceabab2-8ca6-47b9-9702-ccdf0cffd898
+
+	/// Solde CDF des dépôts à terme identifiés par les produits contenant DAT.
+	measure 'Encours DAT CDF' = CALCULATE(SUM(F_Epargne_Soldes[Solde épargne]), KEEPFILTERS(D_Devise[Devise] = "CDF"), FILTER(F_Epargne_Soldes, CONTAINSSTRING(UPPER(F_Epargne_Soldes[Produit épargne]), "DAT")))
+		formatString: #,##0" CDF"
+		displayFolder: 04 - Épargne
+		lineageTag: 2a021437-f8b5-4241-a2f4-de9870684e08
+
+	/// Solde USD des dépôts à terme identifiés par les produits contenant DAT.
+	measure 'Encours DAT USD' = CALCULATE(SUM(F_Epargne_Soldes[Solde épargne]), KEEPFILTERS(D_Devise[Devise] = "USD"), FILTER(F_Epargne_Soldes, CONTAINSSTRING(UPPER(F_Epargne_Soldes[Produit épargne]), "DAT")))
+		formatString: #,##0.00" USD"
+		displayFolder: 04 - Épargne
+		lineageTag: 25906385-9b7c-4c85-913e-f8a51df1f902
+
+	/// Solde CDF des produits d'épargne hors épargne courante et hors DAT.
+	measure 'Autres épargnes CDF' = [Épargne CDF] - [Encours épargne courante CDF] - [Encours DAT CDF]
+		formatString: #,##0" CDF"
+		displayFolder: 04 - Épargne
+		lineageTag: 08e11b85-b497-4666-9b3c-b31534d1d709
+
+	/// Solde USD des produits d'épargne hors épargne courante et hors DAT.
+	measure 'Autres épargnes USD' = [Épargne USD] - [Encours épargne courante USD] - [Encours DAT USD]
+		formatString: #,##0.00" USD"
+		displayFolder: 04 - Épargne
+		lineageTag: 9e01d538-01c7-46c0-bf2e-fbffccb223d7
+
+	/// Part des DAT dans l'épargne totale CDF.
+	measure 'Part DAT épargne CDF' = DIVIDE([Encours DAT CDF], [Épargne CDF])
+		formatString: 0.00%
+		displayFolder: 04 - Épargne
+		lineageTag: 08492a96-7985-431a-8623-2390098eba48
+
+	/// Part des DAT dans l'épargne totale USD.
+	measure 'Part DAT épargne USD' = DIVIDE([Encours DAT USD], [Épargne USD])
+		formatString: 0.00%
+		displayFolder: 04 - Épargne
+		lineageTag: 0b5dca30-bd17-4c6b-af36-a90eb8a026e3
+
+	/// Solde moyen d'épargne par client épargnant, en CDF.
+	measure 'Solde moyen par épargnant CDF' = DIVIDE([Épargne CDF], CALCULATE([Clients épargne], KEEPFILTERS(D_Devise[Devise] = "CDF")))
+		formatString: #,##0" CDF"
+		displayFolder: 04 - Épargne
+		lineageTag: 152a904b-e64b-46f6-a145-58f15fb7f156
+
+	/// Solde moyen d'épargne par client épargnant, en USD.
+	measure 'Solde moyen par épargnant USD' = DIVIDE([Épargne USD], CALCULATE([Clients épargne], KEEPFILTERS(D_Devise[Devise] = "USD")))
+		formatString: #,##0.00" USD"
+		displayFolder: 04 - Épargne
+		lineageTag: 119e3325-aa92-48de-b04f-11b9b08b7ad6
+
+	/// Comptes actifs du socle clients divisés par les comptes ouverts.
+	measure 'Taux activité comptes' = DIVIDE(SUM(F_Clients[Comptes]), SUM(F_Clients[Comptes ouverts]))
+		formatString: 0.00%
+		displayFolder: 02 - Clients
+		lineageTag: dbbfd647-833b-4cc3-9bc5-5af828f19631
+
+	/// Montant des dépôts CDF captés dans le socle conformité.
+	measure 'Montant dépôts CDF' = COALESCE(CALCULATE(SUM(F_Conformite[Montant]), KEEPFILTERS(D_Devise[Devise] = "CDF"), KEEPFILTERS(F_Conformite[Type élément] = "Mouvement"), KEEPFILTERS(F_Conformite[Type opération] IN {"DEPO", "MOB_DEPO", "DDAT"})), 0)
+		formatString: #,##0" CDF"
+		displayFolder: 06 - Surveillance
+		lineageTag: 06f31e12-8550-44b1-9b9f-a82ab58b561b
+
+	/// Montant des dépôts USD captés dans le socle conformité.
+	measure 'Montant dépôts USD' = COALESCE(CALCULATE(SUM(F_Conformite[Montant]), KEEPFILTERS(D_Devise[Devise] = "USD"), KEEPFILTERS(F_Conformite[Type élément] = "Mouvement"), KEEPFILTERS(F_Conformite[Type opération] IN {"DEPO", "MOB_DEPO", "DDAT"})), 0)
+		formatString: #,##0.00" USD"
+		displayFolder: 06 - Surveillance
+		lineageTag: 5d08952d-14c0-4d47-afbc-5ffe52da50c4
+
+	/// Montant des retraits CDF captés dans le socle conformité.
+	measure 'Montant retraits CDF' = COALESCE(CALCULATE(SUM(F_Conformite[Montant]), KEEPFILTERS(D_Devise[Devise] = "CDF"), KEEPFILTERS(F_Conformite[Type élément] = "Mouvement"), KEEPFILTERS(F_Conformite[Type opération] IN {"RETR", "MOB_RETR", "RDAT"})), 0)
+		formatString: #,##0" CDF"
+		displayFolder: 06 - Surveillance
+		lineageTag: 97cc37ec-4854-4968-a9c8-917e32ffa7e0
+
+	/// Montant des retraits USD captés dans le socle conformité.
+	measure 'Montant retraits USD' = COALESCE(CALCULATE(SUM(F_Conformite[Montant]), KEEPFILTERS(D_Devise[Devise] = "USD"), KEEPFILTERS(F_Conformite[Type élément] = "Mouvement"), KEEPFILTERS(F_Conformite[Type opération] IN {"RETR", "MOB_RETR", "RDAT"})), 0)
+		formatString: #,##0.00" USD"
+		displayFolder: 06 - Surveillance
+		lineageTag: 1a1ee479-6567-46e8-bede-db77d5c51e99
+
+	/// Collecte nette CDF : dépôts moins retraits.
+	measure 'Collecte nette CDF' = [Montant dépôts CDF] - [Montant retraits CDF]
+		formatString: #,##0" CDF"
+		displayFolder: 04 - Épargne
+		lineageTag: 5cab70ac-2028-4d7b-ba87-5208feeaf85e
+
+	/// Collecte nette USD : dépôts moins retraits.
+	measure 'Collecte nette USD' = [Montant dépôts USD] - [Montant retraits USD]
+		formatString: #,##0.00" USD"
+		displayFolder: 04 - Épargne
+		lineageTag: 9dadb12e-9b10-47f9-9ae1-69278d27af5b
 
 	column Technique
 		dataType: string

@@ -74,7 +74,7 @@ Chaque cycle dispose :
 
 ```text
 Ordinateur principal :
-C:\Users\Benjamin-mupanzi\AppData\Local\anaconda3
+C:\Users\<utilisateur>\AppData\Local\anaconda3
 
 Autre ordinateur :
 C:\ProgramData\anaconda3
@@ -83,7 +83,7 @@ C:\ProgramData\anaconda3
 Pour éviter de modifier toutes les commandes, définir d’abord la variable `$PYTHON` selon l’ordinateur utilisé :
 
 ```powershell
-$PYTHON = 'C:\Users\Benjamin-mupanzi\AppData\Local\anaconda3\python.exe'
+$PYTHON = 'C:\Users\<utilisateur>\AppData\Local\anaconda3\python.exe'
 
 # Sur un autre ordinateur :
 # $PYTHON = 'C:\ProgramData\anaconda3\python.exe'

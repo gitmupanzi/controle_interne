@@ -59,6 +59,51 @@
               "queryRef": "_Mesures.Encours USD",
               "nativeQueryRef": "Encours USD",
               "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Montant moyen prêt actif CDF"
+                }
+              },
+              "queryRef": "_Mesures.Montant moyen prêt actif CDF",
+              "nativeQueryRef": "Montant moyen prêt actif CDF",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Montant moyen prêt actif USD"
+                }
+              },
+              "queryRef": "_Mesures.Montant moyen prêt actif USD",
+              "nativeQueryRef": "Montant moyen prêt actif USD",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Taux crédits en retard"
+                }
+              },
+              "queryRef": "_Mesures.Taux crédits en retard",
+              "nativeQueryRef": "Taux crédits en retard",
+              "active": true
             }
           ]
         }
@@ -135,7 +180,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "22D"
+                  "Value": "15D"
                 }
               }
             },
@@ -321,7 +366,7 @@
             "text": {
               "expr": {
                 "Literal": {
-                  "Value": "'Portefeuille actif'"
+                  "Value": "'Portefeuille actif et montant moyen'"
                 }
               }
             },

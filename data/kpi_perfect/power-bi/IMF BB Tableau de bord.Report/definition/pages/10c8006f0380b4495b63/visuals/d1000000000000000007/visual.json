@@ -23,6 +23,20 @@
                       "Entity": "_Mesures"
                     }
                   },
+                  "Property": "Prêts décaissés"
+                }
+              },
+              "queryRef": "_Mesures.Prêts décaissés",
+              "nativeQueryRef": "Prêts décaissés"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
                   "Property": "Décaissements CDF"
                 }
               },
@@ -118,7 +132,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "22D"
+                  "Value": "15D"
                 }
               }
             },
@@ -170,6 +184,19 @@
           },
           "selector": {
             "id": "default"
+          }
+        }
+      ],
+      "layout": [
+        {
+          "properties": {
+            "alignment": {
+              "expr": {
+                "Literal": {
+                  "Value": "'middle'"
+                }
+              }
+            }
           }
         }
       ]

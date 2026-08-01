@@ -29,6 +29,21 @@
               "queryRef": "_Mesures.Clients actifs",
               "nativeQueryRef": "Clients actifs",
               "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Taux clients actifs"
+                }
+              },
+              "queryRef": "_Mesures.Taux clients actifs",
+              "nativeQueryRef": "Taux clients actifs",
+              "active": true
             }
           ]
         }
@@ -105,7 +120,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "22D"
+                  "Value": "15D"
                 }
               }
             },
@@ -291,7 +306,7 @@
             "text": {
               "expr": {
                 "Literal": {
-                  "Value": "'Clients actifs'"
+                  "Value": "'Clients actifs et taux'"
                 }
               }
             },

@@ -59,6 +59,36 @@
               "queryRef": "_Mesures.Décaissements USD",
               "nativeQueryRef": "Décaissements USD",
               "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Montant moyen prêt décaissé CDF"
+                }
+              },
+              "queryRef": "_Mesures.Montant moyen prêt décaissé CDF",
+              "nativeQueryRef": "Montant moyen prêt décaissé CDF",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Montant moyen prêt décaissé USD"
+                }
+              },
+              "queryRef": "_Mesures.Montant moyen prêt décaissé USD",
+              "nativeQueryRef": "Montant moyen prêt décaissé USD",
+              "active": true
             }
           ]
         }
@@ -135,7 +165,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "22D"
+                  "Value": "15D"
                 }
               }
             },
@@ -321,7 +351,7 @@
             "text": {
               "expr": {
                 "Literal": {
-                  "Value": "'Décaissements sur la période'"
+                  "Value": "'Décaissements et ticket moyen'"
                 }
               }
             },

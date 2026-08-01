@@ -46,3 +46,21 @@ data/vision/*
 data/vision/power-bi/**/.pbi/
 reports/*
 SOP/*
+analysis/*.ipynb
+
+# Modelisation / fichiers locaux regeneres par Desktop
+data/modelisation/*
+
+# Power BI - projet KPI Perfect / fichiers locaux regeneres par Desktop
+data/kpi_perfect/power-bi/**/.pbi/
+data/kpi_perfect/power-bi/**/*.pbix
+data/kpi_perfect/power-bi/**/*.pbit
+data/kpi_perfect/power-bi/**/*.abf
+data/kpi_perfect/power-bi/**/localSettings.json
+
+# SQL reporting KPI Perfect - scripts locaux sensibles / regenerables
+data/kpi_perfect/reporting_sql/*
+
+# Documents metier locaux / cas clients
+skills/solution-mpesa/*.docx
+skills/solution-mpesa/*.pdf

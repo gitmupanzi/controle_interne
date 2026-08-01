@@ -44,6 +44,96 @@
               "queryRef": "_Mesures.Épargne USD",
               "nativeQueryRef": "Épargne USD",
               "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Encours épargne courante CDF"
+                }
+              },
+              "queryRef": "_Mesures.Encours épargne courante CDF",
+              "nativeQueryRef": "Encours épargne courante CDF",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Encours épargne courante USD"
+                }
+              },
+              "queryRef": "_Mesures.Encours épargne courante USD",
+              "nativeQueryRef": "Encours épargne courante USD",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Encours DAT CDF"
+                }
+              },
+              "queryRef": "_Mesures.Encours DAT CDF",
+              "nativeQueryRef": "Encours DAT CDF",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Encours DAT USD"
+                }
+              },
+              "queryRef": "_Mesures.Encours DAT USD",
+              "nativeQueryRef": "Encours DAT USD",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Autres épargnes CDF"
+                }
+              },
+              "queryRef": "_Mesures.Autres épargnes CDF",
+              "nativeQueryRef": "Autres épargnes CDF",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Autres épargnes USD"
+                }
+              },
+              "queryRef": "_Mesures.Autres épargnes USD",
+              "nativeQueryRef": "Autres épargnes USD",
+              "active": true
             }
           ]
         }
@@ -120,7 +210,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "18D"
+                  "Value": "15D"
                 }
               }
             },
@@ -306,7 +396,7 @@
             "text": {
               "expr": {
                 "Literal": {
-                  "Value": "'Position d’épargne'"
+                  "Value": "'Position et structure d’épargne'"
                 }
               }
             },

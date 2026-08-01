@@ -2,11 +2,10 @@
 
 ## Fichiers de référence
 
-- Schéma SQL Server : `data/vision/BB_VISION_PRO.sql`
-- Catalogue des contrôles : `data/vision/requetes.sql`
-- Modélisation synthétique : `data/vision/schema_modelisation_bb_vision.md`
-- Description complémentaire : `data/vision/desciption_tables_Perfect_vision.xlsx`
-- Indicateurs : `data/vision/Indicateurs_perfect_vision.xlsx`
+- Schéma SQL Server : `data/modelisation/BB_VISION_PRO.sql`
+- Catalogue des contrôles : `data/modelisation/requetes.sql`
+- Description complémentaire : `data/modelisation/desciption_tables_Perfect_vision.xlsx`
+- Indicateurs : `data/modelisation/Indicateurs_perfect_vision.xlsx`
 
 Résoudre ces chemins depuis la racine du dépôt. Depuis ce skill, la racine est `../..`.
 

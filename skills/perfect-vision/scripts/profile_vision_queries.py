@@ -18,7 +18,7 @@ import pyodbc
 
 
 ROOT = Path(__file__).resolve().parents[3]
-QUERIES = ROOT / "data" / "vision" / "requetes.sql"
+QUERIES = ROOT / "data" / "modelisation" / "requetes.sql"
 QUERY_HEADER_PATTERN = re.compile(r"^\s*(\d{1,3})\.\s+(.+?)\s*$")
 
 

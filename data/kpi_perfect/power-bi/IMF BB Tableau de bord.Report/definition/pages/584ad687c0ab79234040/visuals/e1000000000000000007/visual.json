@@ -44,6 +44,66 @@
               "queryRef": "_Mesures.Solde moyen USD",
               "nativeQueryRef": "Solde moyen USD",
               "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Solde moyen par épargnant CDF"
+                }
+              },
+              "queryRef": "_Mesures.Solde moyen par épargnant CDF",
+              "nativeQueryRef": "Solde moyen par épargnant CDF",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Solde moyen par épargnant USD"
+                }
+              },
+              "queryRef": "_Mesures.Solde moyen par épargnant USD",
+              "nativeQueryRef": "Solde moyen par épargnant USD",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Part DAT épargne CDF"
+                }
+              },
+              "queryRef": "_Mesures.Part DAT épargne CDF",
+              "nativeQueryRef": "Part DAT épargne CDF",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Part DAT épargne USD"
+                }
+              },
+              "queryRef": "_Mesures.Part DAT épargne USD",
+              "nativeQueryRef": "Part DAT épargne USD",
+              "active": true
             }
           ]
         }
@@ -120,7 +180,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "18D"
+                  "Value": "15D"
                 }
               }
             },
@@ -306,7 +366,7 @@
             "text": {
               "expr": {
                 "Literal": {
-                  "Value": "'Solde moyen par compte'"
+                  "Value": "'Solde moyen et DAT'"
                 }
               }
             },

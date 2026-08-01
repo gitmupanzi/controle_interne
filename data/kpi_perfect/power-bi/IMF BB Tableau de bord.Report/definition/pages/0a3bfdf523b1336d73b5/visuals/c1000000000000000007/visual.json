@@ -74,6 +74,21 @@
               "queryRef": "_Mesures.Provision CDF",
               "nativeQueryRef": "Provision CDF",
               "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Taux couverture PAR30 CDF"
+                }
+              },
+              "queryRef": "_Mesures.Taux couverture PAR30 CDF",
+              "nativeQueryRef": "Taux couverture PAR30 CDF",
+              "active": true
             }
           ]
         }
@@ -150,7 +165,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "14D"
+                  "Value": "15D"
                 }
               }
             },
@@ -336,7 +351,7 @@
             "text": {
               "expr": {
                 "Literal": {
-                  "Value": "'Qualité du portefeuille — CDF'"
+                  "Value": "'Qualité et couverture — CDF'"
                 }
               }
             },

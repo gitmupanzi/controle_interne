@@ -106,7 +106,9 @@ Dans le PBIP IMF BB, conserver deux paramètres de base :
 Tables validées :
 
 - `F_Conformite` lit `BB_VISION_REPORTING.rpt.f_conformite` ;
-- `F_Clients` lit `BB_VISION_REPORTING.rpt.f_clients`.
+- `F_Clients` lit `BB_VISION_REPORTING.rpt.f_clients` ;
+- `F_Credit_PAR_Detail` lit `BB_VISION_REPORTING.rpt.f_credit_par_detail` ;
+- `F_Credit_Portefeuille` lit `BB_VISION_REPORTING.rpt.f_credit_portefeuille`.
 
 Power Query recommandé :
 

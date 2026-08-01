@@ -29,6 +29,21 @@
               "queryRef": "_Mesures.Clients comptes ouverts",
               "nativeQueryRef": "Clients comptes ouverts",
               "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Taux activité comptes"
+                }
+              },
+              "queryRef": "_Mesures.Taux activité comptes",
+              "nativeQueryRef": "Taux activité comptes",
+              "active": true
             }
           ]
         }
@@ -105,7 +120,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "22D"
+                  "Value": "15D"
                 }
               }
             },
@@ -291,7 +306,7 @@
             "text": {
               "expr": {
                 "Literal": {
-                  "Value": "'Avec compte ouvert'"
+                  "Value": "'Comptes ouverts et activité'"
                 }
               }
             },

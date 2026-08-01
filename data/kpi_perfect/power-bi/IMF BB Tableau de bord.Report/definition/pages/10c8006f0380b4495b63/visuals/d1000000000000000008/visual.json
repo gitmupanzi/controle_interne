@@ -23,6 +23,34 @@
                       "Entity": "_Mesures"
                     }
                   },
+                  "Property": "Clients épargne"
+                }
+              },
+              "queryRef": "_Mesures.Clients épargne",
+              "nativeQueryRef": "Clients épargne"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
+                  "Property": "Comptes épargne"
+                }
+              },
+              "queryRef": "_Mesures.Comptes épargne",
+              "nativeQueryRef": "Comptes épargne"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "_Mesures"
+                    }
+                  },
                   "Property": "Épargne CDF"
                 }
               },
@@ -118,7 +146,7 @@
             "fontSize": {
               "expr": {
                 "Literal": {
-                  "Value": "22D"
+                  "Value": "15D"
                 }
               }
             },
