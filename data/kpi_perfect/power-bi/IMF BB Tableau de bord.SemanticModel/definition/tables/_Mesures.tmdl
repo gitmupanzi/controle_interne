@@ -238,37 +238,37 @@ table _Mesures
 		lineageTag: c4d33a1f-8b77-4ec2-8271-a01e9e0cd717
 
 	/// Nombre de clients distincts répondant à la définition opérationnelle d'un client actif.
-	measure 'Clients actifs' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Client actif] = 1))
+	measure 'Clients actifs' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Client actif] = TRUE()))
 		formatString: #,##0
 		lineageTag: 4e9e08b5-b2e2-443c-b751-8783728cc440
 
 	/// Nombre de clients distincts ayant au moins un compte ouvert.
-	measure 'Clients comptes ouverts' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec compte ouvert] = 1))
+	measure 'Clients comptes ouverts' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec compte ouvert] = TRUE()))
 		formatString: #,##0
 		lineageTag: 245d5d32-37e1-4c4a-b5c7-4b2c15a405e9
 
 	/// Nombre de clients distincts ayant au moins un compte explicitement codé bloqué ou gelé.
-	measure 'Clients comptes bloqués' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec compte bloqué] = 1))
+	measure 'Clients comptes bloqués' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec compte bloqué] = TRUE()))
 		formatString: #,##0
 		lineageTag: c4d3abb2-0506-447d-8caa-6d09984a73cd
 
 	/// Nombre de clients distincts ayant au moins un compte ouvert sans mouvement depuis 24 mois.
-	measure 'Clients comptes dormants' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec compte dormant] = 1))
+	measure 'Clients comptes dormants' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec compte dormant] = TRUE()))
 		formatString: #,##0
 		lineageTag: e51e653d-32d0-434a-a3ac-272eb2b8a9c1
 
 	/// Nombre de clients distincts ayant une échéance de crédit dans la période.
-	measure 'Clients crédit à rembourser' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec crédit à rembourser] = 1))
+	measure 'Clients crédit à rembourser' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec crédit à rembourser] = TRUE()))
 		formatString: #,##0
 		lineageTag: e5c6eee0-cc3c-43d5-9df6-eedca0cfb4da
 
 	/// Nombre de clients distincts ayant reçu un intérêt d'épargne ou de DAT pendant la période.
-	measure 'Clients intérêt épargne' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Bénéficiaire intérêt épargne] = 1))
+	measure 'Clients intérêt épargne' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Bénéficiaire intérêt épargne] = TRUE()))
 		formatString: #,##0
 		lineageTag: d25e9572-992a-4313-a916-55e1ca1a74ea
 
 	/// Nombre de clients distincts dont un DAT arrive à échéance dans la période.
-	measure 'Clients DAT à échéance' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec DAT à échéance] = 1))
+	measure 'Clients DAT à échéance' = CALCULATE(DISTINCTCOUNT(F_Clients[Code client]), KEEPFILTERS(F_Clients[Avec DAT à échéance] = TRUE()))
 		formatString: #,##0
 		lineageTag: b0946f71-bf73-4260-a6b1-9a48b9ea2ace
 
