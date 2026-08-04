@@ -6125,6 +6125,7 @@ def _empty_mpesa_accounting_analysis() -> dict[str, pd.DataFrame]:
         "synthese": pd.DataFrame(),
         "balance_clients": pd.DataFrame(),
         "balance_clients_par_date": pd.DataFrame(),
+        "suivi_depots_retraits_pivot": pd.DataFrame(),
         "balance_auxiliaire_clients": pd.DataFrame(),
         "balance_comptes": pd.DataFrame(),
         "journal_operations": pd.DataFrame(),
@@ -6289,11 +6290,19 @@ def build_mpesa_accounting_analysis(
         normal_savings & normalized_descriptions.eq("retrait vers m-pesa"),
         0.0,
     )
+    scoped["nombre_depots_epargne_observes"] = (
+        scoped["depot_epargne_observe"].gt(0).astype(int)
+    )
+    scoped["nombre_retraits_epargne_observes"] = (
+        scoped["retrait_epargne_observe"].gt(0).astype(int)
+    )
     savings_flows_by_client = (
         scoped.groupby(["customer_id", "currency_code"], as_index=False, dropna=False)
         .agg(
             depots_epargne_observes=("depot_epargne_observe", "sum"),
             retraits_epargne_observes=("retrait_epargne_observe", "sum"),
+            nombre_depots_epargne_observes=("nombre_depots_epargne_observes", "sum"),
+            nombre_retraits_epargne_observes=("nombre_retraits_epargne_observes", "sum"),
         )
     )
     savings_flows_by_client["mouvement_net_epargne_observe"] = (
@@ -6329,6 +6338,8 @@ def build_mpesa_accounting_analysis(
         .agg(
             depots_epargne_observes=("depot_epargne_observe", "sum"),
             retraits_epargne_observes=("retrait_epargne_observe", "sum"),
+            nombre_depots_epargne_observes=("nombre_depots_epargne_observes", "sum"),
+            nombre_retraits_epargne_observes=("nombre_retraits_epargne_observes", "sum"),
         )
     )
     daily_client_balance = (
@@ -6802,6 +6813,7 @@ def build_mpesa_accounting_analysis(
             "synthese": summary.sort_values("currency_code").reset_index(drop=True),
             "balance_clients": balance_clients,
             "balance_clients_par_date": daily_client_balance,
+            "suivi_depots_retraits_pivot": pd.DataFrame(),
             "balance_auxiliaire_clients": auxiliary_balance,
             "balance_comptes": balance_comptes,
             "journal_operations": journal_operations,
@@ -8994,8 +9006,8 @@ def create_mpesa_statistics_word(
     section = document.sections[0]
     section.top_margin = Cm(1.0)
     section.bottom_margin = Cm(1.0)
-    section.left_margin = Cm(1.0)
-    section.right_margin = Cm(1.0)
+    section.left_margin = Cm(2.0)
+    section.right_margin = Cm(2.0)
     styles = document.styles
     styles["Normal"].font.name = "Aptos"
     styles["Normal"].font.size = Pt(8.5)
@@ -12105,6 +12117,102 @@ def _enrich_customer_dat_return_dates(
     return result
 
 
+UPCOMING_REPAYMENT_COLUMNS = [
+    "customer_id",
+    "loan_id",
+    "due_date",
+    "currency_code",
+    "loan_amount",
+    "loan_balance",
+    "outstanding_principle",
+    "outstanding_interest",
+    "outstanding_setup_fees",
+    "outstanding_penalty_fees",
+    "montant_a_rembourser",
+    "status_name",
+]
+
+
+def build_customer_upcoming_repayments(
+    loans: pd.DataFrame,
+    customer_id: object,
+    *,
+    date_start: object | None = None,
+    date_end: object | None = None,
+    currency: object | None = None,
+) -> pd.DataFrame:
+    """Liste les prochaines echeances de credit du client sur la periode."""
+    result = pd.DataFrame(columns=UPCOMING_REPAYMENT_COLUMNS)
+    if not isinstance(loans, pd.DataFrame) or loans.empty or "customer_id" not in loans.columns:
+        return result
+    frame = loans.copy()
+    frame = frame.loc[
+        clean_identifier(frame["customer_id"]).eq(str(customer_id).strip())
+    ].copy()
+    if frame.empty:
+        return result
+    if "currency_code" not in frame.columns:
+        frame["currency_code"] = ""
+    frame["currency_code"] = clean_text(frame["currency_code"]).str.upper()
+    currency_text = str(currency).strip().upper() if currency is not None else ""
+    if currency_text and currency_text not in {"TOUTES", "TOUS", "ALL", "CDF + USD"}:
+        frame = frame.loc[frame["currency_code"].eq(currency_text)].copy()
+    if frame.empty:
+        return result
+    if "due_date" not in frame.columns:
+        return result
+    frame["due_date"] = pd.to_datetime(frame["due_date"], errors="coerce")
+    frame = frame.dropna(subset=["due_date"]).copy()
+    if frame.empty:
+        return result
+    start = pd.to_datetime(date_start, errors="coerce") if date_start is not None else pd.NaT
+    end = pd.to_datetime(date_end, errors="coerce") if date_end is not None else pd.NaT
+    if pd.notna(start):
+        frame = frame.loc[frame["due_date"].ge(pd.Timestamp(start))].copy()
+    if pd.notna(end):
+        end_timestamp = pd.Timestamp(end)
+        if end_timestamp == end_timestamp.normalize():
+            end_timestamp = _timestamp_plus(end_timestamp, days=1, microseconds=-1)
+        frame = frame.loc[frame["due_date"].le(end_timestamp)].copy()
+    if frame.empty:
+        return result
+    for column in [
+        "loan_amount",
+        "loan_balance",
+        "outstanding_principle",
+        "outstanding_interest",
+        "outstanding_setup_fees",
+        "outstanding_penalty_fees",
+    ]:
+        if column not in frame.columns:
+            frame[column] = 0.0
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+    frame["montant_a_rembourser"] = frame[
+        [
+            "outstanding_principle",
+            "outstanding_interest",
+            "outstanding_setup_fees",
+            "outstanding_penalty_fees",
+        ]
+    ].sum(axis=1)
+    frame["montant_a_rembourser"] = frame["montant_a_rembourser"].where(
+        frame["montant_a_rembourser"].gt(0),
+        frame["loan_balance"],
+    )
+    for column in ["loan_id", "status_name"]:
+        if column not in frame.columns:
+            frame[column] = ""
+        frame[column] = clean_text(frame[column])
+    for column in UPCOMING_REPAYMENT_COLUMNS:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+    return (
+        frame[UPCOMING_REPAYMENT_COLUMNS]
+        .sort_values(["due_date", "currency_code", "loan_id"])
+        .reset_index(drop=True)
+    )
+
+
 def build_customer_transaction_analysis(
     prepared: MpesaPreparedData,
     customer_id: object,
@@ -12127,6 +12235,13 @@ def build_customer_transaction_analysis(
         reference_query=reference_query,
         annual_interest_rate_pct=annual_interest_rate_pct,
     )
+    upcoming_repayments = build_customer_upcoming_repayments(
+        prepared.loans,
+        customer_id,
+        date_start=date_start,
+        date_end=date_end,
+        currency=currency,
+    )
     statement_elements = build_customer_statement_elements(
         pd.DataFrame(),
         dat_interest_entries,
@@ -12141,6 +12256,7 @@ def build_customer_transaction_analysis(
         "positions_turbo": pd.DataFrame(),
         "comportement_turbo": pd.DataFrame(),
         "mouvements_internes_turbo": pd.DataFrame(),
+        "prochains_remboursements_client": upcoming_repayments,
         "controles_client_turbo": pd.DataFrame(),
         "elements_extrait_client_turbo": statement_elements["detail"],
         "elements_extrait_client_synthese": statement_elements["synthese"],
@@ -12344,6 +12460,7 @@ def build_customer_transaction_analysis(
         "positions_turbo": positions,
         "comportement_turbo": behavior,
         "mouvements_internes_turbo": internal[internal_columns].sort_values("created_at").reset_index(drop=True),
+        "prochains_remboursements_client": upcoming_repayments,
         "controles_client_turbo": scoped[control_columns].sort_values("created_at").reset_index(drop=True),
         "elements_extrait_client_turbo": statement_elements["detail"],
         "elements_extrait_client_synthese": statement_elements["synthese"],
@@ -14880,7 +14997,7 @@ p {{ margin: 4px 0 7px; }}
       <tr><th>Date du :</th><td>{escape(period_start_text)}</td></tr>
       <tr><th>Au :</th><td>{escape(period_end_text)}</td></tr>
       <tr><th>Sens</th><td>{escape(direction_label)}</td></tr>
-      <tr><th>Source</th><td>{escape(str(report.get("analysis_source_label", "G2") or "G2"))}</td></tr>
+      <tr><th>Source</th><td>{escape(str(report.get("analysis_source_label", "G2") or "Turbo/G2"))}</td></tr>
       <tr><th>Généré le</th><td>{generated_at:%d/%m/%Y}</td></tr>
     </table>
   </div>
@@ -15069,8 +15186,8 @@ def create_customer_statement_word(
     section = document.sections[0]
     section.top_margin = Cm(1.0)
     section.bottom_margin = Cm(1.0)
-    section.left_margin = Cm(1.0)
-    section.right_margin = Cm(1.0)
+    section.left_margin = Cm(2.0)
+    section.right_margin = Cm(2.0)
 
     styles = document.styles
     styles["Normal"].font.name = "Aptos"
@@ -15294,6 +15411,7 @@ def create_customer_statement_word(
                     "date_ecriture_turbo",
                     "date_creation_dat",
                     "date_fin_dat",
+                    "due_date",
                 }:
                     parsed = pd.to_datetime(value, errors="coerce")
                     text = f"{parsed:%d/%m/%Y %H:%M}" if pd.notna(parsed) else "-"
@@ -15398,6 +15516,34 @@ def create_customer_statement_word(
                 "penalite_observee": "Pénalités",
             },
             [2.7, 3.0, 1.3, 2.4, 2.2, 4.4, 2.2],
+        )
+
+    upcoming_repayments = analysis_frame("prochains_remboursements_client")
+    if not minimal and not upcoming_repayments.empty:
+        add_analysis_title("Prochains remboursements sur la période")
+        add_analysis_table(
+            upcoming_repayments,
+            [
+                "due_date",
+                "loan_id",
+                "currency_code",
+                "montant_a_rembourser",
+                "outstanding_principle",
+                "outstanding_interest",
+                "outstanding_penalty_fees",
+                "status_name",
+            ],
+            {
+                "due_date": "Date prévue",
+                "loan_id": "Crédit",
+                "currency_code": "Devise",
+                "montant_a_rembourser": "Montant à rembourser",
+                "outstanding_principle": "Principal",
+                "outstanding_interest": "Intérêts",
+                "outstanding_penalty_fees": "Pénalités",
+                "status_name": "Statut",
+            },
+            [2.5, 2.6, 1.2, 2.6, 2.2, 2.0, 2.0, 3.0],
         )
 
     internal = analysis_frame("mouvements_internes_turbo")
@@ -15792,6 +15938,7 @@ def create_customer_statement_pdf(
                     "date_approved",
                     "date_creation_dat",
                     "date_fin_dat",
+                    "due_date",
                 }:
                     parsed = pd.to_datetime(value, errors="coerce")
                     text_value = f"{parsed:%d/%m/%Y %H:%M}" if pd.notna(parsed) else "-"
@@ -15980,6 +16127,34 @@ def create_customer_statement_pdf(
             ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
         ]))
         story.append(repayment_table)
+
+    upcoming_repayments = analysis_frame("prochains_remboursements_client")
+    if not minimal:
+        append_analysis_table(
+            "Prochains remboursements sur la période",
+            upcoming_repayments,
+            [
+                "due_date",
+                "loan_id",
+                "currency_code",
+                "montant_a_rembourser",
+                "outstanding_principle",
+                "outstanding_interest",
+                "outstanding_penalty_fees",
+                "status_name",
+            ],
+            {
+                "due_date": "Date prévue",
+                "loan_id": "Crédit",
+                "currency_code": "Devise",
+                "montant_a_rembourser": "Montant à rembourser",
+                "outstanding_principle": "Principal",
+                "outstanding_interest": "Intérêts",
+                "outstanding_penalty_fees": "Pénalités",
+                "status_name": "Statut",
+            },
+            [2.3, 2.4, 1.0, 2.5, 2.0, 1.8, 1.8, 3.0],
+        )
 
     if not minimal:
         internal = analysis_frame("mouvements_internes_turbo")
@@ -16174,8 +16349,8 @@ def create_customer_client_statement_word(
     section = document.sections[0]
     section.top_margin = Cm(1.0)
     section.bottom_margin = Cm(1.0)
-    section.left_margin = Cm(1.0)
-    section.right_margin = Cm(1.0)
+    section.left_margin = Cm(2.0)
+    section.right_margin = Cm(2.0)
     styles = document.styles
     styles["Normal"].font.name = "Aptos"
     styles["Normal"].font.size = Pt(8.5)
@@ -16935,6 +17110,218 @@ def build_filtered_turbo_daily_balance_report(
     }
 
 
+def build_filtered_turbo_deposit_withdrawal_pivot_report(
+    report: dict[str, Any],
+    filtered_client_balance: pd.DataFrame,
+) -> dict[str, pd.DataFrame]:
+    """Construit le suivi pivot depots/retraits inspire du releve Vodacom.
+
+    Le tableau conserve une ligne par client, operation et devise. Les colonnes
+    journalieres affichent les montants observes sur le compte ouvert
+    ``NORMAL SAVINGS``; le score mesure la frequence de l'operation sur le
+    nombre de jours couverts par la periode filtree.
+    """
+    daily_report = build_filtered_turbo_daily_balance_report(
+        report,
+        filtered_client_balance,
+    )
+    daily = daily_report.get("balance_clients_par_date", pd.DataFrame())
+    daily = daily.copy() if isinstance(daily, pd.DataFrame) else pd.DataFrame()
+    period = daily_report.get("periode", pd.DataFrame())
+    period = period.copy() if isinstance(period, pd.DataFrame) else pd.DataFrame()
+    empty_result = {
+        "periode": period,
+        "synthese": pd.DataFrame(),
+        "balance_clients": pd.DataFrame(),
+        "balance_clients_par_date": daily,
+        "suivi_depots_retraits_pivot": pd.DataFrame(),
+        "selection": pd.DataFrame(),
+    }
+    if daily.empty or not {"date_operation", "customer_id", "currency_code"}.issubset(daily.columns):
+        return empty_result
+
+    daily["date_operation"] = pd.to_datetime(
+        daily["date_operation"], errors="coerce"
+    ).dt.normalize()
+    daily = daily.dropna(subset=["date_operation"]).copy()
+    if daily.empty:
+        return empty_result
+
+    start = pd.NaT
+    end = pd.NaT
+    if not period.empty:
+        if "date_debut" in period.columns:
+            start = pd.to_datetime(period.iloc[0].get("date_debut"), errors="coerce")
+        if "date_fin" in period.columns:
+            end = pd.to_datetime(period.iloc[0].get("date_fin"), errors="coerce")
+    if pd.isna(start):
+        start = daily["date_operation"].min()
+    if pd.isna(end):
+        end = daily["date_operation"].max()
+    start = pd.Timestamp(start).normalize()
+    end = pd.Timestamp(end).normalize()
+    if start > end:
+        start, end = end, start
+    date_index = pd.date_range(start, end, freq="D")
+    if date_index.empty:
+        return empty_result
+    date_columns = [f"{date:%d/%m/%Y}" for date in date_index]
+    day_count = max(int(len(date_index)), 1)
+
+    selected_positions = (
+        filtered_client_balance.copy()
+        if isinstance(filtered_client_balance, pd.DataFrame)
+        else pd.DataFrame()
+    )
+    position_lookup: dict[tuple[str, str], float] = {}
+    if not selected_positions.empty and {
+        "customer_id",
+        "currency_code",
+        "solde_epargne_courante_observe",
+    }.issubset(selected_positions.columns):
+        selected_positions["__customer_key"] = clean_identifier(
+            selected_positions["customer_id"]
+        )
+        selected_positions["__currency_key"] = clean_text(
+            selected_positions["currency_code"]
+        ).str.upper()
+        selected_positions["solde_epargne_courante_observe"] = pd.to_numeric(
+            selected_positions["solde_epargne_courante_observe"],
+            errors="coerce",
+        ).fillna(0.0)
+        position_lookup = {
+            (row["__customer_key"], row["__currency_key"]): float(
+                row["solde_epargne_courante_observe"]
+            )
+            for _, row in selected_positions.iterrows()
+        }
+
+    for column in [
+        "depots_epargne_observes",
+        "retraits_epargne_observes",
+        "nombre_depots_epargne_observes",
+        "nombre_retraits_epargne_observes",
+    ]:
+        if column not in daily.columns:
+            daily[column] = 0.0
+        daily[column] = pd.to_numeric(daily[column], errors="coerce").fillna(0.0)
+
+    rows: list[dict[str, object]] = []
+    group_keys = ["customer_id", "currency_code"]
+    for (customer_id, currency_code), group in daily.groupby(group_keys, sort=True, dropna=False):
+        group = group.copy()
+        name_text = concat_unique(group.get("Nom_client", pd.Series("", index=group.index)))
+        phone_text = concat_unique(group.get("telephone", pd.Series("", index=group.index)))
+        customer_text = str(customer_id)
+        client_label = (
+            f"{customer_text} - {name_text}"
+            if not _is_empty_text(name_text)
+            else customer_text
+        )
+        deposit_total = float(group["depots_epargne_observes"].sum())
+        withdrawal_total = float(group["retraits_epargne_observes"].sum())
+        period_balance = deposit_total - withdrawal_total
+        client_key = clean_identifier(pd.Series([customer_id])).iloc[0]
+        currency_key = clean_text(pd.Series([currency_code])).str.upper().iloc[0]
+        client_open_balance = position_lookup.get(
+            (client_key, currency_key),
+            period_balance,
+        )
+        for operation, amount_column, count_column in [
+            ("Depot", "depots_epargne_observes", "nombre_depots_epargne_observes"),
+            ("Retrait", "retraits_epargne_observes", "nombre_retraits_epargne_observes"),
+        ]:
+            operation_count = int(group[count_column].sum())
+            score_pct = 100 * operation_count / day_count if day_count else np.nan
+            row: dict[str, object] = {
+                "customer_id": customer_id,
+                "Nom_client": name_text,
+                "telephone": phone_text,
+                "client": client_label,
+                "operation": operation,
+                "currency_code": currency_code,
+                "nombre_operations_suivi": operation_count,
+                "nombre_jours_periode": day_count,
+                "score_pct": score_pct,
+                "score": (
+                    f"{operation_count} / {day_count} jour(s)"
+                    + (f" ({score_pct:.1f}%)" if pd.notna(score_pct) else "")
+                ),
+                "total": float(group[amount_column].sum()),
+                "solde": client_open_balance,
+            }
+            daily_amounts = (
+                group.groupby("date_operation", dropna=False)[amount_column]
+                .sum()
+                .to_dict()
+            )
+            for date_value, column_label in zip(date_index, date_columns):
+                row[column_label] = float(daily_amounts.get(date_value, 0.0))
+            rows.append(row)
+
+    pivot = pd.DataFrame(rows)
+    if not pivot.empty:
+        pivot = pivot[
+            [
+                "client",
+                "operation",
+                "currency_code",
+                *date_columns,
+                "total",
+                "solde",
+                "score",
+                "customer_id",
+                "Nom_client",
+                "telephone",
+                "nombre_operations_suivi",
+                "nombre_jours_periode",
+                "score_pct",
+            ]
+        ].sort_values(["currency_code", "client", "operation"]).reset_index(drop=True)
+
+    summary_rows: list[dict[str, object]] = []
+    for currency_code, group in pivot.groupby("currency_code", sort=True, dropna=False):
+        deposits = group.loc[group["operation"].eq("Depot")]
+        withdrawals = group.loc[group["operation"].eq("Retrait")]
+        total_deposits = float(deposits["total"].sum()) if not deposits.empty else 0.0
+        total_withdrawals = float(withdrawals["total"].sum()) if not withdrawals.empty else 0.0
+        summary_rows.append(
+            {
+                "currency_code": currency_code,
+                "nombre_clients": int(clean_identifier(group["customer_id"]).nunique()),
+                "nombre_jours_periode": day_count,
+                "total_depots": total_deposits,
+                "total_retraits": total_withdrawals,
+                "solde_net_periode": total_deposits - total_withdrawals,
+                "nombre_depots": int(deposits["nombre_operations_suivi"].sum()) if not deposits.empty else 0,
+                "nombre_retraits": int(withdrawals["nombre_operations_suivi"].sum()) if not withdrawals.empty else 0,
+            }
+        )
+    summary = pd.DataFrame(summary_rows)
+    if not period.empty:
+        for column in ["date_debut", "date_fin"]:
+            if column in period.columns:
+                summary[column] = period.iloc[0].get(column)
+    selection = pd.DataFrame(
+        [
+            {
+                "nombre_lignes_pivot": int(len(pivot)),
+                "nombre_clients": int(clean_identifier(pivot["customer_id"]).nunique()) if not pivot.empty else 0,
+                "nombre_jours_periode": day_count,
+                "devises": concat_unique(pivot.get("currency_code", pd.Series(dtype="string"))),
+            }
+        ]
+    )
+    return {
+        "periode": period,
+        "synthese": summary,
+        "balance_clients": pivot,
+        "balance_clients_par_date": daily,
+        "suivi_depots_retraits_pivot": pivot,
+        "selection": selection,
+    }
+
+
 def _turbo_balance_export_frames(
     report: dict[str, Any],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -16995,18 +17382,16 @@ def _turbo_balance_criteria_rows(
     else:
         currencies = []
     currency_text = ", ".join(currencies) or "Non disponible"
+    perimeter_text = (
+        f"{len(client_balance)} ligne(s) client × opération × devise"
+        if balance_by_date
+        else f"{len(client_balance)} ligne(s) client × devise"
+    )
     rows = [
         ("Date du :", start_text),
         ("Au :", end_text),
         ("Clients :", f"{customer_count} client(s)"),
-        (
-            "Périmètre :",
-            (
-                f"{len(client_balance)} ligne(s) date × client × devise"
-                if balance_by_date
-                else f"{len(client_balance)} ligne(s) client × devise"
-            ),
-        ),
+        ("Périmètre :", perimeter_text),
         ("Devise(s) :", currency_text),
     ]
     if balance_by_date and "date_operation" in client_balance.columns:
@@ -17016,6 +17401,13 @@ def _turbo_balance_criteria_rows(
             ).dt.normalize().nunique()
         )
         rows.insert(3, ("Dates avec mouvements :", f"{date_count} date(s)"))
+    elif balance_by_date and "nombre_jours_periode" in client_balance.columns:
+        date_count = int(
+            pd.to_numeric(client_balance["nombre_jours_periode"], errors="coerce")
+            .fillna(0)
+            .max()
+        )
+        rows.insert(3, ("Jours couverts :", f"{date_count} jour(s)"))
     return rows
 
 
@@ -17054,8 +17446,8 @@ def create_turbo_balance_word(
     section = document.sections[0]
     section.top_margin = Cm(0.9)
     section.bottom_margin = Cm(1.0)
-    section.left_margin = Cm(0.9)
-    section.right_margin = Cm(0.9)
+    section.left_margin = Cm(2.0)
+    section.right_margin = Cm(2.0)
     document.styles["Normal"].font.name = "Aptos"
     document.styles["Normal"].font.size = Pt(7.5)
 
@@ -17120,7 +17512,7 @@ def create_turbo_balance_word(
     title.paragraph_format.space_after = Pt(2)
     title_run = title.add_run(
         (
-            "Balance journalière observée - Solution M_PESA"
+            "Suivi des dépôts et retraits - Solution M_PESA"
             if balance_by_date
             else "Balance auxiliaire observée - Solution M_PESA"
         )
@@ -17183,7 +17575,7 @@ def create_turbo_balance_word(
                         "total", "solde", "avoirs", "encours", "ecart",
                         "depot", "retrait", "mouvement",
                     ]
-                ):
+                ) or re.fullmatch(r"\d{2}/\d{2}/\d{4}", str(column)):
                     text = _pdf_number(value, decimals=row_decimals)
                 else:
                     text = "-" if _is_empty_text(value) else str(value)
@@ -17196,59 +17588,54 @@ def create_turbo_balance_word(
 
     add_heading("Synthèse par devise")
     if balance_by_date:
+        date_columns = [
+            column
+            for column in client_balance.columns
+            if re.fullmatch(r"\d{2}/\d{2}/\d{4}", str(column))
+        ]
         add_table(
             summary,
             [
                 "currency_code",
-                "nombre_dates",
                 "nombre_clients",
-                "nombre_operations",
-                "depots_epargne_observes",
-                "retraits_epargne_observes",
-                "mouvement_net_epargne_observe",
-                "total_debit",
-                "total_credit",
+                "nombre_jours_periode",
+                "total_depots",
+                "total_retraits",
+                "solde_net_periode",
+                "nombre_depots",
+                "nombre_retraits",
             ],
             {
                 "currency_code": "Devise",
-                "nombre_dates": "Dates",
                 "nombre_clients": "Clients",
-                "nombre_operations": "Opérations",
-                "depots_epargne_observes": "Dépôts épargne",
-                "retraits_epargne_observes": "Retraits épargne",
-                "mouvement_net_epargne_observe": "Mouvement net épargne",
-                "total_debit": "Total débit",
-                "total_credit": "Total crédit",
+                "nombre_jours_periode": "Jours",
+                "total_depots": "Total dépôts",
+                "total_retraits": "Total retraits",
+                "solde_net_periode": "Solde",
+                "nombre_depots": "Nb dépôts",
+                "nombre_retraits": "Nb retraits",
             },
         )
-        add_heading("Balance par date et par client")
+        add_heading("Tableau croisé dépôts et retraits par client")
         add_table(
             client_balance,
             [
-                "date_operation",
-                "customer_id",
-                "Nom_client",
-                "telephone",
+                "client",
+                "operation",
                 "currency_code",
-                "nombre_operations",
-                "depots_epargne_observes",
-                "retraits_epargne_observes",
-                "mouvement_net_epargne_observe",
-                "total_debit",
-                "total_credit",
+                *date_columns,
+                "total",
+                "solde",
+                "score",
             ],
             {
-                "date_operation": "Date",
-                "customer_id": "Client",
-                "Nom_client": "Nom du client",
-                "telephone": "Téléphone",
+                "client": "Client",
+                "operation": "Opération",
                 "currency_code": "Devise",
-                "nombre_operations": "Opérations",
-                "depots_epargne_observes": "Dépôts épargne",
-                "retraits_epargne_observes": "Retraits épargne",
-                "mouvement_net_epargne_observe": "Mouvement net épargne",
-                "total_debit": "Total débit",
-                "total_credit": "Total crédit",
+                **{column: column[:5] for column in date_columns},
+                "total": "Total",
+                "solde": "Solde",
+                "score": "Score",
             },
         )
     else:
@@ -17303,7 +17690,7 @@ def create_turbo_balance_word(
     footer_run.font.color.rgb = RGBColor(110, 125, 140)
     document.core_properties.title = (
         (
-            f"Balance journalière observée Turbo - {start_text} au {end_text}"
+            f"Suivi depots retraits Turbo - {start_text} au {end_text}"
             if balance_by_date
             else f"Balance observée Turbo - {start_text} au {end_text}"
         )
@@ -17400,7 +17787,7 @@ def create_turbo_balance_pdf(
         topMargin=0.7 * cm,
         bottomMargin=1.0 * cm,
         title=(
-            f"Balance journalière observée Turbo - {start_text} au {end_text}"
+            f"Suivi depots retraits Turbo - {start_text} au {end_text}"
             if balance_by_date
             else f"Balance observée Turbo - {start_text} au {end_text}"
         ),
@@ -17435,7 +17822,7 @@ def create_turbo_balance_pdf(
     story.append(
         Paragraph(
             (
-                "Balance journalière observée - Solution M_PESA"
+                "Suivi des dépôts et retraits - Solution M_PESA"
                 if balance_by_date
                 else "Balance auxiliaire observée - Solution M_PESA"
             ),
@@ -17466,7 +17853,7 @@ def create_turbo_balance_pdf(
                         "total", "solde", "avoirs", "encours", "ecart",
                         "depot", "retrait", "mouvement",
                     ]
-                )
+                ) or re.fullmatch(r"\d{2}/\d{2}/\d{4}", str(column)) is not None
                 if column in {
                     "date_operation",
                     "premiere_ecriture",
@@ -17504,63 +17891,58 @@ def create_turbo_balance_pdf(
         story.append(table)
 
     if balance_by_date:
+        date_columns = [
+            column
+            for column in client_balance.columns
+            if re.fullmatch(r"\d{2}/\d{2}/\d{4}", str(column))
+        ]
         append_table(
             "Synthèse par devise",
             summary,
             [
                 "currency_code",
-                "nombre_dates",
                 "nombre_clients",
-                "nombre_operations",
-                "depots_epargne_observes",
-                "retraits_epargne_observes",
-                "mouvement_net_epargne_observe",
-                "total_debit",
-                "total_credit",
+                "nombre_jours_periode",
+                "total_depots",
+                "total_retraits",
+                "solde_net_periode",
+                "nombre_depots",
+                "nombre_retraits",
             ],
             {
                 "currency_code": "Devise",
-                "nombre_dates": "Dates",
                 "nombre_clients": "Clients",
-                "nombre_operations": "Opérations",
-                "depots_epargne_observes": "Dépôts épargne",
-                "retraits_epargne_observes": "Retraits épargne",
-                "mouvement_net_epargne_observe": "Mouvement net épargne",
-                "total_debit": "Total débit",
-                "total_credit": "Total crédit",
+                "nombre_jours_periode": "Jours",
+                "total_depots": "Total dépôts",
+                "total_retraits": "Total retraits",
+                "solde_net_periode": "Solde",
+                "nombre_depots": "Nb dépôts",
+                "nombre_retraits": "Nb retraits",
             },
-            [1.0, 0.8, 0.9, 1.0, 2.2, 2.2, 2.4, 2.0, 2.0],
+            [1.0, 1.0, 0.8, 2.0, 2.0, 1.8, 1.3, 1.3],
         )
         append_table(
-            "Balance par date et par client",
+            "Tableau croisé dépôts et retraits par client",
             client_balance,
             [
-                "date_operation",
-                "customer_id",
-                "Nom_client",
-                "telephone",
+                "client",
+                "operation",
                 "currency_code",
-                "nombre_operations",
-                "depots_epargne_observes",
-                "retraits_epargne_observes",
-                "mouvement_net_epargne_observe",
-                "total_debit",
-                "total_credit",
+                *date_columns,
+                "total",
+                "solde",
+                "score",
             ],
             {
-                "date_operation": "Date",
-                "customer_id": "Client",
-                "Nom_client": "Nom du client",
-                "telephone": "Téléphone",
+                "client": "Client",
+                "operation": "Op.",
                 "currency_code": "Devise",
-                "nombre_operations": "Opérations",
-                "depots_epargne_observes": "Dépôts épargne",
-                "retraits_epargne_observes": "Retraits épargne",
-                "mouvement_net_epargne_observe": "Mouvement net épargne",
-                "total_debit": "Total débit",
-                "total_credit": "Total crédit",
+                **{column: column[:5] for column in date_columns},
+                "total": "Total",
+                "solde": "Solde",
+                "score": "Score",
             },
-            [1.25, 1.15, 2.2, 1.75, 0.75, 0.85, 1.45, 1.45, 1.55, 1.35, 1.35],
+            [2.9, 1.1, 0.8, *([0.62] * len(date_columns)), 1.2, 1.2, 1.9],
         )
     else:
         append_table(
@@ -17679,8 +18061,8 @@ def create_g2_dat_word(
     section.page_height = Cm(29.7)
     section.top_margin = Cm(1.2)
     section.bottom_margin = Cm(1.2)
-    section.left_margin = Cm(1.25)
-    section.right_margin = Cm(1.25)
+    section.left_margin = Cm(2.0)
+    section.right_margin = Cm(2.0)
     section.start_type = WD_SECTION.NEW_PAGE
 
     styles = document.styles
@@ -17895,8 +18277,8 @@ def create_g2_dat_word(
         detail_section.page_height = Cm(29.7)
         detail_section.top_margin = Cm(1.0)
         detail_section.bottom_margin = Cm(1.0)
-        detail_section.left_margin = Cm(0.6)
-        detail_section.right_margin = Cm(0.6)
+        detail_section.left_margin = Cm(2.0)
+        detail_section.right_margin = Cm(2.0)
         document.add_heading("Transactions", level=1)
         # detail_caption.paragraph_format.space_after = Pt(4)
         add_table(
@@ -18043,6 +18425,7 @@ def create_excel_export(
         ("accounting_financial_products", "Produits_Financiers_Turbo"),
         ("accounting_portfolio_positions", "Positions_Portefeuille_Turbo"),
         ("accounting_g2_controls", "Controle_G2_Turbo"),
+        ("suivi_depots_retraits_pivot", "Suivi_Depots_Retraits"),
         ("diagnostics", "Diagnostics"),
     ]
     sheets = {

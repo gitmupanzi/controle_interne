@@ -57,7 +57,7 @@ from credit_app.services.mpesa_analysis import (
     build_customer_statement_detail_with_covered_operations,
     build_customer_statement_detail_with_opening_balance,
     build_customer_statement_view,
-    build_filtered_turbo_daily_balance_report,
+    build_filtered_turbo_deposit_withdrawal_pivot_report,
     build_filtered_turbo_balance_report,
     build_perfect_client_crosscheck,
     create_excel_export,
@@ -777,26 +777,12 @@ def _create_turbo_balance_pdf_cached(
 
 
 @st.cache_data(show_spinner=False, max_entries=12)
-def _create_turbo_daily_balance_word_cached(
+def _create_turbo_deposit_withdrawal_pivot_word_cached(
     report: dict[str, pd.DataFrame],
     period_start: object | None,
     period_end: object | None,
 ) -> bytes:
     return create_turbo_balance_word(
-        report,
-        period_start=period_start,
-        period_end=period_end,
-        balance_by_date=True,
-    )
-
-
-@st.cache_data(show_spinner=False, max_entries=12)
-def _create_turbo_daily_balance_pdf_cached(
-    report: dict[str, pd.DataFrame],
-    period_start: object | None,
-    period_end: object | None,
-) -> bytes:
-    return create_turbo_balance_pdf(
         report,
         period_start=period_start,
         period_end=period_end,
@@ -2562,6 +2548,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
             "parcours_turbo",
             "dat_en_cours_client",
             "remboursements_turbo_detail_client",
+            "prochains_remboursements_client",
             "elements_extrait_client_turbo",
             "interets_dat_credites_client",
             "comportement_turbo",
@@ -5820,101 +5807,105 @@ def _render_accounting_balances_and_journals(
             key=f"mpesa_turbo_balance_pdf_{start_token}_{end_token}_{selection_token}",
         )
 
-    render_panel_title("Export de la balance par date [Turbo]")
+    render_panel_title("Suivi des dépôts et retraits par client [Turbo]")
     st.caption(
-        "Cette seconde restitution conserve les mêmes clients et devises filtrés, "
-        "mais présente une ligne par date, client et devise. Elle permet de suivre "
-        "les mouvements quotidiens compris dans la période sélectionnée."
+        "Cette restitution reprend l'esprit de l'état des mouvements Vodacom : "
+        "une ligne Dépôt et une ligne Retrait par client et par devise, avec une "
+        "colonne par jour de la période filtrée. Le score indique le nombre "
+        "d'opérations observées rapporté au nombre de jours couverts."
     )
-    daily_export_report = build_filtered_turbo_daily_balance_report(
+    pivot_export_report = build_filtered_turbo_deposit_withdrawal_pivot_report(
         report,
         client_view,
     )
-    daily_balance = daily_export_report.get(
-        "balance_clients_par_date",
+    deposit_withdrawal_pivot = pivot_export_report.get(
+        "suivi_depots_retraits_pivot",
         pd.DataFrame(),
     )
-    daily_date_count = (
-        pd.to_datetime(
-            daily_balance["date_operation"],
-            errors="coerce",
-        ).dt.normalize().nunique()
-        if not daily_balance.empty and "date_operation" in daily_balance.columns
+    pivot_day_count = (
+        int(
+            pd.to_numeric(
+                deposit_withdrawal_pivot["nombre_jours_periode"],
+                errors="coerce",
+            )
+            .fillna(0)
+            .max()
+        )
+        if not deposit_withdrawal_pivot.empty
+        and "nombre_jours_periode" in deposit_withdrawal_pivot.columns
         else 0
     )
     st.caption(
-        f"Périmètre exporté : {len(daily_balance)} ligne(s) date × client × devise, "
-        f"répartie(s) sur {daily_date_count} date(s)."
+        f"Périmètre exporté : {len(deposit_withdrawal_pivot)} ligne(s) client × opération × devise, "
+        f"sur {pivot_day_count} jour(s)."
     )
     with st.expander(
-        "Afficher l'aperçu de la balance par date",
+        "Afficher le tableau croisé dépôts/retraits",
         expanded=False,
     ):
-        daily_columns = [
-            "date_operation",
+        hidden_columns = {
             "customer_id",
             "Nom_client",
             "telephone",
-            "currency_code",
-            "nombre_operations",
-            "depots_epargne_observes",
-            "retraits_epargne_observes",
-            "mouvement_net_epargne_observe",
-            "total_debit",
-            "total_credit",
-        ]
-        daily_columns = [
-            column for column in daily_columns if column in daily_balance.columns
+            "nombre_operations_suivi",
+            "nombre_jours_periode",
+            "score_pct",
+        }
+        pivot_columns = [
+            column
+            for column in deposit_withdrawal_pivot.columns
+            if column not in hidden_columns
         ]
         st.dataframe(
-            daily_balance[daily_columns],
+            deposit_withdrawal_pivot[pivot_columns],
             width="stretch",
             hide_index=True,
             column_config={
-                "date_operation": st.column_config.DateColumn(
-                    "Date",
-                    format="DD/MM/YYYY",
-                ),
+                "client": st.column_config.TextColumn("Client"),
+                "operation": st.column_config.TextColumn("Opération"),
+                "currency_code": st.column_config.TextColumn("Devise"),
+                "total": st.column_config.NumberColumn("Total"),
+                "solde": st.column_config.NumberColumn("Solde"),
+                "score": st.column_config.TextColumn("Score"),
             },
         )
     with st.container(horizontal=True, gap="small"):
         st.download_button(
-            "Télécharger Word par date",
-            data=lambda: _create_turbo_daily_balance_word_cached(
-                daily_export_report,
+            "Télécharger Word dépôts/retraits",
+            data=lambda: _create_turbo_deposit_withdrawal_pivot_word_cached(
+                pivot_export_report,
                 date_start,
                 date_end,
             ),
             file_name=(
-                f"balance_par_date_turbo_{start_token}_{end_token}.docx"
+                f"suivi_depots_retraits_turbo_{start_token}_{end_token}.docx"
             ),
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             icon=":material/download:",
             on_click="ignore",
             width="content",
-            disabled=daily_balance.empty,
+            disabled=deposit_withdrawal_pivot.empty,
             key=(
-                f"mpesa_turbo_daily_balance_word_{start_token}_"
+                f"mpesa_turbo_deposit_withdrawal_word_{start_token}_"
                 f"{end_token}_{selection_token}"
             ),
         )
         st.download_button(
-            "Télécharger PDF par date",
-            data=lambda: _create_turbo_daily_balance_pdf_cached(
-                daily_export_report,
-                date_start,
-                date_end,
+            "Télécharger Excel dépôts/retraits",
+            data=lambda: _create_excel_export_cached(
+                pivot_export_report,
+                print_orientation="landscape",
             ),
             file_name=(
-                f"balance_par_date_turbo_{start_token}_{end_token}.pdf"
+                f"suivi_depots_retraits_turbo_{start_token}_{end_token}.xlsx"
             ),
-            mime="application/pdf",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             icon=":material/download:",
             on_click="ignore",
             width="content",
-            disabled=daily_balance.empty,
+            disabled=deposit_withdrawal_pivot.empty,
             key=(
-                f"mpesa_turbo_daily_balance_pdf_{start_token}_"
+                f"mpesa_turbo_deposit_withdrawal_excel_{start_token}_"
                 f"{end_token}_{selection_token}"
             ),
         )

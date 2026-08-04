@@ -17,7 +17,7 @@ from credit_app.services.mpesa_analysis import (
     build_customer_matured_dat_interest_entries,
     build_customer_statement_elements,
     build_customer_transaction_analysis,
-    build_filtered_turbo_daily_balance_report,
+    build_filtered_turbo_deposit_withdrawal_pivot_report,
     build_filtered_turbo_balance_report,
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
@@ -2862,6 +2862,21 @@ class MpesaAnalysisTests(unittest.TestCase):
         foreign_repayment["customer_id"] = "OTHER-CUSTOMER"
         foreign_repayment["event_reference"] = "FOREIGN-REPAYMENT"
         repayments = pd.concat([repayments, foreign_repayment], ignore_index=True)
+        upcoming_repayments = pd.DataFrame(
+            [
+                {
+                    "customer_id": "1001",
+                    "loan_id": "LN-NEXT",
+                    "due_date": pd.Timestamp("2026-07-20 09:00:00"),
+                    "currency_code": "CDF",
+                    "montant_a_rembourser": 15_000.0,
+                    "outstanding_principle": 14_000.0,
+                    "outstanding_interest": 800.0,
+                    "outstanding_penalty_fees": 200.0,
+                    "status_name": "Active",
+                }
+            ]
+        )
         dat_interest = pd.DataFrame(
             [
                 {
@@ -2889,6 +2904,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         analysis = {
             "dat_en_cours_client": active_dat,
             "remboursements_turbo_detail_client": repayments,
+            "prochains_remboursements_client": upcoming_repayments,
             "interets_dat_credites_client": dat_interest,
         }
 
@@ -2933,6 +2949,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         )
         self.assertIn("DAT en cours - situation au 17/07/2026", text)
         self.assertIn("Remboursements observés", text)
+        self.assertIn("Prochains remboursements sur la période", text)
         self.assertIn("Entrées des intérêts du capital mis en DAT", text)
         self.assertNotIn("Intérêts des DAT échus", text)
         self.assertNotIn("Crédit et remboursements observés", text)
@@ -2965,6 +2982,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         pdf_text = "\n".join(page.extract_text() or "" for page in pdf_reader.pages)
         self.assertIn("DAT en cours - situation au 17/07/2026", pdf_text)
         self.assertIn("Remboursements observés", pdf_text)
+        self.assertIn("Prochains remboursements sur la période", pdf_text)
         self.assertIn("Entrées des intérêts du capital mis en DAT", pdf_text)
         self.assertNotIn("Intérêts des DAT échus", pdf_text)
         self.assertNotIn("Crédit et remboursements observés", pdf_text)
@@ -4504,7 +4522,80 @@ class MpesaAnalysisTests(unittest.TestCase):
         from docx import Document
         from pypdf import PdfReader
 
-        prepared = _sample_prepared_data()
+        transactions = prepare_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "id": 1,
+                        "customer_id": "1001",
+                        "msisdn1": "243812345678",
+                        "account_type": "NORMAL SAVINGS",
+                        "reference_id": "SAVE-001",
+                        "currency_code": "CDF",
+                        "dr": 0,
+                        "cr": 100,
+                        "bal_before": 0,
+                        "bal_after": 100,
+                        "ref_no": "DEP-001",
+                        "description": "Epargne depot",
+                        "created_at": "2026-07-01 10:00:00",
+                    },
+                    {
+                        "id": 2,
+                        "customer_id": "1001",
+                        "msisdn1": "243812345678",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "SAVE-001",
+                        "currency_code": "CDF",
+                        "dr": 100,
+                        "cr": 0,
+                        "bal_before": 0,
+                        "bal_after": 0,
+                        "ref_no": "DEP-001",
+                        "description": "M-Pesa Compte",
+                        "created_at": "2026-07-01 10:00:00",
+                    },
+                    {
+                        "id": 3,
+                        "customer_id": "1001",
+                        "msisdn1": "243812345678",
+                        "account_type": "NORMAL SAVINGS",
+                        "reference_id": "SAVE-001",
+                        "currency_code": "CDF",
+                        "dr": 40,
+                        "cr": 0,
+                        "bal_before": 100,
+                        "bal_after": 60,
+                        "ref_no": "RET-001",
+                        "description": "Retrait Vers M-Pesa",
+                        "created_at": "2026-07-02 11:00:00",
+                    },
+                    {
+                        "id": 4,
+                        "customer_id": "1001",
+                        "msisdn1": "243812345678",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "SAVE-001",
+                        "currency_code": "CDF",
+                        "dr": 0,
+                        "cr": 40,
+                        "bal_before": 0,
+                        "bal_after": 0,
+                        "ref_no": "RET-001",
+                        "description": "Retrait Vers M-Pesa",
+                        "created_at": "2026-07-02 11:00:00",
+                    },
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=transactions,
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+            g2_transactions=pd.DataFrame(),
+        )
         report = build_mpesa_accounting_analysis(
             prepared,
             date_start="2026-07-01",
@@ -4577,47 +4668,120 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Périmètre :", normalized_pdf_text)
         self.assertIn("Devise(s) :", normalized_pdf_text)
 
-    def test_turbo_daily_balance_exports_one_row_per_date_client_currency(self) -> None:
+    def test_turbo_deposit_withdrawal_pivot_exports_vodacom_style_tracking(self) -> None:
         from docx import Document
-        from pypdf import PdfReader
 
-        prepared = _sample_prepared_data()
+        transactions = prepare_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "id": 1,
+                        "customer_id": "1001",
+                        "msisdn1": "243812345678",
+                        "account_type": "NORMAL SAVINGS",
+                        "reference_id": "SAVE-001",
+                        "currency_code": "CDF",
+                        "dr": 0,
+                        "cr": 100,
+                        "bal_before": 0,
+                        "bal_after": 100,
+                        "ref_no": "DEP-001",
+                        "description": "Epargne depot",
+                        "created_at": "2026-07-01 10:00:00",
+                    },
+                    {
+                        "id": 2,
+                        "customer_id": "1001",
+                        "msisdn1": "243812345678",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "SAVE-001",
+                        "currency_code": "CDF",
+                        "dr": 100,
+                        "cr": 0,
+                        "bal_before": 0,
+                        "bal_after": 0,
+                        "ref_no": "DEP-001",
+                        "description": "M-Pesa Compte",
+                        "created_at": "2026-07-01 10:00:00",
+                    },
+                    {
+                        "id": 3,
+                        "customer_id": "1001",
+                        "msisdn1": "243812345678",
+                        "account_type": "NORMAL SAVINGS",
+                        "reference_id": "SAVE-001",
+                        "currency_code": "CDF",
+                        "dr": 40,
+                        "cr": 0,
+                        "bal_before": 100,
+                        "bal_after": 60,
+                        "ref_no": "RET-001",
+                        "description": "Retrait Vers M-Pesa",
+                        "created_at": "2026-07-02 11:00:00",
+                    },
+                    {
+                        "id": 4,
+                        "customer_id": "1001",
+                        "msisdn1": "243812345678",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "SAVE-001",
+                        "currency_code": "CDF",
+                        "dr": 0,
+                        "cr": 40,
+                        "bal_before": 0,
+                        "bal_after": 0,
+                        "ref_no": "RET-001",
+                        "description": "Retrait Vers M-Pesa",
+                        "created_at": "2026-07-02 11:00:00",
+                    },
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=transactions,
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+            g2_transactions=pd.DataFrame(),
+        )
         report = build_mpesa_accounting_analysis(
             prepared,
             date_start="2026-07-01",
             date_end="2026-07-02",
         )
-        daily_report = build_filtered_turbo_daily_balance_report(
+        pivot_report = build_filtered_turbo_deposit_withdrawal_pivot_report(
             report,
             report["balance_clients"],
         )
-        daily = daily_report["balance_clients_par_date"]
+        pivot = pivot_report["suivi_depots_retraits_pivot"]
 
-        self.assertEqual(len(daily), 2)
-        self.assertEqual(
-            daily["date_operation"].dt.strftime("%Y-%m-%d").tolist(),
-            ["2026-07-01", "2026-07-02"],
-        )
-        self.assertEqual(daily["currency_code"].unique().tolist(), ["CDF"])
-        summary = daily_report["synthese"].iloc[0]
-        self.assertEqual(int(summary["nombre_dates"]), 2)
+        self.assertEqual(len(pivot), 2)
+        self.assertEqual(pivot["operation"].tolist(), ["Depot", "Retrait"])
+        self.assertIn("01/07/2026", pivot.columns)
+        self.assertIn("02/07/2026", pivot.columns)
+        self.assertEqual(pivot["currency_code"].unique().tolist(), ["CDF"])
+        summary = pivot_report["synthese"].iloc[0]
+        self.assertEqual(int(summary["nombre_jours_periode"]), 2)
         self.assertEqual(int(summary["nombre_clients"]), 1)
-        self.assertEqual(float(summary["total_debit"]), 1000.0)
-        self.assertEqual(float(summary["total_credit"]), 3000.0)
+        self.assertEqual(float(summary["total_depots"]), 100.0)
+        self.assertEqual(float(summary["total_retraits"]), 40.0)
+        self.assertEqual(float(summary["solde_net_periode"]), 60.0)
+        self.assertEqual(
+            pivot.loc[pivot["operation"].eq("Depot"), "score"].iloc[0],
+            "1 / 2 jour(s) (50.0%)",
+        )
 
         word = create_turbo_balance_word(
-            daily_report,
+            pivot_report,
             period_start="2026-07-01",
             period_end="2026-07-02",
             generated_at=pd.Timestamp("2026-07-03 08:00:00"),
             balance_by_date=True,
         )
-        pdf = create_turbo_balance_pdf(
-            daily_report,
-            period_start="2026-07-01",
-            period_end="2026-07-02",
-            generated_at=pd.Timestamp("2026-07-03 08:00:00"),
-            balance_by_date=True,
+        excel = create_excel_export(
+            pivot_report,
+            print_orientation="landscape",
         )
 
         document = Document(BytesIO(word))
@@ -4628,7 +4792,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         word_text = "\n".join(
             paragraph.text for paragraph in document.paragraphs
         )
-        self.assertIn("Balance journalière observée", word_text)
+        self.assertIn("Suivi des dépôts et retraits", word_text)
         criteria = document.tables[0].cell(1, 1).tables[0]
         self.assertEqual(
             [row.cells[0].text for row in criteria.rows],
@@ -4636,31 +4800,30 @@ class MpesaAnalysisTests(unittest.TestCase):
                 "Date du :",
                 "Au :",
                 "Clients :",
-                "Dates avec mouvements :",
+                "Jours couverts :",
                 "Périmètre :",
                 "Devise(s) :",
             ],
         )
-        daily_table = next(
+        pivot_table = next(
             table
             for table in document.tables
-            if table.rows[0].cells[0].text == "Date"
+            if table.rows[0].cells[0].text == "Client"
         )
-        self.assertEqual(daily_table.rows[1].cells[0].text, "01/07/2026")
-        self.assertEqual(daily_table.rows[2].cells[0].text, "02/07/2026")
+        self.assertIn("01/07", [cell.text for cell in pivot_table.rows[0].cells])
+        self.assertIn("02/07", [cell.text for cell in pivot_table.rows[0].cells])
 
-        reader = PdfReader(BytesIO(pdf))
-        self.assertLess(
-            float(reader.pages[0].mediabox.width),
-            float(reader.pages[0].mediabox.height),
+        workbook = pd.ExcelFile(BytesIO(excel), engine="openpyxl")
+        self.assertIn("Synthese", workbook.sheet_names)
+        self.assertIn("Suivi_Depots_Retraits", workbook.sheet_names)
+        exported_pivot = pd.read_excel(
+            BytesIO(excel),
+            sheet_name="Suivi_Depots_Retraits",
+            engine="openpyxl",
         )
-        pdf_text = " ".join(
-            "\n".join(page.extract_text() or "" for page in reader.pages).split()
-        )
-        self.assertIn("Balance journalière observée", pdf_text)
-        self.assertIn("Balance par date et par client", pdf_text)
-        self.assertIn("01/07/2026", pdf_text)
-        self.assertIn("02/07/2026", pdf_text)
+        self.assertIn("01/07/2026", exported_pivot.columns)
+        self.assertIn("02/07/2026", exported_pivot.columns)
+        self.assertEqual(exported_pivot["operation"].tolist(), ["Depot", "Retrait"])
 
     def test_mpesa_management_dashboard_builds_actionable_microfinance_views(self) -> None:
         g2 = prepare_g2_transactions(
