@@ -6422,27 +6422,34 @@ def _render_statistics_tab(
             selected_currencies=selected_currencies,
         )
         first_row = overview.iloc[0] if not overview.empty else pd.Series(dtype=object)
+        loaded_clients = _scalar_number(first_row.get("clients_turbo_charges", 0))
         known_clients = _scalar_number(first_row.get("clients_turbo_connus", 0))
         active_clients = _scalar_number(first_row.get("clients_turbo_actifs", 0))
         render_kpi_cards(
             [
                 (
-                    "Clients Turbo connus",
-                    _format_count(known_clients),
-                    "Customers [Turbo], sinon sources Turbo observees",
+                    "Clients Turbo charges",
+                    _format_count(loaded_clients),
+                    "Clients distincts dans Customers [Turbo] avant filtre de date",
                     "navy",
+                ),
+                (
+                    "Clients Turbo connus a la date de fin",
+                    _format_count(known_clients),
+                    "Clients crees avant ou a la date de fin du rapport",
+                    "blue",
                 ),
                 (
                     "Clients Turbo actifs",
                     _format_count(active_clients),
                     "Au moins une operation Turbo sur la periode",
-                    "blue",
+                    "green",
                 ),
                 (
                     "Taux d'activite",
                     _safe_rate(active_clients, known_clients),
                     "Clients actifs / clients connus",
-                    "green",
+                    "red",
                 ),
             ]
         )

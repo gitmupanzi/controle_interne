@@ -2273,6 +2273,9 @@ def _build_portal_reference_controls(transactions: pd.DataFrame) -> pd.DataFrame
     tx["est_compte_mpesa"] = clean_text(
         tx.get("account_type", pd.Series("", index=tx.index))
     ).apply(normalize_label).eq("mpesa account")
+    tx["description_normalisee"] = clean_text(
+        tx.get("description", pd.Series("", index=tx.index))
+    ).apply(normalize_label)
 
     rows: list[dict[str, object]] = []
     for ref_no, group in tx.groupby("ref_no", dropna=False, sort=False):
@@ -2288,9 +2291,23 @@ def _build_portal_reference_controls(transactions: pd.DataFrame) -> pd.DataFrame
         )
         mpesa_amounts = group.loc[group["est_compte_mpesa"], "montant_ligne_portal"]
         control_amounts = mpesa_amounts.loc[mpesa_amounts.gt(0)]
-        if control_amounts.empty:
-            control_amounts = group.loc[group["montant_ligne_portal"].gt(0), "montant_ligne_portal"]
-        portal_amount = float(control_amounts.max()) if not control_amounts.empty else np.nan
+        if has_loan:
+            repayment_mpesa_amount = group.loc[
+                group["est_compte_mpesa"]
+                & group["description_normalisee"].str.contains("remboursement", na=False),
+                "montant_ligne_portal",
+            ].sum()
+            portal_amount = (
+                float(repayment_mpesa_amount)
+                if float(repayment_mpesa_amount) > 0
+                else float(control_amounts.sum())
+                if not control_amounts.empty
+                else np.nan
+            )
+        else:
+            if control_amounts.empty:
+                control_amounts = group.loc[group["montant_ligne_portal"].gt(0), "montant_ligne_portal"]
+            portal_amount = float(control_amounts.max()) if not control_amounts.empty else np.nan
         target_account = (
             "LOAN ACCOUNT / PRINCIPLE / LOAN PORTFOLIO"
             if has_loan
@@ -8629,7 +8646,13 @@ def build_mpesa_statistics_report(
     lines = finance.get("lignes_turbo_periode", pd.DataFrame()).copy()
 
     source_priority = _mpesa_statistics_source_rows(prepared)
-    customer_reference = _mpesa_customer_reference(prepared)
+    customer_reference_full = _mpesa_customer_reference(prepared)
+    total_loaded_clients = (
+        int(customer_reference_full["client_key"].nunique())
+        if not customer_reference_full.empty and "client_key" in customer_reference_full.columns
+        else 0
+    )
+    customer_reference = customer_reference_full.copy()
     if not customer_reference.empty and "date_creation" in customer_reference.columns:
         reference_dates = pd.to_datetime(
             customer_reference["date_creation"], errors="coerce"
@@ -8809,6 +8832,7 @@ def build_mpesa_statistics_report(
         overview_rows.append(
             {
                 "currency_code": currency,
+                "clients_turbo_charges": total_loaded_clients,
                 "clients_turbo_connus": total_known_clients,
                 "clients_turbo_actifs": active_clients,
                 "clients_turbo_actifs_devise": active_clients_by_currency.get(str(currency), 0),
@@ -8823,6 +8847,7 @@ def build_mpesa_statistics_report(
             [
                 {
                     "currency_code": "Toutes",
+                    "clients_turbo_charges": total_loaded_clients,
                     "clients_turbo_connus": total_known_clients,
                     "clients_turbo_actifs": active_clients,
                     "clients_turbo_actifs_devise": active_clients,
@@ -8906,7 +8931,12 @@ def build_mpesa_statistics_report(
                 },
                 {
                     "indicateur": "Clients Turbo connus",
-                    "definition": "Clients du fichier Customers [Turbo], sinon clients observes dans les sources Turbo chargees.",
+                    "definition": "Clients du fichier Customers [Turbo] connus a la date de fin du rapport; sinon clients observes dans les sources Turbo chargees.",
+                    "source": "Customers [Turbo] puis sources Turbo observees",
+                },
+                {
+                    "indicateur": "Clients Turbo charges",
+                    "definition": "Clients distincts presents dans le referentiel Customers [Turbo] charge, avant le filtre de date de fin du rapport.",
                     "source": "Customers [Turbo] puis sources Turbo observees",
                 },
                 {
@@ -9241,7 +9271,8 @@ def create_mpesa_statistics_word(
         total_operations = _as_numeric(overview.get("operations", pd.Series(dtype=float))).sum()
         first_row = overview.iloc[0]
         summary_rows = [
-            {"indicateur": "Clients Turbo connus", "devise": "-", "valeur": _pdf_number(first_row.get("clients_turbo_connus", 0), decimals=0)},
+            {"indicateur": "Clients Turbo charges", "devise": "-", "valeur": _pdf_number(first_row.get("clients_turbo_charges", 0), decimals=0)},
+            {"indicateur": "Clients Turbo connus a la date de fin", "devise": "-", "valeur": _pdf_number(first_row.get("clients_turbo_connus", 0), decimals=0)},
             {"indicateur": "Clients Turbo actifs", "devise": "-", "valeur": _pdf_number(first_row.get("clients_turbo_actifs", 0), decimals=0)},
             {"indicateur": "Operations Turbo", "devise": "-", "valeur": _pdf_number(total_operations, decimals=0)},
         ]
@@ -9516,17 +9547,21 @@ def create_mpesa_statistics_word(
             )
 
     add_title("1. Clients")
+    loaded_clients = _first_number(overview, "clients_turbo_charges")
     known_clients = _first_number(overview, "clients_turbo_connus")
     active_clients = _first_number(overview, "clients_turbo_actifs")
     new_clients = _number_value(growth_frame, "nouveaux_clients_turbo")
     final_clients = _number_value(growth_frame.tail(1), "clients_turbo_cumules") if isinstance(growth_frame, pd.DataFrame) else 0.0
     add_text(
         "Lecture : la base client est analysee a partir de Customers [Turbo] lorsqu'il est charge; "
-        "a defaut, elle est degradee depuis les clients observes dans les sources Turbo."
+        "a defaut, elle est degradee depuis les clients observes dans les sources Turbo. "
+        "Les clients charges correspondent au referentiel disponible; les clients connus sont arretes "
+        "a la date de fin du rapport."
     )
     add_annual_block_analysis("Clients")
     add_bullet(
-        f"Clients Turbo connus : {_pdf_number(known_clients, decimals=0)}. "
+        f"Clients Turbo charges : {_pdf_number(loaded_clients, decimals=0)}. "
+        f"Clients Turbo connus a la date de fin : {_pdf_number(known_clients, decimals=0)}. "
         f"Clients actifs sur la periode : {_pdf_number(active_clients, decimals=0)}, "
         f"soit {_percent(active_clients, known_clients)} de la base connue."
     )
@@ -9818,7 +9853,8 @@ def create_mpesa_statistics_word(
         statistics_report.get("vue_ensemble", pd.DataFrame()),
         {
             "currency_code": "Devise",
-            "clients_turbo_connus": "Clients connus",
+            "clients_turbo_charges": "Clients charges",
+            "clients_turbo_connus": "Clients connus a la date de fin",
             "clients_turbo_actifs": "Clients actifs globaux",
             "clients_turbo_actifs_devise": "Clients actifs devise",
             "operations": "Operations",

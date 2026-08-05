@@ -5174,6 +5174,11 @@ class MpesaAnalysisTests(unittest.TestCase):
                         "customer_id": "CLIENT-ANALYSE",
                         "msisdn1": "0812345678",
                         "created_at": "2026-01-15",
+                    },
+                    {
+                        "customer_id": "CLIENT-APRES-PERIODE",
+                        "msisdn1": "0899999999",
+                        "created_at": "2026-08-05",
                     }
                 ]
             )
@@ -5228,6 +5233,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         overview = report["vue_ensemble"].loc[
             report["vue_ensemble"]["currency_code"].eq("CDF")
         ].iloc[0]
+        self.assertEqual(int(overview["clients_turbo_charges"]), 2)
         self.assertEqual(int(overview["clients_turbo_connus"]), 1)
         self.assertEqual(int(overview["clients_turbo_actifs"]), 1)
         self.assertGreater(float(overview["volume_total_transactions"]), 0)
@@ -5279,6 +5285,82 @@ class MpesaAnalysisTests(unittest.TestCase):
             "Source",
             {cell.text for cell in client_growth_tables[0].rows[0].cells},
         )
+
+    def test_turbo_only_g2_dat_uses_consolidated_loan_repayment_amount(self) -> None:
+        transactions = prepare_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "id": 1,
+                        "customer_id": "1001",
+                        "msisdn1": "243811111111",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "LN-001",
+                        "currency_code": "CDF",
+                        "dr": 7000,
+                        "cr": 0,
+                        "bal_before": 20000,
+                        "bal_after": 13000,
+                        "ref_no": "REP-001",
+                        "description": "M-Pesa Remboursement",
+                        "created_at": "2026-07-28 17:21:26",
+                    },
+                    {
+                        "id": 2,
+                        "customer_id": "1001",
+                        "msisdn1": "243811111111",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "LN-001",
+                        "currency_code": "CDF",
+                        "dr": 7000,
+                        "cr": 0,
+                        "bal_before": 13000,
+                        "bal_after": 6000,
+                        "ref_no": "REP-001",
+                        "description": "M-Pesa Remboursement",
+                        "created_at": "2026-07-28 17:21:26",
+                    },
+                    {
+                        "id": 3,
+                        "customer_id": "1001",
+                        "msisdn1": "243811111111",
+                        "account_type": "PRINCIPLE",
+                        "reference_id": "LN-001",
+                        "currency_code": "CDF",
+                        "dr": 0,
+                        "cr": 14000,
+                        "bal_before": 0,
+                        "bal_after": 14000,
+                        "ref_no": "REP-001",
+                        "description": "Remboursement du principal",
+                        "created_at": "2026-07-28 17:21:26",
+                    },
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=transactions,
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            customers=pd.DataFrame(),
+            load_report=pd.DataFrame(),
+        )
+
+        g2_report = build_g2_daily_savings_report(prepared)
+        g2_detail = g2_report["detail"]
+        g2_repayment = g2_detail.loc[
+            g2_detail["details_rapport"].astype(str).eq("Remboursement prets")
+        ]
+        finance = build_mpesa_turbo_financial_analysis(
+            prepared,
+            date_start="2026-07-28",
+            date_end="2026-07-28",
+        )
+        flow = finance["flux_synthese"].iloc[0]
+
+        self.assertEqual(float(g2_repayment["montant"].sum()), 14000.0)
+        self.assertEqual(float(flow["remboursements_observes"]), 14000.0)
 
     def test_year_scope_filters_flows_and_preserves_snapshot_positions(self) -> None:
         prepared = MpesaPreparedData(
