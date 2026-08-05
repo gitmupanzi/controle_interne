@@ -382,6 +382,7 @@ PERFECT_VISION_COLUMN_ALIASES: dict[str, list[str]] = {
         "DATE_DECAISSEMENT",
         "date_decaissement",
         "date_situation",
+        "mois_operation",
         "mois_decaissement",
         "mois_solde",
         "mois_echeance",
@@ -413,6 +414,7 @@ PERFECT_VISION_COLUMN_ALIASES: dict[str, list[str]] = {
         "solde_epargne",
         "solde_epargne_client",
         "solde_moyen_compte",
+        "solde_apres_mouvement",
         "solde_caution",
     ],
     "retard_jours": [
@@ -459,10 +461,13 @@ PERFECT_VISION_COLUMN_ALIASES: dict[str, list[str]] = {
     "compte_id": [
         "Compte",
         "compte",
+        "num_compte",
+        "numero_compte",
         "ID_COMPTE_CREDIT",
         "id_compte_credit",
         "numero_compte_credit",
         "num_compte_credit",
+        "numero_compte_epargne",
     ],
     "agent_id": [
         "Matricule agent",

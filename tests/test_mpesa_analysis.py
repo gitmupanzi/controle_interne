@@ -6331,7 +6331,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         ]
 
         self.assertTrue(content.startswith(b"PK"))
-        self.assertIn("Rapport M-PESA - G2/DAT", text)
+        self.assertIn("Rapport des flux- Solution Bisou Bisou Digital", text)
         self.assertIn("Synthese executive", text)
         self.assertIn("Fréquence temporelle", text)
         self.assertIn("Heure la plus fréquente : 10h", text)
@@ -6505,7 +6505,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         document = Document(BytesIO(content))
         text = "\n".join(paragraph.text for paragraph in document.paragraphs)
 
-        self.assertIn("Rapport M-PESA - Turbo/DAT", text)
+        self.assertIn(" Solution Bisou Bisou Digital", text)
         self.assertIn("Synthese des flux Turbo par devise", text)
         self.assertIn("operation(s) comptabilisee(s) dans Turbo", text)
         self.assertIn("controles croises G2/Turbo sont non applicables", text)

@@ -4,10 +4,11 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from credit_app.core import format_currency
+from credit_app.core import format_currency, format_percent
 from credit_app.cycles import get_cycle_analysis_preset, get_cycle_spec
 from credit_app.domain import (
     build_activity_table,
+    build_credit_par_summary_table,
     build_cycle_priority_actions,
     build_cycle_watchlist,
     build_epargne_dormancy_table,
@@ -372,6 +373,59 @@ def _render_operations_surveillance_block(df: pd.DataFrame, conversion_rate: flo
             )
 
 
+def _render_credit_surveillance_par_block(df: pd.DataFrame, cycle_key: str) -> None:
+    if cycle_key not in {"credit", "likelemba"}:
+        return
+
+    par_df = build_credit_par_summary_table(df)
+    if par_df.empty:
+        return
+
+    focus_df = par_df[par_df["indicateur"].isin(["PAR 7", "PAR 30", "PAR 60"])].copy()
+    if focus_df.empty:
+        return
+
+    par30 = focus_df[focus_df["indicateur"].eq("PAR 30")]
+    par30_text = "PAR 30 non disponible."
+    if not par30.empty:
+        max_row = par30.sort_values("taux_par", ascending=False).iloc[0]
+        par30_text = (
+            f"Le taux PAR 30 le plus élevé est {format_percent(float(max_row['taux_par']))} "
+            f"pour la devise {max_row['devise']}."
+        )
+
+    render_panel_title("Surveillance du PAR")
+    render_summary_box(
+        "Lecture opérationnelle",
+        [
+            "Le PAR est calculé avec l'encours total du prêt en retard, conformément à la règle KPI crédit.",
+            par30_text,
+            "Les seuils PAR 7, PAR 30 et PAR 60 permettent de prioriser la relance et le recouvrement.",
+        ],
+    )
+    st.caption(
+        "Infobulle : seuil PAR, devise, montant PAR, taux PAR, encours total et nombre de crédits en retard."
+    )
+    fig = px.bar(
+        focus_df,
+        x="indicateur",
+        y="montant_par",
+        color="devise",
+        barmode="group",
+        custom_data=["devise", "taux_par", "encours_total", "credits_en_retard"],
+        color_discrete_sequence=["#d77a0f", "#2b74ca", "#6a3fb5", "#1f7a5c"],
+    )
+    fig.update_traces(
+        hovertemplate=(
+            "PAR=%{x}<br>Montant PAR=%{y:,.0f}<br>Devise=%{customdata[0]}"
+            "<br>Taux PAR=%{customdata[1]:.1%}<br>Encours total=%{customdata[2]:,.0f}"
+            "<br>Crédits en retard=%{customdata[3]}<extra>Colonnes: solde_final, retard_jours, devise</extra>"
+        )
+    )
+    style_standard_vertical_bar(fig, height=330, tickangle=0)
+    st_plot(fig, key=f"surveillance_credit_par_{cycle_key}", height=330)
+
+
 def render_surveillance_tab(
     df: pd.DataFrame,
     cycle_key: str = "credit",
@@ -439,6 +493,8 @@ def render_surveillance_tab(
                 f"{snapshot['high_risk_count']:,}".replace(",", " ") + " ligne(s) présentent un risque élevé.",
             ],
         )
+
+    _render_credit_surveillance_par_block(df, cycle_key)
 
     ranking_left, ranking_right = st.columns((1.1, 1))
     amount_columns = preset.get("amount_columns", [])

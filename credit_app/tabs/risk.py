@@ -8,6 +8,7 @@ from credit_app.core import format_currency, format_percent
 from credit_app.cycles import get_cycle_analysis_preset, get_cycle_spec
 from credit_app.domain import (
     build_activity_table,
+    build_credit_par_summary_table,
     build_cycle_priority_actions,
     build_cycle_watchlist,
     build_delay_bucket_table,
@@ -41,6 +42,70 @@ def _resolve_amount_column(df: pd.DataFrame, candidates: list[str]) -> str | Non
         if column in df.columns:
             return column
     return None
+
+
+def _render_credit_par_risk_block(df: pd.DataFrame, cycle_key: str) -> None:
+    if cycle_key not in {"credit", "likelemba"}:
+        return
+
+    par_df = build_credit_par_summary_table(df)
+    if par_df.empty:
+        return
+
+    focus_df = par_df[par_df["indicateur"].isin(["PAR 7", "PAR 30", "PAR 60"])].copy()
+    if focus_df.empty:
+        return
+
+    devise_count = int(focus_df["devise"].nunique(dropna=False))
+    if devise_count == 1:
+        devise_label = str(focus_df["devise"].iloc[0])
+        cards = []
+        for indicator in ["PAR 7", "PAR 30", "PAR 60"]:
+            row = focus_df[focus_df["indicateur"].eq(indicator)].head(1)
+            if row.empty:
+                continue
+            cards.append(
+                (
+                    indicator,
+                    format_currency(float(row.iloc[0]["montant_par"])),
+                    f"Taux {format_percent(float(row.iloc[0]['taux_par']))} - {devise_label}",
+                    "orange" if indicator != "PAR 60" else "red",
+                )
+            )
+        if cards:
+            render_panel_title("PAR prioritaire")
+            render_kpi_cards(cards)
+
+    render_panel_title("PAR 7, PAR 30 et PAR 60 par devise")
+    st.caption(
+        "Infobulle : indicateur PAR, devise, montant PAR, taux PAR, encours total et nombre de crédits en retard. "
+        "Règle : le PAR utilise l'encours total du prêt en retard."
+    )
+    fig = px.bar(
+        focus_df,
+        x="indicateur",
+        y="montant_par",
+        color="devise",
+        barmode="group",
+        custom_data=["devise", "taux_par", "encours_total", "credits_en_retard"],
+        hover_data={
+            "devise": True,
+            "montant_par": ":,.0f",
+            "taux_par": ":.1%",
+            "encours_total": ":,.0f",
+            "credits_en_retard": True,
+        },
+        color_discrete_sequence=["#d77a0f", "#2b74ca", "#6a3fb5", "#1f7a5c"],
+    )
+    fig.update_traces(
+        hovertemplate=(
+            "PAR=%{x}<br>Montant PAR=%{y:,.0f}<br>Devise=%{customdata[0]}"
+            "<br>Taux PAR=%{customdata[1]:.1%}<br>Encours total=%{customdata[2]:,.0f}"
+            "<br>Crédits en retard=%{customdata[3]}<extra>Colonnes: solde_final, retard_jours, devise</extra>"
+        )
+    )
+    style_standard_vertical_bar(fig, height=340, tickangle=0)
+    st_plot(fig, key=f"risk_credit_par_summary_{cycle_key}", height=340)
 
 
 def _render_operations_risk_block(df: pd.DataFrame, conversion_rate: float) -> None:
@@ -207,12 +272,15 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate
         ],
     )
 
+    _render_credit_par_risk_block(df, cycle_key)
+
     left, right = st.columns(2)
 
     with left:
         risk_df = build_risk_distribution(df)
         if not risk_df.empty:
             render_panel_title("Niveaux de risque")
+            st.caption("Infobulle : niveau_risque_calcule et nombre de dossiers.")
             fig = px.bar(
                 risk_df,
                 x="niveau_risque_calcule",
@@ -224,6 +292,9 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate
                     "Élevé": "#c05621",
                     "Non renseigné": "#7b8794",
                 },
+            )
+            fig.update_traces(
+                hovertemplate="Niveau=%{x}<br>Dossiers=%{y}<extra>Colonnes: niveau_risque_calcule, nombre_dossiers</extra>"
             )
             style_standard_vertical_bar(fig, height=360, tickangle=0)
             st_plot(fig, key=f"risk_distribution_{cycle_key}", height=360)
@@ -339,6 +410,7 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate
             delay_df = build_delay_bucket_table(df)
             if not delay_df.empty:
                 render_panel_title("Retards")
+                st.caption("Infobulle : retard_jours regroupé en classes et nombre de dossiers.")
                 fig = px.bar(
                     delay_df,
                     x="classe_retard",
@@ -352,6 +424,9 @@ def render_risk_tab(df: pd.DataFrame, cycle_key: str = "credit", conversion_rate
                         "Plus de 90 jours": "#9b2c2c",
                         "Non renseigné": "#7b8794",
                     },
+                )
+                fig.update_traces(
+                    hovertemplate="Classe=%{x}<br>Dossiers=%{y}<extra>Colonnes: retard_jours, classe_retard, nombre_dossiers</extra>"
                 )
                 style_standard_vertical_bar(fig, height=360, tickangle=0)
                 st_plot(fig, key=f"risk_delay_buckets_{cycle_key}", height=360)

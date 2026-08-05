@@ -83,7 +83,10 @@ from credit_app.cycles import (
     list_cycle_keys,
 )
 from credit_app.domain import (
+    build_mapping_frame,
     build_monthly_series,
+    build_missing_values_frame,
+    build_quality_checks,
     build_standardized_dataframe,
     filter_dataframe,
     get_cycle_primary_date_column,
@@ -245,6 +248,7 @@ def prepare_compiled_dataset_from_paths(
     file_paths: tuple[str, ...],
     sheet_name: str,
     standardize_columns: bool,
+    verifier_compatibilite: bool = True,
 ) -> dict:
     raw_df, compilation_log_df = charger_fichiers_excel(
         liste_fichiers=list(file_paths),
@@ -255,7 +259,7 @@ def prepare_compiled_dataset_from_paths(
         variables_brute=False,
         sheet_log=True,
         log_only_changed=True,
-        verifier_compatibilite=True,
+        verifier_compatibilite=verifier_compatibilite,
     )
     payload = _prepare_payload_from_dataframe(raw_df, standardize_columns=standardize_columns)
     payload["compilation_log_df"] = compilation_log_df
@@ -270,6 +274,7 @@ def prepare_compiled_dataset_from_uploads(
     uploaded_items: tuple[tuple[str, bytes], ...],
     sheet_name: str,
     standardize_columns: bool,
+    verifier_compatibilite: bool = True,
 ) -> dict:
     with tempfile.TemporaryDirectory(prefix="controle_interne_compile_") as temp_dir:
         temp_paths: list[str] = []
@@ -277,8 +282,101 @@ def prepare_compiled_dataset_from_uploads(
             temp_path = Path(temp_dir) / filename
             temp_path.write_bytes(file_bytes)
             temp_paths.append(str(temp_path))
-        payload = prepare_compiled_dataset_from_paths(tuple(temp_paths), sheet_name, standardize_columns)
+        payload = prepare_compiled_dataset_from_paths(
+            tuple(temp_paths),
+            sheet_name,
+            standardize_columns,
+            verifier_compatibilite=verifier_compatibilite,
+        )
     payload["compiled_files"] = [filename for filename, _ in uploaded_items]
+    return payload
+
+
+def _add_source_metadata(raw_df: pd.DataFrame, source_name: str, sheet_name: str | None) -> pd.DataFrame:
+    enriched_df = raw_df.copy()
+    enriched_df["source_fichier"] = Path(source_name).name
+    enriched_df["source_feuille"] = sheet_name or ""
+    enriched_df["numero_ligne_source"] = pd.RangeIndex(start=2, stop=len(enriched_df) + 2)
+    return enriched_df
+
+
+def _build_epargne_compiled_payload(
+    frames: list[tuple[str, pd.DataFrame]],
+    *,
+    standardize_columns: bool,
+) -> dict:
+    raw_frames: list[pd.DataFrame] = []
+    standardized_frames: list[pd.DataFrame] = []
+    mapping_rows: list[dict[str, str]] = []
+
+    for source_name, raw_df in frames:
+        raw_frames.append(raw_df)
+        standardized_df, mapping = build_standardized_dataframe(raw_df, standardize_columns=standardize_columns)
+        standardized_df["schema_colonnes_source"] = "|" + "|".join(sorted(map(str, standardized_df.columns))) + "|"
+        standardized_frames.append(standardized_df)
+        for source_column, standard_column in mapping.items():
+            mapping_rows.append(
+                {
+                    "fichier": Path(source_name).name,
+                    "colonne_source": str(source_column),
+                    "colonne_standard": str(standard_column),
+                }
+            )
+
+    raw_df = pd.concat(raw_frames, ignore_index=True, sort=False) if raw_frames else pd.DataFrame()
+    standardized_df = (
+        pd.concat(standardized_frames, ignore_index=True, sort=False)
+        if standardized_frames
+        else pd.DataFrame()
+    )
+    mapping_df = (
+        pd.DataFrame(mapping_rows)
+        if mapping_rows
+        else build_mapping_frame({})
+    )
+    return {
+        "raw_df": raw_df,
+        "standardized_df": standardized_df,
+        "quality_df": build_quality_checks(standardized_df),
+        "missing_df": build_missing_values_frame(standardized_df),
+        "mapping_df": mapping_df,
+    }
+
+
+@st.cache_data(show_spinner=False)
+def prepare_epargne_compiled_dataset_from_uploads(
+    uploaded_items: tuple[tuple[str, bytes], ...],
+    sheet_name: str | None,
+    standardize_columns: bool,
+) -> dict:
+    frames: list[tuple[str, pd.DataFrame]] = []
+    for filename, file_bytes in uploaded_items:
+        raw_df = load_dataframe_from_bytes(file_bytes, filename, sheet_name)
+        frames.append((filename, _add_source_metadata(raw_df, filename, sheet_name)))
+    payload = _build_epargne_compiled_payload(frames, standardize_columns=standardize_columns)
+    payload["compiled_files"] = [filename for filename, _ in uploaded_items]
+    payload["compilation_log_df"] = pd.DataFrame()
+    payload["column_collisions_df"] = pd.DataFrame()
+    payload["column_provenance"] = {}
+    return payload
+
+
+@st.cache_data(show_spinner=False)
+def prepare_epargne_compiled_dataset_from_paths(
+    file_paths: tuple[str, ...],
+    sheet_name: str | None,
+    standardize_columns: bool,
+) -> dict:
+    frames: list[tuple[str, pd.DataFrame]] = []
+    for file_path in file_paths:
+        path = Path(file_path)
+        raw_df = load_dataframe_from_path(path, sheet_name)
+        frames.append((path.name, _add_source_metadata(raw_df, path.name, sheet_name)))
+    payload = _build_epargne_compiled_payload(frames, standardize_columns=standardize_columns)
+    payload["compiled_files"] = list(file_paths)
+    payload["compilation_log_df"] = pd.DataFrame()
+    payload["column_collisions_df"] = pd.DataFrame()
+    payload["column_provenance"] = {}
     return payload
 
 
@@ -1051,20 +1149,34 @@ def main() -> None:
         elif source_mode == "Téléverser plusieurs fichiers":
             uploaded_items = tuple((file.name, file.getvalue()) for file in uploaded_files)
             with st.spinner("Compilation et préparation des fichiers téléversés en cours..."):
-                if sql_operations_cycle and _contains_sql_bundle_role([file.name for file in uploaded_files]):
+                if selected_cycle_key == "epargne":
+                    payload = prepare_epargne_compiled_dataset_from_uploads(uploaded_items, sheet_name, standardize_columns)
+                elif sql_operations_cycle and _contains_sql_bundle_role([file.name for file in uploaded_files]):
                     payload = prepare_sql_operations_dataset_from_uploads(uploaded_items, sheet_name, standardize_columns)
                 else:
-                    payload = prepare_compiled_dataset_from_uploads(uploaded_items, sheet_name or "", standardize_columns)
+                    payload = prepare_compiled_dataset_from_uploads(
+                        uploaded_items,
+                        sheet_name or "",
+                        standardize_columns,
+                        verifier_compatibilite=(selected_cycle_key != "epargne"),
+                    )
         elif source_mode == "Charger un fichier inclus":
             with st.spinner("Préparation de la base en cours..."):
                 payload = prepare_dataset_from_path(str(selected_local_path), sheet_name, standardize_columns)
         else:
             compiled_paths = tuple(str(path) for path in selected_compilation_paths)
             with st.spinner("Compilation et préparation des bases en cours..."):
-                if sql_operations_cycle and _contains_sql_bundle_role([path.name for path in selected_compilation_paths]):
+                if selected_cycle_key == "epargne":
+                    payload = prepare_epargne_compiled_dataset_from_paths(compiled_paths, sheet_name, standardize_columns)
+                elif sql_operations_cycle and _contains_sql_bundle_role([path.name for path in selected_compilation_paths]):
                     payload = prepare_sql_operations_dataset_from_paths(compiled_paths, sheet_name, standardize_columns)
                 else:
-                    payload = prepare_compiled_dataset_from_paths(compiled_paths, sheet_name or "", standardize_columns)
+                    payload = prepare_compiled_dataset_from_paths(
+                        compiled_paths,
+                        sheet_name or "",
+                        standardize_columns,
+                        verifier_compatibilite=(selected_cycle_key != "epargne"),
+                    )
     except (DataLoadError, DataSchemaError, KeyError, ValueError, pd.errors.ParserError) as exc:
         logger.exception("Échec de préparation de la source %s", filename or source_mode)
         st.error(f"Impossible de préparer les données : {exc}")
@@ -1359,7 +1471,7 @@ def main() -> None:
         tab_labels.append("Actions CRM")
     tab_labels.extend(
         [
-            "Surveillance" if selected_cycle_key == "conformite" else "Alertes",
+            "Surveillance",
             "Portefeuille",
             "Risques",
             "Qualité",

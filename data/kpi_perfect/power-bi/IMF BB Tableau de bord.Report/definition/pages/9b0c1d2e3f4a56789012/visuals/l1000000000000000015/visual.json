@@ -223,10 +223,10 @@
                     "Entity": "F_Clients"
                   }
                 },
-                "Property": "Devise"
+                "Property": "Comptes dormants"
               }
             },
-            "direction": "Ascending"
+            "direction": "Descending"
           }
         ]
       }

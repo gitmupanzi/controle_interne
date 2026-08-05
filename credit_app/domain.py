@@ -948,13 +948,11 @@ def build_epargne_multi_account_clients(df: pd.DataFrame, top_n: int = 10) -> pd
     working_df = df.dropna(subset=["client_id", "compte_id"]).copy()
     if working_df.empty:
         return pd.DataFrame(columns=columns)
+    working_df["_solde_compte_numeric"] = _numeric_series_or_zero(working_df, "solde_compte")
 
     aggregations: dict[str, tuple[str, object]] = {
         "nombre_comptes": ("compte_id", "nunique"),
-        "solde_total": (
-            "solde_compte",
-            lambda series: pd.to_numeric(series, errors="coerce").fillna(0).sum(),
-        ),
+        "solde_total": ("_solde_compte_numeric", "sum"),
     }
     if "nom_client" in working_df.columns:
         aggregations["nom_client"] = (
@@ -1289,6 +1287,60 @@ def build_delay_bucket_table(df: pd.DataFrame) -> pd.DataFrame:
     }
     counts["_ordre"] = counts["classe_retard"].map(order).fillna(99)
     return counts.sort_values(["_ordre", "nombre_dossiers"], ascending=[True, False]).drop(columns="_ordre")
+
+
+def build_credit_par_summary_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Construit les indicateurs PAR Ã  partir de l'encours total des prÃªts en retard.
+
+    RÃ¨gle mÃ©tier: le numÃ©rateur PAR retient le capital restant dÃ» total du prÃªt
+    en retard, et non uniquement l'Ã©chÃ©ance impayÃ©e.
+    """
+    required_columns = {"solde_final", "retard_jours"}
+    if df.empty or not required_columns.issubset(df.columns):
+        return pd.DataFrame(
+            columns=[
+                "devise",
+                "indicateur",
+                "seuil_jours",
+                "encours_total",
+                "montant_par",
+                "taux_par",
+                "credits_en_retard",
+            ]
+        )
+
+    working = df.copy()
+    working["solde_final"] = pd.to_numeric(working["solde_final"], errors="coerce").fillna(0)
+    working["retard_jours"] = pd.to_numeric(working["retard_jours"], errors="coerce").fillna(0)
+    if "devise" in working.columns:
+        devise_values = working["devise"].astype("string").str.strip()
+        working["devise"] = devise_values.mask(
+            devise_values.isna() | devise_values.eq(""),
+            "Non renseignÃ©",
+        ).fillna("Non renseignÃ©")
+    else:
+        working["devise"] = "Toutes devises"
+
+    rows: list[dict[str, object]] = []
+    thresholds = [("PAR 1", 0), ("PAR 7", 7), ("PAR 30", 30), ("PAR 60", 60), ("PAR 90", 90)]
+    for devise, devise_df in working.groupby("devise", dropna=False):
+        encours_total = float(devise_df["solde_final"].sum())
+        for label, threshold in thresholds:
+            delayed_df = devise_df[devise_df["retard_jours"] > threshold]
+            montant_par = float(delayed_df["solde_final"].sum())
+            rows.append(
+                {
+                    "devise": str(devise),
+                    "indicateur": label,
+                    "seuil_jours": threshold,
+                    "encours_total": encours_total,
+                    "montant_par": montant_par,
+                    "taux_par": safe_divide(montant_par, encours_total),
+                    "credits_en_retard": int(len(delayed_df)),
+                }
+            )
+
+    return pd.DataFrame(rows)
 
 
 def build_risk_group_table(df: pd.DataFrame, group_column: str, top_n: int = 8) -> pd.DataFrame:
@@ -1770,7 +1822,7 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
             phone_digits = phone_text.fillna("").str.replace(r"\D", "", regex=True)
             extra_watchlist_columns["telephone"] = phone_text
             phone_missing_mask = phone_text.fillna("").eq("")
-            phone_invalid_mask = ~phone_missing_mask & ~phone_digits.str.match(r"^(243\d{9}|0\d{9})$", na=False)
+            phone_invalid_mask = phone_applicable_mask & ~phone_missing_mask & ~phone_digits.str.match(r"^(243\d{9}|0\d{9})$", na=False)
             mark(phone_missing_mask, "Téléphone manquant")
             mark(phone_invalid_mask, "Téléphone non fiable")
             if "client_id" in df.columns:
@@ -1810,16 +1862,30 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
             extra_watchlist_columns["Mode Désabonné"] = mode_text
             mark(mode_text.fillna("").ne(""), "Client désabonné")
     elif cycle_key == "epargne":
+        def source_has_column(column_name: str) -> pd.Series:
+            if "schema_colonnes_source" not in df.columns:
+                return pd.Series(True, index=df.index)
+            token = f"|{column_name}|"
+            return df["schema_colonnes_source"].astype("string").str.contains(token, regex=False, na=False)
+
         if "compte_id" in df.columns:
-            mark(missing_text("compte_id"), "Compte non renseigné")
+            mark(source_has_column("compte_id") & missing_text("compte_id"), "Compte non renseigné")
         if "type_operation" in df.columns:
-            mark(missing_text("type_operation"), "Type d'opération manquant")
+            mark(source_has_column("type_operation") & missing_text("type_operation"), "Type d'opération manquant")
         if "type_produit" in df.columns:
-            mark(missing_text("type_produit"), "Produit d'épargne manquant")
+            mark(source_has_column("type_produit") & missing_text("type_produit"), "Produit d'épargne manquant")
             product_keys = df["type_produit"].astype("string").map(_classify_epargne_product)
             extra_watchlist_columns["produit_reference"] = product_keys
         else:
             product_keys = pd.Series(pd.NA, index=df.index, dtype="object")
+        if "statut_controle" in df.columns:
+            statut_controle = df["statut_controle"].astype("string").str.strip()
+            extra_watchlist_columns["statut_controle"] = statut_controle
+            mark(source_has_column("statut_controle") & statut_controle.fillna("").ne(""), "Statut de contrôle à revoir")
+        if "statut_inactivite" in df.columns:
+            statut_inactivite = df["statut_inactivite"].astype("string").str.strip()
+            extra_watchlist_columns["statut_inactivite"] = statut_inactivite
+            mark(source_has_column("statut_inactivite") & statut_inactivite.fillna("").ne(""), "Compte inactif ou dormant")
         if "statut_compte" in df.columns:
             sensitive_statuses = {"bloque", "bloqué", "dormant", "inactif"}
             status_mask = df["statut_compte"].apply(
@@ -1863,8 +1929,9 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
             phone_text = df["telephone"].astype("string")
             phone_digits = phone_text.fillna("").str.replace(r"\D", "", regex=True)
             extra_watchlist_columns["telephone"] = phone_text
-            phone_missing_mask = missing_text("telephone")
-            phone_invalid_mask = ~phone_missing_mask & ~phone_digits.str.match(r"^(243\d{9}|0\d{9})$", na=False)
+            phone_applicable_mask = source_has_column("telephone")
+            phone_missing_mask = phone_applicable_mask & missing_text("telephone")
+            phone_invalid_mask = phone_applicable_mask & ~phone_missing_mask & ~phone_digits.str.match(r"^(243\d{9}|0\d{9})$", na=False)
             mark(phone_missing_mask, "Téléphone manquant")
             mark(phone_invalid_mask, "Téléphone non fiable")
         tracked_kyc_fields = [
@@ -1875,14 +1942,15 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
         if tracked_kyc_fields:
             champs_kyc_manquants = pd.Series(0, index=df.index, dtype="int64")
             for column_name in tracked_kyc_fields:
+                applicable_mask = source_has_column(column_name)
                 if column_name == "date_operation":
                     champs_kyc_manquants = champs_kyc_manquants.add(
-                        pd.to_datetime(df[column_name], errors="coerce").isna().astype("int64"),
+                        (applicable_mask & pd.to_datetime(df[column_name], errors="coerce").isna()).astype("int64"),
                         fill_value=0,
                     )
                 else:
                     champs_kyc_manquants = champs_kyc_manquants.add(
-                        missing_text(column_name).astype("int64"),
+                        (applicable_mask & missing_text(column_name)).astype("int64"),
                         fill_value=0,
                     )
             extra_watchlist_columns["champs_kyc_manquants"] = champs_kyc_manquants
@@ -2003,7 +2071,7 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
         if "agence" in df.columns:
             mark(missing_text("agence"), "Point de service manquant")
         if "type_operation" in df.columns:
-            mark(missing_text("type_operation"), "Type d'opération manquant")
+            mark(source_has_column("type_operation") & missing_text("type_operation"), "Type d'opération manquant")
         if "numero_reference" in df.columns:
             duplicate_ref_mask = (
                 df["numero_reference"]
@@ -2086,7 +2154,16 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
             ]
         )
     elif cycle_key == "epargne":
-        candidate_columns.extend(["nom_client", "telephone", "Provenance"])
+        candidate_columns.extend(
+            [
+                "nom_client",
+                "telephone",
+                "statut_controle",
+                "statut_inactivite",
+                "source_fichier",
+                "Provenance",
+            ]
+        )
     elif cycle_key == "crm_clients":
         candidate_columns.extend(
             [
@@ -2124,10 +2201,13 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
     )
 
     if cycle_key == "epargne":
-        watchlist["_abs_solde_compte"] = pd.to_numeric(
-            watchlist.get("solde_compte"),
-            errors="coerce",
-        ).abs()
+        if "solde_compte" in watchlist.columns:
+            watchlist["_abs_solde_compte"] = pd.to_numeric(
+                watchlist["solde_compte"],
+                errors="coerce",
+            ).abs()
+        else:
+            watchlist["_abs_solde_compte"] = pd.Series(0.0, index=watchlist.index)
         epargne_sort_columns = [
             column_name
             for column_name in ["jours_inactivite", "_abs_solde_compte", "nombre_comptes_client"]

@@ -15,6 +15,7 @@ from credit_app.domain import (
     build_frequency_table,
     build_grouped_amounts,
     build_operational_snapshot,
+    build_risk_distribution,
     build_sex_distribution,
     build_status_distribution,
     build_summary_metrics,
@@ -579,6 +580,279 @@ def _render_perfect_vision_retention(df: pd.DataFrame, cycle_key: str) -> None:
                 st_plot(fig, key=f"overview_perfect_vision_retention_group_{cycle_key}", height=340)
 
 
+def _clean_category_series(series: pd.Series, default_label: str = "Non renseigné") -> pd.Series:
+    values = series.astype("string").str.strip()
+    return values.mask(values.isna() | values.eq(""), default_label).fillna(default_label)
+
+
+def _build_grouped_sum(
+    df: pd.DataFrame,
+    group_columns: list[str],
+    value_column: str,
+    *,
+    top_n: int = 10,
+    min_categories: int = 1,
+) -> pd.DataFrame:
+    if value_column not in df.columns or any(column not in df.columns for column in group_columns):
+        return pd.DataFrame()
+
+    working = df[group_columns + [value_column]].copy()
+    working[value_column] = pd.to_numeric(working[value_column], errors="coerce").fillna(0)
+    for column in group_columns:
+        working[column] = _clean_category_series(working[column])
+    working = working[working[value_column].ne(0)]
+    if working.empty:
+        return pd.DataFrame()
+
+    grouped = (
+        working.groupby(group_columns, dropna=False)[value_column]
+        .sum()
+        .reset_index()
+        .sort_values(value_column, ascending=False)
+        .head(top_n)
+    )
+    if grouped[group_columns[0]].nunique(dropna=False) < min_categories:
+        return pd.DataFrame()
+    return grouped
+
+
+def _render_credit_priority_chart_grid(chart_items: list[tuple[str, go.Figure, str, int, str]]) -> None:
+    for index in range(0, len(chart_items), 2):
+        row_items = chart_items[index : index + 2]
+        if len(row_items) == 1:
+            title, fig, key, height, tooltip = row_items[0]
+            render_panel_title(title)
+            if tooltip:
+                st.caption(tooltip)
+            st_plot(fig, key=key, height=height)
+            continue
+
+        left, right = st.columns(2)
+        for column, (title, fig, key, height, tooltip) in zip((left, right), row_items):
+            with column:
+                render_panel_title(title)
+                if tooltip:
+                    st.caption(tooltip)
+                st_plot(fig, key=key, height=height)
+
+
+def _build_horizontal_sum_chart(
+    grouped: pd.DataFrame,
+    category_column: str,
+    value_column: str,
+    *,
+    color_column: str | None = None,
+    height: int = 340,
+) -> go.Figure:
+    plot_df = grouped.sort_values(value_column, ascending=True)
+    fig = px.bar(
+        plot_df,
+        x=value_column,
+        y=category_column,
+        orientation="h",
+        color=color_column if color_column and color_column in plot_df.columns else None,
+        color_discrete_sequence=["#2b74ca", "#d77a0f", "#6a3fb5", "#1f7a5c"],
+        barmode="group",
+    )
+    style_standard_horizontal_bar(fig, height=height)
+    fig.update_layout(yaxis_title=None, xaxis_title=None)
+    return fig
+
+
+def _build_credit_delay_bucket_table(df: pd.DataFrame) -> pd.DataFrame:
+    if "retard_jours" not in df.columns:
+        return pd.DataFrame()
+    working = df.copy()
+    working["retard_jours"] = pd.to_numeric(working["retard_jours"], errors="coerce").fillna(0)
+    working["tranche_retard"] = pd.cut(
+        working["retard_jours"],
+        bins=[-1, 0, 7, 30, 60, 90, float("inf")],
+        labels=["À jour", "1-7 j", "8-30 j", "31-60 j", "61-90 j", "90+ j"],
+    )
+    amount_column = "montant_impaye_estime" if "montant_impaye_estime" in working.columns else "solde_final" if "solde_final" in working.columns else None
+    aggregations: dict[str, tuple[str, str]] = {"nombre_dossiers": ("retard_jours", "size")}
+    if amount_column:
+        working[amount_column] = pd.to_numeric(working[amount_column], errors="coerce").fillna(0)
+        aggregations["montant"] = (amount_column, "sum")
+    grouped = working.groupby("tranche_retard", observed=False).agg(**aggregations).reset_index()
+    return grouped[grouped["nombre_dossiers"].gt(0)]
+
+
+def _build_credit_monthly_requests_table(df: pd.DataFrame) -> pd.DataFrame:
+    date_column = "date_demande" if "date_demande" in df.columns else get_cycle_primary_date_column(df, "credit")
+    if not date_column or date_column not in df.columns:
+        return pd.DataFrame()
+
+    working = df.copy()
+    working[date_column] = pd.to_datetime(working[date_column], errors="coerce")
+    working = working.dropna(subset=[date_column])
+    if working.empty:
+        return pd.DataFrame()
+    for column in ["montant_demande", "montant_accorde"]:
+        if column in working.columns:
+            working[column] = pd.to_numeric(working[column], errors="coerce").fillna(0)
+
+    working["mois"] = working[date_column].dt.to_period("M").dt.to_timestamp()
+    group_columns = ["mois"]
+    if "devise" in working.columns and _clean_category_series(working["devise"]).nunique(dropna=False) > 1:
+        working["devise"] = _clean_category_series(working["devise"])
+        group_columns.append("devise")
+    return (
+        working.groupby(group_columns, dropna=False)
+        .agg(
+            nombre_demandes=(date_column, "size"),
+            montant_demande=("montant_demande", "sum") if "montant_demande" in working.columns else (date_column, "size"),
+            montant_accorde=("montant_accorde", "sum") if "montant_accorde" in working.columns else (date_column, "size"),
+        )
+        .reset_index()
+        .sort_values("mois")
+    )
+
+
+def _render_credit_socle_priority_overview(df: pd.DataFrame, monthly_df: pd.DataFrame, cycle_key: str) -> bool:
+    chart_items: list[tuple[str, go.Figure, str, int, str]] = []
+
+    if "type_produit" in df.columns and "solde_final" in df.columns:
+        group_columns = ["type_produit"]
+        color_column = None
+        if "devise" in df.columns and _clean_category_series(df["devise"]).nunique(dropna=False) > 1:
+            group_columns.append("devise")
+            color_column = "devise"
+        product_df = _build_grouped_sum(df, group_columns, "solde_final", top_n=12, min_categories=2)
+        if not product_df.empty:
+            fig = _build_horizontal_sum_chart(product_df, "type_produit", "solde_final", color_column=color_column)
+            fig.update_traces(
+                hovertemplate="Produit=%{y}<br>Encours=%{x:,.0f}<extra>Colonnes: type_produit, solde_final, devise</extra>"
+            )
+            chart_items.append(("Encours crédit par produit", fig, f"overview_credit_socle_product_{cycle_key}", 340, "Infobulle : type_produit, solde_final et devise si disponible."))
+
+    sex_df = build_sex_distribution(df)
+    if not sex_df.empty and sex_df["sexe"].nunique(dropna=False) >= 2:
+        fig = px.pie(
+            sex_df,
+            names="sexe",
+            values="nombre_lignes",
+            hole=0.55,
+            color="sexe",
+            color_discrete_map={
+                "Masculin": "#1553a1",
+                "Féminin": "#d97b16",
+                "Inconnu": "#a7a9ac",
+            },
+        )
+        style_standard_donut(fig, height=340)
+        fig.update_traces(hovertemplate="Sexe=%{label}<br>Dossiers=%{value}<br>Part=%{percent}<extra>Colonnes: sexe, nombre_lignes</extra>")
+        chart_items.append(("Sexe", fig, f"overview_credit_socle_sex_{cycle_key}", 340, "Infobulle : sexe et nombre de dossiers/clients dans le fichier socle."))
+
+    if "statut_remboursement" in df.columns:
+        status_df = build_frequency_table(df, "statut_remboursement", top_n=8)
+        if not status_df.empty and status_df["statut_remboursement"].nunique(dropna=False) >= 2:
+            fig = px.bar(
+                status_df.sort_values("nombre_lignes", ascending=True),
+                x="nombre_lignes",
+                y="statut_remboursement",
+                orientation="h",
+                color_discrete_sequence=["#2b74ca"],
+            )
+            style_standard_horizontal_bar(fig, height=320)
+            fig.update_layout(yaxis_title=None, xaxis_title=None)
+            fig.update_traces(hovertemplate="Statut=%{y}<br>Dossiers=%{x}<extra>Colonnes: statut_remboursement, nombre_lignes</extra>")
+            chart_items.append(("Statut de remboursement", fig, f"overview_credit_socle_repayment_status_{cycle_key}", 320, "Infobulle : statut_remboursement et nombre de dossiers."))
+
+    risk_df = build_risk_distribution(df)
+    if not risk_df.empty and risk_df["niveau_risque_calcule"].nunique(dropna=False) >= 2:
+        fig = px.pie(
+            risk_df,
+            names="niveau_risque_calcule",
+            values="nombre_dossiers",
+            hole=0.5,
+            color="niveau_risque_calcule",
+            color_discrete_map={
+                "Faible": "#1f7a5c",
+                "Moyen": "#d9a441",
+                "Élevé": "#c05621",
+                "Non renseigné": "#7b8794",
+            },
+        )
+        style_standard_donut(fig, height=340)
+        fig.update_traces(
+            hovertemplate="Niveau=%{label}<br>Dossiers=%{value}<br>Part=%{percent}<extra>Colonnes: niveau_risque_calcule, nombre_dossiers</extra>"
+        )
+        chart_items.append(("Distribution des niveaux de risque", fig, f"overview_credit_socle_risk_{cycle_key}", 340, "Infobulle : niveau_risque_calcule et nombre de dossiers."))
+
+    delay_df = _build_credit_delay_bucket_table(df)
+    if not delay_df.empty and delay_df["tranche_retard"].nunique(dropna=False) >= 2:
+        fig = px.bar(
+            delay_df,
+            x="tranche_retard",
+            y="nombre_dossiers",
+            color="tranche_retard",
+            color_discrete_sequence=["#1f7a5c", "#d9a441", "#e78a1f", "#cf4752", "#9b2c2c", "#611818"],
+        )
+        style_standard_vertical_bar(fig, height=320, tickangle=0)
+        fig.update_layout(showlegend=False, xaxis_title=None, yaxis_title=None)
+        fig.update_traces(hovertemplate="Tranche=%{x}<br>Dossiers=%{y}<extra>Colonnes: retard_jours, nombre_dossiers</extra>")
+        chart_items.append(("Dossiers par tranche de retard", fig, f"overview_credit_socle_delay_{cycle_key}", 320, "Infobulle : retard_jours regroupé en tranches et nombre de dossiers."))
+
+    monthly_requests_df = _build_credit_monthly_requests_table(df)
+    if not monthly_requests_df.empty and monthly_requests_df["mois"].nunique(dropna=False) >= 2:
+        fig = px.line(
+            monthly_requests_df,
+            x="mois",
+            y="nombre_demandes",
+            color="devise" if "devise" in monthly_requests_df.columns else None,
+            markers=True,
+        )
+        fig.update_traces(line=dict(width=3), marker=dict(size=7))
+        style_standard_line(fig, height=340, tickangle=-20)
+        fig.update_layout(xaxis_title=None, yaxis_title=None)
+        fig.update_traces(hovertemplate="Mois=%{x|%Y-%m}<br>Demandes=%{y}<extra>Colonnes: date_demande, devise, nombre_demandes</extra>")
+        chart_items.append(("Évolution mensuelle des demandes", fig, f"overview_credit_socle_monthly_requests_{cycle_key}", 340, "Infobulle : date_demande transformée en mois, devise si disponible, nombre_demandes."))
+
+    if "type_produit" in df.columns and "montant_accorde" in df.columns:
+        group_columns = ["type_produit"]
+        color_column = None
+        if "devise" in df.columns and _clean_category_series(df["devise"]).nunique(dropna=False) > 1:
+            group_columns.append("devise")
+            color_column = "devise"
+        amount_df = _build_grouped_sum(df, group_columns, "montant_accorde", top_n=12, min_categories=2)
+        if not amount_df.empty:
+            fig = _build_horizontal_sum_chart(amount_df, "type_produit", "montant_accorde", color_column=color_column)
+            fig.update_traces(
+                hovertemplate="Produit=%{y}<br>Montant accordé=%{x:,.0f}<extra>Colonnes: type_produit, montant_accorde, devise</extra>"
+            )
+            chart_items.append(("Montants accordés par produit", fig, f"overview_credit_socle_amount_product_{cycle_key}", 340, "Infobulle : type_produit, montant_accorde et devise si disponible."))
+
+    if "devise" in df.columns and "solde_final" in df.columns:
+        currency_df = _build_grouped_sum(df, ["devise"], "solde_final", top_n=6, min_categories=2)
+        if not currency_df.empty:
+            fig = px.bar(
+                currency_df,
+                x="devise",
+                y="solde_final",
+                color="devise",
+                color_discrete_sequence=["#2b74ca", "#d77a0f", "#6a3fb5", "#1f7a5c"],
+            )
+            style_standard_vertical_bar(fig, height=320, tickangle=0)
+            fig.update_layout(showlegend=False, xaxis_title=None, yaxis_title=None)
+            fig.update_traces(hovertemplate="Devise=%{x}<br>Encours=%{y:,.0f}<extra>Colonnes: devise, solde_final</extra>")
+            chart_items.append(("Encours par devise", fig, f"overview_credit_socle_currency_{cycle_key}", 320, "Infobulle : devise et solde_final."))
+
+    if "agent_credit" in df.columns and "solde_final" in df.columns:
+        agent_df = _build_grouped_sum(df, ["agent_credit"], "solde_final", top_n=10, min_categories=2)
+        if not agent_df.empty:
+            fig = _build_horizontal_sum_chart(agent_df, "agent_credit", "solde_final", height=340)
+            fig.update_traces(hovertemplate="Agent=%{y}<br>Encours=%{x:,.0f}<extra>Colonnes: agent_credit, solde_final</extra>")
+            chart_items.append(("Encours par agent crédit", fig, f"overview_credit_socle_agent_{cycle_key}", 340, "Infobulle : agent_credit et solde_final."))
+
+    if not chart_items:
+        return False
+
+    render_panel_title("Graphiques prioritaires du socle crédit")
+    _render_credit_priority_chart_grid(chart_items)
+    return True
+
+
 def _render_perfect_vision_credit_overview(df: pd.DataFrame, cycle_key: str) -> None:
     cards = _build_perfect_vision_credit_cards(df)
     if not cards:
@@ -726,6 +1000,9 @@ def _build_credit_like_cards(df: pd.DataFrame, cycle_key: str) -> list[tuple[str
 
 def _render_credit_like_overview(df: pd.DataFrame, monthly_df: pd.DataFrame, cycle_key: str) -> None:
     render_kpi_cards(_build_credit_like_cards(df, cycle_key))
+    if cycle_key == "credit" and _render_credit_socle_priority_overview(df, monthly_df, cycle_key):
+        return
+
     _render_perfect_vision_credit_overview(df, cycle_key)
     left, right = st.columns((1.1, 1))
 

@@ -14954,7 +14954,7 @@ def build_g2_dat_pdf_html(
             pass
 
     return f"""<!doctype html>
-<html lang="fr"><head><meta charset="utf-8"><title>Rapport M-PESA - G2/DAT</title>
+<html lang="fr"><head><meta charset="utf-8"><title>Rapport - Solution Bisou Bisou Digital</title>
 <style>
 @page {{ size: A4 portrait; margin: 12mm; }}
 * {{ box-sizing: border-box; }}
@@ -15002,7 +15002,7 @@ p {{ margin: 4px 0 7px; }}
     </table>
   </div>
 </header>
-<h1>Rapport M-PESA - G2/DAT</h1>
+<h1>Rapport des flux-Solution Bisou Bisou Digital </h1>
 <p class="meta">Rapport d'analyse des flux et contrôles DAT</p>
 <section class="summary"><h2>Synthese executive</h2><ul>
 <li><strong>Activite.</strong> {escape(context["active_text"])}</li>
@@ -18140,7 +18140,7 @@ def create_g2_dat_word(
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.paragraph_format.space_before = Pt(5)
     title.paragraph_format.space_after = Pt(2)
-    title.add_run(f"Rapport M-PESA - {report_scope}")
+    title.add_run(f"Rapport Solution Bisou Bisou Digital - {report_scope}")
     meta = document.add_paragraph()
     meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
     meta.paragraph_format.space_after = Pt(7)
@@ -18316,7 +18316,7 @@ def create_g2_dat_word(
     footer_run.font.size = Pt(8)
     footer_run.font.color.rgb = RGBColor(110, 125, 140)
 
-    document.core_properties.title = f"Rapport M-PESA - {report_scope}"
+    document.core_properties.title = f"Rapport Solution Bisou Bisou Digital - {report_scope}"
     document.core_properties.subject = "Synthese destinee a la Direction generale"
     document.core_properties.author = "Solution Controle Interne"
     buffer = BytesIO()
