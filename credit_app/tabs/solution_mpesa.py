@@ -69,6 +69,7 @@ from credit_app.services.mpesa_analysis import (
     create_g2_dat_word,
     create_turbo_balance_pdf,
     create_turbo_balance_word,
+    count_mpesa_loaded_customers,
     enrich_transactions_with_g2_customer_names,
     enrich_turbo_with_g2_customer_names,
     filter_g2_transactions_by_completion_time,
@@ -934,6 +935,7 @@ def _build_mpesa_statistics_report_cached(
         historical_prepared,
         date_end,
     )
+    total_loaded_clients = count_mpesa_loaded_customers(prepared)
     return build_mpesa_statistics_report(
         scoped_prepared,
         date_start=date_start,
@@ -945,6 +947,7 @@ def _build_mpesa_statistics_report_cached(
         historical_prepared=scoped_historical_prepared,
         historical_turbo_events=historical_operation_journal["events"],
         historical_turbo_transaction_lines=historical_operation_journal["lines"],
+        total_loaded_clients_override=total_loaded_clients,
     )
 
 

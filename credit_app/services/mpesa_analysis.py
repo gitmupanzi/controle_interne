@@ -7054,6 +7054,14 @@ def _mpesa_customer_reference(prepared: MpesaPreparedData) -> pd.DataFrame:
     )
 
 
+def count_mpesa_loaded_customers(prepared: MpesaPreparedData) -> int:
+    """Compte les clients distincts du referentiel Customers charge, avant filtre a date."""
+    reference = _mpesa_customer_reference(prepared)
+    if reference.empty or "client_key" not in reference.columns:
+        return 0
+    return int(reference["client_key"].nunique())
+
+
 MPESA_COMPARISON_PERIOD_OPTIONS = [
     "Semaine microfinance (lundi)",
     "7 jours glissants",
@@ -8610,6 +8618,7 @@ def build_mpesa_statistics_report(
     historical_prepared: MpesaPreparedData | None = None,
     historical_turbo_events: pd.DataFrame | None = None,
     historical_turbo_transaction_lines: pd.DataFrame | None = None,
+    total_loaded_clients_override: int | None = None,
 ) -> dict[str, Any]:
     """Construit le cockpit statistique Turbo-first de la Solution M-PESA.
 
@@ -8652,6 +8661,8 @@ def build_mpesa_statistics_report(
         if not customer_reference_full.empty and "client_key" in customer_reference_full.columns
         else 0
     )
+    if total_loaded_clients_override is not None:
+        total_loaded_clients = int(total_loaded_clients_override)
     customer_reference = customer_reference_full.copy()
     if not customer_reference.empty and "date_creation" in customer_reference.columns:
         reference_dates = pd.to_datetime(
