@@ -5236,6 +5236,11 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(int(overview["clients_turbo_charges"]), 2)
         self.assertEqual(int(overview["clients_turbo_connus"]), 1)
         self.assertEqual(int(overview["clients_turbo_actifs"]), 1)
+        client_indicators = report["clients_indicateurs"].set_index("indicateur")
+        self.assertEqual(
+            int(client_indicators.loc["Clients du fichier Customers [Turbo] charge", "valeur"]),
+            2,
+        )
         self.assertGreater(float(overview["volume_total_transactions"]), 0)
         self.assertEqual(float(overview["chiffre_affaires_observe"]), 15.0)
 
@@ -5255,6 +5260,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             ]
         )
         self.assertIn("Rapport statistiques - Solution Numérique", word_text)
+        self.assertIn("Clients du fichier Customers [Turbo] charge", word_text)
         self.assertIn("1. Clients", word_text)
         self.assertIn("2. Comptes ouverts et comptes bloques", word_text)
         self.assertIn("3. Credits", word_text)

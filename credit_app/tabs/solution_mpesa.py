@@ -6350,6 +6350,7 @@ def _render_statistics_tab(
     report_view = _filter_pilotage_currencies(report, selected_currencies)
 
     overview = report_view.get("vue_ensemble", pd.DataFrame())
+    client_indicators = report_view.get("clients_indicateurs", pd.DataFrame())
     activity = report_view.get("activite_evolution", pd.DataFrame())
     growth = report_view.get("clients_croissance", pd.DataFrame())
     turnover = report_view.get("chiffre_affaires", pd.DataFrame())
@@ -6422,13 +6423,35 @@ def _render_statistics_tab(
             selected_currencies=selected_currencies,
         )
         first_row = overview.iloc[0] if not overview.empty else pd.Series(dtype=object)
-        loaded_clients = _scalar_number(first_row.get("clients_turbo_charges", 0))
-        known_clients = _scalar_number(first_row.get("clients_turbo_connus", 0))
-        active_clients = _scalar_number(first_row.get("clients_turbo_actifs", 0))
+        def _client_indicator_value(label: str, fallback: Any) -> float:
+            if (
+                isinstance(client_indicators, pd.DataFrame)
+                and not client_indicators.empty
+                and {"indicateur", "valeur"}.issubset(client_indicators.columns)
+            ):
+                matches = client_indicators.loc[
+                    client_indicators["indicateur"].astype(str).eq(label)
+                ]
+                if not matches.empty:
+                    return _scalar_number(matches.iloc[0].get("valeur", 0))
+            return _scalar_number(fallback)
+
+        loaded_clients = _client_indicator_value(
+            "Clients du fichier Customers [Turbo] charge",
+            first_row.get("clients_turbo_charges", 0),
+        )
+        known_clients = _client_indicator_value(
+            "Clients Turbo connus a la date de fin",
+            first_row.get("clients_turbo_connus", 0),
+        )
+        active_clients = _client_indicator_value(
+            "Clients Turbo actifs sur la periode",
+            first_row.get("clients_turbo_actifs", 0),
+        )
         render_kpi_cards(
             [
                 (
-                    "Clients Turbo charges",
+                    "Clients du fichier Customers",
                     _format_count(loaded_clients),
                     "Clients distincts dans Customers [Turbo] avant filtre de date",
                     "navy",

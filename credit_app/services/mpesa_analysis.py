@@ -8857,6 +8857,32 @@ def build_mpesa_statistics_report(
                 }
             ]
         )
+    client_indicators = pd.DataFrame(
+        [
+            {
+                "indicateur": "Clients du fichier Customers [Turbo] charge",
+                "valeur": total_loaded_clients,
+                "definition": (
+                    "Nombre de clients distincts presents dans Customers [Turbo] "
+                    "apres preparation, avant le filtre de date de fin."
+                ),
+            },
+            {
+                "indicateur": "Clients Turbo connus a la date de fin",
+                "valeur": total_known_clients,
+                "definition": (
+                    "Clients crees avant ou a la date de fin du rapport."
+                ),
+            },
+            {
+                "indicateur": "Clients Turbo actifs sur la periode",
+                "valeur": active_clients,
+                "definition": (
+                    "Clients ayant au moins une operation Turbo sur la periode filtree."
+                ),
+            },
+        ]
+    )
 
     weekly_comparison = build_mpesa_weekly_comparison(
         prepared,
@@ -8907,6 +8933,7 @@ def build_mpesa_statistics_report(
         "date_fin_perimetre_annuel": prepared.year_scope_end,
         "priorite_sources": source_priority,
         "clients_reference": customer_reference,
+        "clients_indicateurs": client_indicators,
         "clients_croissance": customer_growth,
         "vue_ensemble": overview,
         "chiffre_affaires": turnover,
@@ -9245,6 +9272,7 @@ def create_mpesa_statistics_word(
 
     add_title("Synthese executive")
     overview = statistics_report.get("vue_ensemble", pd.DataFrame())
+    client_indicators_frame = statistics_report.get("clients_indicateurs", pd.DataFrame())
     activity_frame = statistics_report.get("activite_evolution", pd.DataFrame())
     growth_frame = statistics_report.get("clients_croissance", pd.DataFrame())
     turnover_frame = statistics_report.get("chiffre_affaires", pd.DataFrame())
@@ -9270,10 +9298,35 @@ def create_mpesa_statistics_word(
     if isinstance(overview, pd.DataFrame) and not overview.empty:
         total_operations = _as_numeric(overview.get("operations", pd.Series(dtype=float))).sum()
         first_row = overview.iloc[0]
+        def _client_indicator(label: str, fallback: Any = 0) -> float:
+            if (
+                isinstance(client_indicators_frame, pd.DataFrame)
+                and not client_indicators_frame.empty
+                and {"indicateur", "valeur"}.issubset(client_indicators_frame.columns)
+            ):
+                matches = client_indicators_frame.loc[
+                    client_indicators_frame["indicateur"].astype(str).eq(label)
+                ]
+                if not matches.empty:
+                    return _safe_float(matches.iloc[0].get("valeur", 0))
+            return _safe_float(fallback)
+
+        loaded_clients_summary = _client_indicator(
+            "Clients du fichier Customers [Turbo] charge",
+            first_row.get("clients_turbo_charges", 0),
+        )
+        known_clients_summary = _client_indicator(
+            "Clients Turbo connus a la date de fin",
+            first_row.get("clients_turbo_connus", 0),
+        )
+        active_clients_summary = _client_indicator(
+            "Clients Turbo actifs sur la periode",
+            first_row.get("clients_turbo_actifs", 0),
+        )
         summary_rows = [
-            {"indicateur": "Clients Turbo charges", "devise": "-", "valeur": _pdf_number(first_row.get("clients_turbo_charges", 0), decimals=0)},
-            {"indicateur": "Clients Turbo connus a la date de fin", "devise": "-", "valeur": _pdf_number(first_row.get("clients_turbo_connus", 0), decimals=0)},
-            {"indicateur": "Clients Turbo actifs", "devise": "-", "valeur": _pdf_number(first_row.get("clients_turbo_actifs", 0), decimals=0)},
+            {"indicateur": "Clients du fichier Customers [Turbo] charge", "devise": "-", "valeur": _pdf_number(loaded_clients_summary, decimals=0)},
+            {"indicateur": "Clients Turbo connus a la date de fin", "devise": "-", "valeur": _pdf_number(known_clients_summary, decimals=0)},
+            {"indicateur": "Clients Turbo actifs", "devise": "-", "valeur": _pdf_number(active_clients_summary, decimals=0)},
             {"indicateur": "Operations Turbo", "devise": "-", "valeur": _pdf_number(total_operations, decimals=0)},
         ]
         for _, row in overview.iterrows():
@@ -9547,9 +9600,31 @@ def create_mpesa_statistics_word(
             )
 
     add_title("1. Clients")
-    loaded_clients = _first_number(overview, "clients_turbo_charges")
-    known_clients = _first_number(overview, "clients_turbo_connus")
-    active_clients = _first_number(overview, "clients_turbo_actifs")
+    def _client_metric_value(label: str, fallback_column: str) -> float:
+        if (
+            isinstance(client_indicators_frame, pd.DataFrame)
+            and not client_indicators_frame.empty
+            and {"indicateur", "valeur"}.issubset(client_indicators_frame.columns)
+        ):
+            matches = client_indicators_frame.loc[
+                client_indicators_frame["indicateur"].astype(str).eq(label)
+            ]
+            if not matches.empty:
+                return _safe_float(matches.iloc[0].get("valeur", 0))
+        return _first_number(overview, fallback_column)
+
+    loaded_clients = _client_metric_value(
+        "Clients du fichier Customers [Turbo] charge",
+        "clients_turbo_charges",
+    )
+    known_clients = _client_metric_value(
+        "Clients Turbo connus a la date de fin",
+        "clients_turbo_connus",
+    )
+    active_clients = _client_metric_value(
+        "Clients Turbo actifs sur la periode",
+        "clients_turbo_actifs",
+    )
     new_clients = _number_value(growth_frame, "nouveaux_clients_turbo")
     final_clients = _number_value(growth_frame.tail(1), "clients_turbo_cumules") if isinstance(growth_frame, pd.DataFrame) else 0.0
     add_text(
@@ -9560,7 +9635,7 @@ def create_mpesa_statistics_word(
     )
     add_annual_block_analysis("Clients")
     add_bullet(
-        f"Clients Turbo charges : {_pdf_number(loaded_clients, decimals=0)}. "
+        f"Clients du fichier Customers [Turbo] charge : {_pdf_number(loaded_clients, decimals=0)}. "
         f"Clients Turbo connus a la date de fin : {_pdf_number(known_clients, decimals=0)}. "
         f"Clients actifs sur la periode : {_pdf_number(active_clients, decimals=0)}, "
         f"soit {_percent(active_clients, known_clients)} de la base connue."
