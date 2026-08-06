@@ -64,6 +64,7 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 ## Frontière avec la comptabilité Turbo
 
 - Considérer Perfect Vision comme le cœur métier microfinance et la source à interroger pour les comptes, prêts, échéanciers, remboursements, DAT et écritures officielles disponibles dans son schéma.
+- Traiter `mtt_encours` comme une colonne contextuelle : dans les rapports crédit, elle représente l'encours crédit et se normalise en `solde_final`; dans les rapports d'encours épargnant contenant notamment `num_compte`, `libelle_compte`, `produit` et `mtt_encours`, elle représente le solde du compte épargne et se normalise en `solde_compte`. Ne jamais imposer une seule règle globale qui bloque ou fausse l'autre cycle.
 - Considérer le volet `Balances et journaux` de `Finance Turbo` dans Solution M-PESA comme une restitution de contrôle des sous-registres opérationnels Turbo. Il produit des balances et positions observées, mais ne remplace pas une balance générale, un bilan ou un compte de résultat validé dans Perfect Vision.
 - Utiliser G2 uniquement comme preuve secondaire du canal M-PESA, complément de nom et contrôle `Receipt No = ref_no`; ne jamais reprendre ses montants dans une balance Turbo ou Perfect.
 - En cas d'écart Turbo–Perfect Vision, rapprocher par client, téléphone normalisé, devise, référence, produit et date, puis documenter le sens comptable de chaque système avant de conclure. Ne jamais additionner CDF et USD.

@@ -24,16 +24,17 @@ class _UploadedExcel:
         return self._content
 
 
-def test_finance_turbo_replaces_the_two_previous_main_tabs() -> None:
+def test_solution_mpesa_main_tabs_follow_business_refactoring_order() -> None:
     assert MPESA_SOLUTION_TAB_LABELS == (
-        "Importation",
-        "Extrait client",
-        "Finance Turbo",
-        "DAT",
-        "G2 / DAT",
-        "Detail des credits",
-        "Perfect_client",
+        "Importation et contrôle",
+        "Extraits clients",
+        "Finance et comptabilité",
+        "Épargnes",
+        "Crédits",
+        "Solution Numérique / M-Pesa",
+        "Perfect Client",
         "Statistiques",
+        "Projections",
     )
     assert MPESA_FINANCE_TURBO_TAB_LABELS == (
         "Vue direction",

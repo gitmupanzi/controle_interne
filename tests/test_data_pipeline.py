@@ -7,7 +7,11 @@ import unittest
 import pandas as pd
 
 from credit_app.compilation.fichiers_compilation import charger_fichiers_excel
-from credit_app.colonne_valeur.colonne_nettoyage import load_excel_column_mapping
+from credit_app.colonne_valeur.colonne_nettoyage import (
+    build_effective_column_mapping,
+    load_excel_column_mapping,
+    normalize_column_label,
+)
 from credit_app.colonne_valeur.valeurs_nettoyage import _read_mapping_dataframe
 from credit_app.services.data_pipeline import (
     assess_compilation_compatibility,
@@ -38,6 +42,15 @@ class DataPipelineTests(unittest.TestCase):
         )
         self.assertEqual(result.cycle_key, "operations_depot_retrait")
         self.assertGreater(result.confidence, 0.5)
+
+    def test_cycle_detection_recognizes_perfect_epargne_encours_epargnant(self) -> None:
+        result = detect_cycle(
+            "RAPPORT ENCOURS EPARGNANT_2026-07-31.xlsx",
+            ["id_client", "code_client", "num_compte", "libelle_compte", "produit", "mtt_encours"],
+        )
+
+        self.assertEqual(result.cycle_key, "epargne")
+        self.assertGreaterEqual(result.confidence, 0.9)
 
     def test_cycle_detection_recognizes_conformite_156_contract(self) -> None:
         result = detect_cycle(
@@ -124,6 +137,11 @@ class DataPipelineTests(unittest.TestCase):
             ).to_excel(path, index=False)
             with self.assertRaisesRegex(ValueError, "contradictoire"):
                 load_excel_column_mapping(path)
+
+    def test_project_column_mapping_keeps_mtt_encours_as_credit_balance(self) -> None:
+        lookup = build_effective_column_mapping()
+
+        self.assertEqual(lookup[normalize_column_label("mtt_encours")], "solde_final")
 
     def test_value_mapping_rejects_empty_and_contradictory_rules(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

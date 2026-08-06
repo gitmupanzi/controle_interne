@@ -74,22 +74,24 @@ Le relevé peut commencer directement par `Receipt No., Completion Time, Initiat
 
 ## Interface refactorisée des téléversements
 
+Dans l'interface utilisateur, l'ancienne appellation `Turbo` est remplacée par `Solution Numérique` chaque fois que le libellé est destiné au métier. `Turbo` reste autorisé dans les noms de fonctions, colonnes, feuilles Excel, clés de cache et tests historiques lorsque cela évite de casser un contrat technique. `G2` désigne le rapport de contrôle du canal M-Pesa; il ne constitue pas un canal financier additionnel et ne doit jamais être additionné séparément à M-Pesa.
+
 L'interface Streamlit utilise désormais ce parcours :
 
 | Niveau | Téléversement | Rôle |
 |---|---|---|
-| Turbo principal | `Transactions` | Journal des écritures et mouvements |
-| Turbo principal | `Savings Account` | Source maître de l'épargne courante et des DAT |
-| Turbo principal | `Loans Account` | Crédits, encours, échéances et remboursements |
-| Turbo principal | `Customers` | Téléphone et date de création client |
-| Facultatif | `Transactions G2` multiple | Entrées 1441, sorties 15558, noms et contrôle indépendant |
+| Solution Numérique principale | `Transactions` | Journal des écritures et mouvements |
+| Solution Numérique principale | `Savings Account` | Source maître de l'épargne courante et des DAT |
+| Solution Numérique principale | `Loans Account` | Crédits, encours, échéances et remboursements |
+| Solution Numérique principale | `Customers` | Téléphone et date de création client |
+| Facultatif | `Rapport G2 M-Pesa` multiple | Entrées 1441, sorties 15558, noms et contrôle indépendant |
 | Facultatif | `Clients_Perfect` | Contrôle et adoption intersystèmes |
 
 `Customers with Current Savings Account` et `Customers with Fixed Savings Account` n'ont pas de widgets séparés. Ils peuvent être sélectionnés ensemble dans l'emplacement multiple `Savings Account` lorsque la source complète n'est pas disponible. L'interface doit alors avertir que seuls les soldes positifs sont couverts. Si le fichier complet est aussi présent, il est seul retenu. Les quatre emplacements Turbo principaux doivent produire les mêmes comptes, soldes, devises, statuts et dates que la source maître validée lorsque celle-ci est fournie.
 
-Les sous-onglets principaux de Solution M-PESA suivent l'ordre `Importation`, `Extrait client`, `Finance Turbo`, `DAT`, `G2 / DAT`, `Detail des credits`, `Perfect_client`, `Statistiques`, `Prévisions Turbo`. `Controle des donnees` est integre dans `Importation` afin de regrouper chargement, validation des colonnes, composition Savings Account et anomalies Transactions [Turbo].
+Les sous-onglets principaux de Solution M-PESA suivent l'ordre `Importation et contrôle`, `Extraits clients`, `Finance et comptabilité`, `Épargnes`, `Crédits`, `Solution Numérique / M-Pesa`, `Perfect Client`, `Statistiques`, `Projections`. `Controle des donnees` est integre dans `Importation et contrôle` afin de regrouper chargement, validation des colonnes, composition Savings Account et anomalies Transactions [Turbo].
 
-Le contrat de `Prévisions Turbo` reste strictement Turbo-first. Les séries monétaires sont construites et évaluées par `currency_code`; aucune prévision CDF et USD ne peut être totalisée. Les événements de Transactions [Turbo] alimentent clients actifs, opérations, volumes, décaissements et remboursements; Customers alimente les créations de clients; Savings Account alimente les créations de comptes et l'échéancier DAT; Loans Account alimente les créations et montants de crédits. G2 et Perfect restent exclus du modèle. Les échéances DAT sont des calculs contractuels déterministes. Les positions de solde et d'encours provenant d'instantanés ne sont pas extrapolées sans historique de plusieurs arrêtés.
+Le contrat de `Projections` reste strictement Solution Numérique-first. Les séries monétaires sont construites et évaluées par `currency_code`; aucune prévision CDF et USD ne peut être totalisée. Les événements de Transactions [Solution Numérique] alimentent clients actifs, opérations, volumes, décaissements et remboursements; Customers alimente les créations de clients; Savings Account alimente les créations de comptes et l'échéancier DAT; Loans Account alimente les créations et montants de crédits. Les rapports G2 M-Pesa et Perfect restent exclus du modèle. Les échéances DAT sont des calculs contractuels déterministes. Les positions de solde et d'encours provenant d'instantanés ne sont pas extrapolées sans historique de plusieurs arrêtés.
 
 Règles de montant et de sens :
 
@@ -300,7 +302,7 @@ Le bloc Word `Synthese des flux G2 par devise` utilise `rapport_journalier_pivot
 
 ## Finance Turbo sur une période
 
-L'interface réunit le pilotage financier et la comptabilité observée dans un seul sous-onglet principal `Finance Turbo`. Une période et une sélection de devises alimentent les six volets `Vue direction`, `Flux et activité`, `Crédit, épargne et DAT`, `Balances et journaux`, `Risques et contrôles` et `Export`. Les deux rapports sont construits avant le rendu des volets et mis en cache; les exports de pilotage et de comptabilité conservent des contrats séparés.
+L'interface réunit le pilotage financier et la comptabilité observée dans un seul sous-onglet principal `Finance et comptabilité`. Une période et une sélection de devises alimentent les six volets `Vue direction`, `Flux et activité`, `Crédit, épargne et DAT`, `Balances et journaux`, `Risques et contrôles` et `Export`. Les deux rapports sont construits avant le rendu des volets et mis en cache; les exports de pilotage et de comptabilité conservent des contrats séparés.
 
 - Utiliser `build_turbo_operation_events` pour consolider une seule fois Transactions M-PESA_Turbo au grain événement. La clé prioritaire est `ref_no`; sans référence, utiliser `customer_id + currency_code + created_at` et conserver les ventilations techniques dans le même événement.
 - Utiliser `build_mpesa_turbo_financial_analysis` ou `build_mpesa_management_dashboard` avec `date_start`, `date_end` et `frequency`. Les deux bornes sont incluses; `frequency` accepte le jour, la semaine ou le mois.
@@ -319,7 +321,7 @@ Cas réel du 16 juillet 2026 avec les exports du 17 juillet : 135 événements, 
 
 ## Statistiques Turbo
 
-- `Statistiques` est un cockpit operationnel Turbo-first distinct de `Finance Turbo`. Il sert a suivre la croissance, l'activite, le volume, le chiffre d'affaires observe, l'epargne/DAT, le credit et les meilleurs clients.
+- `Statistiques` est un cockpit operationnel Solution Numérique-first distinct de `Finance et comptabilité`. Il sert a suivre la croissance, l'activite, le volume, le chiffre d'affaires observe, l'epargne/DAT, le credit et les meilleurs clients.
 - L'ecran `Statistiques` est classe par blocs decisionnels repliables/depliables : `Clients`, `Comptes ouverts et comptes bloques`, `Credits` et `Transactions`. Chaque bloc regroupe ses KPI, graphiques et tableaux afin de faciliter la lecture par la direction et d'eviter une page trop longue.
 - Les sources sont hierarchisees ainsi : `Transactions [Turbo]` indispensable, `Savings Account [Turbo]` indispensable, `Loans Account [Turbo]` tres important, `Customers [Turbo]` important, `Transactions [G2]` facultatif utile, `Clients_Perfect` facultatif analytique.
 - Le bloc `Transactions` contient une section de contrôle `Qualité du rapprochement G2`. La couverture est complète lorsque les entrées 1441 et les sorties 15558 sont toutes deux présentes; elle est partielle lorsqu'un seul circuit est chargé. L'absence de G2 ne bloque jamais les statistiques Turbo.

@@ -20,6 +20,32 @@ from credit_app.cycles import get_cycle_analysis_preset
 
 logger = logging.getLogger(__name__)
 
+EPARGNE_ACCOUNT_SNAPSHOT_SOURCE_COLUMNS = frozenset(
+    {
+        "mtt encours",
+        "num compte",
+        "libelle compte",
+    }
+)
+EPARGNE_ACCOUNT_SNAPSHOT_OPTIONAL_COLUMNS = frozenset(
+    {
+        "produit",
+        "code produit",
+        "devise",
+        "code devise",
+    }
+)
+EPARGNE_ACCOUNT_SNAPSHOT_CREDIT_EXCLUSIONS = frozenset(
+    {
+        "id dossier credit",
+        "num dossier",
+        "numero pret",
+        "mtt pret",
+        "montant pret",
+        "date decaissement",
+    }
+)
+
 NUMERIC_COLUMNS = [
     "nombre",
     "volume",
@@ -360,6 +386,18 @@ def build_standardized_dataframe(
         mapping = {column: str(column).strip() for column in standardized.columns}
     elif standardize_columns:
         mapping = {column: standardize_column_name(column) for column in standardized.columns}
+        normalized_source_columns = {
+            normalize_column_label(column) for column in standardized.columns
+        }
+        looks_like_epargne_account_snapshot = (
+            EPARGNE_ACCOUNT_SNAPSHOT_SOURCE_COLUMNS.issubset(normalized_source_columns)
+            and bool(EPARGNE_ACCOUNT_SNAPSHOT_OPTIONAL_COLUMNS.intersection(normalized_source_columns))
+            and not bool(EPARGNE_ACCOUNT_SNAPSHOT_CREDIT_EXCLUSIONS.intersection(normalized_source_columns))
+        )
+        if looks_like_epargne_account_snapshot:
+            for column in standardized.columns:
+                if normalize_column_label(column) == "mtt encours":
+                    mapping[column] = "solde_compte"
     else:
         mapping = {column: column for column in standardized.columns}
     if standardize_columns:
@@ -1712,6 +1750,12 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
             return pd.Series(False, index=df.index)
         return df[column].isna() | df[column].astype("string").str.strip().fillna("").eq("")
 
+    def source_has_column(column_name: str) -> pd.Series:
+        if "schema_colonnes_source" not in df.columns:
+            return pd.Series(True, index=df.index)
+        token = f"|{column_name}|"
+        return df["schema_colonnes_source"].astype("string").str.contains(token, regex=False, na=False)
+
     if "niveau_risque_calcule" in df.columns:
         mark(df["niveau_risque_calcule"].eq("Élevé"), "Risque élevé")
 
@@ -1821,6 +1865,7 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
                 phone_text = phone_text.fillna(candidate.mask(candidate.fillna("").eq(""), pd.NA))
             phone_digits = phone_text.fillna("").str.replace(r"\D", "", regex=True)
             extra_watchlist_columns["telephone"] = phone_text
+            phone_applicable_mask = pd.Series(True, index=df.index)
             phone_missing_mask = phone_text.fillna("").eq("")
             phone_invalid_mask = phone_applicable_mask & ~phone_missing_mask & ~phone_digits.str.match(r"^(243\d{9}|0\d{9})$", na=False)
             mark(phone_missing_mask, "Téléphone manquant")
@@ -1862,12 +1907,6 @@ def build_cycle_watchlist(df: pd.DataFrame, cycle_key: str) -> pd.DataFrame:
             extra_watchlist_columns["Mode Désabonné"] = mode_text
             mark(mode_text.fillna("").ne(""), "Client désabonné")
     elif cycle_key == "epargne":
-        def source_has_column(column_name: str) -> pd.Series:
-            if "schema_colonnes_source" not in df.columns:
-                return pd.Series(True, index=df.index)
-            token = f"|{column_name}|"
-            return df["schema_colonnes_source"].astype("string").str.contains(token, regex=False, na=False)
-
         if "compte_id" in df.columns:
             mark(source_has_column("compte_id") & missing_text("compte_id"), "Compte non renseigné")
         if "type_operation" in df.columns:

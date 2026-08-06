@@ -1158,9 +1158,9 @@ class MpesaAnalysisTests(unittest.TestCase):
         result = enrich_transactions_with_g2_customer_names(transactions, g2)
 
         self.assertEqual(result.loc[0, "Nom_client"], "NOM PAR TELEPHONE")
-        self.assertEqual(result.loc[0, "mode_rapprochement_nom_client"], "Telephone G2 = msisdn1 Turbo")
+        self.assertEqual(result.loc[0, "mode_rapprochement_nom_client"], "Telephone G2 = msisdn1 Solution Numérique")
         self.assertEqual(result.loc[1, "Nom_client"], "NOM PAR REFERENCE")
-        self.assertEqual(result.loc[1, "mode_rapprochement_nom_client"], "Receipt No G2 = ref_no Turbo")
+        self.assertEqual(result.loc[1, "mode_rapprochement_nom_client"], "Receipt No G2 = ref_no Solution Numérique")
         self.assertTrue(pd.isna(result.loc[2, "Nom_client"]))
         self.assertEqual(result.loc[2, "mode_rapprochement_nom_client"], "Nom G2 non rapproche")
 
@@ -1317,7 +1317,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertTrue(bool(summary.loc[0, "present_dans_les_3_systemes"]))
         self.assertEqual(
             summary.loc[0, "statut_presence_systemes"],
-            "Present dans G2, Turbo et Perfect",
+            "Present dans G2, Solution Numérique et Perfect",
         )
         self.assertEqual(clients_trois_systemes.loc[0, "noms_clients_perfect"], "CLIENT PERFECT")
         self.assertEqual(len(report["clients_perfect_dans_mpesa"]), 1)
@@ -1471,7 +1471,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         report = build_mpesa_statement(prepared, "1001", {"CDF": 10000})
         statement = report["extrait"]
 
-        self.assertEqual(report["mode_source_extrait"], "Turbo seul")
+        self.assertEqual(report["mode_source_extrait"], "Solution Numérique seule")
         self.assertFalse(report["controle_g2_disponible"])
         self.assertFalse(report["nom_client_enrichi_g2"])
         self.assertTrue(report["g2_dat"].empty)
@@ -1722,7 +1722,7 @@ class MpesaAnalysisTests(unittest.TestCase):
                 "Entree des interets du capital mis en DAT",
                 "source_turbo",
             ],
-            "Savings Account_Turbo - interest_earned",
+            "Savings Account - interest_earned",
         )
 
     def test_customer_statement_exports_move_dat_deposit_out_of_transaction_detail(self) -> None:
@@ -1816,7 +1816,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             == [
                 "Date",
                 "Compte",
-                "Référence Turbo",
+                "Référence",
                 "Devise",
                 "Description",
                 "Entrées",
@@ -2025,8 +2025,8 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(situation["mouvement_net"]), 10.35)
         self.assertEqual(float(situation["epargne_courante_finale"]), 0.0)
         self.assertEqual(float(situation["dat_final"]), 10.0)
-        self.assertIn("Savings Account [Turbo]", situation["source_epargne_courante_finale"])
-        self.assertIn("Savings Account [Turbo]", situation["source_dat_final"])
+        self.assertIn("Savings Account", situation["source_epargne_courante_finale"])
+        self.assertIn("Savings Account", situation["source_dat_final"])
 
         analysis = build_customer_transaction_analysis(prepared, "37370")
         active_dat = analysis["dat_en_cours_client"].iloc[0]
@@ -2125,7 +2125,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             if table.rows
             and [cell.text for cell in table.rows[0].cells[:2]] == ["Date", "Compte"]
         )
-        self.assertEqual(transaction_table.rows[0].cells[2].text, "Référence Turbo")
+        self.assertEqual(transaction_table.rows[0].cells[2].text, "Référence")
         self.assertEqual(
             transaction_table.rows[0].cells[-1].text,
             "Solde",
@@ -2157,7 +2157,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Ouverture", pdf_text)
         self.assertIn("Cloture", pdf_text)
         self.assertIn("Taux annuel DAT", pdf_text)
-        self.assertIn("Référence Turbo", pdf_text)
+        self.assertIn("Référence", pdf_text)
         self.assertIn("DAT_TEST_001", pdf_text)
         self.assertNotIn("sont présentés du point de vue de Bisou Bisou", pdf_text)
         minimal_pdf_reader = PdfReader(
@@ -2336,7 +2336,7 @@ class MpesaAnalysisTests(unittest.TestCase):
 
         report = build_mpesa_statement(prepared, "1001", {"CDF": None})
 
-        self.assertEqual(report["mode_source_extrait"], "Turbo principal + verification G2")
+        self.assertEqual(report["mode_source_extrait"], "Solution Numérique + verification G2")
         self.assertTrue(report["controle_g2_disponible"])
         self.assertTrue(report["nom_client_enrichi_g2"])
         self.assertEqual(report["extrait"]["Nom_client"].dropna().unique().tolist(), ["CLIENT UN"])
@@ -2631,7 +2631,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             [
                 "Date",
                 "Compte",
-                "Référence Turbo",
+                "Référence",
                 "Devise",
                 "Description",
                 "Entrées",
@@ -3257,7 +3257,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertTrue(report["credits"].empty)
         self.assertEqual(float(report["synthese"].iloc[0]["dat_final"]), 5000.0)
         self.assertIn(
-            "Transactions [Turbo]",
+            "Transactions",
             report["synthese"].iloc[0]["source_dat_final"],
         )
 
@@ -3672,11 +3672,11 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(set(detail.index), {"Depot normal", "DAT", "Paiement client B2C"})
         self.assertEqual(int(detail["sens_flux"].eq("Entree").sum()), 2)
         self.assertEqual(int(detail["sens_flux"].eq("Sortie").sum()), 1)
-        self.assertTrue(detail["source_analytique"].eq("Turbo seul").all())
-        self.assertTrue(detail["statut_transaction_g2"].eq("Comptabilisee Turbo").all())
+        self.assertTrue(detail["source_analytique"].eq("Solution Numérique seule").all())
+        self.assertTrue(detail["statut_transaction_g2"].eq("Comptabilisee Solution Numérique").all())
         self.assertTrue(detail["incluse_synthese"].all())
-        self.assertTrue(detail["statut_rapprochement"].eq("Non applicable - Turbo seul").all())
-        self.assertTrue(detail["controle_date"].eq("Non applicable - Turbo seul").all())
+        self.assertTrue(detail["statut_rapprochement"].eq("Non applicable - Solution Numérique seule").all())
+        self.assertTrue(detail["controle_date"].eq("Non applicable - Solution Numérique seule").all())
         self.assertTrue(report["anomalies"].empty)
         self.assertEqual(float(report["pivot"].iloc[0]["montant_total_entrees"]), 300.0)
         self.assertEqual(float(report["pivot"].iloc[0]["montant_total_sorties"]), 50.0)
@@ -3941,7 +3941,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(float(row["ecart_creation_minutes"]), 60.0166667, places=4)
         self.assertEqual(row["controle_date_creation"], "Ecart de date")
         self.assertEqual(row["statut_rapprochement"], "Rapproche avec ecart")
-        self.assertEqual(row["source_analytique"], "G2 + Turbo")
+        self.assertEqual(row["source_analytique"], "G2 + Solution Numérique")
         self.assertEqual(len(report["anomalies"]), 1)
         self.assertIn("Ecart de date de creation", row["motif_anomalie"])
 
@@ -4073,7 +4073,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(row["source_date_creation_g2"], "Completion Time (repli)")
         self.assertEqual(float(row["ecart_creation_minutes"]), -1440.0)
         self.assertIn("Creation G2 : 13/07/2026 10:00:00", row["Observation"])
-        self.assertIn("Creation Turbo : 14/07/2026 10:00:00", row["Observation"])
+        self.assertIn("Creation Solution Numérique : 14/07/2026 10:00:00", row["Observation"])
         self.assertIn("Decalage creation : 1440 minute(s)", row["Observation"])
         self.assertEqual(len(report["anomalies"]), 1)
         self.assertIn("Observation", report["anomalies"].columns)
@@ -5219,7 +5219,7 @@ class MpesaAnalysisTests(unittest.TestCase):
 
         source_priority = report["priorite_sources"].set_index("source")
         self.assertEqual(
-            source_priority.loc["Transactions [Turbo]", "niveau_importance"],
+            source_priority.loc["Transactions [Solution Numérique]", "niveau_importance"],
             "Indispensable",
         )
         self.assertEqual(
@@ -5238,7 +5238,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(int(overview["clients_turbo_actifs"]), 1)
         client_indicators = report["clients_indicateurs"].set_index("indicateur")
         self.assertEqual(
-            int(client_indicators.loc["Clients du fichier Customers [Turbo] charge", "valeur"]),
+            int(client_indicators.loc["Clients du fichier Customers charge", "valeur"]),
             2,
         )
         self.assertGreater(float(overview["volume_total_transactions"]), 0)
@@ -5260,7 +5260,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             ]
         )
         self.assertIn("Rapport statistiques - Solution Numérique", word_text)
-        self.assertIn("Clients du fichier Customers [Turbo] charge", word_text)
+        self.assertIn("Clients du fichier Customers charge", word_text)
         self.assertIn("1. Clients", word_text)
         self.assertIn("2. Comptes ouverts et comptes bloques", word_text)
         self.assertIn("3. Credits", word_text)
@@ -5270,7 +5270,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Annexe 1. Vue d'ensemble", word_text)
         self.assertNotIn("Annexe 3. Definitions", word_text)
         self.assertIn("Chiffre d'affaires observe", word_text)
-        self.assertIn("Turbo uniquement", word_text)
+        self.assertIn("Solution Numérique uniquement", word_text)
         self.assertIn("Période filtrée", word_text)
         self.assertIn(
             "Comparaison avec la même période de l'année précédente",
@@ -6023,7 +6023,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertTrue(report["activite_clients"].empty)
         self.assertTrue(report["perfect_adoption_detail"].empty)
         self.assertEqual(len(report["sources"]), 5)
-        self.assertIn("Customers_Turbo", report["sources"]["source"].tolist())
+        self.assertIn("Customers [Solution Numérique]", report["sources"]["source"].tolist())
         self.assertIn("Transactions M-PESA_G2", report["sources"]["source"].tolist())
 
     def test_dat_maturity_interest_is_estimated_only_with_a_positive_rate(self) -> None:
@@ -6419,12 +6419,12 @@ class MpesaAnalysisTests(unittest.TestCase):
         ]
 
         self.assertTrue(content.startswith(b"PK"))
-        self.assertIn("Rapport des flux- Solution Bisou Bisou Digital", text)
+        self.assertIn("Rapport Solution Bisou Bisou Digital - Solution Numérique / M-Pesa", text)
         self.assertIn("Synthese executive", text)
         self.assertIn("Fréquence temporelle", text)
         self.assertIn("Heure la plus fréquente : 10h", text)
         self.assertNotIn("Jour de semaine le plus actif", text)
-        self.assertIn("Synthese des flux G2 par devise", text)
+        self.assertIn("Synthese des flux rapport G2 M-Pesa par devise", text)
         self.assertIn("Point de vigilance", text)
         self.assertIn("CDF : 1 transaction(s) Completed, 1 client(s) distinct(s)", text)
         self.assertIn("USD : 1 transaction(s) Completed, 1 client(s) distinct(s)", text)
@@ -6546,7 +6546,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             for table in fallback_document.tables
             if table.rows and table.rows[0].cells[0].text == "Devise"
         ]
-        self.assertIn("Synthese des flux G2 par devise", fallback_text)
+        self.assertIn("Synthese des flux rapport G2 M-Pesa par devise", fallback_text)
         self.assertNotIn("Aucune donnee disponible.", fallback_text)
         self.assertEqual(len(flow_tables), 2)
         self.assertEqual(flow_tables[0].rows[1].cells[0].text, "CDF")
@@ -6568,17 +6568,17 @@ class MpesaAnalysisTests(unittest.TestCase):
                     "montant_entree": 1000,
                     "montant_sortie": 0,
                     "incluse_synthese": True,
-                    "transaction_status": "Comptabilisee Turbo",
+                    "transaction_status": "Comptabilisee Solution Numérique",
                 }
             ]
         )
         report = {
-            "analysis_source_label": "Turbo",
+            "analysis_source_label": "Solution Numérique",
             "rapport_journalier_pivot": build_entry_pivot(detail),
             "rapport_journalier_synthese": pd.DataFrame(),
             "rapport_journalier_detail": detail,
             "g2_dat": detail.assign(
-                statut_rapprochement="Non applicable - Turbo seul",
+                statut_rapprochement="Non applicable - Solution Numérique seule",
                 est_anomalie=False,
             ),
             "retention_mensuelle": pd.DataFrame(),
@@ -6594,9 +6594,9 @@ class MpesaAnalysisTests(unittest.TestCase):
         text = "\n".join(paragraph.text for paragraph in document.paragraphs)
 
         self.assertIn(" Solution Bisou Bisou Digital", text)
-        self.assertIn("Synthese des flux Turbo par devise", text)
-        self.assertIn("operation(s) comptabilisee(s) dans Turbo", text)
-        self.assertIn("controles croises G2/Turbo sont non applicables", text)
+        self.assertIn("Synthese des flux Solution Numérique par devise", text)
+        self.assertIn("operation(s) comptabilisee(s) dans la Solution Numérique", text)
+        self.assertIn("controles croises rapport G2/Solution Numérique sont non applicables", text)
         self.assertNotIn("Rapprochement Receipt No/ref_no", text)
 
     def test_g2_dat_word_activity_uses_filtered_detail_not_retention_month(self) -> None:

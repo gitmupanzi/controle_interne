@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 import tempfile
 import warnings
 from datetime import date
@@ -467,6 +468,64 @@ def prepare_sql_operations_dataset_from_uploads(
 
 def _prepare_payload_from_dataframe(raw_df: pd.DataFrame, *, standardize_columns: bool = True) -> dict:
     return prepare_payload_from_dataframe(raw_df, standardize_columns=standardize_columns)
+
+
+def _extract_snapshot_date_from_filename(filename: str | None) -> pd.Timestamp | None:
+    basename = Path(filename or "").name
+    patterns = (
+        r"(?P<year>20\d{2})[-_](?P<month>\d{2})[-_](?P<day>\d{2})",
+        r"(?P<day>\d{2})[-_](?P<month>\d{2})[-_](?P<year>20\d{2})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, basename)
+        if not match:
+            continue
+        try:
+            return pd.Timestamp(
+                year=int(match.group("year")),
+                month=int(match.group("month")),
+                day=int(match.group("day")),
+            )
+        except ValueError:
+            continue
+    return None
+
+
+def _enrich_epargne_snapshot_date_from_filename(
+    payload: dict,
+    filename: str | None,
+) -> dict:
+    standardized_df = payload.get("standardized_df")
+    if not isinstance(standardized_df, pd.DataFrame) or standardized_df.empty:
+        return payload
+    if "date_operation" in standardized_df.columns:
+        return payload
+    if not {"compte_id", "solde_compte"}.issubset(standardized_df.columns):
+        return payload
+    snapshot_date = _extract_snapshot_date_from_filename(filename)
+    if snapshot_date is None:
+        return payload
+
+    enriched_payload = dict(payload)
+    enriched_df = standardized_df.copy()
+    enriched_df["date_operation"] = snapshot_date
+    enriched_payload["standardized_df"] = enriched_df
+    enriched_payload["quality_df"] = build_quality_checks(enriched_df)
+    enriched_payload["missing_df"] = build_missing_values_frame(enriched_df)
+    mapping_df = enriched_payload.get("mapping_df")
+    if isinstance(mapping_df, pd.DataFrame):
+        extra_mapping = pd.DataFrame(
+            [
+                {
+                    "colonne_source": "date extraite du nom du fichier",
+                    "colonne_standard": "date_operation",
+                }
+            ]
+        )
+        enriched_payload["mapping_df"] = pd.concat(
+            [mapping_df, extra_mapping], ignore_index=True, sort=False
+        )
+    return enriched_payload
 
 
 def _get_common_excel_sheets(file_paths: list[Path]) -> list[str]:
@@ -1100,7 +1159,7 @@ def main() -> None:
         )
 
     if not source_ready:
-        start_tabs = st.tabs(["Demarrage Perfect Vision", "Solution M-PESA"])
+        start_tabs = st.tabs(["Demarrage Perfect Vision", "Solution Numérique"])
         with start_tabs[0]:
             render_context_row(
                 [
@@ -1183,6 +1242,9 @@ def main() -> None:
         st.info("Vérifiez le fichier, la feuille sélectionnée et les colonnes indiquées, puis réessayez.")
         render_footer()
         return
+
+    if selected_cycle_key == "epargne":
+        payload = _enrich_epargne_snapshot_date_from_filename(payload, filename)
 
     raw_df = payload["raw_df"]
     standardized_df = payload["standardized_df"]
@@ -1475,7 +1537,7 @@ def main() -> None:
             "Portefeuille",
             "Risques",
             "Qualité",
-            "M-PESA",
+            "Solution Numérique",
             "Export",
             "Méthode",
         ]

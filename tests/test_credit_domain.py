@@ -793,6 +793,30 @@ class CreditDomainTests(unittest.TestCase):
         self.assertTrue(any("Compte inactif >= 90 j" in str(value) for value in watchlist["motif_alerte"]))
         self.assertTrue(any("Téléphone non fiable" in str(value) for value in watchlist["motif_alerte"]))
 
+    def test_perfect_epargne_encours_epargnant_maps_mtt_encours_to_solde_compte(self) -> None:
+        raw = pd.DataFrame(
+            {
+                "id_client": ["BB/I/000244"],
+                "code_client": ["BBA0100136"],
+                "nom_client": ["BIKELI"],
+                "telephone": ["243831270636"],
+                "num_compte": ["33104000BBA01BBA010013601"],
+                "libelle_compte": ["Compte courant Bwakisa Carte CDF de BIKELI TEGRA"],
+                "devise": ["FC"],
+                "code_devise": ["CDF"],
+                "code_produit": [4],
+                "produit": ["Compte courant Bwakisa Carte CDF"],
+                "mtt_encours": [-5600],
+            }
+        )
+
+        standardized, mapping = build_standardized_dataframe(raw)
+
+        self.assertEqual(mapping["mtt_encours"], "solde_compte")
+        self.assertIn("solde_compte", standardized.columns)
+        self.assertNotIn("solde_final", standardized.columns)
+        self.assertEqual(float(standardized.loc[0, "solde_compte"]), -5600.0)
+
     def test_epargne_advanced_analysis_tables_are_computed(self) -> None:
         raw = pd.DataFrame(
             {
