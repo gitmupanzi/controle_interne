@@ -6419,7 +6419,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         ]
 
         self.assertTrue(content.startswith(b"PK"))
-        self.assertIn("Rapport Solution Bisou Bisou Digital - Solution Numérique / M-Pesa", text)
+        self.assertIn("Rapport - Solution Numérique / M-Pesa", text)
         self.assertIn("Synthese executive", text)
         self.assertIn("Fréquence temporelle", text)
         self.assertIn("Heure la plus fréquente : 10h", text)
