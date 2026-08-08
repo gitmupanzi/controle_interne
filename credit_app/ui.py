@@ -214,6 +214,72 @@ def inject_professional_credit_css() -> None:
         line-height: 1.1;
     }
 
+    .credit-doc-card {
+        background: #ffffff;
+        border: 1px solid rgba(11, 44, 99, 0.10);
+        border-left: 4px solid #ef3340;
+        border-radius: 16px;
+        padding: 0.85rem 0.9rem;
+        margin: 0.65rem 0 1rem;
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+    }
+
+    .credit-doc-kicker {
+        color: #ef3340;
+        font-size: 0.66rem;
+        font-weight: 900;
+        letter-spacing: 0.11em;
+        text-transform: uppercase;
+        margin-bottom: 0.18rem;
+    }
+
+    .credit-doc-title {
+        color: #0b2c63;
+        font-size: 0.98rem;
+        font-weight: 900;
+        line-height: 1.15;
+        margin-bottom: 0.25rem;
+    }
+
+    .credit-doc-text,
+    .credit-doc-hint {
+        color: #55708f;
+        font-size: 0.74rem;
+        line-height: 1.35;
+        margin-bottom: 0.55rem;
+    }
+
+    .credit-doc-hint code {
+        background: #eef4fb;
+        color: #0b2c63;
+        border-radius: 6px;
+        padding: 0.08rem 0.22rem;
+    }
+
+    .credit-doc-link {
+        display: block;
+        width: 100%;
+        background: linear-gradient(135deg, #0b2c63, #1553a1);
+        color: #ffffff !important;
+        text-align: center;
+        text-decoration: none !important;
+        font-size: 0.76rem;
+        font-weight: 850;
+        border-radius: 999px;
+        padding: 0.48rem 0.55rem;
+        margin-top: 0.45rem;
+    }
+
+    .credit-doc-link:hover {
+        filter: brightness(1.06);
+    }
+
+    .credit-doc-link-secondary {
+        background: #edf4ff;
+        color: #0b2c63 !important;
+        border: 1px solid rgba(11, 44, 99, 0.12);
+    }
+
     .credit-hero {
         position: relative;
         overflow: hidden;

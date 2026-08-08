@@ -1,0 +1,54 @@
+site_name: Documentation IMF Bisou Bisou
+site_description: Documentation des solutions Data, Contrôle Interne, Perfect Vision, Perfect Power BI et Solution Numérique.
+docs_dir: documentation_web
+site_dir: site
+use_directory_urls: false
+theme:
+  name: readthedocs
+  language: fr
+extra_css:
+  - assets/site.css
+extra_javascript:
+  - https://unpkg.com/mermaid@10.9.1/dist/mermaid.min.js
+  - assets/mermaid-init.js
+nav:
+  - Accueil: index.md
+  - Architecture globale: architecture_globale.md
+  - Perfect Vision:
+      - Présentation: perfect_vision/index.md
+      - Sources et schéma SQL: perfect_vision/sources_schema_sql.md
+      - Requêtes, cycles et KPI: perfect_vision/requetes_cycles_kpi.md
+      - Tableau de bord Streamlit: perfect_vision/streamlit.md
+      - Tests et limites: perfect_vision/tests_limites.md
+  - Perfect Power BI:
+      - Présentation: perfect_power_bi/index.md
+      - Architecture reporting: perfect_power_bi/architecture_reporting.md
+      - Modèle sémantique et pages: perfect_power_bi/modele_pages.md
+      - KPI, DAX et validation: perfect_power_bi/kpi_dax_validation.md
+      - Exploitation et limites: perfect_power_bi/exploitation_limites.md
+  - Solution Numérique:
+      - Présentation: solution_numerique/index.md
+      - Sources et contrats de données: solution_numerique/sources_contrats.md
+      - Extraits clients: solution_numerique/extraits_clients.md
+      - Finance, balances et journaux: solution_numerique/finance_balances.md
+      - Clients, épargnes et crédits: solution_numerique/clients_epargnes_credits.md
+      - G2, DAT et rapprochements: solution_numerique/g2_dat_rapprochements.md
+      - Statistiques et projections: solution_numerique/statistiques_projections.md
+      - Tests et limites: solution_numerique/tests_limites.md
+  - Références communes:
+      - Glossaire: transversal/glossaire.md
+      - Conventions et devises: transversal/conventions_devises.md
+      - Qualité, sécurité et confidentialité: transversal/qualite_securite.md
+      - Matrice des systèmes: transversal/matrice_systemes.md
+      - Matrice code-documentation: transversal/matrice_code_documentation.md
+  - Historique:
+      - Vue d'ensemble: changelog/index.md
+      - Perfect Vision: changelog/perfect_vision.md
+      - Perfect Power BI: changelog/perfect_power_bi.md
+      - Solution Numérique: changelog/solution_numerique.md
+  - FAQ: faq.md
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true

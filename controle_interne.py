@@ -5,6 +5,7 @@ import logging
 import re
 import tempfile
 import warnings
+import webbrowser
 from datetime import date
 from pathlib import Path
 
@@ -205,6 +206,25 @@ def _fallback_render_sidebar_stat_grid(
 render_sidebar_intro_card = getattr(credit_ui, "render_sidebar_intro_card", _fallback_render_sidebar_intro_card)
 render_sidebar_section = getattr(credit_ui, "render_sidebar_section", _fallback_render_sidebar_section)
 render_sidebar_stat_grid = getattr(credit_ui, "render_sidebar_stat_grid", _fallback_render_sidebar_stat_grid)
+
+
+def _render_documentation_sidebar_link() -> None:
+    docs_index = Path(__file__).resolve().parent / "site" / "index.html"
+    docs_online_url = "https://gitmupanzi.github.io/controle_interne/"
+    with st.sidebar.expander("Documentation web", expanded=False):
+        st.markdown("**Documentation du projet**")
+        st.caption("Perfect Vision, Perfect Power BI et Solution Numérique.")
+        if docs_index.exists():
+            if st.button("Ouvrir la documentation locale", key="open_local_documentation", width="stretch"):
+                webbrowser.open_new_tab(docs_index.as_uri())
+            st.caption("Lecture locale : `site/index.html`.")
+        else:
+            st.info("Documentation locale non générée. Lancez `python -m mkdocs build`.")
+
+        st.markdown("**Lien en ligne**")
+        st.caption("Disponible après publication GitHub Pages.")
+        st.code(docs_online_url, language=None)
+
 
 def configure_page() -> None:
     st.set_page_config(
@@ -767,6 +787,7 @@ def main() -> None:
             "Les KPI standard et les analyses détaillées se synchronisent automatiquement avec le cycle sélectionné.",
         ],
     )
+    _render_documentation_sidebar_link()
     render_sidebar_section("Référentiel de contrôle", "Sélection du cycle à analyser.")
     selected_cycle_key = st.sidebar.selectbox(
         "Type de cycle",

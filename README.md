@@ -107,6 +107,23 @@ $PYTHON = 'C:\Users\<utilisateur>\AppData\Local\anaconda3\python.exe'
 & $PYTHON -m unittest discover -s tests -v
 ```
 
+### Lancer la documentation web
+
+La documentation web commune couvre Perfect Vision, Perfect Power BI et la Solution Numérique.
+
+Pour consulter sans lancer de serveur, construire le site puis ouvrir `site\index.html` dans le navigateur :
+
+```powershell
+& $PYTHON -m mkdocs build
+Start-Process .\site\index.html
+```
+
+Le serveur local reste utile uniquement pendant la rédaction, lorsque l'on veut voir les modifications en direct :
+
+```powershell
+& $PYTHON -m mkdocs serve
+```
+
 ## Sources de données
 
 L’application supporte :
