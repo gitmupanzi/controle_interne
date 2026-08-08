@@ -46,6 +46,26 @@ Dans les libellés destinés aux utilisateurs, utiliser `Solution Numérique`. C
 
 Cas réel de référence du 17 juillet 2026 : `Savings Account` contient 77 084 comptes courants, dont 862 à solde positif, et 3 707 DAT, dont 1 214 à solde positif. Le résumé Current Savings correspond exactement aux 862 comptes courants positifs; le résumé Fixed Savings correspond exactement aux 1 214 DAT positifs.
 
+## Cockpit Épargnes
+
+Référence détaillée : [references/kpi_epargne.md](references/kpi_epargne.md).
+
+- L'onglet `Épargnes` est le cockpit unique de l'épargne courante et des DAT; ne pas créer d'onglet parallèle pour ces analyses.
+- `Savings Account` est la source maître de stock actuel : comptes ouverts `NORMAL SAVINGS`, DAT `FIXED SAVINGS`, soldes, statuts, produits, dates contractuelles, intérêts constatés et frais disponibles.
+- `Transactions [Solution Numérique]` est la source des flux de période : dépôts, retraits, transferts DAT, retours DAT et remboursements depuis compte ouvert. Ne jamais compter les lignes comptables brutes comme transactions clients; utiliser les événements canoniques.
+- G2 reste facultatif et sert à l'identité ou au rapprochement; il ne calcule ni encours épargne, ni dépôts, ni retraits, ni DAT lorsque la source Solution Numérique est disponible.
+- Toujours distinguer `stock_actuel` et `flux_periode`. Ne pas tracer une évolution historique de l'encours épargne ou DAT depuis un seul fichier `Savings Account`.
+- Conserver les comptes à solde nul dans le portefeuille actuel lorsque la source complète `Savings Account` est chargée; les vues résumées Current/Fixed ne couvrent que les soldes positifs et doivent être signalées comme repli partiel.
+- L'activité observée vient des mouvements. `status = active` de Savings Account décrit la position administrative, mais ne prouve pas une activité transactionnelle.
+- L'inactivité affichée est analytique (`actif`, `a_surveille`, `inactif_observe`, `historique_insuffisant`), pas une dormance réglementaire certifiée. Si Transactions atteint 100 000 lignes, conserver l'avertissement `historique_transactions_potentiellement_plafonne`.
+- Le taux annuel DAT reste 11 % par défaut, paramétrable, et 0 % est autorisé pour désactiver l'estimation. La formule est `capital * taux_annuel / 100 * duree_contractuelle_jours / 365`; le résultat est une estimation de préparation, pas une écriture officielle.
+- Ne calculer ni renouvellement DAT, ni churn certifié, ni part digitale sans source et règle fiables; marquer ces KPI en `data_gap`.
+- Les opportunités `DAT sans crédit actif` et `forte épargne sans crédit` sont des pistes commerciales prudentes. Elles ne constituent jamais une éligibilité crédit automatique.
+- Les montants, soldes, flux, concentrations et estimations restent séparés par devise. Ne jamais additionner CDF et USD.
+- Les sous-sous-onglets attendus sont : `Vue d'ensemble`, `Collecte et flux`, `Portefeuille actuel`, `Clients et comptes`, `Activité observée`, `Produits`, `Concentration`, `DAT`, `Échéances DAT`, `Opportunités`, `Contrôles et anomalies`.
+- Les filtres de devise, famille, produit, statut, tranche, client et téléphone doivent prioriser les `multiselect`. Les notions comme horizon, taux annuel, inactivité observée, concentration, seuil forte épargne et data gap doivent avoir une infobulle claire.
+- Lorsque l'option globale `Renommer automatiquement les colonnes` est active, les tableaux et exports Excel de l'onglet Épargnes utilisent des noms français, minuscules, sans accents et en `snake_case`.
+
 ## Invariants G2/DAT
 
 - Autoriser G2/DAT sans fichier G2 lorsque Transactions M-PESA_Turbo est disponible. Dans ce mode, construire une ligne analytique par `ref_no` pour les dépôts/DAT/remboursements et par `reference_id + created_at` pour `Retrait Vers M-Pesa`; utiliser `created_at` comme date d'analyse et tracer `source_analytique = Turbo seul`.

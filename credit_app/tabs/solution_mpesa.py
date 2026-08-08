@@ -49,6 +49,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_accounting_analysis,
     build_mpesa_clients_report,
     build_mpesa_dat_maturity_analysis,
+    build_mpesa_savings_cockpit,
     build_loan_savings_reconciliation,
     build_mpesa_credit_cockpit,
     build_mpesa_management_dashboard,
@@ -1062,6 +1063,35 @@ def _build_mpesa_dat_maturity_analysis_cached(
         as_of_date=analysis_date,
         annual_interest_rate_pct=annual_interest_rate_pct,
         preparation_horizon_days=preparation_horizon_days,
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
+    max_entries=8,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _build_mpesa_savings_cockpit_cached(
+    prepared: MpesaPreparedData,
+    date_start: object,
+    date_end: object,
+    frequency: str,
+    annual_interest_rate_pct: float,
+    inactivity_threshold_days: int,
+    maturity_horizon_days: int,
+    large_savings_usd: float,
+    large_savings_cdf: float,
+) -> dict[str, Any]:
+    scoped_prepared = _prepared_data_as_of(prepared, date_end)
+    return build_mpesa_savings_cockpit(
+        scoped_prepared,
+        date_start=date_start,
+        date_end=date_end,
+        frequency=frequency,
+        annual_interest_rate_pct=annual_interest_rate_pct,
+        inactivity_threshold_days=inactivity_threshold_days,
+        maturity_horizon_days=maturity_horizon_days,
+        large_savings_thresholds={"USD": large_savings_usd, "CDF": large_savings_cdf},
     )
 
 
@@ -3044,37 +3074,412 @@ def _render_large_dat_summary(prepared: MpesaPreparedData) -> None:
 
 @st.fragment
 def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) -> None:
-    _render_dat_repayment_schedule(prepared)
-    _render_large_dat_summary(prepared)
-    if report is not None:
-        render_panel_title("DAT final du client")
+    del report
+    if prepared.current_savings.empty and prepared.fixed_savings.empty:
+        st.info("Chargez Savings Account pour construire le cockpit Epargnes.")
+        return
+
+    render_panel_title("Cockpit Epargnes")
+    default_end = _latest_complete_turbo_date(prepared)
+    if prepared.year_scope_end is not None:
+        default_end = min(default_end, prepared.year_scope_end)
+    transaction_dates = (
+        pd.to_datetime(prepared.transactions["created_at"], errors="coerce").dropna()
+        if not prepared.transactions.empty and "created_at" in prepared.transactions.columns
+        else pd.Series(dtype="datetime64[ns]")
+    )
+    default_start = (
+        pd.Timestamp(transaction_dates.min()).normalize()
+        if not transaction_dates.empty
+        else default_end
+    )
+    if prepared.year_scope_start is not None:
+        default_start = max(default_start, prepared.year_scope_start)
+    scope_token = re.sub(r"[^0-9A-Za-z]+", "_", prepared.year_scope_label).strip("_") or "all"
+    controls = st.columns(4, gap="medium")
+    with controls[0]:
+        date_start = st.date_input(
+            "Date de debut",
+            value=default_start.date(),
+            key=f"mpesa_savings_date_start_{scope_token}",
+            format="DD/MM/YYYY",
+            help="Debut inclusif de la periode utilisee pour les flux observes dans Transactions.",
+        )
+    with controls[1]:
+        date_end = st.date_input(
+            "Date de fin",
+            value=default_end.date(),
+            key=f"mpesa_savings_date_end_{scope_token}",
+            format="DD/MM/YYYY",
+            help="Fin inclusive de la periode. La position Savings Account reste une photographie a cette date.",
+        )
+    with controls[2]:
+        frequency = st.selectbox(
+            "Frequence",
+            ["Jour", "Semaine", "Mois"],
+            index=2,
+            key="mpesa_savings_frequency",
+            help="Regroupement des courbes de flux : jour, semaine ou mois.",
+        )
+    with controls[3]:
+        maturity_horizon_days = st.slider(
+            "Horizon echeances DAT",
+            min_value=1,
+            max_value=90,
+            value=DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
+            step=1,
+            key="mpesa_savings_maturity_horizon_days",
+            help="Nombre de jours a regarder en avant pour preparer les remboursements DAT.",
+        )
+
+    settings = st.columns(3, gap="medium")
+    with settings[0]:
+        annual_interest_rate_pct = st.number_input(
+            "Taux d'interet annuel DAT (%)",
+            min_value=0.0,
+            max_value=100.0,
+            value=float(
+                st.session_state.get(
+                    "mpesa_dat_annual_interest_rate_pct",
+                    DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+                )
+            ),
+            step=0.25,
+            key="mpesa_savings_dat_annual_interest_rate_pct",
+            help="11 % est la valeur Bisou Bisou par defaut. Mettre 0 pour desactiver l'estimation.",
+        )
+    with settings[1]:
+        inactivity_threshold_days = st.slider(
+            "Seuil d'inactivite observee",
+            min_value=7,
+            max_value=365,
+            value=30,
+            step=1,
+            key="mpesa_savings_inactivity_threshold_days",
+            help="Seuil analytique base sur la derniere operation observee; ce n'est pas une dormance reglementaire.",
+        )
+    with settings[2]:
+        large_savings_usd = st.number_input(
+            "Seuil forte epargne USD",
+            min_value=0.0,
+            value=100.0,
+            step=10.0,
+            key="mpesa_savings_large_usd",
+            help="Seuil expose pour identifier les clients a analyser commercialement, sans conclure a leur eligibilite.",
+        )
+    large_savings_cdf = st.number_input(
+        "Seuil forte epargne CDF",
+        min_value=0.0,
+        value=500_000.0,
+        step=50_000.0,
+        key="mpesa_savings_large_cdf",
+        help="Seuil CDF expose pour les opportunites commerciales; les devises restent separees.",
+    )
+
+    if pd.Timestamp(date_start) > pd.Timestamp(date_end):
+        st.warning("La date de debut est posterieure a la date de fin; l'analyse inverse automatiquement les bornes.")
+
+    weekly_date = min(pd.Timestamp(date_end).normalize(), _latest_complete_turbo_date(prepared))
+    _render_weekly_comparison(
+        _build_mpesa_weekly_comparison_cached(
+            prepared,
+            weekly_date,
+            _selected_mpesa_comparison_period(),
+        ),
+        blocks=["Comptes"],
+        indicator_keys=["clients_epargnants", "nouveaux_comptes_ouverts", "nouveaux_dat", "depots_epargne", "depots_dat"],
+        title="Evolution comparative de l'epargne",
+    )
+
+    cockpit = _build_mpesa_savings_cockpit_cached(
+        prepared,
+        date_start,
+        date_end,
+        frequency,
+        float(annual_interest_rate_pct),
+        int(inactivity_threshold_days),
+        int(maturity_horizon_days),
+        float(large_savings_usd),
+        float(large_savings_cdf),
+    )
+    quality = cockpit.get("qualite_donnees", pd.DataFrame())
+    warning_count = int(quality.get("statut", pd.Series(dtype=str)).astype(str).eq("A verifier").sum()) if not quality.empty else 0
+    if warning_count:
+        _render_alert_banner(f"{warning_count} controle(s) Epargnes necessitent une verification.")
+
+    render_summary_box(
+        "Regles de lecture",
+        [
+            "Savings Account est la source de stock actuel : comptes ouverts, DAT, soldes, statuts et echeances.",
+            "Transactions est la source des flux de periode : depots, retraits, transferts DAT et remboursements depuis compte ouvert.",
+            "G2 sert uniquement au controle et a l'identite; il ne modifie pas les montants d'epargne.",
+            "Les montants sont toujours lus devise par devise; aucun total CDF + USD n'est produit.",
+        ],
+    )
+
+    tab_key = "mpesa_savings_cockpit_tabs"
+    inject_professional_tabs_css(container_key=tab_key)
+    sub_tabs = st.container(key=tab_key).tabs(
+        format_professional_tab_labels(
+            (
+                "Vue d'ensemble",
+                "Collecte et flux",
+                "Portefeuille actuel",
+                "Clients et comptes",
+                "Activite observee",
+                "Produits",
+                "Concentration",
+                "DAT",
+                "Echeances DAT",
+                "Opportunites",
+                "Controles et anomalies",
+            )
+        )
+    )
+
+    with sub_tabs[0]:
+        overview = cockpit.get("vue_ensemble", pd.DataFrame())
+        if overview.empty:
+            st.info("Aucun indicateur de synthese disponible.")
+        else:
+            for currency in sorted(overview["currency_code"].dropna().astype(str).unique()):
+                currency_view = overview.loc[overview["currency_code"].astype(str).eq(currency)].copy()
+                cards = []
+                for _, row in currency_view.head(10).iterrows():
+                    unit = str(row.get("unite", ""))
+                    value = row.get("valeur", 0)
+                    formatted = _format_amount(value) if unit == "montant" else _format_count(value)
+                    cards.append(
+                        (
+                            str(row.get("indicateur", "")).replace("_", " ").title(),
+                            formatted,
+                            f"Devise {currency} - {row.get('bloc', '')}",
+                            "navy" if unit == "montant" else "blue",
+                        )
+                    )
+                render_panel_title(f"Synthese - {currency}")
+                render_kpi_cards(cards)
+            _mpesa_dataframe(overview, width="stretch", hide_index=True)
+
+    with sub_tabs[1]:
+        flux = cockpit.get("flux_synthese", pd.DataFrame())
+        evolution = cockpit.get("flux_evolution", pd.DataFrame())
+        render_panel_title("Flux de periode")
+        flux_view = _apply_local_multiselect_filters(
+            flux,
+            ["currency_code"],
+            key_prefix="mpesa_savings_flux_filter",
+        )
+        _mpesa_dataframe(flux_view, width="stretch", hide_index=True)
+        if not evolution.empty:
+            for currency in sorted(evolution["currency_code"].dropna().astype(str).unique()):
+                chart_data = evolution.loc[evolution["currency_code"].astype(str).eq(currency)].copy()
+                chart_long = chart_data.melt(
+                    id_vars=["periode", "currency_code"],
+                    value_vars=[
+                        column
+                        for column in [
+                            "montant_depots_compte_ouvert",
+                            "montant_depots_dat",
+                            "montant_retraits",
+                            "montant_remboursements_depuis_compte_ouvert",
+                        ]
+                        if column in chart_data.columns
+                    ],
+                    var_name="indicateur",
+                    value_name="montant",
+                )
+                if chart_long.empty:
+                    continue
+                st.markdown(f"**Evolution des flux - {currency}**")
+                fig = px.line(
+                    chart_long,
+                    x="periode",
+                    y="montant",
+                    color="indicateur",
+                    markers=True,
+                    labels={"periode": "Periode", "montant": f"Montant ({currency})", "indicateur": "Indicateur"},
+                )
+                style_standard_line(fig, height=390)
+                st_plot(fig, key=f"mpesa_savings_flux_{currency}", height=390)
+
+    with sub_tabs[2]:
+        portfolio = cockpit.get("portefeuille_synthese", pd.DataFrame())
+        detail = cockpit.get("portefeuille_detail", pd.DataFrame())
+        render_panel_title("Portefeuille actuel")
+        portfolio_view = _apply_local_multiselect_filters(
+            portfolio,
+            ["currency_code", "famille_epargne"],
+            key_prefix="mpesa_savings_portfolio_filter",
+        )
+        _mpesa_dataframe(portfolio_view, width="stretch", hide_index=True)
+        with st.expander("Afficher le detail des comptes", expanded=False):
+            detail_view = _apply_local_multiselect_filters(
+                detail,
+                ["currency_code", "famille_epargne", "product_name", "status"],
+                key_prefix="mpesa_savings_portfolio_detail_filter",
+            )
+            columns = [
+                column
+                for column in [
+                    "savings_id", "customer_id", "Nom_client", "msisdn", "currency_code",
+                    "famille_epargne", "product_name", "status", "balance",
+                    "date_creation_compte", "date_approved", "date_activated",
+                    "maturity_date", "is_interest_calculated",
+                    "last_interest_calculation_date", "next_interest_calculation_date",
+                    "interest_earned", "fees_due", "source_position",
+                ]
+                if column in detail_view.columns
+            ]
+            _mpesa_dataframe(detail_view[columns].head(1000), width="stretch", hide_index=True)
+
+    with sub_tabs[3]:
+        new_accounts = cockpit.get("nouveaux_comptes", pd.DataFrame())
+        activity = cockpit.get("activite_comptes", pd.DataFrame())
+        render_panel_title("Clients et comptes")
+        _mpesa_dataframe(new_accounts, width="stretch", hide_index=True)
+        if not activity.empty:
+            summary = (
+                activity.groupby(["currency_code", "famille_epargne", "statut_activite_observee"], as_index=False, dropna=False)
+                .agg(nombre_comptes=("savings_id", "nunique"), nombre_clients=("customer_id", "nunique"), encours_actuel=("balance", "sum"))
+                .sort_values(["currency_code", "famille_epargne", "statut_activite_observee"])
+            )
+            _mpesa_dataframe(summary, width="stretch", hide_index=True)
+
+    with sub_tabs[4]:
+        activity = cockpit.get("activite_comptes", pd.DataFrame())
+        render_panel_title("Activite observee")
+        activity_view = _apply_local_multiselect_filters(
+            activity,
+            ["currency_code", "famille_epargne", "statut_activite_observee", "product_name"],
+            key_prefix="mpesa_savings_activity_filter",
+        )
+        _mpesa_dataframe(activity_view.head(1000), width="stretch", hide_index=True)
+
+    with sub_tabs[5]:
+        products = cockpit.get("produits_synthese", pd.DataFrame())
+        render_panel_title("Produits d'epargne")
+        product_view = _apply_local_multiselect_filters(
+            products,
+            ["currency_code", "famille_epargne", "product_name"],
+            key_prefix="mpesa_savings_products_filter",
+        )
+        _mpesa_dataframe(product_view, width="stretch", hide_index=True)
+
+    with sub_tabs[6]:
+        concentration = cockpit.get("concentration_synthese", pd.DataFrame())
+        clients = cockpit.get("concentration_clients", pd.DataFrame())
+        render_panel_title("Concentration")
+        _mpesa_dataframe(concentration, width="stretch", hide_index=True)
+        clients_view = _apply_local_multiselect_filters(
+            clients,
+            ["currency_code", "famille_epargne", "Nom_client", "customer_id"],
+            key_prefix="mpesa_savings_concentration_clients_filter",
+        )
+        _mpesa_dataframe(clients_view.head(200), width="stretch", hide_index=True)
+
+    with sub_tabs[7]:
+        dat_summary = cockpit.get("dat_synthese", pd.DataFrame())
+        dat_detail = cockpit.get("dat_detail", pd.DataFrame())
+        render_panel_title("DAT - position actuelle")
+        _mpesa_dataframe(dat_summary, width="stretch", hide_index=True)
         dat_view = _apply_local_multiselect_filters(
-            report["dat_final"],
-            ["currency_code", "product_name", "account_type", "statut_dat"],
-            key_prefix="mpesa_dat_final_filter",
+            dat_detail,
+            ["currency_code", "product_name", "status", "tranche_echeance"],
+            key_prefix="mpesa_savings_dat_filter",
         )
-        st.caption(f"{len(dat_view)} ligne(s) DAT affichee(s).")
-        _mpesa_dataframe(dat_view, width="stretch", hide_index=True)
-        render_panel_title("Mouvements DAT reconstruits")
-        dat_movements_view = _apply_local_multiselect_filters(
-            report["mouvements_dat"],
-            ["currency_code", "references", "descriptions"],
-            key_prefix="mpesa_dat_movements_filter",
+        dat_columns = [
+            column
+            for column in [
+                "savings_id", "customer_id", "Nom_client", "msisdn", "product_name",
+                "currency_code", "status", "balance", "date_approved",
+                "maturity_date", "jours_avant_echeance", "interest_earned",
+                "interet_estime", "capital_plus_interet_estime", "tranche_echeance",
+            ]
+            if column in dat_view.columns
+        ]
+        _mpesa_dataframe(dat_view[dat_columns].head(1000), width="stretch", hide_index=True)
+        st.caption(
+            f"Estimation DAT : taux annuel {float(annual_interest_rate_pct):.2f} %. "
+            "Cette valeur sert a la preparation, pas a la comptabilisation officielle."
         )
-        _mpesa_dataframe(dat_movements_view, width="stretch", hide_index=True)
-    elif not prepared.fixed_savings.empty:
-        render_panel_title("DAT importes")
-        dat_view = _apply_local_multiselect_filters(
-            prepared.fixed_savings,
-            ["currency_code", "product_name", "account_type"],
-            key_prefix="mpesa_dat_import_filter",
+
+    with sub_tabs[8]:
+        render_panel_title("Echeances DAT")
+        maturity_summary = cockpit.get("dat_echeances_synthese", pd.DataFrame())
+        maturity_detail = cockpit.get("dat_echeances_detail", pd.DataFrame())
+        _mpesa_dataframe(maturity_summary, width="stretch", hide_index=True)
+        maturity_view = _apply_local_multiselect_filters(
+            maturity_detail,
+            ["currency_code", "tranche_echeance", "statut_preparation_remboursement", "product_name"],
+            key_prefix="mpesa_savings_maturity_filter",
         )
-        st.caption(f"{len(dat_view)} ligne(s) DAT affichee(s).")
-        _mpesa_dataframe(dat_view.head(500), width="stretch", hide_index=True)
-    else:
-        st.info("Aucun DAT trouve dans Savings Account.")
-    st.caption(
-        "Les comptes DAT proviennent de Savings Account. Les interets et montants de remboursement affiches sont des estimations de preparation."
+        _mpesa_dataframe(maturity_view.head(1000), width="stretch", hide_index=True)
+
+    with sub_tabs[9]:
+        render_panel_title("Opportunites commerciales prudentes")
+        opportunities = cockpit.get("opportunites", pd.DataFrame())
+        if opportunities.empty:
+            st.info("Aucune opportunite analytique selon les seuils actuels.")
+        else:
+            opportunity_view = _apply_local_multiselect_filters(
+                opportunities,
+                ["currency_code", "opportunite", "Nom_client", "customer_id"],
+                key_prefix="mpesa_savings_opportunity_filter",
+            )
+            _mpesa_dataframe(opportunity_view.head(1000), width="stretch", hide_index=True)
+        render_summary_box(
+            "Prudence metier",
+            [
+                "DAT sans credit actif et forte epargne sans credit sont des pistes commerciales.",
+                "Ces listes ne constituent pas une decision d'eligibilite credit.",
+                "Les seuils USD/CDF sont visibles dans les filtres pour eviter une regle cachee.",
+            ],
+        )
+
+    with sub_tabs[10]:
+        render_panel_title("Controles et anomalies")
+        quality_view = _apply_local_multiselect_filters(
+            quality,
+            ["statut", "controle"],
+            key_prefix="mpesa_savings_quality_filter",
+        )
+        _mpesa_dataframe(quality_view, width="stretch", hide_index=True)
+        catalogue = cockpit.get("catalogue_kpi", pd.DataFrame())
+        with st.expander("Catalogue KPI et limites", expanded=False):
+            _mpesa_dataframe(catalogue, width="stretch", hide_index=True)
+        for list_key, frame in cockpit.get("listes_action", {}).items():
+            if not isinstance(frame, pd.DataFrame) or frame.empty:
+                continue
+            with st.expander(list_key.replace("_", " ").title(), expanded=False):
+                _mpesa_dataframe(frame.head(1000), width="stretch", hide_index=True)
+
+    export_report: dict[str, Any] = {
+        "epargne_vue_ensemble": cockpit.get("vue_ensemble", pd.DataFrame()),
+        "epargne_portefeuille_synthese": cockpit.get("portefeuille_synthese", pd.DataFrame()),
+        "epargne_portefeuille_detail": cockpit.get("portefeuille_detail", pd.DataFrame()),
+        "epargne_flux_synthese": cockpit.get("flux_synthese", pd.DataFrame()),
+        "epargne_flux_evolution": cockpit.get("flux_evolution", pd.DataFrame()),
+        "epargne_activite_comptes": cockpit.get("activite_comptes", pd.DataFrame()),
+        "epargne_produits_synthese": cockpit.get("produits_synthese", pd.DataFrame()),
+        "epargne_concentration_synthese": cockpit.get("concentration_synthese", pd.DataFrame()),
+        "epargne_concentration_clients": cockpit.get("concentration_clients", pd.DataFrame()),
+        "epargne_dat_detail": cockpit.get("dat_detail", pd.DataFrame()),
+        "epargne_dat_echeances": cockpit.get("dat_echeances_detail", pd.DataFrame()),
+        "epargne_opportunites": cockpit.get("opportunites", pd.DataFrame()),
+        "epargne_qualite_donnees": cockpit.get("qualite_donnees", pd.DataFrame()),
+        "epargne_catalogue_kpi": cockpit.get("catalogue_kpi", pd.DataFrame()),
+    }
+    for name, frame in cockpit.get("listes_action", {}).items():
+        export_report[f"epargne_liste_{name}"] = frame
+    export_bytes = _create_excel_export_current_sidebar(export_report)
+    st.download_button(
+        "Telecharger le cockpit Epargnes",
+        data=export_bytes,
+        file_name=f"cockpit_epargnes_{pd.Timestamp(date_start):%Y%m%d}_{pd.Timestamp(date_end):%Y%m%d}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        width="stretch",
+        key=f"mpesa_savings_cockpit_export_{pd.Timestamp(date_start):%Y%m%d}_{pd.Timestamp(date_end):%Y%m%d}",
     )
 
 

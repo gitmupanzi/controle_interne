@@ -17,6 +17,9 @@ def test_prepare_dataframe_with_user_columns_uses_reference_mapping():
             "customer_id": ["37370"],
             "currency_code": ["USD"],
             "loan_amount": [5.0],
+            "is_interest_calculated": ["1"],
+            "last_interest_calculation_date": [pd.Timestamp("2026-07-20")],
+            "next_interest_calculation_date": [pd.Timestamp("2026-08-20")],
             "Date Échéance": [pd.Timestamp("2026-07-31")],
         }
     )
@@ -27,6 +30,9 @@ def test_prepare_dataframe_with_user_columns_uses_reference_mapping():
         "id_client",
         "devise",
         "montant_credit",
+        "interet_calcule",
+        "date_dernier_calcul_interet",
+        "date_prochain_calcul_interet",
         "date_echeance",
     ]
     assert mapping["customer_id"] == "id_client"

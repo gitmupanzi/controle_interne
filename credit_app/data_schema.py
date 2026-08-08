@@ -118,7 +118,14 @@ MPESA_TRANSACTIONS_SCHEMA = schema(
 CURRENT_SAVINGS_SCHEMA = schema(
     "Épargne courante",
     {"customer_id", "msisdn", "product_name", "account_type", "balance", "currency_code", "created_at", "updated_at"},
-    {"product_description", "savings_id", "msisdn1"},
+    {
+        "product_description",
+        "savings_id",
+        "msisdn1",
+        "is_interest_calculated",
+        "last_interest_calculation_date",
+        "next_interest_calculation_date",
+    },
     {
         "msisdn": ("msisdn1",),
     },
@@ -126,7 +133,12 @@ CURRENT_SAVINGS_SCHEMA = schema(
 FIXED_SAVINGS_SCHEMA = schema(
     "DAT",
     {"customer_id", "msisdn", "product_name", "account_type", "balance", "currency_code", "date_approved", "maturity_date"},
-    {"created_at"},
+    {
+        "created_at",
+        "is_interest_calculated",
+        "last_interest_calculation_date",
+        "next_interest_calculation_date",
+    },
 )
 G2_TRANSACTIONS_SCHEMA = schema(
     "Transactions G2",

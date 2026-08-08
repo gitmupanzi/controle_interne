@@ -28,6 +28,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_accounting_analysis,
     build_mpesa_management_dashboard,
     build_mpesa_credit_cockpit,
+    build_mpesa_savings_cockpit,
     build_mpesa_comparison_windows,
     build_mpesa_forecast_report,
     build_mpesa_g2_statistics_quality,
@@ -7485,6 +7486,252 @@ class TestLoanSavingsReconciliation(unittest.TestCase):
         self.assertIn("Liste_Prets_Defaulted", workbook.sheet_names)
         exported = pd.read_excel(workbook, sheet_name="Liste_Prets_Defaulted")
         self.assertIn("numero_pret", exported.columns)
+
+    def test_savings_cockpit_separates_snapshot_flux_and_currencies(self) -> None:
+        savings = pd.DataFrame(
+            [
+                {
+                    "savings_id": "SAV-USD-1",
+                    "customer_id": "C1",
+                    "msisdn1": "0811111111",
+                    "product_name": "Open Savings",
+                    "product_description": "Current account",
+                    "currency_code": "USD",
+                    "balance": 25,
+                    "status": "active",
+                    "created_at": "2026-07-01",
+                    "date_activated": "2026-07-01",
+                },
+                {
+                    "savings_id": "SAV-USD-0",
+                    "customer_id": "C2",
+                    "msisdn1": "0822222222",
+                    "product_name": "Open Savings",
+                    "product_description": "Current account",
+                    "currency_code": "USD",
+                    "balance": 0,
+                    "status": "active",
+                    "created_at": "2026-07-02",
+                },
+                {
+                    "savings_id": "DAT-USD-1",
+                    "customer_id": "C1",
+                    "msisdn1": "0811111111",
+                    "product_name": "1 Month",
+                    "product_description": "1 Month Fixed Account",
+                    "currency_code": "USD",
+                    "balance": 100,
+                    "status": "active",
+                    "date_approved": "2026-07-01",
+                    "date_activated": "2026-07-01",
+                    "maturity_date": "2026-07-31",
+                    "interest_earned": 1.25,
+                    "created_at": "2026-07-01",
+                },
+                {
+                    "savings_id": "DAT-CDF-0",
+                    "customer_id": "C3",
+                    "msisdn1": "0833333333",
+                    "product_name": "1 Month",
+                    "product_description": "1 Month Fixed Account",
+                    "currency_code": "CDF",
+                    "balance": 0,
+                    "status": "withdrawal",
+                    "date_approved": "2026-06-01",
+                    "maturity_date": "2026-07-01",
+                    "created_at": "2026-06-01",
+                },
+            ]
+        )
+        transactions = pd.DataFrame(
+            [
+                {
+                    "id": 1,
+                    "customer_id": "C1",
+                    "msisdn1": "0811111111",
+                    "account_type": "MPESA ACCOUNT",
+                    "reference_id": "SAV-USD-1",
+                    "currency_code": "USD",
+                    "dr": 10,
+                    "cr": 0,
+                    "bal_before": 100,
+                    "bal_after": 90,
+                    "ref_no": "DEP-1",
+                    "description": "M-Pesa Depot",
+                    "created_at": "2026-07-10 10:00:00",
+                },
+                {
+                    "id": 2,
+                    "customer_id": "C1",
+                    "msisdn1": "0811111111",
+                    "account_type": "NORMAL SAVINGS",
+                    "reference_id": "SAV-USD-1",
+                    "currency_code": "USD",
+                    "dr": 0,
+                    "cr": 10,
+                    "bal_before": 15,
+                    "bal_after": 25,
+                    "ref_no": "DEP-1",
+                    "description": "Epargne depot",
+                    "created_at": "2026-07-10 10:00:00",
+                },
+                {
+                    "id": 3,
+                    "customer_id": "C1",
+                    "msisdn1": "0811111111",
+                    "account_type": "NORMAL SAVINGS",
+                    "reference_id": "SAV-USD-1",
+                    "currency_code": "USD",
+                    "dr": 5,
+                    "cr": 0,
+                    "bal_before": 25,
+                    "bal_after": 20,
+                    "ref_no": "",
+                    "description": "Retrait Vers M-Pesa",
+                    "created_at": "2026-07-11 11:00:00",
+                },
+                {
+                    "id": 4,
+                    "customer_id": "C1",
+                    "msisdn1": "0811111111",
+                    "account_type": "MPESA ACCOUNT",
+                    "reference_id": "SAV-USD-1",
+                    "currency_code": "USD",
+                    "dr": 0,
+                    "cr": 5,
+                    "bal_before": 90,
+                    "bal_after": 95,
+                    "ref_no": "",
+                    "description": "Retrait Vers M-Pesa",
+                    "created_at": "2026-07-11 11:00:00",
+                },
+                {
+                    "id": 5,
+                    "customer_id": "C1",
+                    "msisdn1": "0811111111",
+                    "account_type": "MPESA ACCOUNT",
+                    "reference_id": "DAT-USD-1",
+                    "currency_code": "USD",
+                    "dr": 100,
+                    "cr": 0,
+                    "bal_before": 95,
+                    "bal_after": -5,
+                    "ref_no": "DAT-1",
+                    "description": "M-Pesa Compte",
+                    "created_at": "2026-07-12 12:00:00",
+                },
+                {
+                    "id": 6,
+                    "customer_id": "C1",
+                    "msisdn1": "0811111111",
+                    "account_type": "FIXED SAVINGS",
+                    "reference_id": "DAT-USD-1",
+                    "currency_code": "USD",
+                    "dr": 0,
+                    "cr": 100,
+                    "bal_before": 0,
+                    "bal_after": 100,
+                    "ref_no": "DAT-1",
+                    "description": "Depot Bloque",
+                    "created_at": "2026-07-12 12:00:00",
+                },
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=prepare_transactions(transactions),
+            current_savings=prepare_current_savings(savings),
+            fixed_savings=prepare_fixed_savings_from_accounts(savings),
+            loans=pd.DataFrame(),
+            g2_transactions=pd.DataFrame(),
+            customers=pd.DataFrame(),
+            load_report=pd.DataFrame(),
+        )
+
+        report = build_mpesa_savings_cockpit(
+            prepared,
+            date_start="2026-07-01",
+            date_end="2026-07-31",
+            annual_interest_rate_pct=11,
+            maturity_horizon_days=30,
+            large_savings_thresholds={"USD": 50, "CDF": 50000},
+        )
+
+        portfolio = report["portefeuille_synthese"].set_index(["currency_code", "famille_epargne"])
+        self.assertEqual(float(portfolio.loc[("USD", "Compte ouvert"), "encours_actuel"]), 25.0)
+        self.assertEqual(float(portfolio.loc[("USD", "Compte ouvert"), "comptes_solde_nul"]), 1.0)
+        self.assertEqual(float(portfolio.loc[("USD", "DAT"), "encours_actuel"]), 100.0)
+        self.assertEqual(float(portfolio.loc[("CDF", "DAT"), "encours_actuel"]), 0.0)
+
+        flows = report["flux_synthese"].set_index("currency_code")
+        self.assertEqual(float(flows.loc["USD", "montant_depots_compte_ouvert"]), 10.0)
+        self.assertEqual(float(flows.loc["USD", "montant_depots_dat"]), 100.0)
+        self.assertEqual(float(flows.loc["USD", "montant_retraits"]), 5.0)
+        self.assertEqual(float(flows.loc["USD", "flux_net_epargne"]), 105.0)
+        self.assertNotIn("CDF", flows.index)
+
+        dat = report["dat_detail"].set_index("savings_id")
+        self.assertAlmostEqual(
+            float(dat.loc["DAT-USD-1", "interet_estime"]),
+            100 * 0.11 * 30 / 365,
+            places=6,
+        )
+        self.assertEqual(
+            report["catalogue_kpi"].set_index("kpi").loc["renouvellement_dat", "statut"],
+            "data_gap",
+        )
+        self.assertIn("forte_epargne_sans_credit", report["listes_action"])
+        self.assertFalse(report["opportunites"].empty)
+
+    def test_savings_cockpit_allows_zero_interest_and_exports(self) -> None:
+        savings = pd.DataFrame(
+            [
+                {
+                    "savings_id": "DAT-USD-1",
+                    "customer_id": "C1",
+                    "msisdn1": "0811111111",
+                    "product_name": "1 Month",
+                    "product_description": "1 Month Fixed Account",
+                    "currency_code": "USD",
+                    "balance": 100,
+                    "status": "active",
+                    "date_approved": "2026-07-01",
+                    "maturity_date": "2026-07-31",
+                    "created_at": "2026-07-01",
+                }
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=prepare_current_savings(savings),
+            fixed_savings=prepare_fixed_savings_from_accounts(savings),
+            loans=pd.DataFrame(),
+            load_report=pd.DataFrame(),
+        )
+        report = build_mpesa_savings_cockpit(
+            prepared,
+            date_start="2026-07-01",
+            date_end="2026-07-31",
+            annual_interest_rate_pct=0,
+        )
+
+        dat = report["dat_detail"].iloc[0]
+        self.assertTrue(pd.isna(dat["interet_estime"]))
+        quality = report["qualite_donnees"].set_index("controle")
+        self.assertEqual(quality.loc["Transactions potentiellement plafonnees", "statut"], "OK")
+
+        export = create_excel_export(
+            {
+                "epargne_vue_ensemble": report["vue_ensemble"],
+                "epargne_portefeuille_detail": report["portefeuille_detail"],
+                "epargne_catalogue_kpi": report["catalogue_kpi"],
+            },
+            rename_user_columns=True,
+        )
+        workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
+        self.assertIn("Epargne_Vue_Ensemble", workbook.sheet_names)
+        self.assertIn("Epargne_Detail", workbook.sheet_names)
+        exported = pd.read_excel(workbook, sheet_name="Epargne_Detail")
+        self.assertIn("numero_compte", exported.columns)
 
 
 if __name__ == "__main__":

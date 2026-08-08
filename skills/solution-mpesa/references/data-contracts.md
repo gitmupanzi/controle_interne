@@ -8,6 +8,7 @@ La source de vérité exécutable reste `credit_app/data_schema.py`. Les règles
 - [Chargement de plusieurs fichiers](#chargement-de-plusieurs-fichiers)
 - [Formats G2 acceptés](#formats-g2-acceptés)
 - [Source maître Savings Account et contrôle DAT](#source-maître-savings-account-et-contrôle-dat)
+- [Cockpit Épargnes](#cockpit-épargnes)
 - [Interface refactorisée des téléversements](#interface-refactorisée-des-téléversements)
 - [Grain, clés et rapprochement](#grain-et-clés)
 - [Classification, statuts et anomalies](#classification-des-opérations)
@@ -71,6 +72,26 @@ Le relevé peut commencer directement par `Receipt No., Completion Time, Initiat
 - Si l'export Current Savings résumé est chargé, le rapprocher avec les comptes courants positifs de la source maître sur `customer_id`, téléphone, produit, devise, solde, `created_at` et `updated_at`.
 - Si l'export DAT résumé est chargé, le rapprocher avec les DAT positifs de la source maître sur `customer_id`, `currency_code`, `date_approved`, `maturity_date` et `balance`.
 - Cas réel du 17 juillet 2026 : 80 791 comptes dans la source maître, dont 77 084 courants et 3 707 fixes. Les 862 comptes courants positifs correspondent exactement aux 862 lignes du résumé Current Savings; les 76 222 autres comptes courants ont un solde nul. Les 1 214 DAT positifs correspondent exactement aux 1 214 lignes du résumé Fixed Savings; les 2 493 autres DAT ont un solde nul.
+
+## Cockpit Épargnes
+
+L'onglet `Épargnes` s'appuie sur `build_mpesa_savings_cockpit`. Il ne crée pas de source parallèle : il assemble les positions `Savings Account`, les événements `build_turbo_operation_events`, les flux `activite_epargne_clients`, les échéances `build_mpesa_dat_maturity_analysis` et les rapprochements crédit/épargne existants.
+
+Contrat de lecture :
+
+- `Savings Account` = stock actuel : comptes ouverts, DAT, soldes, statuts, produits, dates contractuelles, intérêts et frais fournis par la source.
+- `Transactions [Solution Numérique]` = flux de période : dépôts, retraits, transferts DAT, retours DAT, remboursements depuis compte ouvert.
+- `G2` = contrôle et identité seulement; il ne pilote pas les KPI d'épargne.
+- Un seul instantané `Savings Account` ne permet pas de tracer l'évolution historique de l'encours. Les tendances autorisées concernent les flux Transactions et les créations/activations de comptes.
+- Les comptes à solde nul sont conservés lorsque la source complète `Savings Account` est disponible.
+- L'activité observée vient des mouvements, pas du seul statut du compte.
+- L'inactivité est analytique, non réglementaire, et doit devenir `historique_insuffisant` lorsque l'historique disponible ne couvre pas le seuil.
+- Le taux annuel DAT par défaut reste 11 %, avec 0 % autorisé pour désactiver l'estimation.
+- Les KPI non démontrables restent en `data_gap` : renouvellement DAT, churn certifié, dormance réglementaire, part digitale et historique d'encours.
+- Les opportunités `DAT sans crédit actif` et `forte épargne sans crédit` sont commerciales et prudentes, jamais des décisions d'éligibilité.
+- Tous les montants et ratios monétaires restent séparés par devise.
+
+Exports Excel principaux : `Epargne_Vue_Ensemble`, `Epargne_Portefeuille`, `Epargne_Detail`, `Epargne_Flux`, `Epargne_Evolution_Flux`, `Epargne_Activite`, `Epargne_Produits`, `Epargne_Concentration`, `Epargne_Top_Clients`, `Epargne_DAT`, `Epargne_Echeances_DAT`, `Epargne_Opportunites`, `Epargne_Qualite`, `Epargne_Catalogue_KPI` et les listes d'action appelées par l'écran.
 
 ## Interface refactorisée des téléversements
 
@@ -434,7 +455,7 @@ Cas réel de validation du cycle DAT dans `bdd Solution M_PESA` : le téléphone
 - Contrôle épargne/DAT : `build_savings_accounts_reconciliation`.
 - Extrait : `build_mpesa_statement`, `build_customer_summary`, `build_diagnostics`.
 - G2/DAT : `build_g2_dat_crosscheck`, `build_g2_entry_report`, `build_g2_daily_savings_report`, `build_g2_transaction_time_analysis`, `build_g2_retention_report`.
-- Pilotage : `build_turbo_operation_events`, `build_mpesa_turbo_financial_analysis`, `build_mpesa_management_dashboard`, `build_mpesa_credit_cockpit`, `build_mpesa_credit_risk_analysis`, `build_loan_savings_reconciliation`, `build_mpesa_dat_maturity_analysis`.
+- Pilotage : `build_turbo_operation_events`, `build_mpesa_turbo_financial_analysis`, `build_mpesa_management_dashboard`, `build_mpesa_savings_cockpit`, `build_mpesa_credit_cockpit`, `build_mpesa_credit_risk_analysis`, `build_loan_savings_reconciliation`, `build_mpesa_dat_maturity_analysis`.
 - Comptabilité : `build_mpesa_accounting_analysis`.
 - Perfect : `build_perfect_client_crosscheck`.
 - Recherche : `search_customers`, `resolve_customer_id`.

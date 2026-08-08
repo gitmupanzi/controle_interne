@@ -12504,6 +12504,842 @@ def build_mpesa_credit_cockpit(
     return result
 
 
+MPESA_SAVINGS_DATA_GAPS: tuple[dict[str, str], ...] = (
+    {
+        "kpi": "historique_encours_epargne",
+        "definition": "Evolution historique de l'encours epargne et DAT.",
+        "formule": "Non calculable avec un seul instantane Savings Account.",
+        "source": "Snapshots Savings Account successifs non disponibles.",
+        "grain": "periode x devise x produit",
+        "devise": "oui",
+        "type_mesure": "stock_historique",
+        "statut": "data_gap",
+        "limite": "Savings Account donne la position actuelle; Transactions donne les flux, pas l'encours historique complet.",
+    },
+    {
+        "kpi": "dormance_reglementaire",
+        "definition": "Compte dormant selon une regle validee et un historique suffisant.",
+        "formule": "Derniere operation > seuil reglementaire valide.",
+        "source": "Seuil reglementaire et historique long non garantis.",
+        "grain": "compte",
+        "devise": "non",
+        "type_mesure": "risque",
+        "statut": "data_gap",
+        "limite": "L'onglet produit seulement une inactivite observee lorsque l'historique le permet.",
+    },
+    {
+        "kpi": "renouvellement_dat",
+        "definition": "DAT arrive a terme et renouvele par le meme client.",
+        "formule": "DAT renouvele / DAT arrives a terme.",
+        "source": "Cle de renouvellement DAT non disponible.",
+        "grain": "DAT",
+        "devise": "oui",
+        "type_mesure": "fidelisation",
+        "statut": "data_gap",
+        "limite": "Un nouveau DAT du meme client ne prouve pas automatiquement un renouvellement.",
+    },
+    {
+        "kpi": "churn_epargne_certifie",
+        "definition": "Cloture ou attrition certifiee des comptes d'epargne.",
+        "formule": "Comptes clotures / comptes ouverts.",
+        "source": "date_closed et regle de cloture non toujours renseignees.",
+        "grain": "compte",
+        "devise": "oui",
+        "type_mesure": "attrition",
+        "statut": "data_gap",
+        "limite": "Ne pas deduire une cloture certifiee depuis le statut seul sans regle validee.",
+    },
+    {
+        "kpi": "part_digitale",
+        "definition": "Part des flux digitaux dans l'ensemble des canaux.",
+        "formule": "Flux digitaux / flux tous canaux.",
+        "source": "Aucune source non digitale comparable dans le perimetre charge.",
+        "grain": "periode x devise",
+        "devise": "oui",
+        "type_mesure": "canal",
+        "statut": "data_gap",
+        "limite": "G2 est un relevé de controle M-Pesa, pas un canal financier distinct a additionner.",
+    },
+)
+
+
+def _mpesa_savings_empty_cockpit() -> dict[str, Any]:
+    return {
+        "periode": pd.DataFrame(),
+        "vue_ensemble": pd.DataFrame(),
+        "portefeuille_synthese": pd.DataFrame(),
+        "portefeuille_detail": pd.DataFrame(),
+        "comptes_courants_detail": pd.DataFrame(),
+        "dat_detail": pd.DataFrame(),
+        "flux_synthese": pd.DataFrame(),
+        "flux_evolution": pd.DataFrame(),
+        "activite_clients": pd.DataFrame(),
+        "activite_comptes": pd.DataFrame(),
+        "nouveaux_comptes": pd.DataFrame(),
+        "produits_synthese": pd.DataFrame(),
+        "concentration_clients": pd.DataFrame(),
+        "concentration_comptes": pd.DataFrame(),
+        "concentration_synthese": pd.DataFrame(),
+        "dat_synthese": pd.DataFrame(),
+        "dat_echeances_synthese": pd.DataFrame(),
+        "dat_echeances_detail": pd.DataFrame(),
+        "opportunites": pd.DataFrame(),
+        "listes_action": {},
+        "qualite_donnees": pd.DataFrame(),
+        "catalogue_kpi": pd.DataFrame(),
+    }
+
+
+def _mpesa_savings_prepare_positions(
+    current_savings: pd.DataFrame | None,
+    fixed_savings: pd.DataFrame | None,
+    *,
+    as_of_date: Any,
+    annual_interest_rate_pct: float | None,
+) -> pd.DataFrame:
+    """Prepare la position epargne/DAT actuelle sans inventer d'historique."""
+
+    parts: list[pd.DataFrame] = []
+    for family, source in [
+        ("Compte ouvert", current_savings),
+        ("DAT", fixed_savings),
+    ]:
+        if not isinstance(source, pd.DataFrame) or source.empty:
+            continue
+        frame = source.copy()
+        frame["famille_epargne"] = family
+        for column in [
+            "id", "savings_id", "customer_id", "Nom_client", "msisdn", "msisdn1",
+            "product_id", "product_name", "product_description", "account_type",
+            "currency_code", "balance", "status", "date_closed", "date_approved",
+            "date_activated", "maturity_date", "is_interest_calculated",
+            "last_interest_calculation_date", "next_interest_calculation_date",
+            "interest_earned", "voda_interest", "fees_due", "locked_balance",
+            "date_locked", "created_at", "updated_at",
+            "fichier_source_epargne_turbo", "fichiers_sources_epargne_turbo",
+            "source_savings_account_complete",
+        ]:
+            if column not in frame.columns:
+                frame[column] = pd.NA
+        parts.append(frame)
+
+    if not parts:
+        return pd.DataFrame()
+
+    frame = concat_frames_stable(parts).reset_index(drop=True)
+    frame["savings_id"] = clean_identifier(frame["savings_id"]).where(
+        clean_identifier(frame["savings_id"]).ne(""),
+        clean_identifier(frame["id"]),
+    )
+    frame["customer_id"] = clean_identifier(frame["customer_id"])
+    frame["Nom_client"] = clean_text(frame["Nom_client"])
+    frame["msisdn"] = normalize_phone(
+        frame["msisdn"].where(frame["msisdn"].notna(), frame["msisdn1"])
+    )
+    frame["msisdn1"] = normalize_phone(frame["msisdn1"])
+    frame["currency_code"] = clean_text(frame["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
+    for column in ["product_id", "product_name", "product_description", "account_type", "status", "is_interest_calculated"]:
+        frame[column] = clean_text(frame[column])
+    for column in ["balance", "interest_earned", "voda_interest", "fees_due", "locked_balance"]:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+    for column in [
+        "date_closed", "date_approved", "date_activated", "maturity_date",
+        "last_interest_calculation_date", "next_interest_calculation_date",
+        "date_locked", "created_at", "updated_at",
+    ]:
+        frame[column] = pd.to_datetime(frame[column], errors="coerce")
+
+    frame["date_creation_compte"] = frame["created_at"].combine_first(
+        frame["date_approved"]
+    ).combine_first(frame["date_activated"])
+    frame["solde_positif"] = frame["balance"].gt(0)
+    frame["solde_nul"] = frame["balance"].le(0)
+    frame["date_situation"] = pd.Timestamp(pd.to_datetime(as_of_date, errors="coerce")).normalize()
+    frame["jours_avant_echeance"] = (
+        frame["maturity_date"].dt.normalize() - frame["date_situation"]
+    ).dt.days
+    frame["duree_contractuelle_jours"] = (
+        frame["maturity_date"].dt.normalize() - frame["date_approved"].dt.normalize()
+    ).dt.days
+    interest_rate = pd.to_numeric(
+        pd.Series([annual_interest_rate_pct]), errors="coerce"
+    ).iloc[0]
+    interest_enabled = pd.notna(interest_rate) and float(interest_rate) > 0
+    frame["taux_interet_annuel_pct"] = float(interest_rate) if interest_enabled else np.nan
+    valid_duration = frame["famille_epargne"].eq("DAT") & frame["duree_contractuelle_jours"].ge(0)
+    frame["interet_estime"] = np.nan
+    if interest_enabled:
+        frame.loc[valid_duration, "interet_estime"] = (
+            frame.loc[valid_duration, "balance"]
+            * float(interest_rate)
+            / 100
+            * frame.loc[valid_duration, "duree_contractuelle_jours"]
+            / 365
+        )
+    frame["capital_plus_interet_estime"] = frame["balance"] + frame["interet_estime"]
+    frame["tranche_echeance"] = np.select(
+        [
+            frame["famille_epargne"].ne("DAT"),
+            frame["maturity_date"].isna(),
+            frame["jours_avant_echeance"].lt(0),
+            frame["jours_avant_echeance"].eq(0),
+            frame["jours_avant_echeance"].le(7),
+            frame["jours_avant_echeance"].le(30),
+            frame["jours_avant_echeance"].le(60),
+            frame["jours_avant_echeance"].le(90),
+        ],
+        [
+            "Non applicable",
+            "Date manquante",
+            "Echu",
+            "Aujourd'hui",
+            "0-7 jours",
+            "8-30 jours",
+            "31-60 jours",
+            "61-90 jours",
+        ],
+        default="> 90 jours",
+    )
+    frame["source_position"] = np.where(
+        frame["famille_epargne"].eq("DAT"),
+        "Savings Account - FIXED SAVINGS",
+        "Savings Account - NORMAL SAVINGS",
+    )
+    return frame.reset_index(drop=True)
+
+
+def build_mpesa_savings_cockpit(
+    prepared: MpesaPreparedData,
+    *,
+    date_start: Any | None = None,
+    date_end: Any | None = None,
+    frequency: str = "Mois",
+    annual_interest_rate_pct: float | None = DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+    inactivity_threshold_days: int = 30,
+    maturity_horizon_days: int = DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
+    large_savings_thresholds: dict[str, float] | None = None,
+    turbo_events: pd.DataFrame | None = None,
+    turbo_transaction_lines: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    """Construit le cockpit Epargnes depuis Savings Account et Transactions.
+
+    ``Savings Account`` porte la position actuelle. ``Transactions`` porte les
+    flux observes sur la periode. G2 ne modifie aucun montant.
+    """
+
+    transactions = prepared.transactions if isinstance(prepared.transactions, pd.DataFrame) else pd.DataFrame()
+    transaction_dates = (
+        pd.to_datetime(transactions["created_at"], errors="coerce").dropna()
+        if not transactions.empty and "created_at" in transactions.columns
+        else pd.Series(dtype="datetime64[ns]")
+    )
+    fallback_end = _mpesa_analysis_date(prepared, date_end)
+    end_date = pd.Timestamp(fallback_end).normalize()
+    if date_start is not None and pd.notna(pd.to_datetime(date_start, errors="coerce")):
+        start_date = pd.Timestamp(pd.to_datetime(date_start, errors="coerce")).normalize()
+    elif not transaction_dates.empty:
+        start_date = pd.Timestamp(transaction_dates.min()).normalize()
+    else:
+        start_date = end_date
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+    period_end_exclusive = end_date + pd.Timedelta(days=1)
+
+    result = _mpesa_savings_empty_cockpit()
+    result["periode"] = pd.DataFrame(
+        [
+            {
+                "date_debut": start_date,
+                "date_fin": end_date,
+                "frequence": frequency,
+                "taux_interet_annuel_dat_pct": annual_interest_rate_pct,
+                "horizon_echeance_dat_jours": maturity_horizon_days,
+                "seuil_inactivite_observee_jours": inactivity_threshold_days,
+            }
+        ]
+    )
+
+    positions = _mpesa_savings_prepare_positions(
+        prepared.current_savings,
+        prepared.fixed_savings,
+        as_of_date=end_date,
+        annual_interest_rate_pct=annual_interest_rate_pct,
+    )
+    result["portefeuille_detail"] = positions
+    if positions.empty:
+        result["qualite_donnees"] = pd.DataFrame(
+            [
+                {
+                    "controle": "Savings Account",
+                    "valeur": 0,
+                    "statut": "A verifier",
+                    "detail": "Aucun fichier Savings Account exploitable pour construire le cockpit epargne.",
+                }
+            ]
+        )
+        result["catalogue_kpi"] = pd.DataFrame(MPESA_SAVINGS_DATA_GAPS)
+        return result
+
+    result["comptes_courants_detail"] = positions.loc[
+        positions["famille_epargne"].eq("Compte ouvert")
+    ].reset_index(drop=True)
+    result["dat_detail"] = positions.loc[positions["famille_epargne"].eq("DAT")].reset_index(drop=True)
+
+    def _nunique_clients(values: pd.Series) -> int:
+        return int(clean_identifier(values).replace("", pd.NA).nunique())
+
+    result["portefeuille_synthese"] = (
+        positions.groupby(["currency_code", "famille_epargne"], as_index=False, dropna=False)
+        .agg(
+            nombre_comptes=("savings_id", "nunique"),
+            nombre_clients=("customer_id", _nunique_clients),
+            comptes_solde_positif=("solde_positif", "sum"),
+            comptes_solde_nul=("solde_nul", "sum"),
+            encours_actuel=("balance", "sum"),
+            solde_moyen=("balance", "mean"),
+            solde_median=("balance", "median"),
+            interet_constate=("interest_earned", lambda values: values.sum(min_count=1)),
+            interet_vodacom=("voda_interest", lambda values: values.sum(min_count=1)),
+            frais_a_payer=("fees_due", lambda values: values.sum(min_count=1)),
+            solde_bloque_technique=("locked_balance", lambda values: values.sum(min_count=1)),
+        )
+        .sort_values(["currency_code", "famille_epargne"])
+        .reset_index(drop=True)
+    )
+
+    dat_maturity = build_mpesa_dat_maturity_analysis(
+        prepared.fixed_savings,
+        as_of_date=end_date,
+        annual_interest_rate_pct=annual_interest_rate_pct,
+        preparation_horizon_days=maturity_horizon_days,
+    )
+    result["dat_echeances_synthese"] = dat_maturity.get("synthese", pd.DataFrame())
+    result["dat_echeances_detail"] = dat_maturity.get("detail", pd.DataFrame())
+
+    events_source = turbo_events if isinstance(turbo_events, pd.DataFrame) else pd.DataFrame()
+    activity_start = min(
+        start_date,
+        end_date - pd.Timedelta(days=max(int(inactivity_threshold_days) * 3, 1)),
+    )
+    if events_source.empty and not transactions.empty:
+        scoped_transactions = transactions
+        if "created_at" in transactions.columns:
+            scoped_dates = pd.to_datetime(transactions["created_at"], errors="coerce")
+            scoped_transactions = transactions.loc[
+                scoped_dates.notna()
+                & scoped_dates.ge(activity_start)
+                & scoped_dates.lt(period_end_exclusive)
+            ].copy()
+        events_source = build_turbo_operation_events(scoped_transactions).get("events", pd.DataFrame())
+    savings_events = pd.DataFrame()
+    activity_savings_events = pd.DataFrame()
+    if isinstance(events_source, pd.DataFrame) and not events_source.empty:
+        events_source = events_source.copy()
+        events_source["created_at"] = pd.to_datetime(events_source["created_at"], errors="coerce")
+        savings_operation_types = [
+            "Sortie M-PESA_Turbo vers epargne",
+            "Sortie M-PESA_Turbo vers DAT",
+            "Entree M-PESA_Turbo depuis epargne",
+            "Transfert DAT vers epargne courante",
+            "Remboursement de credit",
+            "Remboursement avec penalite",
+        ]
+        typed_events = events_source.loc[
+            events_source["created_at"].ge(activity_start)
+            & events_source["created_at"].lt(period_end_exclusive)
+            & clean_text(events_source["type_operation"]).isin(savings_operation_types)
+        ].copy()
+        activity_savings_events = typed_events.copy()
+        savings_events = typed_events.loc[typed_events["created_at"].ge(start_date)].copy()
+
+    if not activity_savings_events.empty:
+        for column in [
+            "event_key", "customer_id", "telephone", "Nom_client", "currency_code",
+            "type_operation", "montant_operation", "remboursement_compte_ouvert",
+            "created_at", "event_reference",
+        ]:
+            if column not in activity_savings_events.columns:
+                activity_savings_events[column] = pd.NA
+        activity_savings_events["currency_code"] = clean_text(activity_savings_events["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
+        activity_savings_events["montant_operation"] = pd.to_numeric(
+            activity_savings_events["montant_operation"], errors="coerce"
+        ).fillna(0.0)
+        activity_savings_events["remboursement_compte_ouvert"] = pd.to_numeric(
+            activity_savings_events["remboursement_compte_ouvert"], errors="coerce"
+        ).fillna(0.0)
+        operation_type = clean_text(activity_savings_events["type_operation"])
+        activity_savings_events["montant_depot_compte_ouvert"] = activity_savings_events["montant_operation"].where(
+            operation_type.eq("Sortie M-PESA_Turbo vers epargne"), 0.0
+        )
+        activity_savings_events["montant_depot_dat"] = activity_savings_events["montant_operation"].where(
+            operation_type.eq("Sortie M-PESA_Turbo vers DAT"), 0.0
+        )
+        activity_savings_events["montant_retrait_compte_ouvert"] = activity_savings_events["montant_operation"].where(
+            operation_type.eq("Entree M-PESA_Turbo depuis epargne"), 0.0
+        )
+        activity_savings_events["montant_retour_dat"] = activity_savings_events["montant_operation"].where(
+            operation_type.eq("Transfert DAT vers epargne courante"), 0.0
+        )
+        activity_savings_events["montant_remboursement_depuis_compte_ouvert"] = activity_savings_events["remboursement_compte_ouvert"].where(
+            operation_type.isin(["Remboursement de credit", "Remboursement avec penalite"]),
+            0.0,
+        )
+        savings_events = activity_savings_events.loc[
+            activity_savings_events["created_at"].ge(start_date)
+        ].copy()
+
+    if not savings_events.empty:
+        operation_type = clean_text(savings_events["type_operation"])
+        savings_events["periode"] = _turbo_period_bucket(savings_events["created_at"], frequency)
+        deposits_mask = operation_type.isin(["Sortie M-PESA_Turbo vers epargne", "Sortie M-PESA_Turbo vers DAT"])
+        withdrawals_mask = operation_type.eq("Entree M-PESA_Turbo depuis epargne")
+        repayments_open_mask = savings_events["montant_remboursement_depuis_compte_ouvert"].gt(0)
+        flow_summary = (
+            savings_events.groupby("currency_code", as_index=False, dropna=False)
+            .agg(
+                nombre_depots=("event_key", lambda values: int(values.loc[deposits_mask.loc[values.index]].nunique())),
+                clients_depots=("customer_id", lambda values: _nunique_clients(values.loc[deposits_mask.loc[values.index]])),
+                montant_depots_compte_ouvert=("montant_depot_compte_ouvert", "sum"),
+                montant_depots_dat=("montant_depot_dat", "sum"),
+                nombre_retraits=("event_key", lambda values: int(values.loc[withdrawals_mask.loc[values.index]].nunique())),
+                clients_retraits=("customer_id", lambda values: _nunique_clients(values.loc[withdrawals_mask.loc[values.index]])),
+                montant_retraits=("montant_retrait_compte_ouvert", "sum"),
+                nombre_remboursements_depuis_compte_ouvert=("event_key", lambda values: int(values.loc[repayments_open_mask.loc[values.index]].nunique())),
+                montant_remboursements_depuis_compte_ouvert=("montant_remboursement_depuis_compte_ouvert", "sum"),
+                retours_dat=("montant_retour_dat", "sum"),
+                nombre_operations_epargne=("event_key", "nunique"),
+                clients_actifs_observes=("customer_id", _nunique_clients),
+            )
+        )
+        flow_summary["montant_depots_total"] = (
+            flow_summary["montant_depots_compte_ouvert"] + flow_summary["montant_depots_dat"]
+        )
+        flow_summary["depot_moyen"] = flow_summary["montant_depots_total"].div(
+            flow_summary["nombre_depots"].replace(0, pd.NA)
+        )
+        flow_summary["retrait_moyen"] = flow_summary["montant_retraits"].div(
+            flow_summary["nombre_retraits"].replace(0, pd.NA)
+        )
+        flow_summary["flux_net_epargne"] = (
+            flow_summary["montant_depots_compte_ouvert"]
+            + flow_summary["montant_depots_dat"]
+            + flow_summary["retours_dat"]
+            - flow_summary["montant_retraits"]
+            - flow_summary["montant_remboursements_depuis_compte_ouvert"]
+        )
+        result["flux_synthese"] = flow_summary.sort_values("currency_code").reset_index(drop=True)
+        result["activite_clients"] = (
+            activity_savings_events.groupby(
+                ["currency_code", "customer_id"], as_index=False, dropna=False
+            )
+            .agg(
+                telephone=("telephone", concat_unique),
+                Nom_client=("Nom_client", concat_unique),
+                nombre_operations=("event_key", "nunique"),
+                depots_epargne_courante=("montant_depot_compte_ouvert", "sum"),
+                depots_dat=("montant_depot_dat", "sum"),
+                retraits_epargne=("montant_retrait_compte_ouvert", "sum"),
+                retours_dat=("montant_retour_dat", "sum"),
+                remboursements_depuis_compte_ouvert=("montant_remboursement_depuis_compte_ouvert", "sum"),
+                premiere_operation=("created_at", "min"),
+                derniere_operation=("created_at", "max"),
+            )
+            .sort_values(["currency_code", "derniere_operation"])
+            .reset_index(drop=True)
+        )
+        result["activite_clients"]["flux_net_epargne"] = (
+            result["activite_clients"]["depots_epargne_courante"]
+            + result["activite_clients"]["depots_dat"]
+            + result["activite_clients"]["retours_dat"]
+            - result["activite_clients"]["retraits_epargne"]
+            - result["activite_clients"]["remboursements_depuis_compte_ouvert"]
+        )
+        result["flux_evolution"] = (
+            savings_events.groupby(["periode", "currency_code"], as_index=False, dropna=False)
+            .agg(
+                montant_depots_compte_ouvert=("montant_depot_compte_ouvert", "sum"),
+                montant_depots_dat=("montant_depot_dat", "sum"),
+                montant_retraits=("montant_retrait_compte_ouvert", "sum"),
+                montant_remboursements_depuis_compte_ouvert=("montant_remboursement_depuis_compte_ouvert", "sum"),
+                nombre_operations=("event_key", "nunique"),
+                clients_actifs=("customer_id", _nunique_clients),
+            )
+            .sort_values(["currency_code", "periode"])
+            .reset_index(drop=True)
+        )
+    else:
+        result["flux_synthese"] = pd.DataFrame(
+            columns=[
+                "currency_code", "nombre_depots", "clients_depots",
+                "montant_depots_compte_ouvert", "montant_depots_dat",
+                "nombre_retraits", "clients_retraits", "montant_retraits",
+                "nombre_remboursements_depuis_compte_ouvert",
+                "montant_remboursements_depuis_compte_ouvert", "retours_dat",
+                "nombre_operations_epargne", "clients_actifs_observes",
+                "montant_depots_total", "depot_moyen", "retrait_moyen",
+                "flux_net_epargne",
+            ]
+        )
+
+    if result["activite_clients"].empty and not activity_savings_events.empty:
+        result["activite_clients"] = (
+            activity_savings_events.groupby(
+                ["currency_code", "customer_id"], as_index=False, dropna=False
+            )
+            .agg(
+                telephone=("telephone", concat_unique),
+                Nom_client=("Nom_client", concat_unique),
+                nombre_operations=("event_key", "nunique"),
+                depots_epargne_courante=("montant_depot_compte_ouvert", "sum"),
+                depots_dat=("montant_depot_dat", "sum"),
+                retraits_epargne=("montant_retrait_compte_ouvert", "sum"),
+                retours_dat=("montant_retour_dat", "sum"),
+                remboursements_depuis_compte_ouvert=("montant_remboursement_depuis_compte_ouvert", "sum"),
+                premiere_operation=("created_at", "min"),
+                derniere_operation=("created_at", "max"),
+            )
+            .sort_values(["currency_code", "derniere_operation"])
+            .reset_index(drop=True)
+        )
+        result["activite_clients"]["flux_net_epargne"] = (
+            result["activite_clients"]["depots_epargne_courante"]
+            + result["activite_clients"]["depots_dat"]
+            + result["activite_clients"]["retours_dat"]
+            - result["activite_clients"]["retraits_epargne"]
+            - result["activite_clients"]["remboursements_depuis_compte_ouvert"]
+        )
+
+    if not result["activite_clients"].empty:
+        activity = result["activite_clients"].copy()
+        activity["customer_id"] = clean_identifier(activity.get("customer_id", pd.Series("", index=activity.index)))
+        activity["currency_code"] = clean_text(activity.get("currency_code", pd.Series("", index=activity.index))).str.upper().replace("", "NON RENSEIGNEE")
+        activity["derniere_operation"] = pd.to_datetime(activity.get("derniere_operation"), errors="coerce")
+        active_keys = activity.loc[
+            activity["derniere_operation"].notna(), ["customer_id", "currency_code", "derniere_operation"]
+        ].drop_duplicates(["customer_id", "currency_code"])
+        account_activity = positions.merge(active_keys, on=["customer_id", "currency_code"], how="left")
+    else:
+        account_activity = positions.copy()
+        account_activity["derniere_operation"] = pd.NaT
+    account_activity["jours_inactivite_observee"] = (
+        end_date - pd.to_datetime(account_activity["derniere_operation"], errors="coerce").dt.normalize()
+    ).dt.days
+    account_activity["statut_activite_observee"] = np.select(
+        [
+            account_activity["derniere_operation"].notna() & account_activity["jours_inactivite_observee"].le(inactivity_threshold_days),
+            account_activity["derniere_operation"].notna() & account_activity["jours_inactivite_observee"].le(inactivity_threshold_days * 3),
+            account_activity["derniere_operation"].notna(),
+        ],
+        ["actif", "a_surveille", "inactif_observe"],
+        default="historique_insuffisant",
+    )
+    result["activite_comptes"] = account_activity.sort_values(
+        ["currency_code", "famille_epargne", "statut_activite_observee", "balance"],
+        ascending=[True, True, True, False],
+    ).reset_index(drop=True)
+
+    result["nouveaux_comptes"] = (
+        positions.loc[
+            positions["date_creation_compte"].notna()
+            & positions["date_creation_compte"].ge(start_date)
+            & positions["date_creation_compte"].lt(period_end_exclusive)
+        ]
+        .groupby(["currency_code", "famille_epargne"], as_index=False, dropna=False)
+        .agg(
+            nouveaux_comptes=("savings_id", "nunique"),
+            nouveaux_clients=("customer_id", _nunique_clients),
+            comptes_actives=("date_activated", lambda values: int(pd.to_datetime(values, errors="coerce").notna().sum())),
+            encours_actuel_nouveaux_comptes=("balance", "sum"),
+        )
+        .sort_values(["currency_code", "famille_epargne"])
+        .reset_index(drop=True)
+    )
+    if not result["nouveaux_comptes"].empty:
+        result["nouveaux_comptes"]["taux_activation_nouveaux_comptes_pct"] = (
+            result["nouveaux_comptes"]["comptes_actives"]
+            .div(result["nouveaux_comptes"]["nouveaux_comptes"].replace(0, pd.NA))
+            .mul(100)
+        )
+
+    result["produits_synthese"] = (
+        positions.groupby(
+            ["currency_code", "famille_epargne", "product_id", "product_name"],
+            as_index=False,
+            dropna=False,
+        )
+        .agg(
+            nombre_comptes=("savings_id", "nunique"),
+            nombre_clients=("customer_id", _nunique_clients),
+            encours_actuel=("balance", "sum"),
+            comptes_solde_positif=("solde_positif", "sum"),
+            comptes_solde_nul=("solde_nul", "sum"),
+        )
+        .sort_values(["currency_code", "famille_epargne", "encours_actuel"], ascending=[True, True, False])
+        .reset_index(drop=True)
+    )
+
+    client_balances = (
+        positions.groupby(["currency_code", "famille_epargne", "customer_id"], as_index=False, dropna=False)
+        .agg(
+            Nom_client=("Nom_client", concat_unique),
+            telephone=("msisdn", concat_unique),
+            nombre_comptes=("savings_id", "nunique"),
+            encours_actuel=("balance", "sum"),
+            produits=("product_name", concat_unique),
+        )
+        .sort_values(["currency_code", "famille_epargne", "encours_actuel"], ascending=[True, True, False])
+        .reset_index(drop=True)
+    )
+    client_balances["rang_client"] = client_balances.groupby(
+        ["currency_code", "famille_epargne"]
+    )["encours_actuel"].rank(method="first", ascending=False).astype(int)
+    result["concentration_clients"] = client_balances
+    result["concentration_comptes"] = positions.sort_values(
+        ["currency_code", "famille_epargne", "balance"],
+        ascending=[True, True, False],
+    ).reset_index(drop=True)
+    concentration_rows: list[dict[str, Any]] = []
+    for (currency, family), group in client_balances.groupby(["currency_code", "famille_epargne"], dropna=False):
+        ordered = group.sort_values("encours_actuel", ascending=False)
+        total = float(pd.to_numeric(ordered["encours_actuel"], errors="coerce").sum())
+        concentration_rows.append(
+            {
+                "currency_code": currency,
+                "famille_epargne": family,
+                "nombre_clients": int(len(ordered)),
+                "encours_actuel": total,
+                "part_top_5_clients_pct": float(ordered.head(5)["encours_actuel"].sum() / total * 100) if total else np.nan,
+                "part_top_10_clients_pct": float(ordered.head(10)["encours_actuel"].sum() / total * 100) if total else np.nan,
+                "part_top_20_clients_pct": float(ordered.head(20)["encours_actuel"].sum() / total * 100) if total else np.nan,
+            }
+        )
+    result["concentration_synthese"] = pd.DataFrame(concentration_rows)
+
+    dat_positive = result["dat_detail"].loc[result["dat_detail"]["balance"].gt(0)].copy()
+    if not dat_positive.empty:
+        result["dat_synthese"] = (
+            dat_positive.groupby(["currency_code", "tranche_echeance"], as_index=False, dropna=False)
+            .agg(
+                nombre_dat=("savings_id", "nunique"),
+                nombre_clients=("customer_id", _nunique_clients),
+                capital_bloque=("balance", "sum"),
+                interet_estime=("interet_estime", lambda values: values.sum(min_count=1)),
+                capital_plus_interet_estime=("capital_plus_interet_estime", lambda values: values.sum(min_count=1)),
+            )
+            .sort_values(["currency_code", "tranche_echeance"])
+            .reset_index(drop=True)
+        )
+
+    opportunities: list[pd.DataFrame] = []
+    thresholds = large_savings_thresholds or {"USD": 100.0, "CDF": 500_000.0}
+    active_credit = pd.DataFrame(columns=["customer_id", "currency_code", "credit_actif"])
+    if isinstance(prepared.loans, pd.DataFrame) and not prepared.loans.empty:
+        loans = _mpesa_credit_prepare_portfolio_detail(prepared.loans, as_of_date=end_date)
+        active_credit = loans.loc[loans["pret_actif"], ["customer_id", "currency_code"]].drop_duplicates()
+        active_credit["credit_actif"] = True
+    if not dat_positive.empty:
+        dat_without_credit = dat_positive.merge(
+            active_credit,
+            on=["customer_id", "currency_code"],
+            how="left",
+        )
+        dat_without_credit = dat_without_credit.loc[
+            dat_without_credit["credit_actif"].isna()
+        ].drop(columns=["credit_actif"], errors="ignore")
+    else:
+        dat_without_credit = pd.DataFrame()
+    if not dat_without_credit.empty:
+        dat_without_credit["opportunite"] = "dat_sans_credit_actif"
+        dat_without_credit["lecture"] = "Potentiel commercial a analyser, pas une eligibilite automatique."
+        opportunities.append(dat_without_credit)
+    strong_savings = client_balances.copy()
+    strong_savings["seuil_forte_epargne"] = strong_savings["currency_code"].map(thresholds)
+    strong_savings = strong_savings.merge(active_credit, on=["customer_id", "currency_code"], how="left")
+    strong_savings = strong_savings.loc[
+        strong_savings["seuil_forte_epargne"].notna()
+        & strong_savings["encours_actuel"].ge(strong_savings["seuil_forte_epargne"])
+        & strong_savings["credit_actif"].isna()
+    ].copy()
+    if not strong_savings.empty:
+        strong_savings["opportunite"] = "forte_epargne_sans_credit"
+        strong_savings["lecture"] = "Client a contacter selon le seuil expose, sans conclure a l'eligibilite."
+        opportunities.append(strong_savings)
+    result["opportunites"] = concat_frames_stable(opportunities).reset_index(drop=True)
+
+    active_account = result["activite_comptes"]["statut_activite_observee"].eq("actif")
+    zero_accounts = positions.loc[positions["solde_nul"]].copy()
+    new_not_activated = positions.loc[
+        positions["date_creation_compte"].notna()
+        & positions["date_creation_compte"].ge(start_date)
+        & positions["date_creation_compte"].lt(period_end_exclusive)
+        & positions["date_activated"].isna()
+    ].copy()
+    dat_30 = dat_positive.loc[
+        dat_positive["jours_avant_echeance"].ge(0)
+        & dat_positive["jours_avant_echeance"].le(maturity_horizon_days)
+    ].copy()
+    dat_expired = dat_positive.loc[dat_positive["jours_avant_echeance"].lt(0)].copy()
+    result["listes_action"] = {
+        "comptes_positifs_sans_mouvement_recent": result["activite_comptes"].loc[
+            result["activite_comptes"]["solde_positif"] & ~active_account
+        ].copy(),
+        "comptes_solde_nul": zero_accounts,
+        "nouveaux_comptes_non_actives": new_not_activated,
+        "gros_deposants": client_balances.sort_values(
+            ["currency_code", "encours_actuel"], ascending=[True, False]
+        ).groupby("currency_code", as_index=False, group_keys=False).head(20).reset_index(drop=True),
+        "dat_echeance_horizon": dat_30,
+        "dat_echus_a_rembourser": dat_expired,
+        "dat_sans_credit_actif": dat_without_credit,
+        "forte_epargne_sans_credit": strong_savings,
+        "comptes_qualite_a_revoir": positions.loc[
+            positions["customer_id"].eq("")
+            | positions["currency_code"].eq("NON RENSEIGNEE")
+            | positions["savings_id"].eq("")
+        ].copy(),
+    }
+
+    overview_rows: list[dict[str, Any]] = []
+    portfolio = result["portefeuille_synthese"]
+    flows = result["flux_synthese"]
+    currencies = sorted(
+        set(portfolio.get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
+        | set(flows.get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
+    )
+    for currency in currencies:
+        current_row = portfolio.loc[
+            portfolio["currency_code"].astype(str).eq(currency)
+            & portfolio["famille_epargne"].astype(str).eq("Compte ouvert")
+        ].head(1)
+        dat_row = portfolio.loc[
+            portfolio["currency_code"].astype(str).eq(currency)
+            & portfolio["famille_epargne"].astype(str).eq("DAT")
+        ].head(1)
+        flow_row = flows.loc[flows["currency_code"].astype(str).eq(currency)].head(1) if "currency_code" in flows.columns else pd.DataFrame()
+        overview_rows.extend(
+            [
+                {"bloc": "Stock actuel", "indicateur": "encours_epargne_courante", "currency_code": currency, "valeur": float(current_row.iloc[0].get("encours_actuel", 0)) if not current_row.empty else 0.0, "unite": "montant"},
+                {"bloc": "Stock actuel", "indicateur": "encours_dat", "currency_code": currency, "valeur": float(dat_row.iloc[0].get("encours_actuel", 0)) if not dat_row.empty else 0.0, "unite": "montant"},
+                {"bloc": "Stock actuel", "indicateur": "clients_epargnants", "currency_code": currency, "valeur": float(positions.loc[positions["currency_code"].astype(str).eq(currency), "customer_id"].replace("", pd.NA).nunique()), "unite": "nombre"},
+                {"bloc": "Stock actuel", "indicateur": "comptes_courants", "currency_code": currency, "valeur": float(current_row.iloc[0].get("nombre_comptes", 0)) if not current_row.empty else 0.0, "unite": "nombre"},
+                {"bloc": "Stock actuel", "indicateur": "dat_positifs", "currency_code": currency, "valeur": float(dat_row.iloc[0].get("comptes_solde_positif", 0)) if not dat_row.empty else 0.0, "unite": "nombre"},
+                {"bloc": "Flux periode", "indicateur": "depots_periode", "currency_code": currency, "valeur": float(flow_row.iloc[0].get("montant_depots_total", 0)) if not flow_row.empty else 0.0, "unite": "montant"},
+                {"bloc": "Flux periode", "indicateur": "retraits_periode", "currency_code": currency, "valeur": float(flow_row.iloc[0].get("montant_retraits", 0)) if not flow_row.empty else 0.0, "unite": "montant"},
+                {"bloc": "Flux periode", "indicateur": "flux_net_epargne_observe", "currency_code": currency, "valeur": float(flow_row.iloc[0].get("flux_net_epargne", 0)) if not flow_row.empty else 0.0, "unite": "montant"},
+                {"bloc": "Activite observee", "indicateur": "comptes_actifs_observes", "currency_code": currency, "valeur": float(result["activite_comptes"].loc[result["activite_comptes"]["currency_code"].astype(str).eq(currency) & result["activite_comptes"]["statut_activite_observee"].eq("actif"), "savings_id"].nunique()), "unite": "nombre"},
+                {"bloc": "DAT", "indicateur": f"dat_echeance_{maturity_horizon_days}j", "currency_code": currency, "valeur": float(dat_30.loc[dat_30["currency_code"].astype(str).eq(currency), "savings_id"].nunique()), "unite": "nombre"},
+            ]
+        )
+    result["vue_ensemble"] = pd.DataFrame(overview_rows)
+
+    quality_rows = [
+        {
+            "controle": "Savings Account charge",
+            "valeur": int(len(positions)),
+            "statut": "OK",
+            "detail": "Position actuelle des comptes ouverts et DAT.",
+        },
+        {
+            "controle": "Comptes sans numero",
+            "valeur": int(positions["savings_id"].eq("").sum()),
+            "statut": "A verifier" if int(positions["savings_id"].eq("").sum()) else "OK",
+            "detail": "savings_id ou id manquant.",
+        },
+        {
+            "controle": "Comptes sans devise",
+            "valeur": int(positions["currency_code"].eq("NON RENSEIGNEE").sum()),
+            "statut": "A verifier" if int(positions["currency_code"].eq("NON RENSEIGNEE").sum()) else "OK",
+            "detail": "Les montants doivent rester separes par devise.",
+        },
+        {
+            "controle": "Transactions potentiellement plafonnees",
+            "valeur": int(len(transactions)),
+            "statut": "A verifier" if len(transactions) >= 100_000 else "OK",
+            "detail": "historique_transactions_potentiellement_plafonne si le fichier atteint 100 000 lignes.",
+        },
+        {
+            "controle": "Historique d'inactivite",
+            "valeur": int((result["activite_comptes"]["statut_activite_observee"].eq("historique_insuffisant")).sum()),
+            "statut": "Information",
+            "detail": "Une absence de mouvement observe ne suffit pas a certifier une dormance reglementaire.",
+        },
+        {
+            "controle": "G2",
+            "valeur": int(len(prepared.g2_transactions)) if isinstance(prepared.g2_transactions, pd.DataFrame) else 0,
+            "statut": "Information",
+            "detail": "G2 sert au controle et a l'identite; il ne modifie pas les KPI d'epargne.",
+        },
+    ]
+    invalid_dat_dates = positions.loc[
+        positions["famille_epargne"].eq("DAT")
+        & positions["date_approved"].notna()
+        & positions["maturity_date"].notna()
+        & positions["maturity_date"].lt(positions["date_approved"])
+    ]
+    quality_rows.append(
+        {
+            "controle": "Dates DAT incoherentes",
+            "valeur": int(len(invalid_dat_dates)),
+            "statut": "A verifier" if len(invalid_dat_dates) else "OK",
+            "detail": "maturity_date anterieure a date_approved.",
+        }
+    )
+    result["qualite_donnees"] = pd.DataFrame(quality_rows)
+
+    implemented_catalogue = pd.DataFrame(
+        [
+            {
+                "kpi": "encours_epargne_courante",
+                "definition": "Solde actuel des comptes NORMAL SAVINGS.",
+                "formule": "Somme balance des comptes ouverts",
+                "source": "Savings Account",
+                "grain": "compte x devise",
+                "devise": "oui",
+                "type_mesure": "stock_actuel",
+                "statut": "implemente",
+                "limite": "Position instantanee, pas historique.",
+            },
+            {
+                "kpi": "encours_dat",
+                "definition": "Solde actuel des comptes FIXED SAVINGS.",
+                "formule": "Somme balance des DAT",
+                "source": "Savings Account",
+                "grain": "DAT x devise",
+                "devise": "oui",
+                "type_mesure": "stock_actuel",
+                "statut": "implemente",
+                "limite": "Position instantanee.",
+            },
+            {
+                "kpi": "flux_net_epargne_observe",
+                "definition": "Flux net observe sur les comptes d'epargne pendant la periode.",
+                "formule": "depots compte ouvert + depots DAT + retours DAT - retraits - remboursements depuis compte ouvert",
+                "source": "Transactions",
+                "grain": "periode x devise",
+                "devise": "oui",
+                "type_mesure": "flux_periode",
+                "statut": "implemente",
+                "limite": "Flux observe; ne pas le confondre avec la collecte externe nette institutionnelle.",
+            },
+            {
+                "kpi": "interet_estime_dat",
+                "definition": "Estimation de preparation du remboursement DAT.",
+                "formule": "capital * taux annuel / 100 * duree contractuelle jours / 365",
+                "source": "Savings Account",
+                "grain": "DAT",
+                "devise": "oui",
+                "type_mesure": "estimation",
+                "statut": "implemente",
+                "limite": "Ce n'est pas une ecriture comptable officielle.",
+            },
+        ]
+    )
+    result["catalogue_kpi"] = concat_frames_stable(
+        [implemented_catalogue, pd.DataFrame(MPESA_SAVINGS_DATA_GAPS)]
+    )
+    return result
+
+
 def _build_customer_observed_positions(
     prepared: MpesaPreparedData,
     transaction_lines: pd.DataFrame,
@@ -19804,6 +20640,29 @@ def create_excel_export(
         ("credit_liste_fortes_expositions", "Liste_Fortes_Expositions"),
         ("credit_liste_prets_echeance_30j", "Liste_Echeance_30j"),
         ("credit_liste_rapprochement_epargne_ambigu", "Liste_Epargne_Ambigue"),
+        ("epargne_vue_ensemble", "Epargne_Vue_Ensemble"),
+        ("epargne_portefeuille_synthese", "Epargne_Portefeuille"),
+        ("epargne_portefeuille_detail", "Epargne_Detail"),
+        ("epargne_flux_synthese", "Epargne_Flux"),
+        ("epargne_flux_evolution", "Epargne_Evolution_Flux"),
+        ("epargne_activite_comptes", "Epargne_Activite"),
+        ("epargne_produits_synthese", "Epargne_Produits"),
+        ("epargne_concentration_synthese", "Epargne_Concentration"),
+        ("epargne_concentration_clients", "Epargne_Top_Clients"),
+        ("epargne_dat_detail", "Epargne_DAT"),
+        ("epargne_dat_echeances", "Epargne_Echeances_DAT"),
+        ("epargne_opportunites", "Epargne_Opportunites"),
+        ("epargne_qualite_donnees", "Epargne_Qualite"),
+        ("epargne_catalogue_kpi", "Epargne_Catalogue_KPI"),
+        ("epargne_liste_comptes_positifs_sans_mouvement_recent", "Epargne_Sans_Mouvement"),
+        ("epargne_liste_comptes_solde_nul", "Epargne_Solde_Nul"),
+        ("epargne_liste_nouveaux_comptes_non_actives", "Epargne_Nouveaux_Non_Actives"),
+        ("epargne_liste_gros_deposants", "Epargne_Gros_Deposants"),
+        ("epargne_liste_dat_echeance_horizon", "Epargne_DAT_Echeance"),
+        ("epargne_liste_dat_echus_a_rembourser", "Epargne_DAT_Echus"),
+        ("epargne_liste_dat_sans_credit_actif", "Epargne_DAT_Sans_Credit"),
+        ("epargne_liste_forte_epargne_sans_credit", "Epargne_Forte_Sans_Credit"),
+        ("epargne_liste_comptes_qualite_a_revoir", "Epargne_Qualite_A_Revoir"),
         ("liquidite_synthese", "Liquidite_Turbo"),
         ("liquidite_journaliere", "Liquidite_Jour_Turbo"),
         ("activite_clients", "Activite_Turbo"),
