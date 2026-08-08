@@ -33,6 +33,29 @@ Conserver `methode_rapprochement` et `statut_confiance`. Ne jamais rapprocher un
 | `taux_activation_nouveaux_clients` | `nouveaux_clients_actifs / nouveaux_clients`. |
 | `clients_sans_mouvement` | Clients de la population de référence sans événement valide sur la période. |
 
+## Nouveaux clients et comptes actifs par devise
+
+Ajouter une table de lecture au grain `client x devise` pour répondre à une question opérationnelle simple : les clients ou comptes nouvellement créés commencent-ils réellement à utiliser la Solution Numérique ?
+
+La population comprend :
+
+- les clients dont `Customers.created_at` tombe dans la période ;
+- les comptes ouverts et DAT dont la date de création/approbation/activation disponible dans `Savings Account` tombe dans la période.
+
+Colonnes attendues :
+
+| Colonne | Lecture |
+|---|---|
+| `client_key`, `customer_id`, `numero_telephone`, `nom_client` | Identification canonique du client. |
+| `date_creation_client` | Date de création issue de `Customers` lorsque disponible. |
+| `currency_code` | Devise de lecture. Les montants ne sont jamais totalisés entre devises. |
+| `nouveau_client`, `nouveau_compte_ouvert_periode`, `nouveau_dat_periode` | Nature de la nouveauté observée sur la période. |
+| `actif_periode`, `statut_activation` | Indique si le client ou le compte a eu au moins une transaction consolidée. |
+| `nombre_transactions`, `volume_transactions_observe` | Activité issue de `Transactions`, au grain d'événement métier consolidé. |
+| `solde_compte_ouvert`, `solde_dat` | Positions issues de `Savings Account`, séparées par devise. |
+
+G2 peut enrichir le nom du client, mais ne calcule ni activité, ni solde, ni montant.
+
 ## Segmentations
 
 Segments comportementaux objectifs :

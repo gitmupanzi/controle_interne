@@ -26,6 +26,10 @@ Turbo / Solution Numérique constitue la source opérationnelle principale. G2 e
     <span>Sources et contrats</span>
     Transactions, Savings Account, Loans Account, Customers, G2 et colonnes attendues.
   </a>
+  <a class="bb-link-card" href="circuits_information.html">
+    <span>Circuit d'information</span>
+    Comment les lignes sont générées lors d'une transaction, d'une épargne, d'un DAT ou d'un crédit.
+  </a>
   <a class="bb-link-card" href="extraits_clients.html">
     <span>Extraits clients</span>
     Relevé bancaire, détail des transactions, DAT, remboursements et exports.

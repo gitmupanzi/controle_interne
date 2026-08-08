@@ -15,25 +15,73 @@ Les contrats sont documentés dans `skills/solution-mpesa/references/data-contra
 
 Grain : une écriture transactionnelle.
 
-Colonnes clés : `id`, `customer_id`, `msisdn1`, `account_type`, `reference_id`, `currency_code`, `dr`, `cr`, `bal_before`, `bal_after`, `ref_no`, `description`, `created_at`.
+Colonnes clés :
+
+| Colonne anglaise | Nom français recommandé |
+|---|---|
+| `id` | identifiant_ligne |
+| `customer_id` | identifiant_client |
+| `msisdn1` | telephone_client |
+| `account_type` | type_de_compte |
+| `reference_id` | reference_metier |
+| `currency_code` | devise |
+| `dr` | debit_sortie |
+| `cr` | credit_entree |
+| `bal_before` | solde_avant |
+| `bal_after` | solde_apres |
+| `ref_no` | reference_operation |
+| `description` | description_operation |
+| `created_at` | date_creation |
 
 ### Savings Account
 
 Grain : une position de compte d'épargne ouvert ou bloqué.
 
-Colonnes clés : `savings_id`, `customer_id`, `msisdn1`, `product_name`, `currency_code`, `balance`, `status`, `date_activated`, `maturity_date`, `interest_earned`, `locked_balance`.
+Colonnes clés :
+
+| Colonne anglaise | Nom français recommandé |
+|---|---|
+| `savings_id` | identifiant_compte_epargne |
+| `customer_id` | identifiant_client |
+| `msisdn1` | telephone_client |
+| `product_name` | nom_produit |
+| `currency_code` | devise |
+| `balance` | solde |
+| `status` | statut |
+| `date_activated` | date_activation |
+| `maturity_date` | date_echeance |
+| `interest_earned` | interet_client |
+| `locked_balance` | solde_bloque |
 
 ### Loans Account
 
 Grain : un prêt ou une position de prêt.
 
-Colonnes clés : `loan_id`, `customer_id`, `loan_amount`, `loan_balance`, `amount_paid`, `outstanding_principle`, `outstanding_interest`, `status_name`, `due_date`, `msisdn1`.
+Colonnes clés :
+
+| Colonne anglaise | Nom français recommandé |
+|---|---|
+| `loan_id` | identifiant_credit |
+| `customer_id` | identifiant_client |
+| `loan_amount` | montant_credit |
+| `loan_balance` | solde_credit |
+| `amount_paid` | montant_paye |
+| `outstanding_principle` | capital_restant_du |
+| `outstanding_interest` | interet_restant_du |
+| `status_name` | statut_credit |
+| `due_date` | date_echeance |
+| `msisdn1` | telephone_client |
 
 ### Customers
 
 Grain : un client connu par la Solution Numérique.
 
-Colonnes clés : `msisdn1`, `created_at`.
+Colonnes clés :
+
+| Colonne anglaise | Nom français recommandé |
+|---|---|
+| `msisdn1` | telephone_client |
+| `created_at` | date_creation |
 
 ## Chargement multiple
 

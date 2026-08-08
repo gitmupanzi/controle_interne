@@ -7306,6 +7306,304 @@ def _mpesa_clients_product_positions(
     return concat_frames_stable(rows) if rows else pd.DataFrame()
 
 
+def _mpesa_clients_accounts_currency_summary(
+    prepared: MpesaPreparedData,
+    *,
+    start_date: pd.Timestamp,
+    period_end_exclusive: pd.Timestamp,
+    as_of_date: pd.Timestamp,
+) -> pd.DataFrame:
+    """Resume les positions epargne/DAT et les creations de comptes par client x devise."""
+
+    positions = _mpesa_savings_prepare_positions(
+        prepared.current_savings,
+        prepared.fixed_savings,
+        as_of_date=as_of_date,
+        annual_interest_rate_pct=None,
+    )
+    if positions.empty:
+        return pd.DataFrame()
+
+    positions = positions.copy()
+    positions["client_key"] = _mpesa_client_key_from_frame(positions)
+    positions["currency_code"] = clean_text(
+        positions.get("currency_code", pd.Series("", index=positions.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    positions["balance"] = pd.to_numeric(positions.get("balance"), errors="coerce").fillna(0.0)
+    positions["date_creation_compte"] = pd.to_datetime(
+        positions.get("date_creation_compte", pd.Series(pd.NaT, index=positions.index)),
+        errors="coerce",
+    )
+    positions = positions.loc[positions["client_key"].astype(str).str.strip().ne("")]
+    if positions.empty:
+        return pd.DataFrame()
+
+    key_columns = ["client_key", "currency_code"]
+    result_keys = positions[key_columns].drop_duplicates().reset_index(drop=True)
+
+    for family, prefix in [("Compte ouvert", "compte_ouvert"), ("DAT", "dat")]:
+        family_positions = positions.loc[positions["famille_epargne"].eq(family)].copy()
+        if family_positions.empty:
+            result_keys[f"nombre_{prefix}"] = 0
+            result_keys[f"solde_{prefix}"] = 0.0
+            result_keys[f"nouveaux_{prefix}_periode"] = 0
+            result_keys[f"date_premier_{prefix}_cree_periode"] = pd.NaT
+            result_keys[f"date_dernier_{prefix}_cree_periode"] = pd.NaT
+            continue
+
+        balances = (
+            family_positions.groupby(key_columns, as_index=False, dropna=False)
+            .agg(
+                **{
+                    f"nombre_{prefix}": ("balance", "size"),
+                    f"solde_{prefix}": ("balance", "sum"),
+                }
+            )
+            .reset_index(drop=True)
+        )
+        created = family_positions.loc[
+            family_positions["date_creation_compte"].notna()
+            & family_positions["date_creation_compte"].ge(start_date)
+            & family_positions["date_creation_compte"].lt(period_end_exclusive)
+        ]
+        if created.empty:
+            created_summary = pd.DataFrame(columns=key_columns)
+        else:
+            created_summary = (
+                created.groupby(key_columns, as_index=False, dropna=False)
+                .agg(
+                    **{
+                        f"nouveaux_{prefix}_periode": ("date_creation_compte", "size"),
+                        f"date_premier_{prefix}_cree_periode": ("date_creation_compte", "min"),
+                        f"date_dernier_{prefix}_cree_periode": ("date_creation_compte", "max"),
+                    }
+                )
+                .reset_index(drop=True)
+            )
+
+        result_keys = result_keys.merge(balances, on=key_columns, how="left")
+        result_keys = result_keys.merge(created_summary, on=key_columns, how="left")
+
+    for column in [
+        "nombre_compte_ouvert",
+        "nombre_dat",
+        "nouveaux_compte_ouvert_periode",
+        "nouveaux_dat_periode",
+    ]:
+        if column not in result_keys.columns:
+            result_keys[column] = 0
+        result_keys[column] = pd.to_numeric(result_keys[column], errors="coerce").fillna(0).astype(int)
+    for column in ["solde_compte_ouvert", "solde_dat"]:
+        if column not in result_keys.columns:
+            result_keys[column] = 0.0
+        result_keys[column] = pd.to_numeric(result_keys[column], errors="coerce").fillna(0.0)
+
+    return result_keys.reset_index(drop=True)
+
+
+def _mpesa_clients_new_accounts_activity(
+    client_360: pd.DataFrame,
+    period_events: pd.DataFrame,
+    accounts_summary: pd.DataFrame,
+    *,
+    start_date: pd.Timestamp,
+    period_end_exclusive: pd.Timestamp,
+) -> pd.DataFrame:
+    """Construit la table des nouveaux clients/comptes et de leur activite par devise."""
+
+    if client_360.empty:
+        return pd.DataFrame()
+
+    identities = client_360.copy()
+    identities["date_creation_client"] = pd.to_datetime(
+        identities.get("date_creation_client", pd.Series(pd.NaT, index=identities.index)),
+        errors="coerce",
+    )
+    identities["client_key"] = clean_identifier(identities.get("client_key", pd.Series("", index=identities.index)))
+    identities = identities.loc[identities["client_key"].astype(str).str.strip().ne("")]
+    if identities.empty:
+        return pd.DataFrame()
+
+    new_client_mask = (
+        identities["date_creation_client"].notna()
+        & identities["date_creation_client"].ge(start_date)
+        & identities["date_creation_client"].lt(period_end_exclusive)
+    )
+    new_client_keys = set(identities.loc[new_client_mask, "client_key"].astype(str))
+
+    if isinstance(accounts_summary, pd.DataFrame) and not accounts_summary.empty:
+        account_summary = accounts_summary.copy()
+        account_summary["client_key"] = clean_identifier(account_summary["client_key"])
+        account_summary["currency_code"] = clean_text(account_summary["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
+        for column in ["nouveaux_compte_ouvert_periode", "nouveaux_dat_periode"]:
+            if column not in account_summary.columns:
+                account_summary[column] = 0
+            account_summary[column] = pd.to_numeric(account_summary[column], errors="coerce").fillna(0).astype(int)
+        new_account_mask = account_summary[["nouveaux_compte_ouvert_periode", "nouveaux_dat_periode"]].sum(axis=1).gt(0)
+        new_account_keys = set(account_summary.loc[new_account_mask, "client_key"].astype(str))
+    else:
+        account_summary = pd.DataFrame()
+        new_account_keys = set()
+
+    target_keys = new_client_keys | new_account_keys
+    if not target_keys:
+        return pd.DataFrame()
+
+    activity_by_currency = pd.DataFrame()
+    if isinstance(period_events, pd.DataFrame) and not period_events.empty:
+        events = period_events.copy()
+        events["client_key"] = clean_identifier(events.get("client_key", pd.Series("", index=events.index)))
+        events["currency_code"] = clean_text(
+            events.get("currency_code", pd.Series("", index=events.index))
+        ).str.upper().replace("", "NON RENSEIGNEE")
+        events["created_at"] = pd.to_datetime(events.get("created_at"), errors="coerce")
+        amount = pd.to_numeric(
+            events.get("montant_operation", pd.Series(0.0, index=events.index)),
+            errors="coerce",
+        ).fillna(0.0).abs()
+        fallback_amount = pd.concat(
+            [
+                pd.to_numeric(events.get("total_debit_ecritures", pd.Series(0.0, index=events.index)), errors="coerce").fillna(0.0).abs(),
+                pd.to_numeric(events.get("total_credit_ecritures", pd.Series(0.0, index=events.index)), errors="coerce").fillna(0.0).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        events["volume_transactions_observe"] = amount.where(amount.gt(0), fallback_amount)
+        events = events.loc[events["client_key"].astype(str).str.strip().ne("")]
+        if not events.empty:
+            activity_by_currency = (
+                events.groupby(["client_key", "currency_code"], as_index=False, dropna=False)
+                .agg(
+                    nombre_transactions=("event_key", "nunique" if "event_key" in events.columns else "size"),
+                    volume_transactions_observe=("volume_transactions_observe", "sum"),
+                    date_premiere_transaction=("created_at", "min"),
+                    date_derniere_transaction=("created_at", "max"),
+                )
+                .reset_index(drop=True)
+            )
+
+    currency_pairs = []
+    if not account_summary.empty:
+        currency_pairs.append(account_summary.loc[account_summary["client_key"].astype(str).isin(target_keys), ["client_key", "currency_code"]])
+    if not activity_by_currency.empty:
+        currency_pairs.append(activity_by_currency.loc[activity_by_currency["client_key"].astype(str).isin(target_keys), ["client_key", "currency_code"]])
+    if currency_pairs:
+        pair_frame = pd.concat(currency_pairs, ignore_index=True).drop_duplicates()
+    else:
+        pair_frame = pd.DataFrame(columns=["client_key", "currency_code"])
+
+    missing_pair_keys = target_keys - set(pair_frame.get("client_key", pd.Series(dtype=str)).astype(str))
+    if missing_pair_keys:
+        pair_frame = pd.concat(
+            [
+                pair_frame,
+                pd.DataFrame(
+                    {
+                        "client_key": sorted(missing_pair_keys),
+                        "currency_code": "NON RENSEIGNEE",
+                    }
+                ),
+            ],
+            ignore_index=True,
+        )
+
+    identity_columns = [
+        "client_key",
+        "customer_id",
+        "numero_telephone",
+        "nom_client",
+        "date_creation_client",
+        "sources_client",
+        "methode_rapprochement",
+        "statut_confiance",
+    ]
+    result = pair_frame.merge(
+        identities[[column for column in identity_columns if column in identities.columns]].drop_duplicates("client_key"),
+        on="client_key",
+        how="left",
+    )
+    if not activity_by_currency.empty:
+        result = result.merge(activity_by_currency, on=["client_key", "currency_code"], how="left")
+    if not account_summary.empty:
+        result = result.merge(account_summary, on=["client_key", "currency_code"], how="left")
+
+    for column in [
+        "nombre_transactions",
+        "nombre_compte_ouvert",
+        "nombre_dat",
+        "nouveaux_compte_ouvert_periode",
+        "nouveaux_dat_periode",
+    ]:
+        if column not in result.columns:
+            result[column] = 0
+        result[column] = pd.to_numeric(result[column], errors="coerce").fillna(0).astype(int)
+    for column in ["volume_transactions_observe", "solde_compte_ouvert", "solde_dat"]:
+        if column not in result.columns:
+            result[column] = 0.0
+        result[column] = pd.to_numeric(result[column], errors="coerce").fillna(0.0)
+    for column in [
+        "date_premiere_transaction",
+        "date_derniere_transaction",
+        "date_premier_compte_ouvert_cree_periode",
+        "date_dernier_compte_ouvert_cree_periode",
+        "date_premier_dat_cree_periode",
+        "date_dernier_dat_cree_periode",
+    ]:
+        if column not in result.columns:
+            result[column] = pd.NaT
+        result[column] = pd.to_datetime(result[column], errors="coerce")
+
+    result["nouveau_client"] = result["client_key"].astype(str).isin(new_client_keys)
+    result["nouveau_compte_ouvert_periode"] = result["nouveaux_compte_ouvert_periode"].gt(0)
+    result["nouveau_dat_periode"] = result["nouveaux_dat_periode"].gt(0)
+    result["actif_periode"] = result["nombre_transactions"].gt(0)
+    result["statut_activation"] = np.select(
+        [
+            result["nouveau_client"] & result["actif_periode"],
+            (result["nouveau_compte_ouvert_periode"] | result["nouveau_dat_periode"]) & result["actif_periode"],
+            result["nouveau_client"] & ~result["actif_periode"],
+            (result["nouveau_compte_ouvert_periode"] | result["nouveau_dat_periode"]) & ~result["actif_periode"],
+        ],
+        [
+            "Nouveau client actif",
+            "Nouveau compte actif",
+            "Nouveau client sans transaction",
+            "Nouveau compte sans transaction",
+        ],
+        default="A suivre",
+    )
+
+    ordered_columns = [
+        "client_key",
+        "customer_id",
+        "numero_telephone",
+        "nom_client",
+        "date_creation_client",
+        "currency_code",
+        "nouveau_client",
+        "nouveau_compte_ouvert_periode",
+        "nouveau_dat_periode",
+        "actif_periode",
+        "statut_activation",
+        "nombre_transactions",
+        "volume_transactions_observe",
+        "date_premiere_transaction",
+        "date_derniere_transaction",
+        "nouveaux_compte_ouvert_periode",
+        "solde_compte_ouvert",
+        "nouveaux_dat_periode",
+        "solde_dat",
+        "date_premier_compte_ouvert_cree_periode",
+        "date_premier_dat_cree_periode",
+        "sources_client",
+        "statut_confiance",
+    ]
+    return result[[column for column in ordered_columns if column in result.columns]].sort_values(
+        ["date_creation_client", "client_key", "currency_code"],
+        na_position="last",
+    ).reset_index(drop=True)
+
+
 def build_mpesa_clients_report(
     prepared: MpesaPreparedData,
     *,
@@ -7510,6 +7808,20 @@ def build_mpesa_clients_report(
             default="sans_mouvement",
         )
 
+    accounts_currency_summary = _mpesa_clients_accounts_currency_summary(
+        prepared,
+        start_date=start_date,
+        period_end_exclusive=period_end_exclusive,
+        as_of_date=end_date,
+    )
+    new_clients_accounts_activity = _mpesa_clients_new_accounts_activity(
+        client_360,
+        period_events,
+        accounts_currency_summary,
+        start_date=start_date,
+        period_end_exclusive=period_end_exclusive,
+    )
+
     clients_referentiel = len(reference_set)
     clients_connus = len(known_set)
     clients_actifs = len(active_set)
@@ -7695,9 +8007,11 @@ def build_mpesa_clients_report(
         "identites_clients": identities,
         "client_360": client_360.sort_values("client_key").reset_index(drop=True) if not client_360.empty else client_360,
         "acquisition_activation": acquisition,
+        "nouveaux_clients_comptes_activation": new_clients_accounts_activity,
         "segments_clients": segment_summary,
         "segments_produits": product_summary,
         "positions_produits": product_positions,
+        "positions_comptes_par_devise": accounts_currency_summary,
         "dat_sans_credit_actif": dat_without_credit,
         "qualite_donnees": data_quality,
         "operations_turbo": period_events.reset_index(drop=True),

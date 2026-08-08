@@ -34,6 +34,7 @@ nav:
   - Solution Numérique:
       - Présentation: solution_numerique/index.md
       - Sources et contrats de données: solution_numerique/sources_contrats.md
+      - Circuit d'information: solution_numerique/circuits_information.md
       - Extraits clients: solution_numerique/extraits_clients.md
       - Finance, balances et journaux: solution_numerique/finance_balances.md
       - Clients, épargnes et crédits: solution_numerique/clients_epargnes_credits.md

@@ -1292,6 +1292,27 @@ def _apply_local_multiselect_filters(
     return filtered.reset_index(drop=True)
 
 
+def _dataframe_display_signature(df: pd.DataFrame) -> tuple[Any, ...]:
+    """Signature stable et legere pour eviter d'afficher deux tableaux identiques."""
+
+    if df is None or not isinstance(df, pd.DataFrame):
+        return ("not_dataframe",)
+    if df.empty:
+        return ("empty", tuple(str(column) for column in df.columns))
+    comparable = df.reset_index(drop=True).copy()
+    comparable.columns = [str(column) for column in comparable.columns]
+    comparable = comparable.reindex(sorted(comparable.columns), axis=1)
+    normalized = comparable.astype("string").fillna("<NA>")
+    hashed = pd.util.hash_pandas_object(normalized, index=False)
+    return (
+        tuple(normalized.columns),
+        int(len(normalized)),
+        int(hashed.sum()),
+        int(hashed.iloc[0]) if len(hashed) else 0,
+        int(hashed.iloc[-1]) if len(hashed) else 0,
+    )
+
+
 @st.fragment
 def _render_import_tab(prepared: MpesaPreparedData, missing: dict[str, list[str]]) -> None:
     render_panel_title("Controle de chargement")
@@ -5545,22 +5566,32 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             selected_lists = st.multiselect(
                 "Listes a afficher",
                 options=names,
-                default=names[:2],
+                default=names[:1],
                 format_func=lambda value: str(value).replace("_", " ").title(),
                 key="mpesa_credit_action_lists",
                 help="Selection multiple pour comparer plusieurs listes de suivi credit. Une selection vide masque les listes a l'ecran, mais pas l'export.",
             )
             if not selected_lists:
                 st.info("Selectionnez au moins une liste d'action.")
+            displayed_signatures: dict[tuple[Any, ...], str] = {}
             for name in selected_lists:
                 frame = action_lists.get(name, pd.DataFrame())
-                st.markdown(f"**{str(name).replace('_', ' ').title()}**")
+                display_name = str(name).replace("_", " ").title()
+                st.markdown(f"**{display_name}**")
                 if isinstance(frame, pd.DataFrame) and not frame.empty:
                     frame = _apply_local_multiselect_filters(
                         frame,
                         ["currency_code", "status_name", "customer_id", "msisdn1", "loan_product_id", "tranche_echeance"],
                         key_prefix=f"mpesa_credit_action_{name}",
                     )
+                signature = _dataframe_display_signature(frame)
+                duplicate_of = displayed_signatures.get(signature)
+                if duplicate_of is not None:
+                    st.info(
+                        f"Cette liste contient les memes lignes que `{duplicate_of}` sur le filtre courant; le tableau n'est pas repete."
+                    )
+                    continue
+                displayed_signatures[signature] = display_name
                 _mpesa_dataframe(frame, width="stretch", height=360, hide_index=True)
 
     with quality_tab:
@@ -6845,6 +6876,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
     kpi = report.get("kpi", pd.DataFrame())
     client_360 = report.get("client_360", pd.DataFrame())
     acquisition = report.get("acquisition_activation", pd.DataFrame())
+    new_clients_accounts = report.get("nouveaux_clients_comptes_activation", pd.DataFrame())
     segments_clients = report.get("segments_clients", pd.DataFrame())
     segments_produits = report.get("segments_produits", pd.DataFrame())
     dat_without_credit = report.get("dat_sans_credit_actif", pd.DataFrame())
@@ -6875,6 +6907,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
         overview_tab,
         activity_tab,
         acquisition_tab,
+        new_accounts_tab,
         client_360_tab,
         dat_tab,
         segmentation_tab,
@@ -6885,6 +6918,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                 "Vue d'ensemble",
                 "Activité",
                 "Acquisition et activation",
+                "Nouveaux comptes actifs",
                 "Produits et Client 360",
                 "DAT sans crédit",
                 "Segmentation",
@@ -6935,6 +6969,59 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
             _mpesa_dataframe(acquisition, width="stretch", hide_index=True)
         else:
             st.info("Aucune création client exploitable sur le périmètre.")
+
+    with new_accounts_tab:
+        render_panel_title("Nouveaux clients et comptes actifs par devise")
+        st.caption(
+            "Cette analyse repère les clients créés sur la période et les comptes épargne/DAT créés sur la période, puis vérifie s'ils ont eu des transactions. Les soldes restent séparés par devise."
+        )
+        display_columns = [
+            "client_key",
+            "customer_id",
+            "numero_telephone",
+            "nom_client",
+            "date_creation_client",
+            "currency_code",
+            "nouveau_client",
+            "nouveau_compte_ouvert_periode",
+            "nouveau_dat_periode",
+            "actif_periode",
+            "statut_activation",
+            "nombre_transactions",
+            "volume_transactions_observe",
+            "date_premiere_transaction",
+            "date_derniere_transaction",
+            "nouveaux_compte_ouvert_periode",
+            "solde_compte_ouvert",
+            "nouveaux_dat_periode",
+            "solde_dat",
+            "date_premier_compte_ouvert_cree_periode",
+            "date_premier_dat_cree_periode",
+            "sources_client",
+            "statut_confiance",
+        ]
+        if not new_clients_accounts.empty:
+            filtered = _apply_local_multiselect_filters(
+                new_clients_accounts,
+                [
+                    "numero_telephone",
+                    "currency_code",
+                    "statut_activation",
+                    "nouveau_client",
+                    "nouveau_compte_ouvert_periode",
+                    "nouveau_dat_periode",
+                    "actif_periode",
+                    "statut_confiance",
+                ],
+                key_prefix="mpesa_clients_new_accounts_filter",
+            )
+            _mpesa_dataframe(
+                filtered[[column for column in display_columns if column in filtered.columns]],
+                width="stretch",
+                hide_index=True,
+            )
+        else:
+            st.info("Aucun nouveau client ou nouveau compte épargne/DAT détecté sur la période.")
 
     with client_360_tab:
         render_panel_title("Produits détenus et Client 360")
@@ -7031,6 +7118,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                 "clients_kpi": kpi,
                 "clients_360": client_360,
                 "clients_acquisition_activation": acquisition,
+                "clients_nouveaux_comptes_actifs": new_clients_accounts,
                 "clients_segments": segments_clients,
                 "clients_segments_produits": segments_produits,
                 "clients_qualite_donnees": data_quality,

@@ -108,6 +108,30 @@ def test_clients_report_uses_customers_date_for_new_clients():
     assert client_360.loc["101", "segment_client"] == "nouveau_non_active"
 
 
+def test_clients_report_tracks_new_clients_accounts_activity_by_currency():
+    report = build_mpesa_clients_report(
+        _sample_prepared(),
+        date_start="2026-07-01",
+        date_end="2026-07-31",
+    )
+
+    activation = report["nouveaux_clients_comptes_activation"].set_index(["client_key", "currency_code"])
+
+    assert ("100", "USD") in activation.index
+    assert bool(activation.loc[("100", "USD"), "nouveau_client"])
+    assert bool(activation.loc[("100", "USD"), "actif_periode"])
+    assert int(activation.loc[("100", "USD"), "nombre_transactions"]) == 2
+    assert activation.loc[("100", "USD"), "solde_compte_ouvert"] == 5.0
+    assert activation.loc[("100", "USD"), "solde_dat"] == 0.0
+
+    assert ("101", "USD") in activation.index
+    assert bool(activation.loc[("101", "USD"), "nouveau_client"])
+    assert not bool(activation.loc[("101", "USD"), "actif_periode"])
+    assert int(activation.loc[("101", "USD"), "nombre_transactions"]) == 0
+    assert activation.loc[("101", "USD"), "solde_compte_ouvert"] == 0.0
+    assert activation.loc[("101", "USD"), "solde_dat"] == 20.0
+
+
 def test_clients_report_reuses_dat_without_active_credit_logic():
     report = build_mpesa_clients_report(
         _sample_prepared(),
