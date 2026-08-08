@@ -7070,6 +7070,642 @@ def count_mpesa_loaded_customers(prepared: MpesaPreparedData) -> int:
     return int(reference["client_key"].nunique())
 
 
+def _mpesa_clients_identity_candidates(
+    prepared: MpesaPreparedData,
+) -> pd.DataFrame:
+    """Construit les candidats d'identite client depuis les sources Solution Numerique."""
+
+    rows: list[pd.DataFrame] = []
+    source_specs = [
+        ("Customers [Solution Numérique]", prepared.customers, "msisdn1", "", "created_at"),
+        ("Transactions [Solution Numérique]", prepared.transactions, "msisdn1", "customer_id", "created_at"),
+        ("Savings Account [Solution Numérique]", prepared.current_savings, "msisdn", "customer_id", "created_at"),
+        ("Savings Account [Solution Numérique]", prepared.fixed_savings, "msisdn", "customer_id", "created_at"),
+        ("Loans Account [Solution Numérique]", prepared.loans, "msisdn1", "customer_id", "created_at"),
+    ]
+    for source_name, frame, phone_column, id_column, date_column in source_specs:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        tmp = pd.DataFrame(index=frame.index)
+        tmp["source_identite"] = source_name
+        tmp["customer_id"] = (
+            clean_identifier(frame[id_column])
+            if id_column and id_column in frame.columns
+            else pd.Series("", index=frame.index, dtype="string")
+        )
+        tmp["numero_telephone"] = (
+            normalize_phone(frame[phone_column])
+            if phone_column and phone_column in frame.columns
+            else pd.Series(pd.NA, index=frame.index, dtype="string")
+        )
+        name_candidates = [
+            column
+            for column in ["Nom_client", "customer", "nom_client"]
+            if column in frame.columns
+        ]
+        tmp["nom_client"] = (
+            clean_text(frame[name_candidates[0]])
+            if name_candidates
+            else pd.Series("", index=frame.index, dtype="string")
+        )
+        tmp["date_creation_observee"] = pd.to_datetime(
+            frame.get(date_column, pd.Series(pd.NaT, index=frame.index)),
+            errors="coerce",
+        )
+        tmp = tmp.loc[
+            tmp["customer_id"].astype(str).str.strip().ne("")
+            | tmp["numero_telephone"].astype("string").fillna("").str.strip().ne("")
+        ].copy()
+        if not tmp.empty:
+            rows.append(tmp)
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "source_identite",
+                "customer_id",
+                "numero_telephone",
+                "nom_client",
+                "date_creation_observee",
+            ]
+        )
+    return concat_frames_stable(rows).reset_index(drop=True)
+
+
+def _mpesa_clients_identity_frame(prepared: MpesaPreparedData) -> pd.DataFrame:
+    """Retourne une ligne canonique par client observe, avec methode de rapprochement."""
+
+    candidates = _mpesa_clients_identity_candidates(prepared)
+    if candidates.empty:
+        return pd.DataFrame(
+            columns=[
+                "client_key",
+                "customer_id",
+                "numero_telephone",
+                "nom_client",
+                "date_creation_client",
+                "sources_client",
+                "methode_rapprochement",
+                "statut_confiance",
+                "present_customers",
+            ]
+        )
+
+    phone_id = candidates.loc[
+        candidates["numero_telephone"].notna() & candidates["customer_id"].astype(str).str.strip().ne(""),
+        ["numero_telephone", "customer_id"],
+    ].drop_duplicates()
+    phone_to_ids = (
+        phone_id.groupby("numero_telephone")["customer_id"]
+        .agg(lambda values: [value for value in pd.Series(values).dropna().astype(str).unique() if value])
+        .to_dict()
+        if not phone_id.empty
+        else {}
+    )
+
+    def canonical_key(row: pd.Series) -> str:
+        customer_id = str(row.get("customer_id", "") or "").strip()
+        phone = row.get("numero_telephone")
+        phone_text = "" if pd.isna(phone) else str(phone).strip()
+        if customer_id:
+            return customer_id
+        linked_ids = phone_to_ids.get(phone_text, [])
+        if len(linked_ids) == 1:
+            return linked_ids[0]
+        return phone_text
+
+    candidates = candidates.copy()
+    candidates["client_key"] = candidates.apply(canonical_key, axis=1)
+    candidates["date_creation_customers"] = candidates["date_creation_observee"].where(
+        candidates["source_identite"].astype(str).eq("Customers [Solution Numérique]"),
+        pd.NaT,
+    )
+    candidates = candidates.loc[candidates["client_key"].astype(str).str.strip().ne("")].copy()
+    if candidates.empty:
+        return pd.DataFrame()
+
+    grouped = (
+        candidates.groupby("client_key", as_index=False, dropna=False)
+        .agg(
+            customer_id=("customer_id", concat_unique),
+            numero_telephone=("numero_telephone", first_non_empty),
+            nom_client=("nom_client", first_non_empty),
+            date_creation_customers=("date_creation_customers", "min"),
+            premiere_date_observee=("date_creation_observee", "min"),
+            sources_client=("source_identite", concat_unique),
+            present_customers=(
+                "source_identite",
+                lambda values: bool(pd.Series(values).astype(str).eq("Customers [Solution Numérique]").any()),
+            ),
+        )
+        .reset_index(drop=True)
+    )
+    grouped["date_creation_client"] = grouped["date_creation_customers"].combine_first(
+        grouped["premiere_date_observee"]
+    )
+    grouped["methode_rapprochement"] = np.select(
+        [
+            grouped["customer_id"].astype(str).str.strip().ne("")
+            & grouped["numero_telephone"].astype("string").fillna("").str.strip().ne(""),
+            grouped["customer_id"].astype(str).str.strip().ne(""),
+            grouped["numero_telephone"].astype("string").fillna("").str.strip().ne(""),
+        ],
+        ["customer_id + telephone", "customer_id", "telephone"],
+        default="non_rapprochable",
+    )
+    grouped["statut_confiance"] = np.select(
+        [
+            grouped["methode_rapprochement"].eq("customer_id + telephone"),
+            grouped["methode_rapprochement"].isin(["customer_id", "telephone"]),
+        ],
+        ["forte", "moyenne"],
+        default="faible",
+    )
+    return grouped
+
+
+def _mpesa_client_key_from_frame(frame: pd.DataFrame) -> pd.Series:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return pd.Series(dtype="string")
+    customer_id = (
+        clean_identifier(frame["customer_id"])
+        if "customer_id" in frame.columns
+        else pd.Series("", index=frame.index, dtype="string")
+    )
+    phone_column = "msisdn1" if "msisdn1" in frame.columns else "msisdn" if "msisdn" in frame.columns else ""
+    phone = (
+        normalize_phone(frame[phone_column])
+        if phone_column
+        else pd.Series(pd.NA, index=frame.index, dtype="string")
+    )
+    return customer_id.where(customer_id.astype(str).str.strip().ne(""), phone)
+
+
+def _mpesa_clients_product_positions(
+    prepared: MpesaPreparedData,
+) -> pd.DataFrame:
+    rows: list[pd.DataFrame] = []
+
+    def add_savings(frame: pd.DataFrame, famille: str) -> None:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            return
+        tmp = frame.copy()
+        tmp["client_key"] = _mpesa_client_key_from_frame(tmp)
+        tmp["currency_code"] = clean_text(
+            tmp.get("currency_code", pd.Series("", index=tmp.index))
+        ).str.upper().replace("", "NON RENSEIGNEE")
+        tmp["balance"] = numeric_column(tmp, "balance")
+        tmp = tmp.loc[tmp["client_key"].astype(str).str.strip().ne("")]
+        if tmp.empty:
+            return
+        grouped = (
+            tmp.groupby(["client_key", "currency_code"], as_index=False, dropna=False)
+            .agg(
+                nombre_comptes=("balance", "size"),
+                solde=("balance", "sum"),
+                comptes_solde_positif=("balance", lambda values: int(pd.to_numeric(values, errors="coerce").fillna(0).gt(0).sum())),
+            )
+            .reset_index(drop=True)
+        )
+        grouped["famille_produit"] = famille
+        rows.append(grouped)
+
+    add_savings(prepared.current_savings, "compte_ouvert")
+    add_savings(prepared.fixed_savings, "dat")
+
+    loans = prepared.loans.copy() if isinstance(prepared.loans, pd.DataFrame) else pd.DataFrame()
+    if not loans.empty:
+        loans["client_key"] = _mpesa_client_key_from_frame(loans)
+        loans["currency_code"] = clean_text(
+            loans.get("currency_code", pd.Series("", index=loans.index))
+        ).str.upper().replace("", "NON RENSEIGNEE")
+        balance_columns = [
+            column
+            for column in ["loan_balance", "outstanding_principle", "outstanding_principal"]
+            if column in loans.columns
+        ]
+        loans["encours_credit"] = 0.0
+        for column in balance_columns:
+            loans["encours_credit"] = loans["encours_credit"].where(
+                loans["encours_credit"].ne(0),
+                numeric_column(loans, column),
+            )
+        loans = loans.loc[loans["client_key"].astype(str).str.strip().ne("")]
+        if not loans.empty:
+            grouped = (
+                loans.groupby(["client_key", "currency_code"], as_index=False, dropna=False)
+                .agg(
+                    nombre_comptes=("loan_id", "nunique" if "loan_id" in loans.columns else "size"),
+                    solde=("encours_credit", "sum"),
+                    comptes_solde_positif=("encours_credit", lambda values: int(pd.to_numeric(values, errors="coerce").fillna(0).gt(0).sum())),
+                )
+                .reset_index(drop=True)
+            )
+            grouped["famille_produit"] = "credit"
+            rows.append(grouped)
+
+    return concat_frames_stable(rows) if rows else pd.DataFrame()
+
+
+def build_mpesa_clients_report(
+    prepared: MpesaPreparedData,
+    *,
+    date_start: Any | None = None,
+    date_end: Any | None = None,
+    frequency: str = "Mois",
+    inactivity_threshold_days: int = 30,
+    occasional_max_operations: int = 2,
+    turbo_events: pd.DataFrame | None = None,
+    turbo_transaction_lines: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    """Construit l'onglet Clients : Client 360, activation, segmentation et listes."""
+
+    transactions = prepared.transactions if isinstance(prepared.transactions, pd.DataFrame) else pd.DataFrame()
+    transaction_dates = (
+        pd.to_datetime(transactions["created_at"], errors="coerce").dropna()
+        if not transactions.empty and "created_at" in transactions.columns
+        else pd.Series(dtype="datetime64[ns]")
+    )
+    fallback_end = _mpesa_analysis_date(prepared, date_end)
+    end_date = pd.Timestamp(fallback_end).normalize()
+    if date_start is not None and pd.notna(pd.to_datetime(date_start, errors="coerce")):
+        start_date = pd.Timestamp(pd.to_datetime(date_start, errors="coerce")).normalize()
+    elif not transaction_dates.empty:
+        start_date = pd.Timestamp(transaction_dates.min()).normalize()
+    else:
+        start_date = end_date
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+    period_end_exclusive = end_date + pd.Timedelta(days=1)
+
+    if isinstance(turbo_events, pd.DataFrame) and isinstance(turbo_transaction_lines, pd.DataFrame):
+        all_events = turbo_events.copy()
+    else:
+        all_events = build_turbo_operation_events(transactions).get("events", pd.DataFrame())
+    if not all_events.empty:
+        all_events = all_events.copy()
+        all_events["created_at"] = pd.to_datetime(all_events["created_at"], errors="coerce")
+        all_events["client_key"] = _mpesa_client_key_from_frame(all_events)
+        all_events = all_events.loc[all_events["client_key"].astype(str).str.strip().ne("")]
+        events_until_end = all_events.loc[all_events["created_at"].lt(period_end_exclusive)].copy()
+        period_events = all_events.loc[
+            all_events["created_at"].ge(start_date)
+            & all_events["created_at"].lt(period_end_exclusive)
+        ].copy()
+        period_events["periode"] = _turbo_period_bucket(period_events["created_at"], frequency)
+    else:
+        events_until_end = pd.DataFrame()
+        period_events = pd.DataFrame()
+
+    identities = _mpesa_clients_identity_frame(prepared)
+    product_positions = _mpesa_clients_product_positions(prepared)
+    if identities.empty and not product_positions.empty:
+        identities = (
+            product_positions[["client_key"]]
+            .drop_duplicates()
+            .assign(
+                customer_id="",
+                numero_telephone=pd.NA,
+                nom_client="",
+                date_creation_client=pd.NaT,
+                sources_client="Positions produits",
+                methode_rapprochement="positions",
+                statut_confiance="moyenne",
+                present_customers=False,
+            )
+        )
+
+    active_set = (
+        set(period_events["client_key"].dropna().astype(str))
+        if not period_events.empty and "client_key" in period_events.columns
+        else set()
+    )
+    reference_population = (
+        identities.loc[identities["present_customers"].astype(bool), "client_key"].dropna().astype(str)
+        if not identities.empty and "present_customers" in identities.columns
+        else pd.Series(dtype=str)
+    )
+    reference_set = set(reference_population)
+    known_set = set(identities.get("client_key", pd.Series(dtype=str)).dropna().astype(str))
+    denominator_set = reference_set if reference_set else known_set
+
+    client_activity = pd.DataFrame()
+    if not events_until_end.empty:
+        client_activity = (
+            events_until_end.groupby("client_key", as_index=False, dropna=False)
+            .agg(
+                date_derniere_operation_observee=("created_at", "max"),
+                nombre_operations_total=("event_key", "nunique" if "event_key" in events_until_end.columns else "size"),
+            )
+        )
+    period_activity = pd.DataFrame()
+    if not period_events.empty:
+        period_activity = (
+            period_events.groupby("client_key", as_index=False, dropna=False)
+            .agg(
+                nombre_operations=("event_key", "nunique" if "event_key" in period_events.columns else "size"),
+                nombre_periodes_actives=("periode", "nunique"),
+                date_premiere_operation_periode=("created_at", "min"),
+                date_derniere_operation_periode=("created_at", "max"),
+            )
+        )
+
+    client_360 = identities.copy() if not identities.empty else pd.DataFrame(columns=["client_key"])
+    for table in [client_activity, period_activity]:
+        if not table.empty:
+            client_360 = client_360.merge(table, on="client_key", how="outer")
+    if not product_positions.empty:
+        pivot = (
+            product_positions.pivot_table(
+                index="client_key",
+                columns="famille_produit",
+                values=["nombre_comptes", "solde", "comptes_solde_positif"],
+                aggfunc="sum",
+                fill_value=0,
+            )
+            .reset_index()
+        )
+        pivot.columns = [
+            "_".join(str(part) for part in column if str(part))
+            if isinstance(column, tuple)
+            else str(column)
+            for column in pivot.columns
+        ]
+        client_360 = client_360.merge(pivot, on="client_key", how="outer")
+
+    if not client_360.empty:
+        for column in [
+            "nombre_operations",
+            "nombre_periodes_actives",
+            "nombre_operations_total",
+            "nombre_comptes_compte_ouvert",
+            "nombre_comptes_dat",
+            "nombre_comptes_credit",
+            "comptes_solde_positif_dat",
+            "comptes_solde_positif_credit",
+        ]:
+            if column not in client_360.columns:
+                client_360[column] = 0
+            client_360[column] = pd.to_numeric(client_360[column], errors="coerce").fillna(0)
+        for column in ["solde_compte_ouvert", "solde_dat", "solde_credit"]:
+            if column not in client_360.columns:
+                client_360[column] = 0.0
+            client_360[column] = pd.to_numeric(client_360[column], errors="coerce").fillna(0.0)
+        client_360["date_creation_client"] = pd.to_datetime(
+            client_360.get("date_creation_client", pd.Series(pd.NaT, index=client_360.index)),
+            errors="coerce",
+        )
+        client_360["date_derniere_operation_observee"] = pd.to_datetime(
+            client_360.get("date_derniere_operation_observee", pd.Series(pd.NaT, index=client_360.index)),
+            errors="coerce",
+        )
+        client_360["jours_depuis_derniere_operation"] = (
+            end_date - client_360["date_derniere_operation_observee"].dt.normalize()
+        ).dt.days
+        client_360["actif_periode"] = client_360["client_key"].astype(str).isin(active_set)
+        client_360["nouveau_client"] = client_360["date_creation_client"].ge(start_date) & client_360["date_creation_client"].lt(period_end_exclusive)
+        client_360["nouveau_client_actif"] = client_360["nouveau_client"] & client_360["actif_periode"]
+        client_360["sans_mouvement_periode"] = client_360["client_key"].astype(str).isin(denominator_set - active_set)
+        client_360["historique_insuffisant"] = (
+            (end_date - start_date).days + 1
+        ) < int(inactivity_threshold_days)
+        client_360["inactif_observe"] = (
+            client_360["jours_depuis_derniere_operation"].ge(int(inactivity_threshold_days))
+            & ~client_360["historique_insuffisant"]
+        )
+        client_360["presence_epargne"] = client_360["nombre_comptes_compte_ouvert"].gt(0)
+        client_360["presence_dat"] = client_360["comptes_solde_positif_dat"].gt(0)
+        client_360["presence_credit"] = client_360["comptes_solde_positif_credit"].gt(0)
+        client_360["presence_transaction"] = client_360["nombre_operations_total"].gt(0)
+        product_flag_count = client_360[["presence_epargne", "presence_dat", "presence_credit"]].sum(axis=1)
+        client_360["multi_produits"] = product_flag_count.ge(2)
+
+        def product_segment(row: pd.Series) -> str:
+            parts = []
+            if bool(row.get("presence_epargne", False)):
+                parts.append("epargne")
+            if bool(row.get("presence_dat", False)):
+                parts.append("dat")
+            if bool(row.get("presence_credit", False)):
+                parts.append("credit")
+            return "_".join(parts) if parts else "sans_produit_observe"
+
+        client_360["segment_produit"] = client_360.apply(product_segment, axis=1)
+        client_360["segment_client"] = np.select(
+            [
+                client_360["nouveau_client_actif"],
+                client_360["nouveau_client"] & ~client_360["actif_periode"],
+                client_360["multi_produits"],
+                client_360["inactif_observe"],
+                client_360["actif_periode"] & client_360["nombre_operations"].le(int(occasional_max_operations)),
+                client_360["actif_periode"],
+            ],
+            [
+                "nouveau_actif",
+                "nouveau_non_active",
+                "multi_produits",
+                "inactif_observe",
+                "occasionnel",
+                "actif",
+            ],
+            default="sans_mouvement",
+        )
+
+    clients_referentiel = len(reference_set)
+    clients_connus = len(known_set)
+    clients_actifs = len(active_set)
+    denominator_count = len(denominator_set)
+    nouveaux_clients_set = (
+        set(client_360.loc[client_360["nouveau_client"], "client_key"].dropna().astype(str))
+        if not client_360.empty and "nouveau_client" in client_360.columns
+        else set()
+    )
+    nouveaux_actifs_set = nouveaux_clients_set & active_set
+    kpi = pd.DataFrame(
+        [
+            {
+                "indicateur": "clients_referentiel",
+                "valeur": clients_referentiel,
+                "denominateur": "",
+                "definition": "Clients distincts de Customers, dedupliques par telephone normalise.",
+            },
+            {
+                "indicateur": "clients_connus_solution_numerique",
+                "valeur": clients_connus,
+                "denominateur": "",
+                "definition": "Clients observes dans au moins une source Solution Numerique.",
+            },
+            {
+                "indicateur": "clients_actifs",
+                "valeur": clients_actifs,
+                "denominateur": "clients_referentiel" if reference_set else "clients_connus_solution_numerique",
+                "definition": "Clients avec au moins un evenement metier valide sur la periode.",
+            },
+            {
+                "indicateur": "taux_clients_actifs",
+                "valeur": (clients_actifs / denominator_count * 100.0) if denominator_count else np.nan,
+                "denominateur": "clients_referentiel" if reference_set else "clients_connus_solution_numerique",
+                "definition": "clients_actifs / population de reference documentee.",
+            },
+            {
+                "indicateur": "nouveaux_clients",
+                "valeur": len(nouveaux_clients_set),
+                "denominateur": "",
+                "definition": "Clients de Customers dont created_at tombe dans la periode.",
+            },
+            {
+                "indicateur": "nouveaux_clients_actifs",
+                "valeur": len(nouveaux_actifs_set),
+                "denominateur": "nouveaux_clients",
+                "definition": "Nouveaux clients ayant aussi au moins un evenement valide dans la periode.",
+            },
+            {
+                "indicateur": "taux_activation_nouveaux_clients",
+                "valeur": (len(nouveaux_actifs_set) / len(nouveaux_clients_set) * 100.0) if nouveaux_clients_set else np.nan,
+                "denominateur": "nouveaux_clients",
+                "definition": "nouveaux_clients_actifs / nouveaux_clients.",
+            },
+            {
+                "indicateur": "clients_sans_mouvement",
+                "valeur": len(denominator_set - active_set),
+                "denominateur": "population_reference",
+                "definition": "Clients de la population de reference sans evenement valide sur la periode.",
+            },
+        ]
+    )
+
+    segment_summary = (
+        client_360.groupby("segment_client", as_index=False, dropna=False)
+        .agg(nombre_clients=("client_key", "nunique"))
+        .sort_values("nombre_clients", ascending=False)
+        .reset_index(drop=True)
+        if not client_360.empty and "segment_client" in client_360.columns
+        else pd.DataFrame()
+    )
+    product_summary = (
+        client_360.groupby("segment_produit", as_index=False, dropna=False)
+        .agg(nombre_clients=("client_key", "nunique"))
+        .sort_values("nombre_clients", ascending=False)
+        .reset_index(drop=True)
+        if not client_360.empty and "segment_produit" in client_360.columns
+        else pd.DataFrame()
+    )
+    acquisition = pd.DataFrame()
+    if not client_360.empty and "date_creation_client" in client_360.columns:
+        growth = client_360.loc[client_360["date_creation_client"].notna()].copy()
+        growth = growth.loc[growth["date_creation_client"].lt(period_end_exclusive)]
+        if not growth.empty:
+            growth["periode"] = _turbo_period_bucket(growth["date_creation_client"], frequency)
+            acquisition = (
+                growth.groupby("periode", as_index=False)
+                .agg(nouveaux_clients=("client_key", "nunique"))
+                .sort_values("periode")
+                .reset_index(drop=True)
+            )
+            active_new = client_360.loc[client_360.get("nouveau_client_actif", False)].copy()
+            if not active_new.empty:
+                active_new["periode"] = _turbo_period_bucket(active_new["date_creation_client"], frequency)
+                activation = active_new.groupby("periode", as_index=False).agg(
+                    nouveaux_clients_actifs=("client_key", "nunique")
+                )
+                acquisition = acquisition.merge(activation, on="periode", how="left")
+            if "nouveaux_clients_actifs" not in acquisition.columns:
+                acquisition["nouveaux_clients_actifs"] = 0
+            acquisition["nouveaux_clients_actifs"] = pd.to_numeric(
+                acquisition["nouveaux_clients_actifs"], errors="coerce"
+            ).fillna(0)
+            acquisition["taux_activation_pct"] = np.where(
+                acquisition["nouveaux_clients"].ne(0),
+                acquisition["nouveaux_clients_actifs"] / acquisition["nouveaux_clients"] * 100.0,
+                np.nan,
+            )
+
+    dat_without_credit = pd.DataFrame()
+    finance = build_mpesa_turbo_financial_analysis(
+        prepared,
+        date_start=start_date,
+        date_end=end_date,
+        frequency=frequency,
+        turbo_events=turbo_events,
+        turbo_transaction_lines=turbo_transaction_lines,
+    )
+    dat_without_credit = finance.get("dat_sans_credit_actif", pd.DataFrame()).copy()
+
+    data_quality_rows: list[dict[str, Any]] = []
+    customers = prepared.customers.copy() if isinstance(prepared.customers, pd.DataFrame) else pd.DataFrame()
+    if not customers.empty:
+        phones = normalize_phone(customers.get("msisdn1", pd.Series("", index=customers.index)))
+        valid = phones.astype("string").str.fullmatch(r"243\d{9}", na=False)
+        duplicated = phones[phones.notna() & phones.duplicated(keep=False)]
+        data_quality_rows.extend(
+            [
+                {"controle": "telephones_customers_invalides_ou_vides", "valeur": int((~valid).sum()), "statut": "A verifier" if int((~valid).sum()) else "OK"},
+                {"controle": "doublons_telephone_customers", "valeur": int(duplicated.nunique()), "statut": "A verifier" if int(duplicated.nunique()) else "OK"},
+            ]
+        )
+    if not transactions.empty:
+        missing_customer = int(
+            clean_identifier(transactions.get("customer_id", pd.Series("", index=transactions.index))).eq("").sum()
+        )
+        data_quality_rows.append(
+            {"controle": "transactions_sans_customer_id", "valeur": missing_customer, "statut": "A verifier" if missing_customer else "OK"}
+        )
+        if len(transactions) == 100_000:
+            data_quality_rows.append(
+                {"controle": "export_transactions_potentiellement_plafonne", "valeur": 100_000, "statut": "A verifier"}
+            )
+    phone_id = _mpesa_clients_identity_candidates(prepared)
+    if not phone_id.empty:
+        linked = phone_id.loc[
+            phone_id["numero_telephone"].notna() & phone_id["customer_id"].astype(str).str.strip().ne("")
+        ]
+        multi = linked.groupby("numero_telephone")["customer_id"].nunique()
+        count_multi = int(multi.gt(1).sum())
+        data_quality_rows.append(
+            {"controle": "telephone_vers_plusieurs_customer_id", "valeur": count_multi, "statut": "A verifier" if count_multi else "OK"}
+        )
+    data_quality = pd.DataFrame(data_quality_rows)
+
+    def select_list(mask_column: str) -> pd.DataFrame:
+        if client_360.empty or mask_column not in client_360.columns:
+            return pd.DataFrame()
+        return client_360.loc[client_360[mask_column].astype(bool)].copy()
+
+    action_lists = {
+        "clients_actifs": select_list("actif_periode"),
+        "nouveaux_clients": select_list("nouveau_client"),
+        "nouveaux_clients_actifs": select_list("nouveau_client_actif"),
+        "nouveaux_clients_non_actives": (
+            client_360.loc[client_360["nouveau_client"] & ~client_360["actif_periode"]].copy()
+            if not client_360.empty and {"nouveau_client", "actif_periode"}.issubset(client_360.columns)
+            else pd.DataFrame()
+        ),
+        "clients_sans_mouvement": select_list("sans_mouvement_periode"),
+        "clients_inactifs_observes": select_list("inactif_observe"),
+        "clients_multi_produits": select_list("multi_produits"),
+        "clients_dat_sans_credit_actif": dat_without_credit,
+    }
+
+    return {
+        "date_debut": start_date,
+        "date_fin": end_date,
+        "frequence": frequency,
+        "seuil_inactivite_jours": int(inactivity_threshold_days),
+        "seuil_occasionnel_operations": int(occasional_max_operations),
+        "kpi": kpi,
+        "identites_clients": identities,
+        "client_360": client_360.sort_values("client_key").reset_index(drop=True) if not client_360.empty else client_360,
+        "acquisition_activation": acquisition,
+        "segments_clients": segment_summary,
+        "segments_produits": product_summary,
+        "positions_produits": product_positions,
+        "dat_sans_credit_actif": dat_without_credit,
+        "qualite_donnees": data_quality,
+        "operations_turbo": period_events.reset_index(drop=True),
+        "listes_action": action_lists,
+        **{f"liste_{key}": value for key, value in action_lists.items()},
+    }
+
+
 MPESA_COMPARISON_PERIOD_OPTIONS = [
     "Semaine microfinance (lundi)",
     "7 jours glissants",
@@ -18572,6 +19208,20 @@ def create_excel_export(
         ("accounting_portfolio_positions", "Positions_Portefeuille_Turbo"),
         ("accounting_g2_controls", "Controle_G2_Turbo"),
         ("suivi_depots_retraits_pivot", "Suivi_Depots_Retraits"),
+        ("clients_kpi", "Clients_KPI"),
+        ("clients_360", "Clients_360"),
+        ("clients_acquisition_activation", "Clients_Acquisition"),
+        ("clients_segments", "Clients_Segments"),
+        ("clients_segments_produits", "Clients_Produits"),
+        ("clients_qualite_donnees", "Clients_Qualite"),
+        ("clients_clients_actifs", "Clients_Actifs"),
+        ("clients_nouveaux_clients", "Nouveaux_Clients"),
+        ("clients_nouveaux_clients_actifs", "Nouveaux_Clients_Actifs"),
+        ("clients_nouveaux_clients_non_actives", "Nouveaux_Non_Actives"),
+        ("clients_clients_sans_mouvement", "Clients_Sans_Mouvement"),
+        ("clients_clients_inactifs_observes", "Clients_Inactifs"),
+        ("clients_clients_multi_produits", "Clients_Multi_Produits"),
+        ("clients_clients_dat_sans_credit_actif", "DAT_Sans_Credit"),
         ("diagnostics", "Diagnostics"),
     ]
     sheets = {

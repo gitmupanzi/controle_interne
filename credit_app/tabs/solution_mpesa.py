@@ -13,6 +13,7 @@ import streamlit as st
 
 from credit_app.display_columns import (
     prepare_dataframe_with_user_columns,
+    resolve_user_column_mapping,
     translate_column_config_for_user_columns,
 )
 from credit_app.services.mpesa_analysis import (
@@ -46,6 +47,7 @@ from credit_app.services.mpesa_analysis import (
     build_turbo_only_g2_transactions,
     build_load_report,
     build_mpesa_accounting_analysis,
+    build_mpesa_clients_report,
     build_mpesa_dat_maturity_analysis,
     build_loan_savings_reconciliation,
     build_mpesa_management_dashboard,
@@ -117,6 +119,7 @@ MPESA_SOLUTION_TAB_LABELS = (
     "Importation et contrôle",
     "Extraits clients",
     "Finance et comptabilité",
+    "Clients",
     "Épargnes",
     "Crédits",
     "Solution Numérique / M-Pesa",
@@ -993,6 +996,33 @@ def _build_mpesa_statistics_report_cached(
 
 @st.cache_data(
     show_spinner=False,
+    max_entries=8,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _build_mpesa_clients_report_cached(
+    prepared: MpesaPreparedData,
+    date_start: object,
+    date_end: object,
+    frequency: str,
+    inactivity_threshold_days: int,
+    occasional_max_operations: int,
+) -> dict[str, Any]:
+    operation_journal = _build_turbo_operation_events_cached(prepared)
+    scoped_prepared = _prepared_data_as_of(prepared, date_end)
+    return build_mpesa_clients_report(
+        scoped_prepared,
+        date_start=date_start,
+        date_end=date_end,
+        frequency=frequency,
+        inactivity_threshold_days=inactivity_threshold_days,
+        occasional_max_operations=occasional_max_operations,
+        turbo_events=operation_journal["events"],
+        turbo_transaction_lines=operation_journal["lines"],
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
     max_entries=12,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
@@ -1176,6 +1206,11 @@ def _apply_local_multiselect_filters(
         return df.copy()
 
     active_filters: dict[str, list[str]] = {}
+    visible_column_names = (
+        resolve_user_column_mapping(pd.Index(available_columns))
+        if _mpesa_user_column_rename_enabled()
+        else {}
+    )
     widgets = st.columns(min(3, max(1, len(available_columns))))
     for index, column in enumerate(available_columns):
         options = _filter_value_options(df[column])
@@ -1183,11 +1218,11 @@ def _apply_local_multiselect_filters(
             continue
         with widgets[index % len(widgets)]:
             selected_values = st.multiselect(
-                column,
+                visible_column_names.get(column, column),
                 options=options,
                 default=[],
                 key=f"{key_prefix}_{column}",
-                placeholder="Choose options",
+                placeholder="Choisir une ou plusieurs valeurs",
                 help="Aucune valeur selectionnee = toutes les valeurs.",
             )
         if selected_values:
@@ -1388,6 +1423,7 @@ def _filter_statement(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     context: dict[str, Any] = {
         "currency": "Toutes",
+        "currencies": [],
         "operation_types": [],
         "date_start": None,
         "date_end": None,
@@ -1403,20 +1439,31 @@ def _filter_statement(
         first_row, second_row = st.columns(2)
         currencies = _currency_options(filtered)
         selected_currency = "Toutes"
+        selected_currencies: list[str] = []
         if currencies:
-            selected_currency = first_row.selectbox(
+            selected_currencies = first_row.multiselect(
                 "Devise",
-                ["Toutes"] + currencies,
+                currencies,
+                default=currencies,
                 key=f"{key_prefix}_currency",
+                placeholder="Sélectionner les devises",
                 help=(
-                    "Choisissez une devise pour limiter le relevé. `Toutes` "
-                    "conserve CDF et USD dans le même document, mais les montants "
+                    "Choisissez une ou plusieurs devises pour limiter le relevé. "
+                    "Aucune devise choisie = toutes les devises disponibles; les montants "
                     "et les soldes restent présentés séparément par devise."
                 ),
             )
+            selected_currencies = [str(value).strip() for value in selected_currencies if str(value).strip()]
+            if selected_currencies:
+                filtered = filtered.loc[filtered["currency_code"].astype(str).isin(selected_currencies)]
+            selected_currency = (
+                selected_currencies[0]
+                if len(selected_currencies) == 1
+                else "Toutes"
+            )
             context["currency"] = selected_currency
-            if selected_currency != "Toutes":
-                filtered = filtered.loc[filtered["currency_code"].eq(selected_currency)]
+            context["currencies"] = selected_currencies
+        currency_key_token = "_".join(selected_currencies) if selected_currencies else "Toutes"
         operation_types = sorted(filtered["type_operation"].dropna().astype(str).unique()) if "type_operation" in filtered.columns else []
         if operation_types:
             default_operation_types = [
@@ -1428,7 +1475,7 @@ def _filter_statement(
                 "Type d'opération",
                 operation_types,
                 default=default_operation_types,
-                key=f"{key_prefix}_{selected_currency}_type",
+                key=f"{key_prefix}_{currency_key_token}_type",
                 placeholder="Sélectionner les opérations",
                 help=(
                     "Par défaut : dépôts, retraits vers M-PESA, décaissements de crédit et remboursements de crédit. "
@@ -1441,7 +1488,7 @@ def _filter_statement(
         if "created_at" in filtered.columns:
             dates = pd.to_datetime(filtered["created_at"], errors="coerce").dropna()
             if not dates.empty:
-                date_key = f"{key_prefix}_{selected_currency}_{dates.min():%Y%m%d}_{dates.max():%Y%m%d}"
+                date_key = f"{key_prefix}_{currency_key_token}_{dates.min():%Y%m%d}_{dates.max():%Y%m%d}"
                 start_column, end_column = st.columns(2)
                 start = start_column.date_input(
                     "Date de début",
@@ -2633,6 +2680,7 @@ def _render_dat_repayment_schedule(prepared: MpesaPreparedData) -> None:
             "Date de situation DAT",
             value=default_analysis_date.date(),
             key=analysis_date_key,
+            format="DD/MM/YYYY",
             help="Les DAT deja echus et ceux arrivant a terme apres cette date sont classes separement.",
         )
     with controls[1]:
@@ -4318,6 +4366,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
             f"mpesa_management_analysis_date_{minimum_date:%Y%m%d}_"
             f"{maximum_date:%Y%m%d}_{len(available_dates)}"
         ),
+        format="DD/MM/YYYY",
         help=(
             "La derniere journee complete est proposee lorsque la journee la plus "
             "recente semble encore partielle. L'historique ulterieur est exclu."
@@ -6185,6 +6234,301 @@ def _render_diagnostics_tab(prepared: MpesaPreparedData, report: dict[str, Any] 
 
 
 @st.fragment
+def _render_clients_tab(prepared: MpesaPreparedData) -> None:
+    render_summary_box(
+        "Clients 360 - Solution Numérique",
+        [
+            "Cet onglet mesure le référentiel client, l'activité, l'acquisition, l'activation et les opportunités commerciales.",
+            "Customers sert au référentiel téléphone et à la date de création client; Transactions fournit l'activité consolidée.",
+            "Les rapports G2 M-Pesa enrichissent le nom et le contrôle, mais ne créent aucun KPI financier ni aucune opération.",
+        ],
+    )
+
+    date_candidates: list[pd.Series] = []
+    if not prepared.transactions.empty and "created_at" in prepared.transactions.columns:
+        date_candidates.append(pd.to_datetime(prepared.transactions["created_at"], errors="coerce").dropna())
+    if not prepared.customers.empty and "created_at" in prepared.customers.columns:
+        date_candidates.append(pd.to_datetime(prepared.customers["created_at"], errors="coerce").dropna())
+    combined_dates = (
+        pd.concat(date_candidates, ignore_index=True).dropna()
+        if date_candidates
+        else pd.Series(dtype="datetime64[ns]")
+    )
+    if combined_dates.empty:
+        st.info("Chargez au moins Customers ou Transactions avec une date exploitable pour construire l'onglet Clients.")
+        return
+
+    minimum_date = combined_dates.min().date()
+    maximum_date = combined_dates.max().date()
+    default_end = maximum_date
+    default_start = max(minimum_date, (pd.Timestamp(default_end) - pd.Timedelta(days=90)).date())
+    with st.container(border=True):
+        filter_cols = st.columns(5)
+        with filter_cols[0]:
+            date_start = st.date_input(
+                "Date de début",
+                value=default_start,
+                min_value=minimum_date,
+                max_value=maximum_date,
+                key="mpesa_clients_date_start",
+                format="DD/MM/YYYY",
+                help="Borne incluse pour l'activité client, les nouveaux clients et les listes d'action.",
+            )
+        with filter_cols[1]:
+            date_end = st.date_input(
+                "Date de fin",
+                value=default_end,
+                min_value=minimum_date,
+                max_value=maximum_date,
+                key="mpesa_clients_date_end",
+                format="DD/MM/YYYY",
+                help="Borne incluse. Les positions de comptes et de crédits restent des instantanés disponibles à cette date.",
+            )
+        with filter_cols[2]:
+            frequency = st.selectbox(
+                "Fréquence",
+                options=["Jour", "Semaine", "Mois"],
+                index=2,
+                key="mpesa_clients_frequency",
+                help="Regroupe l'acquisition et l'activité par jour, semaine ou mois sans modifier les sources.",
+            )
+        with filter_cols[3]:
+            inactivity_threshold = st.number_input(
+                "Seuil inactivité",
+                min_value=7,
+                max_value=365,
+                value=30,
+                step=7,
+                key="mpesa_clients_inactivity_threshold",
+                help="Nombre de jours sans opération pour classer un client comme inactif observé. Ce n'est pas un statut réglementaire.",
+            )
+        with filter_cols[4]:
+            occasional_threshold = st.number_input(
+                "Seuil occasionnel",
+                min_value=1,
+                max_value=20,
+                value=2,
+                step=1,
+                key="mpesa_clients_occasional_threshold",
+                help="Nombre maximal d'opérations sur la période pour classer un client actif comme occasionnel.",
+            )
+
+    report = _build_mpesa_clients_report_cached(
+        prepared,
+        date_start,
+        date_end,
+        frequency,
+        int(inactivity_threshold),
+        int(occasional_threshold),
+    )
+    kpi = report.get("kpi", pd.DataFrame())
+    client_360 = report.get("client_360", pd.DataFrame())
+    acquisition = report.get("acquisition_activation", pd.DataFrame())
+    segments_clients = report.get("segments_clients", pd.DataFrame())
+    segments_produits = report.get("segments_produits", pd.DataFrame())
+    dat_without_credit = report.get("dat_sans_credit_actif", pd.DataFrame())
+    data_quality = report.get("qualite_donnees", pd.DataFrame())
+    action_lists = report.get("listes_action", {})
+
+    def kpi_value(indicator: str) -> Any:
+        if kpi.empty or "indicateur" not in kpi.columns:
+            return None
+        rows = kpi.loc[kpi["indicateur"].eq(indicator)]
+        return rows.iloc[0]["valeur"] if not rows.empty else None
+
+    cards = [
+        ("Clients référentiel", _format_count(kpi_value("clients_referentiel")), "Customers dédupliqué par téléphone", "blue"),
+        ("Clients connus", _format_count(kpi_value("clients_connus_solution_numerique")), "Toutes sources Solution Numérique", "slate"),
+        ("Clients actifs", _format_count(kpi_value("clients_actifs")), f"Du {pd.Timestamp(date_start):%d/%m/%Y} au {pd.Timestamp(date_end):%d/%m/%Y}", "green"),
+        ("Taux actifs", _format_percent(kpi_value("taux_clients_actifs")), "Dénominateur explicite dans la table KPI", "orange"),
+        ("Nouveaux clients", _format_count(kpi_value("nouveaux_clients")), "Customers.created_at dans la période", "blue"),
+        ("Activation nouveaux", _format_percent(kpi_value("taux_activation_nouveaux_clients")), "Nouveaux clients actifs / nouveaux clients", "green"),
+        ("Sans mouvement", _format_count(kpi_value("clients_sans_mouvement")), "Population de référence sans événement", "red"),
+    ]
+    render_kpi_cards(cards)
+
+    tabs_key = "mpesa_clients_inner_tabs"
+    inject_professional_tabs_css(container_key=tabs_key)
+    tabs_container = st.container(key=tabs_key)
+    (
+        overview_tab,
+        activity_tab,
+        acquisition_tab,
+        client_360_tab,
+        dat_tab,
+        segmentation_tab,
+        action_tab,
+    ) = tabs_container.tabs(
+        format_professional_tab_labels(
+            [
+                "Vue d'ensemble",
+                "Activité",
+                "Acquisition et activation",
+                "Produits et Client 360",
+                "DAT sans crédit",
+                "Segmentation",
+                "Listes d'action",
+            ]
+        )
+    )
+
+    with overview_tab:
+        render_panel_title("Indicateurs et qualité des données")
+        _mpesa_dataframe(kpi, width="stretch", hide_index=True)
+        if not data_quality.empty:
+            alerts = data_quality.loc[data_quality["statut"].astype(str).eq("A verifier")]
+            if alerts.empty:
+                st.success("Aucun signal de qualité bloquant pour l'onglet Clients.")
+            else:
+                st.error(f"{len(alerts)} contrôle(s) client nécessitent une vérification.")
+            _mpesa_dataframe(data_quality, width="stretch", hide_index=True)
+
+    with activity_tab:
+        render_panel_title("Activité et inactivité observées")
+        activity_columns = [
+            "client_key",
+            "customer_id",
+            "numero_telephone",
+            "nom_client",
+            "nombre_operations",
+            "nombre_periodes_actives",
+            "date_derniere_operation_observee",
+            "jours_depuis_derniere_operation",
+            "segment_client",
+        ]
+        if not client_360.empty:
+            filtered = _apply_local_multiselect_filters(
+                client_360,
+                ["numero_telephone", "segment_client", "statut_confiance", "methode_rapprochement"],
+                key_prefix="mpesa_clients_activity_filter",
+            )
+            _mpesa_dataframe(filtered[[column for column in activity_columns if column in filtered.columns]], width="stretch", hide_index=True)
+        else:
+            st.info("Aucun client à afficher.")
+
+    with acquisition_tab:
+        render_panel_title("Acquisition et activation")
+        if not acquisition.empty:
+            st.caption("Nouveaux clients et nouveaux clients actifs par période. Le taux d'activation reste un ratio, pas un montant.")
+            st.line_chart(acquisition, x="periode", y=["nouveaux_clients", "nouveaux_clients_actifs"])
+            _mpesa_dataframe(acquisition, width="stretch", hide_index=True)
+        else:
+            st.info("Aucune création client exploitable sur le périmètre.")
+
+    with client_360_tab:
+        render_panel_title("Produits détenus et Client 360")
+        display_columns = [
+            "client_key",
+            "customer_id",
+            "numero_telephone",
+            "nom_client",
+            "date_creation_client",
+            "presence_epargne",
+            "presence_dat",
+            "presence_credit",
+            "presence_transaction",
+            "nombre_comptes_compte_ouvert",
+            "solde_compte_ouvert",
+            "comptes_solde_positif_dat",
+            "solde_dat",
+            "comptes_solde_positif_credit",
+            "solde_credit",
+            "segment_produit",
+            "segment_client",
+            "sources_client",
+        ]
+        if not client_360.empty:
+            filtered = _apply_local_multiselect_filters(
+                client_360,
+                ["numero_telephone", "segment_produit", "segment_client", "statut_confiance"],
+                key_prefix="mpesa_clients_360_filter",
+            )
+            _mpesa_dataframe(filtered[[column for column in display_columns if column in filtered.columns]], width="stretch", hide_index=True)
+        else:
+            st.info("Aucune vue Client 360 disponible.")
+
+    with dat_tab:
+        render_panel_title("Clients DAT sans crédit actif")
+        st.caption(
+            "Cette liste signale un potentiel commercial crédit. Elle ne constitue pas une décision d'éligibilité."
+        )
+        if not dat_without_credit.empty:
+            filtered = _apply_local_multiselect_filters(
+                dat_without_credit,
+                ["numero_telephone", "msisdn1", "msisdn", "currency_code", "product_name", "status"],
+                key_prefix="mpesa_clients_dat_without_credit_filter",
+            )
+            _mpesa_dataframe(filtered, width="stretch", hide_index=True)
+        else:
+            st.success("Aucun DAT positif sans crédit actif détecté avec les sources chargées.")
+
+    with segmentation_tab:
+        render_panel_title("Segmentation objective")
+        left, right = st.columns(2)
+        with left:
+            st.markdown("**Segments comportementaux**")
+            _mpesa_dataframe(segments_clients, width="stretch", hide_index=True)
+        with right:
+            st.markdown("**Segments produits**")
+            _mpesa_dataframe(segments_produits, width="stretch", hide_index=True)
+
+    with action_tab:
+        render_panel_title("Listes d'action")
+        if not isinstance(action_lists, dict) or not action_lists:
+            st.info("Aucune liste d'action disponible.")
+        else:
+            list_names = list(action_lists.keys())
+            selected_lists = st.multiselect(
+                "Listes à afficher",
+                options=list_names,
+                default=list_names[:1],
+                format_func=lambda value: str(value).replace("_", " ").title(),
+                key="mpesa_clients_action_lists",
+                help="Les listes sont produites depuis Client 360. Les montants restent séparés par devise lorsqu'ils existent.",
+            )
+            if not selected_lists:
+                st.info("Sélectionnez au moins une liste d'action.")
+            for selected_list in selected_lists:
+                selected_frame = action_lists.get(selected_list, pd.DataFrame())
+                st.markdown(f"**{str(selected_list).replace('_', ' ').title()}**")
+                if isinstance(selected_frame, pd.DataFrame) and not selected_frame.empty:
+                    selected_frame = _apply_local_multiselect_filters(
+                        selected_frame,
+                        [
+                            "numero_telephone",
+                            "client_key",
+                            "customer_id",
+                            "segment_client",
+                            "segment_produit",
+                            "statut_confiance",
+                            "currency_code",
+                        ],
+                        key_prefix=f"mpesa_clients_action_filter_{selected_list}",
+                    )
+                _mpesa_dataframe(selected_frame, width="stretch", hide_index=True)
+            export_report = {
+                "clients_kpi": kpi,
+                "clients_360": client_360,
+                "clients_acquisition_activation": acquisition,
+                "clients_segments": segments_clients,
+                "clients_segments_produits": segments_produits,
+                "clients_qualite_donnees": data_quality,
+                **{f"clients_{key}": value for key, value in action_lists.items()},
+            }
+            st.download_button(
+                "Télécharger les listes Clients Excel",
+                data=lambda: _create_excel_export_current_sidebar(export_report),
+                file_name=(
+                    f"clients_solution_numerique_{pd.Timestamp(date_start):%Y%m%d}_"
+                    f"{pd.Timestamp(date_end):%Y%m%d}.xlsx"
+                ),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                icon=":material/download:",
+                width="content",
+            )
+
+
+@st.fragment
 def _render_statistics_tab(
     prepared: MpesaPreparedData,
     historical_prepared: MpesaPreparedData | None = None,
@@ -7825,14 +8169,16 @@ def render_solution_mpesa_tab() -> None:
     with sub_tabs[2]:
         _render_finance_turbo_tab(analysis_prepared)
     with sub_tabs[3]:
-        _render_dat_tab(None, analysis_prepared)
+        _render_clients_tab(analysis_prepared)
     with sub_tabs[4]:
-        _render_loans_tab(None, analysis_prepared)
+        _render_dat_tab(None, analysis_prepared)
     with sub_tabs[5]:
-        _render_g2_dat_tab(None, analysis_prepared)
+        _render_loans_tab(None, analysis_prepared)
     with sub_tabs[6]:
-        _render_perfect_client_tab(analysis_prepared)
+        _render_g2_dat_tab(None, analysis_prepared)
     with sub_tabs[7]:
-        _render_statistics_tab(analysis_prepared, historical_prepared=prepared)
+        _render_perfect_client_tab(analysis_prepared)
     with sub_tabs[8]:
+        _render_statistics_tab(analysis_prepared, historical_prepared=prepared)
+    with sub_tabs[9]:
         _render_forecast_tab(analysis_prepared)

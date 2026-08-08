@@ -29,6 +29,7 @@ def test_solution_mpesa_main_tabs_follow_business_refactoring_order() -> None:
         "Importation et contrôle",
         "Extraits clients",
         "Finance et comptabilité",
+        "Clients",
         "Épargnes",
         "Crédits",
         "Solution Numérique / M-Pesa",

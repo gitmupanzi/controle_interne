@@ -16,6 +16,58 @@ from credit_app.colonne_valeur.colonne_nettoyage import (
 USER_COLUMN_NAME_PATTERN = re.compile(r"^[a-z0-9_]+$")
 
 
+MPESA_CLIENT_USER_COLUMN_ALIASES: dict[str, str] = {
+    "client_key": "cle_client",
+    "customer_id": "id_client",
+    "present_customers": "present_dans_referentiel_clients",
+    "date_creation_customers": "date_creation_referentiel_clients",
+    "date_creation_client": "date_creation_client",
+    "date_premiere_observation": "date_premiere_observation",
+    "date_derniere_operation_observee": "date_derniere_operation",
+    "date_derniere_operation_periode": "date_derniere_operation_periode",
+    "date_premiere_operation_periode": "date_premiere_operation_periode",
+    "jours_depuis_derniere_operation": "jours_depuis_derniere_operation",
+    "nombre_operations": "nombre_operations",
+    "nombre_operations_total": "nombre_total_operations",
+    "nombre_periodes_actives": "nombre_periodes_actives",
+    "actif_periode": "actif_sur_periode",
+    "nouveau_client": "nouveau_client",
+    "nouveau_client_actif": "nouveau_client_actif",
+    "sans_mouvement_periode": "sans_mouvement_sur_periode",
+    "historique_insuffisant": "historique_insuffisant",
+    "inactif_observe": "inactif_observe",
+    "presence_epargne": "presence_epargne",
+    "presence_dat": "presence_dat",
+    "presence_credit": "presence_credit",
+    "presence_transaction": "presence_transaction",
+    "multi_produits": "multi_produits",
+    "segment_produit": "segment_produit",
+    "segment_client": "segment_client",
+    "nombre_comptes_compte_ouvert": "nombre_comptes_ouverts",
+    "nombre_comptes_dat": "nombre_dat",
+    "nombre_comptes_credit": "nombre_credits",
+    "comptes_solde_positif_compte_ouvert": "nombre_comptes_ouverts_positifs",
+    "comptes_solde_positif_dat": "nombre_dat_positifs",
+    "comptes_solde_positif_credit": "nombre_credits_actifs",
+    "solde_compte_ouvert": "solde_compte_ouvert",
+    "solde_dat": "solde_dat",
+    "solde_credit": "encours_credit",
+    "sources_client": "sources_client",
+    "source_identite": "source_identite",
+    "methode_rapprochement": "methode_rapprochement",
+    "statut_confiance": "statut_confiance",
+    "clients_referentiel": "clients_referentiel",
+    "clients_connus_solution_numerique": "clients_connus_solution_numerique",
+    "clients_actifs": "clients_actifs",
+    "taux_clients_actifs": "taux_clients_actifs",
+    "nouveaux_clients": "nouveaux_clients",
+    "nouveaux_clients_actifs": "nouveaux_clients_actifs",
+    "taux_activation_nouveaux_clients": "taux_activation_nouveaux_clients",
+    "clients_sans_mouvement": "clients_sans_mouvement",
+    "taux_activation_pct": "taux_activation_pourcentage",
+}
+
+
 def normalize_user_column_name(value: Any) -> str:
     """Return a stable French-style snake_case column name for user-facing tables."""
 
@@ -39,11 +91,18 @@ def normalize_user_column_name(value: Any) -> str:
 
 
 def _build_user_column_lookup() -> dict[str, str]:
-    return {
+    lookup = {
         normalized_source: normalize_user_column_name(target)
         for normalized_source, target in load_excel_column_mapping().items()
         if normalized_source and str(target).strip()
     }
+    lookup.update(
+        {
+            normalize_column_label(source): normalize_user_column_name(target)
+            for source, target in MPESA_CLIENT_USER_COLUMN_ALIASES.items()
+        }
+    )
+    return lookup
 
 
 def resolve_user_column_mapping(columns: list[Any] | pd.Index) -> dict[Any, str]:
