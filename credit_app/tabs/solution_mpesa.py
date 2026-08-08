@@ -551,7 +551,7 @@ def _prepared_data_as_of(
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=24)
+@st.cache_data(show_spinner=False, max_entries=6)
 def _read_excel_bytes(file_bytes: bytes, file_name: str) -> pd.DataFrame:
     if not file_bytes:
         return pd.DataFrame()
@@ -643,7 +643,7 @@ def _mpesa_dataframe(
     return st.dataframe(data, *args, column_config=column_config, **kwargs)
 
 
-@st.cache_data(show_spinner=False, max_entries=8)
+@st.cache_data(show_spinner=False, max_entries=3)
 def _create_excel_export_cached(
     export_report: dict[str, Any],
     print_orientation: str | None = None,
@@ -667,7 +667,7 @@ def _create_excel_export_current_sidebar(
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=12)
+@st.cache_data(show_spinner=False, max_entries=3)
 def _create_g2_dat_word_cached(
     word_report: dict[str, Any],
     period_text: str,
@@ -680,7 +680,7 @@ def _create_g2_dat_word_cached(
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=12)
+@st.cache_data(show_spinner=False, max_entries=3)
 def _create_customer_statement_word_cached(
     statement: pd.DataFrame,
     analysis_report: dict[str, pd.DataFrame],
@@ -709,7 +709,7 @@ def _create_customer_statement_word_cached(
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=12)
+@st.cache_data(show_spinner=False, max_entries=3)
 def _create_customer_statement_pdf_cached(
     statement: pd.DataFrame,
     analysis_report: dict[str, pd.DataFrame],
@@ -738,7 +738,7 @@ def _create_customer_statement_pdf_cached(
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=12)
+@st.cache_data(show_spinner=False, max_entries=3)
 def _create_customer_client_statement_word_cached(
     statement: pd.DataFrame,
     analysis_report: dict[str, pd.DataFrame],
@@ -767,7 +767,7 @@ def _create_customer_client_statement_word_cached(
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=12)
+@st.cache_data(show_spinner=False, max_entries=3)
 def _create_customer_client_statement_pdf_cached(
     statement: pd.DataFrame,
     analysis_report: dict[str, pd.DataFrame],
@@ -796,7 +796,7 @@ def _create_customer_client_statement_pdf_cached(
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=12)
+@st.cache_data(show_spinner=False, max_entries=3)
 def _create_turbo_balance_word_cached(
     report: dict[str, pd.DataFrame],
     period_start: object | None,
@@ -809,7 +809,7 @@ def _create_turbo_balance_word_cached(
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=12)
+@st.cache_data(show_spinner=False, max_entries=3)
 def _create_turbo_balance_pdf_cached(
     report: dict[str, pd.DataFrame],
     period_start: object | None,
@@ -822,7 +822,7 @@ def _create_turbo_balance_pdf_cached(
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=12)
+@st.cache_data(show_spinner=False, max_entries=3)
 def _create_turbo_deposit_withdrawal_pivot_word_cached(
     report: dict[str, pd.DataFrame],
     period_start: object | None,
@@ -838,7 +838,7 @@ def _create_turbo_deposit_withdrawal_pivot_word_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=24,
+    max_entries=4,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_customer_transaction_analysis_cached(
@@ -865,7 +865,7 @@ def _build_customer_transaction_analysis_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=12,
+    max_entries=3,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_statement_cached(
@@ -882,7 +882,7 @@ def _build_mpesa_statement_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=12,
+    max_entries=3,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_g2_daily_savings_report_cached(
@@ -905,7 +905,7 @@ def _build_turbo_operation_events_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=16,
+    max_entries=4,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_weekly_comparison_cached(
@@ -929,7 +929,7 @@ def _build_mpesa_weekly_comparison_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=8,
+    max_entries=2,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_management_dashboard_cached(
@@ -960,7 +960,7 @@ def _build_mpesa_management_dashboard_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=8,
+    max_entries=2,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_statistics_report_cached(
@@ -998,7 +998,7 @@ def _build_mpesa_statistics_report_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=8,
+    max_entries=2,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_clients_report_cached(
@@ -1025,7 +1025,7 @@ def _build_mpesa_clients_report_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=12,
+    max_entries=3,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_forecast_report_cached(
@@ -1049,7 +1049,7 @@ def _build_mpesa_forecast_report_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=16,
+    max_entries=4,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_dat_maturity_analysis_cached(
@@ -1068,7 +1068,7 @@ def _build_mpesa_dat_maturity_analysis_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=8,
+    max_entries=2,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_savings_cockpit_cached(
@@ -1097,7 +1097,7 @@ def _build_mpesa_savings_cockpit_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=12,
+    max_entries=3,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_loan_savings_reconciliation_cached(
@@ -1112,7 +1112,7 @@ def _build_loan_savings_reconciliation_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=8,
+    max_entries=2,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_credit_cockpit_cached(
@@ -1139,7 +1139,7 @@ def _build_mpesa_credit_cockpit_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=12,
+    max_entries=3,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_accounting_analysis_cached(
@@ -8680,26 +8680,32 @@ def render_solution_mpesa_tab() -> None:
     tabs_container_key = "mpesa_solution_tabs"
     inject_professional_tabs_css(container_key=tabs_container_key)
     tabs_container = st.container(key=tabs_container_key)
+    tab_labels = format_professional_tab_labels(MPESA_SOLUTION_TAB_LABELS)
     sub_tabs = tabs_container.tabs(
-        format_professional_tab_labels(MPESA_SOLUTION_TAB_LABELS)
+        tab_labels,
+        default=tab_labels[0],
+        key="mpesa_solution_active_tab",
+        on_change="rerun",
     )
-    with sub_tabs[0]:
-        _render_import_tab(prepared, missing)
-    with sub_tabs[1]:
-        _render_customer_extract(analysis_prepared)
-    with sub_tabs[2]:
-        _render_finance_turbo_tab(analysis_prepared)
-    with sub_tabs[3]:
-        _render_clients_tab(analysis_prepared)
-    with sub_tabs[4]:
-        _render_dat_tab(None, analysis_prepared)
-    with sub_tabs[5]:
-        _render_loans_tab(None, analysis_prepared)
-    with sub_tabs[6]:
-        _render_g2_dat_tab(None, analysis_prepared)
-    with sub_tabs[7]:
-        _render_perfect_client_tab(analysis_prepared)
-    with sub_tabs[8]:
-        _render_statistics_tab(analysis_prepared, historical_prepared=prepared)
-    with sub_tabs[9]:
-        _render_forecast_tab(analysis_prepared)
+    tab_renderers = (
+        lambda: _render_import_tab(prepared, missing),
+        lambda: _render_customer_extract(analysis_prepared),
+        lambda: _render_finance_turbo_tab(analysis_prepared),
+        lambda: _render_clients_tab(analysis_prepared),
+        lambda: _render_dat_tab(None, analysis_prepared),
+        lambda: _render_loans_tab(None, analysis_prepared),
+        lambda: _render_g2_dat_tab(None, analysis_prepared),
+        lambda: _render_perfect_client_tab(analysis_prepared),
+        lambda: _render_statistics_tab(analysis_prepared, historical_prepared=prepared),
+        lambda: _render_forecast_tab(analysis_prepared),
+    )
+    active_tab_rendered = False
+    for sub_tab, render_tab in zip(sub_tabs, tab_renderers):
+        if getattr(sub_tab, "open", None) is True:
+            with sub_tab:
+                render_tab()
+            active_tab_rendered = True
+            break
+    if not active_tab_rendered and sub_tabs:
+        with sub_tabs[0]:
+            _render_import_tab(prepared, missing)

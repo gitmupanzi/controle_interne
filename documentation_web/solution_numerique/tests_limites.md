@@ -28,3 +28,15 @@ Les données individuelles ne doivent pas être publiées dans la documentation 
 - Le plan d'amortissement détaillé peut manquer pour certaines projections crédit.
 - Les colonnes disponibles varient selon le fichier exporté.
 - Les montants CDF et USD restent séparés.
+
+## Performance Streamlit Cloud
+
+La Solution Numérique peut charger des fichiers Excel volumineux. Pour limiter les risques de crash :
+
+- les sources communes sont préparées une fois après téléversement ;
+- les sous-onglets principaux utilisent une navigation dynamique : seul le sous-onglet ouvert rend son contenu ;
+- les rapports lourds sont conservés dans des caches bornés ;
+- les exports Word/PDF/Excel sont générés à la demande et gardent peu d'entrées en cache ;
+- les analyses récurrentes doivent réutiliser le journal d'événements consolidé plutôt que recalculer les transactions dans chaque onglet.
+
+Cette règle ne change pas les calculs métier : elle limite seulement les calculs cachés et la mémoire conservée.

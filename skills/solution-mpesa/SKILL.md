@@ -142,7 +142,7 @@ La Solution Numérique constitue la source opérationnelle principale de la Solu
 - Rapprocher globalement les décaissements Turbo des comptes de crédit créés dans la période, par devise. Présenter l'écart comme un contrôle global et non comme une affectation ligne à ligne.
 - Adapter les contrôles Perfect Vision prioritaires réellement démontrables : remboursements, évolution dépôts/crédits, nouveaux crédits, concentration crédit/transactions, PAR par tranche, dépôts fréquents, tranches de dépôts, comptes inactifs, DAT sans crédit actif et crédit avec épargne disponible. Signaler les analyses non reproductibles faute de plan d'amortissement, provision, garantie ou plan comptable complet.
 - Conserver G2 hors de tous ces calculs. Il peut enrichir un nom et prouver un rapprochement ailleurs dans la solution, mais ne modifie aucun montant, solde, DAT, encours, remboursement, seuil ou alerte du cockpit.
-- Calculer toutes les analyses du cockpit une fois au premier chargement et les conserver en cache. Mettre en cache séparément le journal d'événements Turbo et le rapprochement crédit-épargne; une modification de période doit réutiliser la consolidation initiale. Ne jamais basculer vers un calcul limité au seul onglet interne sélectionné.
+- Préparer les sources communes une seule fois après téléversement, puis calculer les analyses lourdes uniquement lorsque le sous-onglet ou le volet concerné est ouvert. Conserver les résultats déterministes en cache borné afin d'éviter les recalculs inutiles sans saturer la mémoire Streamlit Cloud. Mettre en cache séparément le journal d'événements Turbo et le rapprochement crédit-épargne; une modification de période doit réutiliser la consolidation initiale lorsque c'est possible.
 - Traiter les alertes comme des signaux de revue et non comme des preuves de fraude ou d'erreur.
 - Produire l'échéancier DAT par tranche et devise.
 - Dans le sous-onglet DAT, lister en priorité les comptes à solde positif déjà échus et ceux arrivant à terme dans un horizon réglable, fixé à 30 jours par défaut. Conserver `savings_id`, client, téléphone, produit, statut, approbation, échéance, jours restants, capital, intérêt estimé et capital plus intérêt.
@@ -174,11 +174,11 @@ La Solution Numérique constitue la source opérationnelle principale de la Solu
 ## Architecture Streamlit des sous-onglets
 
 - Pour toute période utilisateur, afficher deux `st.date_input` distincts intitulés exactement `Date de début` et `Date de fin`, au format `DD/MM/YYYY`. Ne jamais utiliser un `st.date_input` initialisé avec un tuple ou une liste comme sélecteur de plage. Employer deux clés stables distinctes, valider `date_debut <= date_fin` et appliquer des bornes inclusives.
-- Construire tous les sous-onglets avec `st.tabs` au premier chargement de Solution M-PESA afin qu'ils soient immédiatement disponibles après l'importation.
+- Construire la navigation principale avec `st.tabs(..., on_change="rerun")` et rendre uniquement le sous-onglet ouvert. Les libellés restent immédiatement disponibles, mais les contenus lourds cachés ne doivent pas se calculer en arrière-plan.
 - Organiser les sous-onglets principaux dans cet ordre : `Importation et contrôle`, `Extraits clients`, `Finance et comptabilité`, `Épargnes`, `Crédits`, `Solution Numérique / M-Pesa`, `Perfect Client`, `Statistiques`, `Projections`.
 - Fusionner `Controle des donnees` dans `Importation et contrôle` : l'onglet d'importation affiche les fichiers charges, les colonnes attendues/manquantes, la composition Savings Account, les controles de donnees et les anomalies Transactions [Turbo].
 - Réunir le pilotage financier et la comptabilité observée dans un seul sous-onglet principal `Finance et comptabilité`. Utiliser une période et une sélection de devises communes, puis six volets internes : `Vue direction`, `Flux et activité`, `Crédit, épargne et DAT`, `Balances et journaux`, `Risques et contrôles` et `Export`.
-- Construire le rapport de pilotage et le rapport comptable avant les six volets, puis réutiliser leurs résultats mis en cache. Ne jamais réintroduire deux périodes concurrentes ni un calcul conditionné par le volet sélectionné.
+- Dans `Finance et comptabilité`, éviter de reconstruire plusieurs fois les mêmes agrégats : réutiliser le journal d'événements et les rapports mis en cache, et reporter les calculs non visibles lorsque cela évite un pic mémoire. Ne jamais réintroduire deux périodes concurrentes.
 - Conserver deux contrats d'export séparés dans le volet `Export` : le classeur ciblé de pilotage et le classeur comptable à douze feuilles.
 - Isoler chaque fonction de rendu avec `st.fragment`. Après le chargement initial, une interaction locale doit recalculer uniquement le sous-onglet concerné.
 - Garder les téléversements et la préparation partagée en dehors des fragments : toute modification des fichiers sources déclenche volontairement une reconstruction complète des sous-onglets.
@@ -248,7 +248,7 @@ La Solution Numérique constitue la source opérationnelle principale de la Solu
 - Encapsuler chaque barre `st.tabs` dans un `st.container(key=...)` doté d'une clé CSS unique. Ne jamais créer directement un sous-sous-onglet avec `st.tabs` hors d'un conteneur ciblé.
 - Appeler `inject_professional_tabs_css(container_key=...)`, puis `format_professional_tab_labels(...)`, afin de réutiliser la norme commune de `credit_app/ui.py`. Ne pas dupliquer ce CSS dans `solution_mpesa.py`.
 - Choisir des clés stables et propres au contexte, par exemple `mpesa_solution_tabs`, `mpesa_finance_turbo_inner_tabs`, `mpesa_perfect_client_cohort_tabs` et `mpesa_g2_temporal_detail_tabs`, afin d'éviter les collisions et les débordements de style entre niveaux.
-- Préserver le mode de calcul défini dans la section précédente : l'habillage visuel ne doit jamais transformer les onglets en calcul conditionnel limité au seul onglet sélectionné.
+- Préserver le mode de calcul défini dans la section précédente : l'habillage visuel doit rester indépendant de la logique métier, mais la performance prime sur Streamlit Cloud. Les onglets peuvent être rendus conditionnellement si les sources communes, les règles métier et les caches garantissent les mêmes résultats à l'ouverture du volet.
 
 ## Exports
 
