@@ -11916,6 +11916,594 @@ def build_mpesa_turbo_financial_analysis(
     }
 
 
+MPESA_CREDIT_DATA_GAPS: tuple[dict[str, str], ...] = (
+    {
+        "kpi": "par_reglementaire_detaille",
+        "definition": "PAR issu d'un plan d'amortissement detaille par echeance.",
+        "formule": "Encours en retard / encours total selon les echeances exigibles detaillees.",
+        "source": "Plan d'amortissement detaille non disponible dans Loans Account.",
+        "grain": "pret x echeance",
+        "devise": "oui",
+        "type_mesure": "risque",
+        "statut": "data_gap",
+        "limite": "Loans Account fournit une due_date globale, pas les echeances detaillees.",
+    },
+    {
+        "kpi": "provision_reglementaire",
+        "definition": "Provision calculee selon les regles internes ou reglementaires.",
+        "formule": "Non calculable sans regles de provision et age exact des impayes.",
+        "source": "Regles et source provision non disponibles.",
+        "grain": "pret",
+        "devise": "oui",
+        "type_mesure": "risque",
+        "statut": "data_gap",
+        "limite": "Ne pas inventer de taux de provision.",
+    },
+    {
+        "kpi": "garantie_caution",
+        "definition": "Couverture du credit par garantie, caution ou surete.",
+        "formule": "Valeur garantie / encours credit.",
+        "source": "Contrats ou module garanties non disponibles.",
+        "grain": "pret",
+        "devise": "oui",
+        "type_mesure": "couverture",
+        "statut": "data_gap",
+        "limite": "L'epargne observee ne doit pas etre appelee garantie sans preuve contractuelle.",
+    },
+    {
+        "kpi": "collection_efficiency",
+        "definition": "Efficacite de recouvrement des montants exigibles.",
+        "formule": "Montant collecte / montant exigible sur la periode.",
+        "source": "Montant exigible detaille absent.",
+        "grain": "periode x devise",
+        "devise": "oui",
+        "type_mesure": "recouvrement",
+        "statut": "data_gap",
+        "limite": "Les remboursements observes ne suffisent pas a calculer l'exigible.",
+    },
+    {
+        "kpi": "write_off",
+        "definition": "Credits radies.",
+        "formule": "Montant radie par periode.",
+        "source": "Source de radiation non disponible.",
+        "grain": "pret",
+        "devise": "oui",
+        "type_mesure": "perte",
+        "statut": "data_gap",
+        "limite": "Aucun champ fiable de radiation n'est charge.",
+    },
+    {
+        "kpi": "restructuration",
+        "definition": "Credits restructures ou reamenages.",
+        "formule": "Nombre et encours des prets restructures.",
+        "source": "Source restructuration non disponible.",
+        "grain": "pret",
+        "devise": "oui",
+        "type_mesure": "risque",
+        "statut": "data_gap",
+        "limite": "is_rollover ne suffit pas a qualifier une restructuration reglementaire.",
+    },
+    {
+        "kpi": "cout_du_risque",
+        "definition": "Cout du risque credit sur une periode.",
+        "formule": "Dotations nettes / encours moyen.",
+        "source": "Provisions, reprises et encours moyen historique non disponibles.",
+        "grain": "periode x devise",
+        "devise": "oui",
+        "type_mesure": "rentabilite_risque",
+        "statut": "data_gap",
+        "limite": "Ne pas calculer depuis un seul instantane Loans Account.",
+    },
+    {
+        "kpi": "rendement_sur_encours_moyen",
+        "definition": "Rendement historique du portefeuille credit.",
+        "formule": "Produits financiers / encours moyen.",
+        "source": "Historique d'encours moyen non disponible.",
+        "grain": "periode x devise",
+        "devise": "oui",
+        "type_mesure": "rentabilite",
+        "statut": "data_gap",
+        "limite": "Un seul instantane ne permet pas une moyenne historique fiable.",
+    },
+)
+
+
+def _mpesa_credit_empty_cockpit() -> dict[str, Any]:
+    return {
+        "periode": pd.DataFrame(),
+        "vue_ensemble": pd.DataFrame(),
+        "portefeuille_synthese": pd.DataFrame(),
+        "portefeuille_detail": pd.DataFrame(),
+        "statuts_portefeuille": pd.DataFrame(),
+        "production_synthese": pd.DataFrame(),
+        "production_detail": pd.DataFrame(),
+        "remboursements_synthese": pd.DataFrame(),
+        "remboursements_detail": pd.DataFrame(),
+        "risque_synthese": pd.DataFrame(),
+        "risque_detail": pd.DataFrame(),
+        "echeances_synthese": pd.DataFrame(),
+        "echeances_detail": pd.DataFrame(),
+        "concentration_prets": pd.DataFrame(),
+        "concentration_clients": pd.DataFrame(),
+        "concentration_synthese": pd.DataFrame(),
+        "concentration_produits": pd.DataFrame(),
+        "concentration_tranches": pd.DataFrame(),
+        "credit_epargne_clients": pd.DataFrame(),
+        "credit_epargne_synthese": pd.DataFrame(),
+        "credit_epargne_controles": pd.DataFrame(),
+        "cohortes_a_date": pd.DataFrame(),
+        "listes_action": {},
+        "qualite_donnees": pd.DataFrame(),
+        "catalogue_kpi": pd.DataFrame(MPESA_CREDIT_DATA_GAPS),
+    }
+
+
+def _mpesa_credit_bool(series: pd.Series | Any, index: pd.Index) -> pd.Series:
+    if not isinstance(series, pd.Series):
+        series = pd.Series(series, index=index)
+    numeric = pd.to_numeric(series, errors="coerce")
+    normalized = clean_text(series).str.lower()
+    return numeric.eq(1) | normalized.isin({"1", "1.0", "true", "vrai", "yes", "oui", "y"})
+
+
+def _mpesa_credit_maturity_bucket(days_to_due: Any) -> str:
+    if pd.isna(days_to_due):
+        return "Echeance non renseignee"
+    try:
+        days = int(days_to_due)
+    except (TypeError, ValueError):
+        return "Echeance non renseignee"
+    if days < 0:
+        return "Echu"
+    if days == 0:
+        return "Aujourd'hui"
+    if days <= 7:
+        return "0-7 jours"
+    if days <= 30:
+        return "8-30 jours"
+    if days <= 60:
+        return "31-60 jours"
+    if days <= 90:
+        return "61-90 jours"
+    return "> 90 jours"
+
+
+def _mpesa_credit_prepare_portfolio_detail(
+    loans: pd.DataFrame | None,
+    *,
+    as_of_date: Any,
+) -> pd.DataFrame:
+    columns = [
+        "loan_id", "customer_id", "Nom_client", "customer", "msisdn1",
+        "currency_code", "loan_product_id", "savings_account_id",
+        "repayment_installments", "repayment_period", "repayment_period_unit",
+        "loan_amount", "loan_balance", "amount_paid", "outstanding_principle",
+        "outstanding_setup_fees", "outstanding_interest",
+        "outstanding_penalty_fees", "interest_earned", "status_name",
+        "defaulted", "is_rollover", "is_grace_period", "due_date",
+        "last_repayment_date", "created_at", "updated_at",
+        "encours_credit", "pret_actif", "jours_retard", "jours_avant_echeance",
+        "tranche_echeance", "par_simplifie_1j", "par_simplifie_7j",
+        "par_simplifie_30j", "tranche_encours",
+    ]
+    if not isinstance(loans, pd.DataFrame) or loans.empty or "loan_id" not in loans.columns:
+        return pd.DataFrame(columns=columns)
+
+    analysis_date = pd.Timestamp(pd.to_datetime(as_of_date, errors="coerce")).normalize()
+    frame = loans.copy()
+    frame["loan_id"] = clean_identifier(frame.get("loan_id", pd.Series("", index=frame.index)))
+    frame["customer_id"] = clean_identifier(frame.get("customer_id", pd.Series("", index=frame.index)))
+    frame["currency_code"] = clean_text(
+        frame.get("currency_code", pd.Series("", index=frame.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    for column in ["Nom_client", "customer", "msisdn1", "loan_product_id", "savings_account_id", "status_name"]:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+    for column in ["created_at", "updated_at", "due_date", "last_repayment_date"]:
+        frame[column] = pd.to_datetime(frame.get(column, pd.Series(pd.NaT, index=frame.index)), errors="coerce")
+    sort_columns = [column for column in ["updated_at", "created_at"] if column in frame.columns]
+    if sort_columns:
+        frame = frame.sort_values(sort_columns, ascending=False, na_position="last")
+    frame = frame.loc[frame["loan_id"].ne("")].drop_duplicates("loan_id", keep="first").copy()
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    numeric_columns = [
+        "loan_amount", "loan_balance", "amount_paid", "outstanding_principle",
+        "outstanding_setup_fees", "outstanding_interest",
+        "outstanding_penalty_fees", "interest_earned",
+        "repayment_installments", "repayment_period",
+    ]
+    source_presence = {column: column in loans.columns for column in numeric_columns}
+    for column in numeric_columns:
+        frame[column] = numeric_column(frame, column).clip(lower=0)
+    computed_outstanding = (
+        frame["outstanding_principle"]
+        + frame["outstanding_setup_fees"]
+        + frame["outstanding_interest"]
+        + frame["outstanding_penalty_fees"]
+    )
+    frame["encours_credit"] = frame["loan_balance"] if source_presence["loan_balance"] else computed_outstanding
+    frame["pret_actif"] = frame["encours_credit"].gt(0)
+    frame["defaulted"] = _mpesa_credit_bool(frame.get("defaulted", pd.Series(False, index=frame.index)), frame.index)
+    frame["is_rollover"] = _mpesa_credit_bool(frame.get("is_rollover", pd.Series(False, index=frame.index)), frame.index)
+    frame["is_grace_period"] = _mpesa_credit_bool(frame.get("is_grace_period", pd.Series(False, index=frame.index)), frame.index)
+    frame["jours_retard"] = (
+        analysis_date - frame["due_date"].dt.normalize()
+    ).dt.days.where(frame["due_date"].notna() & frame["pret_actif"], 0).fillna(0).clip(lower=0).astype(int)
+    frame["jours_avant_echeance"] = (
+        frame["due_date"].dt.normalize() - analysis_date
+    ).dt.days.where(frame["due_date"].notna(), pd.NA)
+    frame["tranche_echeance"] = frame["jours_avant_echeance"].map(_mpesa_credit_maturity_bucket)
+    frame["par_simplifie_1j"] = frame["pret_actif"] & frame["jours_retard"].ge(1)
+    frame["par_simplifie_7j"] = frame["pret_actif"] & frame["jours_retard"].ge(7)
+    frame["par_simplifie_30j"] = frame["pret_actif"] & frame["jours_retard"].ge(30)
+    frame["tranche_encours"] = [
+        _turbo_amount_band(currency, amount)
+        for currency, amount in zip(frame["currency_code"], frame["encours_credit"], strict=False)
+    ]
+    return frame[[column for column in columns if column in frame.columns]].reset_index(drop=True)
+
+
+def build_mpesa_credit_cockpit(
+    prepared: MpesaPreparedData,
+    *,
+    date_start: Any | None = None,
+    date_end: Any | None = None,
+    frequency: str = "Mois",
+    high_exposure_top_n: int = 20,
+    dat_annual_interest_rate_pct: float | None = DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+    turbo_events: pd.DataFrame | None = None,
+    turbo_transaction_lines: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    """Assemble le cockpit Credits depuis Loans Account et les flux Turbo.
+
+    Loans Account est traite comme un instantane de position. Transactions
+    fournit les flux observes sur la periode. G2 ne calcule aucun montant.
+    """
+    transactions = prepared.transactions if isinstance(prepared.transactions, pd.DataFrame) else pd.DataFrame()
+    transaction_dates = (
+        pd.to_datetime(transactions["created_at"], errors="coerce").dropna()
+        if not transactions.empty and "created_at" in transactions.columns
+        else pd.Series(dtype="datetime64[ns]")
+    )
+    fallback_end = _mpesa_analysis_date(prepared, date_end)
+    end_date = pd.Timestamp(fallback_end).normalize()
+    if date_start is not None and pd.notna(pd.to_datetime(date_start, errors="coerce")):
+        start_date = pd.Timestamp(pd.to_datetime(date_start, errors="coerce")).normalize()
+    elif not transaction_dates.empty:
+        start_date = pd.Timestamp(transaction_dates.min()).normalize()
+    else:
+        start_date = end_date
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    result = _mpesa_credit_empty_cockpit()
+    result["periode"] = pd.DataFrame(
+        [{"date_debut": start_date, "date_fin": end_date, "frequence": frequency}]
+    )
+
+    finance = build_mpesa_turbo_financial_analysis(
+        prepared,
+        date_start=start_date,
+        date_end=end_date,
+        frequency=frequency,
+        dat_annual_interest_rate_pct=dat_annual_interest_rate_pct,
+        turbo_events=turbo_events,
+        turbo_transaction_lines=turbo_transaction_lines,
+    )
+    risk = build_mpesa_credit_risk_analysis(prepared.loans, as_of_date=end_date)
+    reconciliation = build_loan_savings_reconciliation(
+        prepared.loans,
+        prepared.current_savings,
+        prepared.fixed_savings,
+    )
+    detail = _mpesa_credit_prepare_portfolio_detail(prepared.loans, as_of_date=end_date)
+    result["portefeuille_detail"] = detail
+    result["risque_detail"] = risk.get("detail", pd.DataFrame())
+    result["risque_synthese"] = risk.get("synthese", pd.DataFrame())
+    result["production_synthese"] = finance.get("nouveaux_credits_synthese", pd.DataFrame())
+    result["production_detail"] = finance.get("nouveaux_credits_detail", pd.DataFrame())
+    result["remboursements_synthese"] = finance.get("remboursements_synthese", pd.DataFrame())
+    result["remboursements_detail"] = finance.get("remboursements_detail", pd.DataFrame())
+    result["concentration_clients"] = finance.get("concentration_credit_clients", pd.DataFrame())
+    result["concentration_synthese"] = finance.get("concentration_credit_synthese", pd.DataFrame())
+    result["credit_epargne_clients"] = reconciliation.get("clients", pd.DataFrame())
+    result["credit_epargne_synthese"] = reconciliation.get("synthese", pd.DataFrame())
+    result["credit_epargne_controles"] = reconciliation.get("controles", pd.DataFrame())
+
+    if detail.empty:
+        quality_rows = [
+            {
+                "controle": "Loans Account",
+                "valeur": 0,
+                "statut": "A verifier",
+                "detail": "Aucun fichier Loans Account exploitable pour construire le cockpit credits.",
+            }
+        ]
+        result["qualite_donnees"] = pd.DataFrame(quality_rows)
+        return result
+
+    active = detail.loc[detail["pret_actif"]].copy()
+    grouped = (
+        detail.groupby("currency_code", as_index=False, dropna=False)
+        .agg(
+            nombre_prets=("loan_id", "nunique"),
+            nombre_prets_actifs=("pret_actif", "sum"),
+            nombre_emprunteurs_actifs=("customer_id", lambda values: clean_identifier(values.loc[active.index.intersection(values.index)]).replace("", pd.NA).nunique()),
+            montant_credit_initial=("loan_amount", "sum"),
+            encours_credit=("encours_credit", "sum"),
+            montant_deja_rembourse=("amount_paid", "sum"),
+            capital_restant_du=("outstanding_principle", "sum"),
+            frais_dossier_restants=("outstanding_setup_fees", "sum"),
+            interets_restants=("outstanding_interest", "sum"),
+            penalites_restantes=("outstanding_penalty_fees", "sum"),
+            interets_gagnes=("interest_earned", "sum"),
+            prets_defaulted=("defaulted", "sum"),
+            prets_rollover=("is_rollover", "sum"),
+            prets_grace_period=("is_grace_period", "sum"),
+            prets_avec_penalite=("outstanding_penalty_fees", lambda values: int(pd.to_numeric(values, errors="coerce").fillna(0).gt(0).sum())),
+            prets_sans_dernier_remboursement=("last_repayment_date", lambda values: int(pd.to_datetime(values, errors="coerce").isna().sum())),
+            prets_par_simplifie_30j=("par_simplifie_30j", "sum"),
+        )
+    )
+    active_counts = (
+        active.groupby("currency_code", as_index=False, dropna=False)
+        .agg(
+            encours_actif=("encours_credit", "sum"),
+            emprunteurs_actifs=("customer_id", lambda values: clean_identifier(values).replace("", pd.NA).nunique()),
+            prets_actifs=("loan_id", "nunique"),
+        )
+        if not active.empty
+        else pd.DataFrame(columns=["currency_code", "encours_actif", "emprunteurs_actifs", "prets_actifs"])
+    )
+    grouped = grouped.merge(active_counts, on="currency_code", how="left")
+    grouped["encours_moyen_par_pret"] = grouped["encours_actif"].div(grouped["prets_actifs"].replace(0, pd.NA))
+    grouped["encours_moyen_par_emprunteur"] = grouped["encours_actif"].div(grouped["emprunteurs_actifs"].replace(0, pd.NA))
+    grouped = grouped.drop(columns=["encours_actif", "emprunteurs_actifs", "prets_actifs"], errors="ignore")
+    result["portefeuille_synthese"] = grouped.fillna({"encours_moyen_par_pret": 0, "encours_moyen_par_emprunteur": 0})
+
+    status_frames: list[pd.DataFrame] = []
+    for status_column in ["status_name", "defaulted", "is_rollover", "is_grace_period"]:
+        tmp = (
+            detail.groupby(["currency_code", status_column], as_index=False, dropna=False)
+            .agg(nombre_prets=("loan_id", "nunique"), encours_credit=("encours_credit", "sum"))
+            .rename(columns={status_column: "valeur_statut"})
+        )
+        tmp["famille_statut"] = status_column
+        tmp["valeur_statut"] = clean_text(tmp["valeur_statut"]).replace("", "Non renseigne")
+        status_frames.append(tmp)
+    result["statuts_portefeuille"] = concat_frames_stable(status_frames)[
+        ["famille_statut", "valeur_statut", "currency_code", "nombre_prets", "encours_credit"]
+    ]
+
+    maturity_order = [
+        "Echu", "Aujourd'hui", "0-7 jours", "8-30 jours",
+        "31-60 jours", "61-90 jours", "> 90 jours", "Echeance non renseignee",
+    ]
+    maturity = (
+        detail.groupby(["currency_code", "tranche_echeance"], as_index=False, dropna=False)
+        .agg(
+            nombre_prets=("loan_id", "nunique"),
+            nombre_clients=("customer_id", lambda values: clean_identifier(values).replace("", pd.NA).nunique()),
+            encours_credit=("encours_credit", "sum"),
+            montant_credit_initial=("loan_amount", "sum"),
+        )
+    )
+    maturity["ordre"] = maturity["tranche_echeance"].map({label: i for i, label in enumerate(maturity_order)}).fillna(99).astype(int)
+    result["echeances_synthese"] = maturity.sort_values(["currency_code", "ordre"]).drop(columns=["ordre"]).reset_index(drop=True)
+    result["echeances_detail"] = detail.sort_values(["currency_code", "due_date", "encours_credit"], ascending=[True, True, False]).reset_index(drop=True)
+
+    result["concentration_prets"] = (
+        detail.loc[detail["encours_credit"].gt(0)]
+        .sort_values(["currency_code", "encours_credit"], ascending=[True, False])
+        .groupby("currency_code", as_index=False, group_keys=False)
+        .head(int(high_exposure_top_n))
+        .reset_index(drop=True)
+    )
+    result["concentration_produits"] = (
+        detail.groupby(["currency_code", "loan_product_id"], as_index=False, dropna=False)
+        .agg(nombre_prets=("loan_id", "nunique"), encours_credit=("encours_credit", "sum"), montant_credit_initial=("loan_amount", "sum"))
+        .sort_values(["currency_code", "encours_credit"], ascending=[True, False])
+        .reset_index(drop=True)
+    )
+    result["concentration_tranches"] = (
+        detail.groupby(["currency_code", "tranche_encours"], as_index=False, dropna=False)
+        .agg(nombre_prets=("loan_id", "nunique"), encours_credit=("encours_credit", "sum"), montant_credit_initial=("loan_amount", "sum"))
+        .sort_values(["currency_code", "encours_credit"], ascending=[True, False])
+        .reset_index(drop=True)
+    )
+
+    cohort_frame = detail.copy()
+    cohort_frame["cohorte_creation"] = cohort_frame["created_at"].dt.to_period("M").astype("string").replace("<NA>", "Non renseignee")
+    cohort = (
+        cohort_frame.groupby(["currency_code", "cohorte_creation"], as_index=False, dropna=False)
+        .agg(
+            nombre_prets=("loan_id", "nunique"),
+            montant_initial=("loan_amount", "sum"),
+            encours_actuel=("encours_credit", "sum"),
+            prets_defaulted=("defaulted", "sum"),
+            prets_par_simplifie_30j=("par_simplifie_30j", "sum"),
+        )
+    )
+    cohort["taux_prets_defaulted_pct"] = cohort["prets_defaulted"].div(cohort["nombre_prets"].replace(0, pd.NA)).mul(100)
+    cohort["taux_prets_par_simplifie_30j_pct"] = cohort["prets_par_simplifie_30j"].div(cohort["nombre_prets"].replace(0, pd.NA)).mul(100)
+    result["cohortes_a_date"] = cohort.sort_values(["currency_code", "cohorte_creation"]).reset_index(drop=True)
+
+    overview_rows: list[dict[str, Any]] = []
+    currencies = sorted(
+        set(grouped.get("currency_code", pd.Series(dtype=str)).astype(str))
+        | set(result["production_synthese"].get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
+        | set(result["remboursements_synthese"].get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
+    )
+    production = result["production_synthese"]
+    repayments = result["remboursements_synthese"]
+    risk_summary = result["risque_synthese"]
+    for currency in currencies:
+        portfolio_row = grouped.loc[grouped["currency_code"].eq(currency)].head(1)
+        production_row = production.loc[production["currency_code"].eq(currency)].head(1) if "currency_code" in production.columns else pd.DataFrame()
+        repayment_row = repayments.loc[repayments["currency_code"].eq(currency)].head(1) if "currency_code" in repayments.columns else pd.DataFrame()
+        risk_row = risk_summary.loc[risk_summary["currency_code"].eq(currency)].head(1) if "currency_code" in risk_summary.columns else pd.DataFrame()
+        overview_rows.extend(
+            [
+                {
+                    "bloc": "Portefeuille actuel",
+                    "indicateur": "prets_actifs",
+                    "currency_code": currency,
+                    "valeur": float(portfolio_row.iloc[0].get("nombre_prets_actifs", 0)) if not portfolio_row.empty else 0.0,
+                    "unite": "nombre",
+                },
+                {
+                    "bloc": "Portefeuille actuel",
+                    "indicateur": "emprunteurs_actifs",
+                    "currency_code": currency,
+                    "valeur": float(portfolio_row.iloc[0].get("nombre_emprunteurs_actifs", 0)) if not portfolio_row.empty else 0.0,
+                    "unite": "nombre",
+                },
+                {
+                    "bloc": "Portefeuille actuel",
+                    "indicateur": "encours_credit",
+                    "currency_code": currency,
+                    "valeur": float(portfolio_row.iloc[0].get("encours_credit", 0)) if not portfolio_row.empty else 0.0,
+                    "unite": "montant",
+                },
+                {
+                    "bloc": "Production",
+                    "indicateur": "nouveaux_credits",
+                    "currency_code": currency,
+                    "valeur": float(production_row.iloc[0].get("nombre_decaissements", production_row.iloc[0].get("nombre_credits", 0))) if not production_row.empty else 0.0,
+                    "unite": "nombre",
+                },
+                {
+                    "bloc": "Production",
+                    "indicateur": "montant_decaisse",
+                    "currency_code": currency,
+                    "valeur": float(production_row.iloc[0].get("montant_decaisse_turbo", production_row.iloc[0].get("montant_decaisse_client", 0))) if not production_row.empty else 0.0,
+                    "unite": "montant",
+                },
+                {
+                    "bloc": "Remboursements",
+                    "indicateur": "remboursements_observes",
+                    "currency_code": currency,
+                    "valeur": float(repayment_row.iloc[0].get("nombre_remboursements", 0)) if not repayment_row.empty else 0.0,
+                    "unite": "nombre",
+                },
+                {
+                    "bloc": "Remboursements",
+                    "indicateur": "montant_rembourse_observe",
+                    "currency_code": currency,
+                    "valeur": float(repayment_row.iloc[0].get("montant_rembourse", repayment_row.iloc[0].get("remboursement_mpesa", 0))) if not repayment_row.empty else 0.0,
+                    "unite": "montant",
+                },
+                {
+                    "bloc": "Risque simplifie",
+                    "indicateur": "par_simplifie_30j_pct",
+                    "currency_code": currency,
+                    "valeur": float(risk_row.iloc[0].get("par_30j_pct", np.nan)) if not risk_row.empty else np.nan,
+                    "unite": "pourcentage",
+                },
+                {
+                    "bloc": "Risque simplifie",
+                    "indicateur": "prets_defaulted",
+                    "currency_code": currency,
+                    "valeur": float(portfolio_row.iloc[0].get("prets_defaulted", 0)) if not portfolio_row.empty else 0.0,
+                    "unite": "nombre",
+                },
+            ]
+        )
+    result["vue_ensemble"] = pd.DataFrame(overview_rows)
+
+    top_n = int(max(1, high_exposure_top_n))
+    due_next_30 = detail.loc[
+        detail["pret_actif"]
+        & detail["jours_avant_echeance"].ge(0)
+        & detail["jours_avant_echeance"].le(30)
+    ].copy()
+    action_lists = {
+        "prets_echus_avec_encours": detail.loc[detail["pret_actif"] & detail["jours_retard"].gt(0)].copy(),
+        "prets_defaulted": detail.loc[detail["defaulted"]].copy(),
+        "prets_avec_penalites": detail.loc[pd.to_numeric(detail["outstanding_penalty_fees"], errors="coerce").fillna(0).gt(0)].copy(),
+        "prets_par_simplifie_30j": detail.loc[detail["par_simplifie_30j"]].copy(),
+        "fortes_expositions": result["concentration_prets"].copy(),
+        "prets_echeance_30j": due_next_30.sort_values(["currency_code", "due_date"]).groupby("currency_code", as_index=False, group_keys=False).head(top_n).reset_index(drop=True),
+        "rapprochement_epargne_ambigu": result["credit_epargne_controles"].copy(),
+    }
+    result["listes_action"] = action_lists
+
+    quality_rows = [
+        {
+            "controle": "Plan amortissement detaille",
+            "valeur": 0,
+            "statut": "Information",
+            "detail": "Absent : seuls les indicateurs simplifiés depuis due_date sont disponibles.",
+        },
+        {
+            "controle": "Loans Account charges",
+            "valeur": int(len(detail)),
+            "statut": "OK",
+            "detail": "Instantane de position credit apres deduplication par loan_id.",
+        },
+        {
+            "controle": "Prets sans due_date",
+            "valeur": int(detail["due_date"].isna().sum()),
+            "statut": "A verifier" if int(detail["due_date"].isna().sum()) else "OK",
+            "detail": "Le PAR simplifie exige due_date.",
+        },
+        {
+            "controle": "Prets sans dernier remboursement",
+            "valeur": int(detail["last_repayment_date"].isna().sum()),
+            "statut": "Information",
+            "detail": "Peut etre normal pour un pret nouveau; a analyser avec la date de creation.",
+        },
+        {
+            "controle": "Rapprochement epargne a revoir",
+            "valeur": int(len(result["credit_epargne_controles"])),
+            "statut": "A verifier" if len(result["credit_epargne_controles"]) else "OK",
+            "detail": "Absence ou ambiguite du compte courant rapproche avec Loans Account.",
+        },
+    ]
+    result["qualite_donnees"] = pd.DataFrame(quality_rows)
+    implemented_catalogue = pd.DataFrame(
+        [
+            {
+                "kpi": "par_simplifie_1j_7j_30j",
+                "definition": "Encours dont due_date est depassee selon le seuil.",
+                "formule": "encours en retard n jours / encours total",
+                "source": "Loans Account",
+                "grain": "pret x devise",
+                "devise": "oui",
+                "type_mesure": "risque",
+                "statut": "implemente",
+                "limite": "Indicateur simplifie, pas PAR reglementaire detaille.",
+            },
+            {
+                "kpi": "production_credit",
+                "definition": "Decaissements observes sur la periode.",
+                "formule": "evenements Turbo consolides de decaissement",
+                "source": "Transactions",
+                "grain": "evenement x devise",
+                "devise": "oui",
+                "type_mesure": "flux",
+                "statut": "implemente",
+                "limite": "Flux observe, pas encours historique.",
+            },
+            {
+                "kpi": "remboursements_observes",
+                "definition": "Remboursements detectes dans Transactions sur la periode.",
+                "formule": "evenements Turbo consolides de remboursement",
+                "source": "Transactions",
+                "grain": "evenement x devise",
+                "devise": "oui",
+                "type_mesure": "flux",
+                "statut": "implemente",
+                "limite": "Ne fournit pas le montant exigible.",
+            },
+        ]
+    )
+    result["catalogue_kpi"] = concat_frames_stable([implemented_catalogue, pd.DataFrame(MPESA_CREDIT_DATA_GAPS)])
+    return result
+
+
 def _build_customer_observed_positions(
     prepared: MpesaPreparedData,
     transaction_lines: pd.DataFrame,
@@ -19186,6 +19774,36 @@ def create_excel_export(
         ("loan_savings_clients", "Credit_Epargne_Clients"),
         ("loan_savings_detail", "Credit_Epargne_Detail"),
         ("loan_savings_controls", "Controle_Credit_Epargne"),
+        ("credit_vue_ensemble", "Credit_Vue_Ensemble"),
+        ("credit_portefeuille_synthese", "Credit_Portefeuille"),
+        ("credit_portefeuille_detail", "Credit_Detail"),
+        ("credit_statuts_portefeuille", "Credit_Statuts"),
+        ("credit_production_synthese", "Credit_Production_Synth"),
+        ("credit_production_detail", "Credit_Production_Detail"),
+        ("credit_remboursements_synthese", "Credit_Remb_Synthese"),
+        ("credit_remboursements_detail", "Credit_Remb_Detail"),
+        ("credit_risque_synthese", "Credit_Risque_Synthese"),
+        ("credit_risque_detail", "Credit_Risque_Detail"),
+        ("credit_echeances_synthese", "Credit_Echeances"),
+        ("credit_echeances_detail", "Credit_Echeances_Detail"),
+        ("credit_concentration_prets", "Credit_Top_Prets"),
+        ("credit_concentration_clients", "Credit_Top_Clients"),
+        ("credit_concentration_synthese", "Credit_Concentration"),
+        ("credit_concentration_produits", "Credit_Produits"),
+        ("credit_concentration_tranches", "Credit_Tranches"),
+        ("credit_epargne_clients", "Credit_Epargne_Clients_360"),
+        ("credit_epargne_synthese", "Credit_Epargne_Cockpit"),
+        ("credit_epargne_controles", "Credit_Epargne_Controles"),
+        ("credit_cohortes_a_date", "Credit_Cohortes"),
+        ("credit_qualite_donnees", "Credit_Qualite"),
+        ("credit_catalogue_kpi", "Credit_Catalogue_KPI"),
+        ("credit_liste_prets_echus_avec_encours", "Liste_Prets_Echus"),
+        ("credit_liste_prets_defaulted", "Liste_Prets_Defaulted"),
+        ("credit_liste_prets_avec_penalites", "Liste_Prets_Penalites"),
+        ("credit_liste_prets_par_simplifie_30j", "Liste_Prets_PAR30"),
+        ("credit_liste_fortes_expositions", "Liste_Fortes_Expositions"),
+        ("credit_liste_prets_echeance_30j", "Liste_Echeance_30j"),
+        ("credit_liste_rapprochement_epargne_ambigu", "Liste_Epargne_Ambigue"),
         ("liquidite_synthese", "Liquidite_Turbo"),
         ("liquidite_journaliere", "Liquidite_Jour_Turbo"),
         ("activite_clients", "Activite_Turbo"),

@@ -338,6 +338,21 @@ L'interface réunit le pilotage financier et la comptabilité observée dans un 
 
 Cas réel du 16 juillet 2026 avec les exports du 17 juillet : 135 événements, dont 48 CDF et 87 USD. Les remboursements observés sont 284 910 CDF et 194,54 USD; les nouveaux crédits décaissés sont 122 200 CDF et 99 USD. Les décaissements et les comptes de crédit créés se rapprochent exactement dans les deux devises pour ce cas.
 
+## Cockpit Crédits
+
+L'onglet `Crédits` utilise `build_mpesa_credit_cockpit`. Il assemble les briques existantes sans créer de source parallèle :
+
+- `Loans Account` reste l'instantané actuel du portefeuille : encours, statuts, `defaulted`, `is_rollover`, `is_grace_period`, `due_date`, dernier remboursement et pénalités restantes.
+- `Transactions` fournit uniquement les flux observés sur la période : production de crédit, décaissements, remboursements, intérêts et pénalités. Les écritures brutes ne sont jamais comptées comme opérations.
+- `Savings Account` permet la mise en regard analytique crédit/épargne au grain client x devise. L'épargne n'est jamais compensée avec l'encours et ne doit pas être appelée garantie sans preuve contractuelle.
+- `G2` reste une source facultative de contrôle et d'identité; il ne calcule ni l'encours, ni les montants du prêt, ni les remboursements.
+
+Les volets attendus sont `Vue d'ensemble`, `Production`, `Portefeuille actuel`, `Remboursements`, `Risque simplifié`, `Échéances`, `Concentration`, `Crédit et épargne`, `Cohortes à date`, `Listes d'action` et `Qualité des données`.
+
+Le `PAR simplifié` est calculé depuis `due_date` et l'encours disponible (`loan_balance` prioritaire, sinon composantes `outstanding_*`). Il doit être libellé comme simplifié et ne remplace pas un PAR réglementaire issu d'un échéancier détaillé. Les KPI suivants restent en `data_gap` sans source fiable : PAR réglementaire détaillé, PAR90/PAR180 exacts, aging détaillé, provision, garantie/caution, collection efficiency, write-off, restructuration, coût du risque et rendement sur encours moyen.
+
+Les listes d'action minimales sont : prêts échus avec encours, prêts `defaulted`, prêts avec pénalités, prêts PAR simplifié 30 jours, fortes expositions, prêts arrivant à échéance dans 30 jours et rapprochements épargne ambigus.
+
 ## Statistiques Turbo
 
 - `Statistiques` est un cockpit operationnel Solution Numérique-first distinct de `Finance et comptabilité`. Il sert a suivre la croissance, l'activite, le volume, le chiffre d'affaires observe, l'epargne/DAT, le credit et les meilleurs clients.
@@ -419,7 +434,7 @@ Cas réel de validation du cycle DAT dans `bdd Solution M_PESA` : le téléphone
 - Contrôle épargne/DAT : `build_savings_accounts_reconciliation`.
 - Extrait : `build_mpesa_statement`, `build_customer_summary`, `build_diagnostics`.
 - G2/DAT : `build_g2_dat_crosscheck`, `build_g2_entry_report`, `build_g2_daily_savings_report`, `build_g2_transaction_time_analysis`, `build_g2_retention_report`.
-- Pilotage : `build_turbo_operation_events`, `build_mpesa_turbo_financial_analysis`, `build_mpesa_management_dashboard`, `build_mpesa_credit_risk_analysis`, `build_loan_savings_reconciliation`, `build_mpesa_dat_maturity_analysis`.
+- Pilotage : `build_turbo_operation_events`, `build_mpesa_turbo_financial_analysis`, `build_mpesa_management_dashboard`, `build_mpesa_credit_cockpit`, `build_mpesa_credit_risk_analysis`, `build_loan_savings_reconciliation`, `build_mpesa_dat_maturity_analysis`.
 - Comptabilité : `build_mpesa_accounting_analysis`.
 - Perfect : `build_perfect_client_crosscheck`.
 - Recherche : `search_customers`, `resolve_customer_id`.

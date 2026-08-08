@@ -27,6 +27,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_dat_maturity_analysis,
     build_mpesa_accounting_analysis,
     build_mpesa_management_dashboard,
+    build_mpesa_credit_cockpit,
     build_mpesa_comparison_windows,
     build_mpesa_forecast_report,
     build_mpesa_g2_statistics_quality,
@@ -7387,6 +7388,103 @@ class TestLoanSavingsReconciliation(unittest.TestCase):
         )
         self.assertTrue(report["controles"].empty)
         self.assertTrue(pd.isna(report["synthese"].iloc[0]["taux_rapprochement_pct"]))
+
+    def test_credit_cockpit_keeps_snapshot_flux_and_data_gaps_separate(self) -> None:
+        loans = pd.DataFrame(
+            [
+                {
+                    "loan_id": "LN-USD-1",
+                    "customer_id": "C1",
+                    "msisdn1": "243811111111",
+                    "currency_code": "USD",
+                    "loan_product_id": "P1",
+                    "loan_amount": 100,
+                    "loan_balance": 60,
+                    "amount_paid": 40,
+                    "outstanding_principle": 50,
+                    "outstanding_interest": 10,
+                    "outstanding_penalty_fees": 0,
+                    "status_name": "ACTIVE",
+                    "defaulted": 0,
+                    "is_rollover": 0,
+                    "is_grace_period": 0,
+                    "due_date": "2026-07-01",
+                    "last_repayment_date": "2026-07-10",
+                    "created_at": "2026-06-01",
+                },
+                {
+                    "loan_id": "LN-CDF-1",
+                    "customer_id": "C2",
+                    "msisdn1": "243822222222",
+                    "currency_code": "CDF",
+                    "loan_product_id": "P2",
+                    "loan_amount": 1000,
+                    "loan_balance": 1000,
+                    "amount_paid": 0,
+                    "outstanding_penalty_fees": 25,
+                    "status_name": "ACTIVE",
+                    "defaulted": 1,
+                    "is_rollover": "1.0",
+                    "is_grace_period": True,
+                    "due_date": "2026-08-10",
+                    "created_at": "2026-07-01",
+                },
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=loans,
+            load_report=pd.DataFrame(),
+            customers=pd.DataFrame(),
+        )
+
+        report = build_mpesa_credit_cockpit(
+            prepared,
+            date_start="2026-07-01",
+            date_end="2026-08-05",
+        )
+
+        portfolio = report["portefeuille_synthese"].set_index("currency_code")
+        self.assertEqual(float(portfolio.loc["USD", "encours_credit"]), 60.0)
+        self.assertEqual(float(portfolio.loc["CDF", "encours_credit"]), 1000.0)
+        self.assertEqual(int(portfolio.loc["CDF", "prets_defaulted"]), 1)
+        self.assertEqual(int(portfolio.loc["CDF", "prets_rollover"]), 1)
+        self.assertEqual(int(portfolio.loc["CDF", "prets_grace_period"]), 1)
+
+        maturity = report["echeances_synthese"].set_index(["currency_code", "tranche_echeance"])
+        self.assertEqual(float(maturity.loc[("USD", "Echu"), "encours_credit"]), 60.0)
+        self.assertEqual(float(maturity.loc[("CDF", "0-7 jours"), "encours_credit"]), 1000.0)
+
+        catalogue = report["catalogue_kpi"].set_index("kpi")
+        self.assertEqual(catalogue.loc["par_reglementaire_detaille", "statut"], "data_gap")
+        self.assertIn("prets_par_simplifie_30j", report["listes_action"])
+        self.assertTrue(
+            report["statuts_portefeuille"]["valeur_statut"].map(type).eq(str).all()
+        )
+
+    def test_credit_cockpit_excel_export_contains_credit_sheets(self) -> None:
+        report = {
+            "credit_vue_ensemble": pd.DataFrame(
+                [{"indicateur": "encours_credit", "currency_code": "USD", "valeur": 60}]
+            ),
+            "credit_catalogue_kpi": pd.DataFrame(
+                [{"kpi": "par_reglementaire_detaille", "statut": "data_gap"}]
+            ),
+            "credit_liste_prets_defaulted": pd.DataFrame(
+                [{"loan_id": "LN-1", "currency_code": "USD"}]
+            ),
+        }
+
+        export = create_excel_export(report, rename_user_columns=True)
+        workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
+
+        self.assertIn("Credit_Vue_Ensemble", workbook.sheet_names)
+        self.assertIn("Credit_Catalogue_KPI", workbook.sheet_names)
+        self.assertIn("Liste_Prets_Defaulted", workbook.sheet_names)
+        exported = pd.read_excel(workbook, sheet_name="Liste_Prets_Defaulted")
+        self.assertIn("numero_pret", exported.columns)
 
 
 if __name__ == "__main__":
