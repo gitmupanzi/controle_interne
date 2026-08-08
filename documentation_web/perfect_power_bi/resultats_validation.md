@@ -1,4 +1,4 @@
-# Résultats de validation
+# Résultats de validation Power BI
 
 ## Lot Crédit cœur — 30 juin 2026
 

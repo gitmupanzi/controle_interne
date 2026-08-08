@@ -256,30 +256,6 @@ def inject_professional_credit_css() -> None:
         padding: 0.08rem 0.22rem;
     }
 
-    .credit-doc-link {
-        display: block;
-        width: 100%;
-        background: linear-gradient(135deg, #0b2c63, #1553a1);
-        color: #ffffff !important;
-        text-align: center;
-        text-decoration: none !important;
-        font-size: 0.76rem;
-        font-weight: 850;
-        border-radius: 999px;
-        padding: 0.48rem 0.55rem;
-        margin-top: 0.45rem;
-    }
-
-    .credit-doc-link:hover {
-        filter: brightness(1.06);
-    }
-
-    .credit-doc-link-secondary {
-        background: #edf4ff;
-        color: #0b2c63 !important;
-        border: 1px solid rgba(11, 44, 99, 0.12);
-    }
-
     .credit-hero {
         position: relative;
         overflow: hidden;

@@ -1,16 +1,14 @@
 # KPI, DAX et validation
 
-## Catalogue KPI
+## Documentation centralisée
 
-Le dossier `data/kpi_perfect/documentation` contient :
+Les anciennes notes Power BI ont été centralisées dans cette documentation web :
 
-- `KPI_CATALOGUE.md`
-- `VALIDATION_RESULTS.md`
-- `DATA_GAPS.md`
-- `MIGRATION_STATUS.md`
-- `NEXT_STEPS_POWER_BI.md`
-
-Ces fichiers sont la base de documentation pour les KPI Power BI.
+- [Catalogue KPI](catalogue_kpi.md)
+- [Résultats de validation](resultats_validation.md)
+- [Data gaps](data_gaps.md)
+- [État de migration](etat_migration.md)
+- [Prochaines étapes](prochaines_etapes.md)
 
 ## Exemples de familles de mesures
 

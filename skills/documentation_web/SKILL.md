@@ -1026,7 +1026,7 @@ Exemples :
 ```text
 data/kpi_perfect/power-bi/*
 data/kpi_perfect/reporting_sql/*
-data/kpi_perfect/documentation/*
+documentation_web/perfect_power_bi/*
 ```
 
 ## Solution Numérique

@@ -25,6 +25,11 @@ nav:
       - Architecture reporting: perfect_power_bi/architecture_reporting.md
       - Modèle sémantique et pages: perfect_power_bi/modele_pages.md
       - KPI, DAX et validation: perfect_power_bi/kpi_dax_validation.md
+      - Catalogue KPI: perfect_power_bi/catalogue_kpi.md
+      - Data gaps: perfect_power_bi/data_gaps.md
+      - Résultats de validation: perfect_power_bi/resultats_validation.md
+      - État de migration: perfect_power_bi/etat_migration.md
+      - Prochaines étapes: perfect_power_bi/prochaines_etapes.md
       - Exploitation et limites: perfect_power_bi/exploitation_limites.md
   - Solution Numérique:
       - Présentation: solution_numerique/index.md

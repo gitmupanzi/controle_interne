@@ -1,4 +1,4 @@
-# Données manquantes ou non encore matérialisées
+# Data gaps Power BI
 
 Ce document distingue une absence réelle de source d'une simple migration restant à réaliser.
 

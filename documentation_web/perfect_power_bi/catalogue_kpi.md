@@ -1,4 +1,4 @@
-# Catalogue KPI — périmètre matérialisé
+# Catalogue KPI Power BI — périmètre matérialisé
 
 Ce catalogue présente les KPI actuellement soutenus par les faits chargés. Les montants CDF et USD restent séparés.
 

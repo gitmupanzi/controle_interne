@@ -69,4 +69,4 @@ La page `Direction` a été enrichie dans le PBIR avec les KPI `Clients actifs`,
 Actualiser Power BI Desktop et contrôler visuellement les pages `Crédit`, `Risque crédit`, `Prévisions crédit`,
 `Direction` et `Épargne`. Ensuite, passer à l'optimisation : index, durée de rafraîchissement, passerelle, puis sécurité RLS.
 
-La feuille de route opérationnelle est détaillée dans `data/kpi_perfect/documentation/NEXT_STEPS_POWER_BI.md`.
+La feuille de route opérationnelle est détaillée dans [Prochaines étapes Power BI](prochaines_etapes.md).
