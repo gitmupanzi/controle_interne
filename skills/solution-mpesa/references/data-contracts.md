@@ -103,6 +103,25 @@ Règles de montant et de sens :
 
 Pour Transactions Turbo, ne pas appliquer ces règles G2. Utiliser `dr` comme sortie du compte `MPESA ACCOUNT` et `cr` comme entrée, puis regrouper les écritures techniques par `ref_no` pour le rapprochement.
 
+## Colonnes visibles utilisateur
+
+Le contrat metier interne conserve les colonnes techniques de `credit_app/data_schema.py` et de `credit_app/services/mpesa_analysis.py`. Le renommage utilisateur ne doit intervenir qu'au moment de rendre un tableau Streamlit ou d'ecrire un export Excel.
+
+Lorsque l'option globale `credit_standardize_columns` du sidebar est active (`Reference et stockage > Preparation des donnees > Renommer automatiquement les colonnes`), les noms visibles doivent respecter les regles suivantes :
+
+| Regle | Attendu |
+|---|---|
+| Convention | francais, minuscules, sans accents, `snake_case` |
+| Expression valide | `^[a-z0-9_]+$` |
+| Source de correspondance | `data/Rename_columns.xlsx` |
+| Colonnes non referencees | conversion automatique lisible en `snake_case` |
+| Collision | conserver toutes les colonnes avec suffixe stable |
+| Option desactivee | conserver les noms techniques originaux |
+
+Exemples attendus : `customer_id` -> `id_client`, `msisdn1` -> `numero_telephone`, `currency_code` -> `devise`, `created_at` -> `date_creation`, `loan_amount` -> `montant_credit`, `dr` -> `debit`, `cr` -> `credit`, `bal_before` -> `solde_avant`, `bal_after` -> `solde_apres`, `Receipt No.` -> `reference`.
+
+Ce contrat ne modifie ni les fichiers Excel sources, ni les calculs, ni les cles de jointure. Les tests doivent couvrir au minimum le mapping explicite, le repli automatique, les collisions et l'export Excel.
+
 ## Grain et clés
 
 | Objet | Grain | Clé ou règle |

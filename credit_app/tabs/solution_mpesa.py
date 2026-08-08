@@ -11,6 +11,10 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from credit_app.display_columns import (
+    prepare_dataframe_with_user_columns,
+    translate_column_config_for_user_columns,
+)
 from credit_app.services.mpesa_analysis import (
     CURRENT_SAVINGS_REQUIRED_COLUMNS,
     CUSTOMER_STATEMENT_FOCUS_OPERATION_TYPES,
@@ -614,12 +618,48 @@ def _uploaded_files_fingerprint(**sources: Any) -> str:
     return digest.hexdigest()
 
 
+def _mpesa_user_column_rename_enabled() -> bool:
+    """Mirror the global sidebar option without recalculating business DataFrames."""
+
+    return bool(st.session_state.get("credit_standardize_columns", True))
+
+
+def _mpesa_dataframe(
+    data: Any,
+    *args: Any,
+    column_config: dict[Any, Any] | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Render a Solution Numérique table with optional user-facing column names."""
+
+    if isinstance(data, pd.DataFrame) and _mpesa_user_column_rename_enabled():
+        data, column_mapping = prepare_dataframe_with_user_columns(data, enabled=True)
+        column_config = translate_column_config_for_user_columns(column_config, column_mapping)  # type: ignore[assignment]
+    return st.dataframe(data, *args, column_config=column_config, **kwargs)
+
+
 @st.cache_data(show_spinner=False, max_entries=8)
 def _create_excel_export_cached(
     export_report: dict[str, Any],
     print_orientation: str | None = None,
+    rename_user_columns: bool = False,
 ) -> bytes:
-    return create_excel_export(export_report, print_orientation=print_orientation)
+    return create_excel_export(
+        export_report,
+        print_orientation=print_orientation,
+        rename_user_columns=rename_user_columns,
+    )
+
+
+def _create_excel_export_current_sidebar(
+    export_report: dict[str, Any],
+    print_orientation: str | None = None,
+) -> bytes:
+    return _create_excel_export_cached(
+        export_report,
+        print_orientation=print_orientation,
+        rename_user_columns=_mpesa_user_column_rename_enabled(),
+    )
 
 
 @st.cache_data(show_spinner=False, max_entries=12)
@@ -1166,7 +1206,7 @@ def _render_import_tab(prepared: MpesaPreparedData, missing: dict[str, list[str]
     if report.empty:
         st.info("Aucun fichier n'a encore ete charge.")
         return
-    st.dataframe(report, width="stretch", hide_index=True)
+    _mpesa_dataframe(report, width="stretch", hide_index=True)
     prepared_frames = {
         "Transactions M-PESA_Turbo": prepared.transactions,
         "Epargne courante_Turbo": prepared.current_savings,
@@ -1323,7 +1363,7 @@ def _render_import_tab(prepared: MpesaPreparedData, missing: dict[str, list[str]
         savings_gaps = savings_reconciliation.get("ecarts", pd.DataFrame())
         if not savings_gaps.empty:
             with st.expander("Afficher les ecarts Savings Account / DAT", expanded=False):
-                st.dataframe(
+                _mpesa_dataframe(
                     savings_gaps,
                     width="stretch",
                     hide_index=True,
@@ -1605,14 +1645,14 @@ def _render_customer_journey_analysis(analysis: dict[str, pd.DataFrame]) -> None
         st.caption(
             "Une ligne par devise et type d'operation. Les montants CDF et USD restent toujours separes."
         )
-        st.dataframe(
+        _mpesa_dataframe(
             _format_customer_analysis_dates(milestones),
             width="stretch",
             hide_index=True,
         )
     if not path.empty:
         with st.expander("Afficher la chronologie complete", expanded=False):
-            st.dataframe(
+            _mpesa_dataframe(
                 _format_customer_analysis_dates(path),
                 width="stretch",
                 hide_index=True,
@@ -1675,7 +1715,7 @@ def _render_customer_repayments(analysis: dict[str, pd.DataFrame]) -> None:
         "penalite_observee",
     ]
     display_columns = [column for column in display_columns if column in repayment_detail.columns]
-    st.dataframe(
+    _mpesa_dataframe(
         repayment_detail[display_columns],
         width="stretch",
         hide_index=True,
@@ -1713,7 +1753,7 @@ def _render_customer_turbo_controls(analysis: dict[str, pd.DataFrame]) -> None:
         _render_alert_banner(
             "Les lignes ci-dessous sont des points de revue. Elles ne constituent pas automatiquement une erreur ou une fraude."
         )
-        st.dataframe(
+        _mpesa_dataframe(
             _format_customer_analysis_dates(review),
             width="stretch",
             hide_index=True,
@@ -1723,7 +1763,7 @@ def _render_customer_turbo_controls(analysis: dict[str, pd.DataFrame]) -> None:
             "L'ecart debit/credit global est informatif : certaines operations contiennent des comptes de collecte "
             "ou de revenu dont la semantique n'est pas celle du seul compte client."
         )
-        st.dataframe(
+        _mpesa_dataframe(
             _format_customer_analysis_dates(controls),
             width="stretch",
             hide_index=True,
@@ -1775,7 +1815,7 @@ def _render_customer_statement_elements_preview(
         }
     )
     st.markdown("##### Éléments couverts par l'extrait")
-    st.dataframe(display, width="stretch", hide_index=True)
+    _mpesa_dataframe(display, width="stretch", hide_index=True)
 
 
 def _render_customer_dat_returns_preview(
@@ -1808,7 +1848,7 @@ def _render_customer_dat_returns_preview(
         return
     number_format = "%.0f" if str(currency).upper() == "CDF" else "%.2f"
     st.markdown("##### Retours du capital mis en DAT")
-    st.dataframe(
+    _mpesa_dataframe(
         display[columns],
         width="stretch",
         hide_index=True,
@@ -1965,7 +2005,7 @@ def _render_customer_statement_preview(
                     "compte_bloque": "Compte bloqué",
                 }
             )
-            st.dataframe(
+            _mpesa_dataframe(
                 financial_display,
                 width="stretch",
                 hide_index=True,
@@ -1998,7 +2038,7 @@ def _render_customer_statement_preview(
                 "solde": "Solde",
             }
         )
-        st.dataframe(display, width="stretch", hide_index=True)
+        _mpesa_dataframe(display, width="stretch", hide_index=True)
     return previews
 
 
@@ -2058,7 +2098,7 @@ def _render_customer_active_dat_positions(analysis_report: dict[str, pd.DataFram
             column for column in display_columns if column in currency_entries.columns
         ]
         number_format = "%.0f" if currency_text == "CDF" else "%.2f"
-        st.dataframe(
+        _mpesa_dataframe(
             currency_entries[display_columns],
             width="stretch",
             hide_index=True,
@@ -2170,7 +2210,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
             ),
         )
     with st.expander(f"Voir les {len(candidates)} client(s) correspondant(s)", expanded=False):
-        st.dataframe(candidates, width="stretch", hide_index=True)
+        _mpesa_dataframe(candidates, width="stretch", hide_index=True)
 
     identity = candidates.loc[candidates["customer_id"].astype(str).eq(selected_customer)].iloc[0]
     render_panel_title("2. Client et critères de restitution")
@@ -2359,7 +2399,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
             verification_columns = [
                 column for column in verification_columns if column in g2_control.columns
             ]
-            st.dataframe(
+            _mpesa_dataframe(
                 g2_control[verification_columns],
                 width="stretch",
                 hide_index=True,
@@ -2391,7 +2431,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
                 "mouvement_net_mpesa": "mouvement_net_mpesa_turbo",
             }
         )
-        st.dataframe(technical_display, width="stretch", hide_index=True)
+        _mpesa_dataframe(technical_display, width="stretch", hide_index=True)
         st.caption("Vue complète des colonnes disponibles")
         full_display = filtered_statement.rename(
             columns={
@@ -2400,7 +2440,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
                 "mouvement_net_mpesa": "mouvement_net_mpesa_turbo",
             }
         )
-        st.dataframe(full_display, width="stretch", hide_index=True)
+        _mpesa_dataframe(full_display, width="stretch", hide_index=True)
 
     render_panel_title("10. Exports")
     st.caption(
@@ -2563,7 +2603,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         ]
     }
     customer_export = {"synthese": export_summary, **customer_export}
-    export_bytes = _create_excel_export_cached(customer_export)
+    export_bytes = _create_excel_export_current_sidebar(customer_export)
     excel_column = st.columns(3)[0]
     excel_column.download_button(
         "Telecharger le rapport complet du client",
@@ -2751,7 +2791,7 @@ def _render_dat_repayment_schedule(prepared: MpesaPreparedData) -> None:
     st.caption(
         f"{len(filtered_actionable)} compte(s) DAT a preparer. Les montants restent separes par devise."
     )
-    st.dataframe(
+    _mpesa_dataframe(
         filtered_actionable[display_columns],
         width="stretch",
         hide_index=True,
@@ -2786,7 +2826,7 @@ def _render_dat_repayment_schedule(prepared: MpesaPreparedData) -> None:
             ),
         },
     )
-    export_bytes = _create_excel_export_cached(
+    export_bytes = _create_excel_export_current_sidebar(
         {"dat_echeances_detail": filtered_actionable}
     )
     st.download_button(
@@ -2912,9 +2952,9 @@ def _render_large_dat_summary(prepared: MpesaPreparedData) -> None:
         key_prefix="mpesa_large_dat_combined_filter",
     )
     st.caption(f"{len(combined_view)} client(s) affiche(s), toutes devises confondues sans addition des montants.")
-    st.dataframe(combined_view[display_columns], width="stretch", hide_index=True)
+    _mpesa_dataframe(combined_view[display_columns], width="stretch", hide_index=True)
 
-    export_bytes = _create_excel_export_cached(
+    export_bytes = _create_excel_export_current_sidebar(
         {"forts_dat": combined_strong_clients, "portefeuille_dat": portefeuille}
     )
     st.download_button(
@@ -2938,14 +2978,14 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
             key_prefix="mpesa_dat_final_filter",
         )
         st.caption(f"{len(dat_view)} ligne(s) DAT affichee(s).")
-        st.dataframe(dat_view, width="stretch", hide_index=True)
+        _mpesa_dataframe(dat_view, width="stretch", hide_index=True)
         render_panel_title("Mouvements DAT reconstruits")
         dat_movements_view = _apply_local_multiselect_filters(
             report["mouvements_dat"],
             ["currency_code", "references", "descriptions"],
             key_prefix="mpesa_dat_movements_filter",
         )
-        st.dataframe(dat_movements_view, width="stretch", hide_index=True)
+        _mpesa_dataframe(dat_movements_view, width="stretch", hide_index=True)
     elif not prepared.fixed_savings.empty:
         render_panel_title("DAT importes")
         dat_view = _apply_local_multiselect_filters(
@@ -2954,7 +2994,7 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
             key_prefix="mpesa_dat_import_filter",
         )
         st.caption(f"{len(dat_view)} ligne(s) DAT affichee(s).")
-        st.dataframe(dat_view.head(500), width="stretch", hide_index=True)
+        _mpesa_dataframe(dat_view.head(500), width="stretch", hide_index=True)
     else:
         st.info("Aucun DAT trouve dans Savings Account.")
     st.caption(
@@ -3009,7 +3049,7 @@ def _render_g2_report_export(
                 "g2_dat": g2_dat,
             }
         )
-    report_bytes = _create_excel_export_cached(export_report, print_orientation="portrait")
+    report_bytes = _create_excel_export_current_sidebar(export_report, print_orientation="portrait")
     word_report = dict(export_report)
     word_report["statuts_g2"] = daily_statuts
     word_report["rapport_journalier_anomalies"] = daily_anomalies
@@ -3171,14 +3211,14 @@ def _render_g2_transaction_time_analysis(
             format_professional_tab_labels(temporal_tab_labels)
         )
         with daily_tab:
-            st.dataframe(par_jour, width="stretch", hide_index=True)
+            _mpesa_dataframe(par_jour, width="stretch", hide_index=True)
         with weekday_tab:
-            st.dataframe(par_jour_semaine, width="stretch", hide_index=True)
+            _mpesa_dataframe(par_jour_semaine, width="stretch", hide_index=True)
         with hourly_tab:
-            st.dataframe(par_heure, width="stretch", hide_index=True)
+            _mpesa_dataframe(par_heure, width="stretch", hide_index=True)
         with day_hour_tab:
             st.caption("Detail des heures effectivement actives; les heures sans transaction ne sont pas repetees.")
-            st.dataframe(jour_heure, width="stretch", hide_index=True)
+            _mpesa_dataframe(jour_heure, width="stretch", hide_index=True)
 
 
 def _render_g2_retention_report(
@@ -3289,14 +3329,14 @@ def _render_g2_retention_report(
         "eligible_retention_m1",
         "eligible_retention_90j",
     ]
-    st.dataframe(monthly[monthly_columns], width="stretch", hide_index=True)
+    _mpesa_dataframe(monthly[monthly_columns], width="stretch", hide_index=True)
 
     with st.expander("Afficher la fidelisation par type d'operation", expanded=False):
         st.caption(
             "Un client ayant plusieurs types d'operation pendant un meme mois figure dans chaque segment concerne; "
             "les segments ne doivent donc pas etre additionnes."
         )
-        st.dataframe(retention_report.get("operations", pd.DataFrame()), width="stretch", hide_index=True)
+        _mpesa_dataframe(retention_report.get("operations", pd.DataFrame()), width="stretch", hide_index=True)
     with st.expander("Afficher le detail client de la fidelisation", expanded=False):
         detail = retention_report.get("detail_clients", pd.DataFrame())
         detail_columns = [
@@ -3314,7 +3354,7 @@ def _render_g2_retention_report(
             "retenu_90j",
         ]
         detail_columns = [column for column in detail_columns if column in detail.columns]
-        st.dataframe(detail[detail_columns], width="stretch", hide_index=True)
+        _mpesa_dataframe(detail[detail_columns], width="stretch", hide_index=True)
     if source_label == "Turbo":
         st.caption(
             "Sans fichier G2, les noms Opposite Party, statuts G2, soldes G2 et delais de finalisation G2 ne sont pas estimes."
@@ -3553,7 +3593,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                     "prise_en_compte_analyse": "Incluse dans les analyses",
                 }
             )
-            st.dataframe(status_view, width="stretch", hide_index=True)
+            _mpesa_dataframe(status_view, width="stretch", hide_index=True)
             if source_label == "Turbo":
                 st.caption(
                     "Les operations comptabilisees dans la Solution Numérique alimentent les analyses. Aucun statut G2 n'est deduit."
@@ -3615,7 +3655,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                 "montant_total": "Volume total entrees + sorties",
             }
         )
-        st.dataframe(flow_view, width="stretch", hide_index=True)
+        _mpesa_dataframe(flow_view, width="stretch", hide_index=True)
         st.caption("Solde net des flux = entrees - sorties. Les devises ne sont jamais additionnees entre elles.")
 
         classified_summary = daily_synthese.loc[
@@ -3634,10 +3674,10 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                     "montant": "Montant",
                 }
             )
-            st.dataframe(classified_summary, width="stretch", hide_index=True)
+            _mpesa_dataframe(classified_summary, width="stretch", hide_index=True)
 
         with st.expander("Afficher la synthese detaillee en colonnes", expanded=False):
-            st.dataframe(daily_pivot, width="stretch", hide_index=True)
+            _mpesa_dataframe(daily_pivot, width="stretch", hide_index=True)
 
     _render_g2_transaction_time_analysis(transaction_time_report, source_label)
 
@@ -3680,7 +3720,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             "operation_turbo_confirmee"
         ]
         detail_columns = [column for column in detail_columns if column in daily_view.columns]
-        st.dataframe(daily_view[detail_columns], width="stretch", hide_index=True)
+        _mpesa_dataframe(daily_view[detail_columns], width="stretch", hide_index=True)
 
     if daily_anomalies.empty:
         if source_label == "Turbo":
@@ -3729,7 +3769,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                 "motif_anomalie",
             ]
             anomaly_columns = [column for column in anomaly_columns if column in daily_anomalies.columns]
-            st.dataframe(
+            _mpesa_dataframe(
                 daily_anomalies[anomaly_columns],
                 width="stretch",
                 hide_index=True,
@@ -3926,7 +3966,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         control_columns = [column for column in control_columns if column in filtered.columns]
         filtered_display = filtered[control_columns].copy() if control_columns else filtered
         st.caption(f"{len(filtered)} ligne(s) de controle affichee(s).")
-        st.dataframe(
+        _mpesa_dataframe(
             filtered_display,
             width="stretch",
             hide_index=True,
@@ -4085,7 +4125,7 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
                         "types_operations_mpesa": "types_operations_turbo_g2",
                     }
                 )
-                st.dataframe(cohort_display, width="stretch", hide_index=True)
+                _mpesa_dataframe(cohort_display, width="stretch", hide_index=True)
 
     render_panel_title("2. Clients transactionnels [Solution Numérique + G2] recherches dans Clients_Perfect")
     search_value = st.text_input(
@@ -4151,7 +4191,7 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
             "types_operations_mpesa": "types_operations_turbo_g2",
         }
     )
-    st.dataframe(summary_display, width="stretch", hide_index=True)
+    _mpesa_dataframe(summary_display, width="stretch", hide_index=True)
     st.caption(
         "Une correspondance multiple signifie que le meme Phone_Prefixe est rattache a plusieurs fiches Perfect; "
         "toutes les identites restent visibles dans la ligne."
@@ -4199,10 +4239,10 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
             }
         )
         st.caption(f"{len(operation_view)} operation(s) affichee(s). Les montants restent separes par source et par devise.")
-        st.dataframe(operation_display, width="stretch", hide_index=True)
+        _mpesa_dataframe(operation_display, width="stretch", hide_index=True)
 
     render_panel_title("4. Export")
-    export_bytes = _create_excel_export_cached(
+    export_bytes = _create_excel_export_current_sidebar(
         {
             "clients_perfect_dans_mpesa": clients_perfect_dans_mpesa,
             "clients_perfect_dans_turbo": clients_perfect_dans_turbo,
@@ -4405,7 +4445,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
             _render_alert_banner(
                 f"{len(priority_table)} priorite(s) necessitent l'attention du lecteur."
             )
-            st.dataframe(
+            _mpesa_dataframe(
                 priority_table,
                 width="stretch",
                 hide_index=True,
@@ -4420,7 +4460,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
         if credit_summary.empty:
             st.info("Chargez le fichier Credits pour calculer l'encours, les retards et le PAR.")
         else:
-            st.dataframe(credit_summary, width="stretch", hide_index=True)
+            _mpesa_dataframe(credit_summary, width="stretch", hide_index=True)
             if not credit_detail.empty:
                 risk_chart = (
                     credit_detail.groupby(["currency_code", "statut_risque"], as_index=False)
@@ -4443,7 +4483,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
                         ["currency_code", "statut_risque", "status_name", "customer_id"],
                         key_prefix="mpesa_pilotage_credit_filter",
                     )
-                    st.dataframe(credit_view, width="stretch", hide_index=True)
+                    _mpesa_dataframe(credit_view, width="stretch", hide_index=True)
 
         render_panel_title("2. Liquidite [G2]")
         liquidity_summary = report_view.get("liquidite_synthese", pd.DataFrame())
@@ -4451,7 +4491,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
         if liquidity_summary.empty:
             st.info("Chargez Transactions G2 avec Completion Time et montants pour analyser la liquidite.")
         else:
-            st.dataframe(liquidity_summary, width="stretch", hide_index=True)
+            _mpesa_dataframe(liquidity_summary, width="stretch", hide_index=True)
             if not liquidity_daily.empty:
                 chart_data = liquidity_daily.melt(
                     id_vars=["date_transaction", "currency_code"],
@@ -4475,7 +4515,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
                 style_standard_line(fig, height=390, tickangle=-20)
                 st_plot(fig, key="mpesa_pilotage_liquidity", height=390)
                 with st.expander("Afficher les flux journaliers de liquidite", expanded=False):
-                    st.dataframe(liquidity_daily, width="stretch", hide_index=True)
+                    _mpesa_dataframe(liquidity_daily, width="stretch", hide_index=True)
 
     with clients_tab:
         render_panel_title("1. Activite, dormance et reactivation [Solution Numérique + G2]")
@@ -4501,7 +4541,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
                     ["currency_code", "statut_activite", "est_nouveau_30j", "est_reactive_30j"],
                     key_prefix="mpesa_pilotage_activity_filter",
                 )
-                st.dataframe(activity_view, width="stretch", hide_index=True)
+                _mpesa_dataframe(activity_view, width="stretch", hide_index=True)
 
         render_panel_title("2. Conversion depot normal vers DAT [G2]")
         conversion_summary = report_view.get("conversion_synthese", pd.DataFrame())
@@ -4509,10 +4549,10 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
         if conversion_summary.empty:
             st.info("La conversion exige des operations G2 classees Depot normal et DAT.")
         else:
-            st.dataframe(conversion_summary, width="stretch", hide_index=True)
+            _mpesa_dataframe(conversion_summary, width="stretch", hide_index=True)
             st.caption("La conversion est observee dans la periode chargee; elle ne prouve pas l'affectation exacte d'un depot a un DAT.")
             with st.expander("Afficher le detail client de la conversion", expanded=False):
-                st.dataframe(conversion_clients, width="stretch", hide_index=True)
+                _mpesa_dataframe(conversion_clients, width="stretch", hide_index=True)
 
         render_panel_title("3. Adoption globale [Solution Numérique + G2] des Clients_Perfect")
         perfect_summary = report_view.get("perfect_adoption_synthese", pd.DataFrame())
@@ -4527,7 +4567,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
                     "taux_adoption_mpesa_pct": "taux_adoption_turbo_g2_pct",
                 }
             )
-            st.dataframe(perfect_summary_display, width="stretch", hide_index=True)
+            _mpesa_dataframe(perfect_summary_display, width="stretch", hide_index=True)
             if not perfect_statuses.empty:
                 fig = px.bar(
                     perfect_statuses,
@@ -4546,7 +4586,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
                         "types_operations_mpesa": "types_operations_turbo_g2",
                     }
                 )
-                st.dataframe(perfect_detail_display, width="stretch", hide_index=True)
+                _mpesa_dataframe(perfect_detail_display, width="stretch", hide_index=True)
 
     with risk_tab:
         render_panel_title("1. Concentration des transactions [G2]")
@@ -4555,7 +4595,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
         if concentration_summary.empty:
             st.info("Aucun telephone G2 valide ne permet de mesurer la concentration.")
         else:
-            st.dataframe(concentration_summary, width="stretch", hide_index=True)
+            _mpesa_dataframe(concentration_summary, width="stretch", hide_index=True)
             top_clients = concentration_clients.loc[concentration_clients["rang_volume"].le(10)].copy()
             if not top_clients.empty:
                 fig = px.bar(
@@ -4571,7 +4611,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
                 style_standard_horizontal_bar(fig, height=max(380, 30 * len(top_clients)))
                 st_plot(fig, key="mpesa_pilotage_concentration", height=max(380, 30 * len(top_clients)))
             with st.expander("Afficher le classement complet des clients", expanded=False):
-                st.dataframe(concentration_clients, width="stretch", hide_index=True)
+                _mpesa_dataframe(concentration_clients, width="stretch", hide_index=True)
 
         render_panel_title("2. Qualite et alertes transactions [G2]")
         quality_summary = report_view.get("qualite_synthese", pd.DataFrame())
@@ -4579,7 +4619,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
         if quality_summary.empty:
             st.info("Chargez Transactions G2 pour calculer les taux de succes, d'anomalie et de qualite.")
         else:
-            st.dataframe(quality_summary, width="stretch", hide_index=True)
+            _mpesa_dataframe(quality_summary, width="stretch", hide_index=True)
             alert_reason = alerts.get(
                 "motif_alerte_comportement", pd.Series("", index=alerts.index)
             ).astype("string").fillna("")
@@ -4598,7 +4638,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
                     _render_alert_banner(
                         "Une alerte comportementale est un signal de revue, pas une preuve de fraude."
                     )
-                st.dataframe(
+                _mpesa_dataframe(
                     behavioral_alerts,
                     width="stretch",
                     hide_index=True,
@@ -4635,7 +4675,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
             style_standard_vertical_bar(fig, height=390, tickangle=-25)
             st_plot(fig, key="mpesa_pilotage_dat_maturity", height=390)
             with st.expander("Afficher les DAT et leurs echeances", expanded=False):
-                st.dataframe(dat_detail, width="stretch", hide_index=True)
+                _mpesa_dataframe(dat_detail, width="stretch", hide_index=True)
 
     render_panel_title("Export cible du cockpit [Solution Numérique + G2]")
     export_keys = [
@@ -4650,7 +4690,7 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
     }
     if st.button("Preparer l'export Excel du cockpit", key="mpesa_prepare_pilotage_export", width="stretch"):
         with st.spinner("Preparation des feuilles importantes..."):
-            export_bytes = _create_excel_export_cached(export_report)
+            export_bytes = _create_excel_export_current_sidebar(export_report)
         st.download_button(
             "Telecharger le cockpit Solution Numérique + G2",
             data=export_bytes,
@@ -4689,7 +4729,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             key_prefix="mpesa_client_loans_filter",
         )
         st.caption(f"{len(credits_view)} credit(s) affiche(s).")
-        st.dataframe(credits_view, width="stretch", hide_index=True)
+        _mpesa_dataframe(credits_view, width="stretch", hide_index=True)
         return
     if prepared.loans.empty:
         st.info("Le fichier Credits est facultatif. Chargez-le pour enrichir l'extrait avec les informations LN.")
@@ -4814,7 +4854,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                     ),
                 ]
             )
-        st.dataframe(
+        _mpesa_dataframe(
             summary_view,
             width="stretch",
             hide_index=True,
@@ -4917,7 +4957,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             f"{len(clients_view)} position(s) client x devise affichee(s). "
             "Epargne totale observee = epargne courante + DAT positifs de la meme devise."
         )
-        st.dataframe(
+        _mpesa_dataframe(
             clients_view[client_columns],
             width="stretch",
             height=500,
@@ -4959,7 +4999,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 "motif_controle",
             ]
             control_columns = [column for column in control_columns if column in controls_view.columns]
-            st.dataframe(
+            _mpesa_dataframe(
                 controls_view[control_columns],
                 width="stretch",
                 hide_index=True,
@@ -4982,7 +5022,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             width="content",
         ):
             with st.spinner("Preparation des positions et controles..."):
-                export_bytes = _create_excel_export_cached(export_report)
+                export_bytes = _create_excel_export_current_sidebar(export_report)
             st.download_button(
                 "Telecharger le controle credit / epargne",
                 data=export_bytes,
@@ -5001,7 +5041,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             key_prefix="mpesa_import_loans_filter",
         )
         st.caption(f"{len(loans_view)} credit(s) affiche(s); le tableau est limite aux 500 premieres lignes.")
-        st.dataframe(loans_view.head(500), width="stretch", hide_index=True)
+        _mpesa_dataframe(loans_view.head(500), width="stretch", hide_index=True)
 
 
 @st.fragment
@@ -5306,7 +5346,7 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             _render_alert_banner(
                 f"{len(priority_table)} priorite(s) necessitent l'attention du lecteur."
             )
-            st.dataframe(priority_table, width="stretch", hide_index=True)
+            _mpesa_dataframe(priority_table, width="stretch", hide_index=True)
         else:
             st.success("Aucune priorite calculee sur la periode selectionnee.")
 
@@ -5357,7 +5397,7 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             )
             style_standard_line(fig, height=430, tickangle=-20)
             st_plot(fig, key="mpesa_turbo_financial_evolution", height=430)
-            st.dataframe(evolution, width="stretch", hide_index=True)
+            _mpesa_dataframe(evolution, width="stretch", hide_index=True)
 
         render_panel_title("Remboursements de credit observes")
         repayments_summary = report_view.get("remboursements_synthese", pd.DataFrame())
@@ -5365,14 +5405,14 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         if repayments_summary.empty:
             st.info("Aucun remboursement classe dans la periode.")
         else:
-            st.dataframe(repayments_summary, width="stretch", hide_index=True)
+            _mpesa_dataframe(repayments_summary, width="stretch", hide_index=True)
             with st.expander("Afficher le detail des remboursements", expanded=False):
                 repayment_view = _apply_local_multiselect_filters(
                     repayments_detail,
                     ["currency_code", "mode_remboursement_observe", "statut_controle_turbo"],
                     key_prefix="mpesa_turbo_repayment_filter",
                 )
-                st.dataframe(repayment_view.head(1000), width="stretch", hide_index=True)
+                _mpesa_dataframe(repayment_view.head(1000), width="stretch", hide_index=True)
 
         _render_accounting_flows(accounting_view)
 
@@ -5382,7 +5422,7 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         if new_credit_summary.empty:
             st.info("Aucun nouveau compte ou decaissement de credit dans la periode.")
         else:
-            st.dataframe(new_credit_summary, width="stretch", hide_index=True)
+            _mpesa_dataframe(new_credit_summary, width="stretch", hide_index=True)
             st.caption(
                 "L'ecart rapproche les decaissements observes dans Transactions et les comptes crees dans Loans Account. "
                 "Il s'agit d'un controle global par devise, pas d'une preuve d'affectation ligne a ligne."
@@ -5394,7 +5434,7 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         if credit_summary.empty:
             st.info("Chargez Loans Account pour calculer l'encours et le PAR.")
         else:
-            st.dataframe(credit_summary, width="stretch", hide_index=True)
+            _mpesa_dataframe(credit_summary, width="stretch", hide_index=True)
             if not credit_detail.empty:
                 risk_chart = (
                     credit_detail.groupby(["currency_code", "statut_risque"], as_index=False)
@@ -5416,16 +5456,16 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         par_bands = report_view.get("par_tranches_montant", pd.DataFrame())
         render_panel_title("Concentration du portefeuille et PAR par tranche")
         if not concentration.empty:
-            st.dataframe(concentration, width="stretch", hide_index=True)
+            _mpesa_dataframe(concentration, width="stretch", hide_index=True)
         if not par_bands.empty:
-            st.dataframe(par_bands, width="stretch", hide_index=True)
+            _mpesa_dataframe(par_bands, width="stretch", hide_index=True)
         with st.expander("Afficher les credits a suivre", expanded=False):
             credit_view = _apply_local_multiselect_filters(
                 credit_detail,
                 ["currency_code", "statut_risque", "status_name", "customer_id"],
                 key_prefix="mpesa_turbo_credit_filter",
             ) if not credit_detail.empty else credit_detail
-            st.dataframe(credit_view.head(1000), width="stretch", hide_index=True)
+            _mpesa_dataframe(credit_view.head(1000), width="stretch", hide_index=True)
 
     with portfolio_tab:
         render_panel_title("Activite d'epargne par client [Transactions]")
@@ -5450,32 +5490,32 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             style_standard_horizontal_bar(fig, height=430)
             st_plot(fig, key="mpesa_turbo_savings_clients", height=430)
             with st.expander("Afficher l'activite epargne client", expanded=False):
-                st.dataframe(savings_activity.head(1000), width="stretch", hide_index=True)
+                _mpesa_dataframe(savings_activity.head(1000), width="stretch", hide_index=True)
 
         frequent = report_view.get("depots_frequents_hebdo", pd.DataFrame())
         deposit_bands = report_view.get("tranches_depots", pd.DataFrame())
         render_panel_title("Frequence et tranches de depots")
         if not deposit_bands.empty:
-            st.dataframe(deposit_bands, width="stretch", hide_index=True)
+            _mpesa_dataframe(deposit_bands, width="stretch", hide_index=True)
         if not frequent.empty:
             frequent_only = frequent.loc[frequent["deposant_frequent_3_plus"]].copy()
             with st.expander("Afficher les clients avec au moins trois depots par semaine", expanded=False):
-                st.dataframe(frequent_only.head(1000), width="stretch", hide_index=True)
+                _mpesa_dataframe(frequent_only.head(1000), width="stretch", hide_index=True)
 
         render_panel_title("DAT a preparer et DAT sans credit actif")
         dat_summary = report_view.get("dat_echeances_synthese", pd.DataFrame())
         dat_without_credit = report_view.get("dat_sans_credit_actif", pd.DataFrame())
         if not dat_summary.empty:
-            st.dataframe(dat_summary, width="stretch", hide_index=True)
+            _mpesa_dataframe(dat_summary, width="stretch", hide_index=True)
         with st.expander("Afficher les DAT positifs sans credit actif dans la meme devise", expanded=False):
-            st.dataframe(dat_without_credit.head(1000), width="stretch", hide_index=True)
+            _mpesa_dataframe(dat_without_credit.head(1000), width="stretch", hide_index=True)
 
         render_panel_title("Credits et epargne disponible, sans compensation")
         credit_savings = report_view.get("credits_epargne_disponible", pd.DataFrame())
         if credit_savings.empty:
             st.info("Aucune position credit/epargne consolidable.")
         else:
-            st.dataframe(credit_savings.head(1000), width="stretch", hide_index=True)
+            _mpesa_dataframe(credit_savings.head(1000), width="stretch", hide_index=True)
 
         _render_accounting_portfolio(accounting_view)
 
@@ -5497,7 +5537,7 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         if concentration_summary.empty:
             st.info("Aucune operation dans la periode.")
         else:
-            st.dataframe(concentration_summary, width="stretch", hide_index=True)
+            _mpesa_dataframe(concentration_summary, width="stretch", hide_index=True)
             top_clients = concentration_clients.loc[
                 concentration_clients["rang_volume"].le(10)
             ].copy()
@@ -5527,7 +5567,7 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             _render_alert_banner(
                 f"{len(alert_view)} alerte(s) necessitent une verification."
             )
-            st.dataframe(
+            _mpesa_dataframe(
                 alert_view.head(1500),
                 width="stretch",
                 hide_index=True,
@@ -5542,13 +5582,13 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             _render_alert_banner(
                 f"{len(inactive)} mouvement(s) sur compte inactif necessitent une verification."
             )
-            st.dataframe(
+            _mpesa_dataframe(
                 inactive.head(1000),
                 width="stretch",
                 hide_index=True,
             )
         if not client_quality.empty:
-            st.dataframe(
+            _mpesa_dataframe(
                 client_quality,
                 width="stretch",
                 hide_index=True,
@@ -5596,7 +5636,7 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             width="content",
         ):
             with st.spinner("Preparation du classeur..."):
-                export_bytes = _create_excel_export_cached(export_report)
+                export_bytes = _create_excel_export_current_sidebar(export_report)
             st.download_button(
                 "Telecharger le pilotage financier",
                 data=export_bytes,
@@ -5609,8 +5649,8 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
                 width="content",
             )
         with st.expander("Sources et definitions des indicateurs", expanded=False):
-            st.dataframe(sources, width="stretch", hide_index=True)
-            st.dataframe(report_view.get("definitions", pd.DataFrame()), width="stretch", hide_index=True)
+            _mpesa_dataframe(sources, width="stretch", hide_index=True)
+            _mpesa_dataframe(report_view.get("definitions", pd.DataFrame()), width="stretch", hide_index=True)
 
         _render_accounting_export(accounting_view, date_start, date_end)
 
@@ -5701,7 +5741,7 @@ def _render_accounting_balances_and_journals(
     ]
     client_columns = [column for column in client_columns if column in client_view.columns]
     st.caption(f"{len(client_view)} ligne(s) client x devise affichee(s).")
-    st.dataframe(client_view[client_columns], width="stretch", hide_index=True)
+    _mpesa_dataframe(client_view[client_columns], width="stretch", hide_index=True)
 
     with st.expander("Afficher la balance auxiliaire detaillee par produit", expanded=False):
         auxiliary = report["balance_auxiliaire_clients"]
@@ -5713,7 +5753,7 @@ def _render_accounting_balances_and_journals(
                 ["currency_code", "famille_position", "nature_comptable_indicative", "customer_id"],
                 key_prefix="mpesa_accounting_auxiliary_filter",
             )
-            st.dataframe(auxiliary_view, width="stretch", hide_index=True)
+            _mpesa_dataframe(auxiliary_view, width="stretch", hide_index=True)
 
     render_panel_title("Balance des mouvements par type de compte")
     st.caption(
@@ -5746,7 +5786,7 @@ def _render_accounting_balances_and_journals(
         )
         style_standard_vertical_bar(fig, height=390, tickangle=-35)
         st_plot(fig, key=f"mpesa_account_balance_{currency}", height=390)
-    st.dataframe(account_balance, width="stretch", hide_index=True)
+    _mpesa_dataframe(account_balance, width="stretch", hide_index=True)
 
     render_panel_title("Journaux comptables observes")
     with st.expander("Afficher le journal des operations", expanded=False):
@@ -5755,9 +5795,9 @@ def _render_accounting_balances_and_journals(
             ["currency_code", "statut_controle_operation", "customer_id"],
             key_prefix="mpesa_accounting_operation_journal_filter",
         )
-        st.dataframe(operation_view, width="stretch", hide_index=True)
+        _mpesa_dataframe(operation_view, width="stretch", hide_index=True)
     with st.expander("Afficher le journal brut des ecritures", expanded=False):
-        st.dataframe(report.get("journal_ecritures", pd.DataFrame()), width="stretch", hide_index=True)
+        _mpesa_dataframe(report.get("journal_ecritures", pd.DataFrame()), width="stretch", hide_index=True)
 
     render_panel_title("Export de la balance observée")
     st.caption(
@@ -5859,7 +5899,7 @@ def _render_accounting_balances_and_journals(
             for column in deposit_withdrawal_pivot.columns
             if column not in hidden_columns
         ]
-        st.dataframe(
+        _mpesa_dataframe(
             deposit_withdrawal_pivot[pivot_columns],
             width="stretch",
             hide_index=True,
@@ -5895,7 +5935,7 @@ def _render_accounting_balances_and_journals(
         )
         st.download_button(
             "Télécharger Excel dépôts/retraits",
-            data=lambda: _create_excel_export_cached(
+            data=lambda: _create_excel_export_current_sidebar(
                 pivot_export_report,
                 print_orientation="landscape",
             ),
@@ -5924,14 +5964,14 @@ def _render_accounting_flows(report: dict[str, pd.DataFrame]) -> None:
             "Dans la restitution Bisou Bisou, le debit technique du MPESA ACCOUNT devient une entree "
             "et le credit technique une sortie."
         )
-        st.dataframe(report.get("flux_mpesa", pd.DataFrame()), width="stretch", hide_index=True)
+        _mpesa_dataframe(report.get("flux_mpesa", pd.DataFrame()), width="stretch", hide_index=True)
     with products_column:
         st.markdown("**Produits et repartitions observes**")
         st.caption(
             "Les lignes Interets, Penalites, Part Bisou et Part Voda sont presentees separement; "
             "elles ne sont pas additionnees pour eviter de compter deux fois une meme ventilation."
         )
-        st.dataframe(report.get("produits_financiers", pd.DataFrame()), width="stretch", hide_index=True)
+        _mpesa_dataframe(report.get("produits_financiers", pd.DataFrame()), width="stretch", hide_index=True)
         product_detail = report.get("produits_financiers_detail", pd.DataFrame())
         if not product_detail.empty:
             with st.expander("Afficher le detail des produits financiers", expanded=False):
@@ -5940,7 +5980,7 @@ def _render_accounting_flows(report: dict[str, pd.DataFrame]) -> None:
                     ["currency_code", "account_type"],
                     key_prefix="mpesa_turbo_financial_product_filter",
                 )
-                st.dataframe(
+                _mpesa_dataframe(
                     product_detail_view.head(2000),
                     width="stretch",
                     hide_index=True,
@@ -5970,7 +6010,7 @@ def _render_accounting_portfolio(report: dict[str, pd.DataFrame]) -> None:
                 ("Credits / depots", _format_percent(row["ratio_credits_depots_pct"]), f"Devise {currency}", "slate"),
             ]
         )
-    st.dataframe(portfolio, width="stretch", hide_index=True)
+    _mpesa_dataframe(portfolio, width="stretch", hide_index=True)
 
 
 def _render_accounting_controls(
@@ -5987,7 +6027,7 @@ def _render_accounting_controls(
             "Le taux de rapprochement compare uniquement les transactions G2 terminees de la periode "
             "avec ref_no. Un fichier G2 limite au compte 1441 ne couvre pas les sorties 15558."
         )
-        st.dataframe(
+        _mpesa_dataframe(
             g2_control,
             width="stretch",
             hide_index=True,
@@ -6009,13 +6049,13 @@ def _render_accounting_controls(
             f"{control_count} signal(aux) comptable(s) necessitent une verification."
         )
     with st.expander("Afficher les operations a verifier", expanded=False):
-        st.dataframe(
+        _mpesa_dataframe(
             operation_controls,
             width="stretch",
             hide_index=True,
         )
     with st.expander("Afficher les variations de solde a verifier", expanded=False):
-        st.dataframe(
+        _mpesa_dataframe(
             balance_controls,
             width="stretch",
             hide_index=True,
@@ -6055,7 +6095,7 @@ def _render_accounting_export(
         width="content",
     ):
         with st.spinner("Preparation du classeur comptable..."):
-            export_bytes = _create_excel_export_cached(export_report)
+            export_bytes = _create_excel_export_current_sidebar(export_report)
         st.download_button(
             "Telecharger les analyses comptables",
             data=export_bytes,
@@ -6084,7 +6124,7 @@ def _render_diagnostics_content(prepared: MpesaPreparedData, report: dict[str, A
         _render_alert_banner(
             f"{diagnostic_alert_count} type(s) de controle de donnees necessitent une verification."
         )
-    st.dataframe(
+    _mpesa_dataframe(
         diagnostics_view,
         width="stretch",
         hide_index=True,
@@ -6121,7 +6161,7 @@ def _render_diagnostics_content(prepared: MpesaPreparedData, report: dict[str, A
                 "correspond aux lignes detaillees; la liste fusionne les lignes communes. "
                 "Sans filtre de controle, une meme ligne peut cumuler plusieurs raisons d'anomalie."
             )
-            st.dataframe(
+            _mpesa_dataframe(
                 anomalies.head(1000),
                 width="stretch",
                 hide_index=True,
@@ -6176,7 +6216,7 @@ def _render_statistics_tab(
         )
         source_preview = build_mpesa_statistics_report(prepared).get("priorite_sources", pd.DataFrame())
         if not source_preview.empty:
-            st.dataframe(source_preview, width="stretch", hide_index=True)
+            _mpesa_dataframe(source_preview, width="stretch", hide_index=True)
         return
 
     minimum_date = combined_dates.min().date()
@@ -6390,7 +6430,7 @@ def _render_statistics_tab(
 
     if not source_priority.empty:
         render_panel_title("Sources et importance")
-        st.dataframe(
+        _mpesa_dataframe(
             source_priority,
             width="stretch",
             hide_index=True,
@@ -6519,7 +6559,7 @@ def _render_statistics_tab(
                 height=390,
             )
             with st.expander("Afficher la table de croissance clients", expanded=False):
-                st.dataframe(growth, width="stretch", hide_index=True)
+                _mpesa_dataframe(growth, width="stretch", hide_index=True)
 
     with st.expander("2. Comptes ouverts et comptes bloques", expanded=False):
         st.caption(
@@ -6585,7 +6625,7 @@ def _render_statistics_tab(
                         ]
                     )
             render_kpi_cards(account_cards)
-            st.dataframe(
+            _mpesa_dataframe(
                 portfolio,
                 width="stretch",
                 hide_index=True,
@@ -6655,7 +6695,7 @@ def _render_statistics_tab(
                         ]
                     )
             render_kpi_cards(credit_cards)
-            st.dataframe(
+            _mpesa_dataframe(
                 credit_summary,
                 width="stretch",
                 hide_index=True,
@@ -6740,7 +6780,7 @@ def _render_statistics_tab(
             st.caption(
                 "Le chiffre d'affaires observe est indicatif : interets + penalites + part Bisou detectes dans Transactions."
             )
-            st.dataframe(
+            _mpesa_dataframe(
                 turnover,
                 width="stretch",
                 hide_index=True,
@@ -6755,7 +6795,7 @@ def _render_statistics_tab(
             top_view = top_clients.sort_values(["currency_code", "rang_volume"]).head(
                 int(top_n_clients)
             )
-            st.dataframe(
+            _mpesa_dataframe(
                 top_view,
                 width="stretch",
                 hide_index=True,
@@ -6855,7 +6895,7 @@ def _render_statistics_tab(
                     title="Évolution comparative de la qualité G2",
                 )
                 st.markdown("**Qualité par circuit et par devise**")
-                st.dataframe(
+                _mpesa_dataframe(
                     g2_quality,
                     width="stretch",
                     hide_index=True,
@@ -6892,7 +6932,7 @@ def _render_statistics_tab(
                 )
                 if isinstance(g2_statuses, pd.DataFrame) and not g2_statuses.empty:
                     st.markdown("**Statuts G2 par devise**")
-                    st.dataframe(
+                    _mpesa_dataframe(
                         g2_statuses,
                         width="stretch",
                         hide_index=True,
@@ -6917,7 +6957,7 @@ def _render_statistics_tab(
                         f"{len(g2_unmatched)} opération(s) G2 terminée(s) et "
                         "comparable(s) reste(nt) à rapprocher avec la Solution Numérique."
                     )
-                    st.dataframe(
+                    _mpesa_dataframe(
                         g2_unmatched.head(500),
                         width="stretch",
                         hide_index=True,
@@ -7255,7 +7295,7 @@ dates d'échéance et le taux annuel aux comptes bloqués disponibles.
             "Il faut au minimum 28 jours calendaires et plusieurs jours d'activité."
         )
         if not non_calculable.empty:
-            st.dataframe(non_calculable, hide_index=True, width="stretch")
+            _mpesa_dataframe(non_calculable, hide_index=True, width="stretch")
         return
 
     currency_options = sorted(
@@ -7415,7 +7455,7 @@ dates d'échéance et le taux annuel aux comptes bloqués disponibles.
                     "nombre_jours_historique",
                 ]
             ]
-            st.dataframe(
+            _mpesa_dataframe(
                 table,
                 hide_index=True,
                 width="stretch",
@@ -7477,7 +7517,7 @@ dates d'échéance et le taux annuel aux comptes bloqués disponibles.
                 "interet_estime_echeance",
                 "capital_plus_interet_estime",
             ]
-            st.dataframe(
+            _mpesa_dataframe(
                 dat_view[[column for column in dat_columns if column in dat_view.columns]],
                 hide_index=True,
                 width="stretch",
@@ -7516,10 +7556,10 @@ dates d'échéance et le taux annuel aux comptes bloqués disponibles.
 - Le modèle ne prévoit pas les soldes futurs d'épargne, l'encours futur des crédits, le défaut individuel ni un chiffre d'affaires certifié à partir d'un seul instantané.
             """
         )
-        st.dataframe(coverage, hide_index=True, width="stretch")
+        _mpesa_dataframe(coverage, hide_index=True, width="stretch")
         if not non_calculable.empty:
             st.caption("Indicateurs non calculables avec l'historique actuel")
-            st.dataframe(non_calculable, hide_index=True, width="stretch")
+            _mpesa_dataframe(non_calculable, hide_index=True, width="stretch")
 
 
 def render_solution_mpesa_tab() -> None:
@@ -7696,7 +7736,7 @@ def render_solution_mpesa_tab() -> None:
                 },
             ]
         )
-        st.dataframe(
+        _mpesa_dataframe(
             expected_sources,
             hide_index=True,
             column_config={

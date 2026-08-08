@@ -23,6 +23,14 @@ Tous les téléversements de Solution M-PESA peuvent recevoir plusieurs fichiers
 
 Dans les libellés destinés aux utilisateurs, utiliser `Solution Numérique`. Conserver `Turbo` seulement lorsqu'il s'agit d'un nom technique déjà contractuel : colonnes sources, fonctions, clés Streamlit, feuilles Excel historiques, tests, fichiers exportés ou libellés de traçabilité. `G2` doit être présenté comme `rapport G2 M-Pesa` ou `Rapport G2` lorsqu'il désigne le relevé de contrôle; il ne constitue pas un canal financier distinct de M-Pesa et ne doit jamais être additionné séparément aux montants M-Pesa. Réserver `Solution M-PESA` au nom global du module; ne jamais utiliser `M-PESA` seul comme source de calcul d'un indicateur. Exception : les exports officiels de l'Extrait client ne contiennent aucun suffixe `[Turbo]`, car ils constituent des relevés clients et non des écrans de traçabilité technique.
 
+## Noms de colonnes visibles
+
+- L'option globale du sidebar `Reference et stockage > Preparation des donnees > Renommer automatiquement les colonnes` pilote aussi Solution Numerique. Si elle est cochee, les tableaux visibles et les exports Excel doivent afficher des noms de colonnes propres, en francais, minuscules, sans accents, au format `snake_case` et conformes a `^[a-z0-9_]+$`.
+- Le renommage utilisateur est applique uniquement a la frontiere d'affichage ou d'export. Les DataFrames metier internes conservent leurs colonnes techniques (`customer_id`, `currency_code`, `created_at`, `ref_no`, etc.) afin de ne pas casser les calculs, filtres, rapprochements et tests existants.
+- `data/Rename_columns.xlsx` reste la source centrale des alias et des noms cibles. Avant d'ajouter un alias Solution Numerique, verifier le contrat avec `scripts/inspect_mpesa_contracts.py`, puis ajouter la correspondance dans ce fichier plutot que de multiplier les dictionnaires locaux.
+- Les collisions doivent etre resolues sans perte de donnees. Si deux colonnes sources aboutissent au meme nom visible, garder les deux colonnes et ajouter un suffixe stable au second nom.
+- Quand l'option du sidebar est desactivee, les tableaux et exports conservent les noms techniques originaux. Le choix ne doit jamais modifier les fichiers Excel sources ni les DataFrames caches.
+
 ## Décision de refactoring des téléversements
 
 État : refactoring Streamlit implémenté. Le parcours principal affiche quatre sources Solution Numérique et deux compléments facultatifs.

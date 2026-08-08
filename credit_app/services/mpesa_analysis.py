@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 from openpyxl.styles import Font, PatternFill
 
+from credit_app.display_columns import prepare_dataframe_for_display
 from credit_app.data_schema import (
     CURRENT_SAVINGS_SCHEMA,
     CUSTOMERS_SCHEMA,
@@ -18163,7 +18164,8 @@ def create_g2_dat_word(
         source_label_normalized == "turbo"
         or source_label.casefold().startswith("solution num")
     )
-    source_display_label = "Solution Numérique" if turbo_only else "rapport G2 M-Pesa"
+    source_display_label = "Solution Bisou Bisou Digital" if turbo_only else "rapport G2 M-Pesa"
+    flow_display_label = "Solution Numérique" if turbo_only else source_display_label
     report_scope = "Solution Numérique / M-Pesa"
     daily_pivot = report.get("rapport_journalier_pivot", pd.DataFrame())
     daily_synthese = report.get("rapport_journalier_synthese", pd.DataFrame())
@@ -18283,12 +18285,12 @@ def create_g2_dat_word(
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.paragraph_format.space_before = Pt(5)
     title.paragraph_format.space_after = Pt(2)
-    title.add_run(f"Rapport- {report_scope}")
+    title.add_run(f"Rapport - {report_scope}")
     meta = document.add_paragraph()
     meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
     meta.paragraph_format.space_after = Pt(7)
     meta_run = meta.add_run(
-        f"Rapport d'analyse des flux et contrôles DAT | Sens : {direction_label}"
+        f"Rapport d'analyse des flux et contrôles DAT | Sens : {direction_label} | Source : {source_display_label}"
     )
     meta_run.font.size = Pt(8.5)
     meta_run.font.color.rgb = RGBColor(93, 113, 135)
@@ -18372,7 +18374,7 @@ def create_g2_dat_word(
         document.add_paragraph().paragraph_format.space_after = Pt(0)
         return table
 
-    document.add_heading(f"Synthese des flux {source_display_label} par devise", level=1)
+    document.add_heading(f"Synthese des flux {flow_display_label} par devise", level=1)
     add_table(
         daily_pivot,
         ["currency_code", "nombre_entrees", "montant_total_entrees", "nombre_sorties", "montant_total_sorties", "solde_net_flux"],
@@ -18472,6 +18474,7 @@ def create_excel_export(
     report: dict[str, Any],
     *,
     print_orientation: str | None = None,
+    rename_user_columns: bool = False,
 ) -> bytes:
     sheet_contract = [
         ("synthese", "Synthese"),
@@ -18584,6 +18587,7 @@ def create_excel_export(
             safe_frame = frame if isinstance(frame, pd.DataFrame) else pd.DataFrame()
             if sheet_name == "DAT_En_Cours" and "jours_avant_echeance" in safe_frame.columns:
                 safe_frame = safe_frame.rename(columns={"jours_avant_echeance": "Jours restants"})
+            safe_frame = prepare_dataframe_for_display(safe_frame, enabled=rename_user_columns)
             safe_frame.to_excel(writer, sheet_name=sheet_name[:31], index=False)
             worksheet = writer.sheets[sheet_name[:31]]
             worksheet.freeze_panes = "A2"
