@@ -5263,6 +5263,8 @@ class MpesaAnalysisTests(unittest.TestCase):
         )
         self.assertIn("Rapport statistiques - Solution Numérique", word_text)
         self.assertIn("Clients du fichier Customers charge", word_text)
+        self.assertIn("Clients du fichier Customers charge | - | 2", word_text)
+        self.assertIn("Clients connus a la date de fin | - | 1", word_text)
         self.assertIn("1. Clients", word_text)
         self.assertIn("2. Comptes ouverts et comptes bloques", word_text)
         self.assertIn("3. Credits", word_text)

@@ -9826,11 +9826,25 @@ def build_mpesa_statistics_report(
                 }
             ]
         )
+    if not overview.empty:
+        loaded_clients_value = max(
+            total_loaded_clients,
+            total_known_clients,
+            int(
+                pd.to_numeric(
+                    overview.get("clients_turbo_charges", pd.Series(dtype=float)),
+                    errors="coerce",
+                )
+                .fillna(0)
+                .max()
+            ),
+        )
+        overview["clients_turbo_charges"] = loaded_clients_value
     client_indicators = pd.DataFrame(
         [
             {
                 "indicateur": "Clients du fichier Customers charge",
-                "valeur": total_loaded_clients,
+                "valeur": loaded_clients_value,
                 "definition": (
                     "Nombre de clients distincts presents dans Customers "
                     "apres preparation, avant le filtre de date de fin."
@@ -10241,6 +10255,8 @@ def create_mpesa_statistics_word(
 
     add_title("Synthese executive")
     overview = statistics_report.get("vue_ensemble", pd.DataFrame())
+    if isinstance(overview, pd.DataFrame):
+        overview = overview.copy()
     client_indicators_frame = statistics_report.get("clients_indicateurs", pd.DataFrame())
     activity_frame = statistics_report.get("activite_evolution", pd.DataFrame())
     growth_frame = statistics_report.get("clients_croissance", pd.DataFrame())
@@ -10280,18 +10296,28 @@ def create_mpesa_statistics_word(
                     return _safe_float(matches.iloc[0].get("valeur", 0))
             return _safe_float(fallback)
 
-        loaded_clients_summary = _client_indicator(
-            "Clients du fichier Customers charge",
-            first_row.get("clients_turbo_charges", 0),
-        )
         known_clients_summary = _client_indicator(
             "Clients connus a la date de fin",
             first_row.get("clients_turbo_connus", 0),
+        )
+        loaded_clients_summary = max(
+            _client_indicator(
+                "Clients du fichier Customers charge",
+                first_row.get("clients_turbo_charges", 0),
+            ),
+            float(
+                _as_numeric(overview.get("clients_turbo_charges", pd.Series(dtype=float))).max()
+            )
+            if "clients_turbo_charges" in overview.columns
+            else 0.0,
+            known_clients_summary,
         )
         active_clients_summary = _client_indicator(
             "Clients actifs sur la periode",
             first_row.get("clients_turbo_actifs", 0),
         )
+        if "clients_turbo_charges" in overview.columns:
+            overview.loc[:, "clients_turbo_charges"] = loaded_clients_summary
         summary_rows = [
             {"indicateur": "Clients du fichier Customers charge", "devise": "-", "valeur": _pdf_number(loaded_clients_summary, decimals=0)},
             {"indicateur": "Clients connus a la date de fin", "devise": "-", "valeur": _pdf_number(known_clients_summary, decimals=0)},
