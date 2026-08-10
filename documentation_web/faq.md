@@ -92,6 +92,34 @@ Les fichiers principaux sont :
 | 5 | Rapports `G2 M-Pesa` | Source facultative d'enrichissement du nom client et de contrôle des écritures |
 | 6 | `Clients_Perfect` | Source facultative pour les croisements Perfect / Solution Numérique |
 
+### Où trouver le cockpit client ?
+
+Dans le module `Solution Numérique`, ouvrir l'onglet `Clients`.
+
+Le cockpit Clients est organisé en cinq volets :
+
+| Besoin | Volet à consulter |
+|---|---|
+| KPI, référentiel et qualité des données | `Vue d'ensemble` |
+| Clients actifs, inactifs, acquisition et activation | `Activité et activation` |
+| Nouveaux clients et comptes créés sur la période | `Nouveaux clients et comptes` |
+| Vue Client 360, produits détenus et tranches d'encours | `Client 360 et segmentation` |
+| DAT sans crédit actif et listes commerciales prudentes | `Opportunités` |
+
+Le bloc `Export du cockpit Clients` se trouve après les volets d'analyse. Il permet de préparer l'Excel complet du cockpit Clients uniquement si l'utilisateur en a besoin.
+
+### Pourquoi faut-il cliquer sur `Actualiser les clients` ?
+
+Les fichiers de la Solution Numérique peuvent être lourds. Pour éviter qu'un changement de date, de fréquence ou de seuil relance immédiatement tous les calculs, les paramètres sont regroupés dans un formulaire. L'analyse démarre seulement après le clic sur `Actualiser les clients`.
+
+Ce principe est aussi utilisé dans les onglets analytiques lourds comme `Épargnes`, `Crédits`, `Statistiques` et `Projections`.
+
+### Pourquoi l'Excel n'apparaît-il pas directement ?
+
+La consultation en ligne est prioritaire. Les KPI, tableaux, alertes et listes sont affichés dans Streamlit pour permettre une lecture rapide. L'Excel est un support secondaire de retraitement ou de partage.
+
+Pour limiter les risques de lenteur ou de crash sur Streamlit Cloud, les gros classeurs Excel sont préparés seulement après clic sur `Préparer`, puis le bouton `Télécharger` apparaît quand le fichier est construit.
+
 ### Où trouver les clients qui épargnent le plus ?
 
 Dans l'interface Streamlit, ouvrir le module `Solution Numérique`, puis l'onglet `Épargnes`.

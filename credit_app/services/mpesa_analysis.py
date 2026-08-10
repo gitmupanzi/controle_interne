@@ -10680,6 +10680,7 @@ def create_mpesa_statistics_word(
             paragraph = document.add_paragraph("Aucune donnee disponible.")
             paragraph.paragraph_format.space_after = Pt(4)
             return
+        frame = frame.loc[:, ~frame.columns.duplicated()].copy()
         columns = [column for column in labels if column in frame.columns]
         if not columns:
             paragraph = document.add_paragraph("Aucune colonne exploitable.")
@@ -10750,6 +10751,9 @@ def create_mpesa_statistics_word(
         if not start_value:
             return "non calculable"
         return f"{100 * (end_value - start_value) / start_value:.2f} %"
+
+    def _comment_amount(value: Any, *, decimals: int = 2) -> str:
+        return _pdf_number(_safe_float(value), decimals=decimals)
 
     def add_text(text: str, *, bold_prefix: str | None = None) -> None:
         paragraph = document.add_paragraph()
@@ -11161,30 +11165,26 @@ def create_mpesa_statistics_word(
     client_analysis_rows: list[dict[str, Any]] = [
         {
             "analyse": "Clients du fichier Customers charge",
-            "devise": "-",
-            "valeur_debut": "-",
-            "valeur_fin": _pdf_number(loaded_clients, decimals=0),
-            "ratio_ou_variation": "-",
+            "devise": "Toutes",
+            "valeur": _pdf_number(loaded_clients, decimals=0),
+            "ratio_ou_variation": "Referentiel charge",
         },
         {
             "analyse": "Clients connus a la date de fin",
-            "devise": "-",
-            "valeur_debut": "-",
-            "valeur_fin": _pdf_number(known_clients, decimals=0),
-            "ratio_ou_variation": "-",
+            "devise": "Toutes",
+            "valeur": _pdf_number(known_clients, decimals=0),
+            "ratio_ou_variation": "Base connue",
         },
         {
             "analyse": "Clients actifs sur la periode",
-            "devise": "-",
-            "valeur_debut": "-",
-            "valeur_fin": _pdf_number(active_clients, decimals=0),
+            "devise": "Toutes",
+            "valeur": _pdf_number(active_clients, decimals=0),
             "ratio_ou_variation": _percent(active_clients, known_clients),
         },
         {
             "analyse": "Nouveaux clients observes",
-            "devise": "-",
-            "valeur_debut": "-",
-            "valeur_fin": _pdf_number(new_clients, decimals=0),
+            "devise": "Toutes",
+            "valeur": _pdf_number(new_clients, decimals=0),
             "ratio_ou_variation": _percent(new_clients, final_clients),
         },
     ]
@@ -11197,6 +11197,7 @@ def create_mpesa_statistics_word(
                 {
                     "analyse": "Clients actifs par devise",
                     "devise": _currency_label(currency),
+                    "valeur": f"{_pdf_number(values.iloc[0], decimals=0)} -> {_pdf_number(values.iloc[-1], decimals=0)}",
                     "valeur_debut": _pdf_number(values.iloc[0], decimals=0),
                     "valeur_fin": _pdf_number(values.iloc[-1], decimals=0),
                     "ratio_ou_variation": _variation_percent(float(values.iloc[0]), float(values.iloc[-1])),
@@ -11207,12 +11208,41 @@ def create_mpesa_statistics_word(
         {
             "analyse": "Analyse",
             "devise": "Devise",
-            "valeur_debut": "Début / référence",
-            "valeur_fin": "Fin / valeur",
+            "valeur": "Valeur",
             "ratio_ou_variation": "Ratio / variation",
         },
         max_rows=20,
     )
+    add_text(
+        (
+            "Commentaire : "
+            f"le referentiel charge contient {_pdf_number(loaded_clients, decimals=0)} client(s). "
+            f"A la date de fin, {_pdf_number(known_clients, decimals=0)} client(s) sont connus et "
+            f"{_pdf_number(active_clients, decimals=0)} client(s) ont ete actifs sur la periode, "
+            f"soit {_percent(active_clients, known_clients)} de la base connue."
+        ),
+        bold_prefix="Commentaire :",
+    )
+    if new_clients:
+        add_text(
+            (
+                "Commentaire croissance : "
+                f"{_pdf_number(new_clients, decimals=0)} nouveau(x) client(s) sont observes dans la courbe. "
+                f"Rapportes a la base finale observee ({_pdf_number(final_clients, decimals=0)}), "
+                f"ils representent {_percent(new_clients, final_clients)}."
+            ),
+            bold_prefix="Commentaire croissance :",
+        )
+    for row in client_analysis_rows:
+        if row.get("analyse") == "Clients actifs par devise":
+            add_text(
+                (
+                    f"Commentaire {_currency_label(row.get('devise'))} : "
+                    f"les clients actifs passent de {row.get('valeur_debut')} a {row.get('valeur_fin')} "
+                    f"sur les bornes observees, soit une variation de {row.get('ratio_ou_variation')}."
+                ),
+                bold_prefix=f"Commentaire {_currency_label(row.get('devise'))} :",
+            )
 
     add_title("2. Comptes ouverts et comptes bloques")
     open_accounts = _frame_by_family(portfolio_frame, "Compte ouvert")
@@ -11227,17 +11257,15 @@ def create_mpesa_statistics_word(
     account_analysis_rows: list[dict[str, Any]] = [
         {
             "analyse": "Comptes ouverts",
-            "devise": "-",
-            "nombre": _pdf_number(open_count, decimals=0),
-            "montant": "-",
-            "part": _percent(open_count, total_accounts),
+            "devise": "Toutes",
+            "valeur": _pdf_number(open_count, decimals=0),
+            "ratio_ou_part": _percent(open_count, total_accounts),
         },
         {
             "analyse": "Comptes bloqués / DAT",
-            "devise": "-",
-            "nombre": _pdf_number(fixed_count, decimals=0),
-            "montant": "-",
-            "part": _percent(fixed_count, total_accounts),
+            "devise": "Toutes",
+            "valeur": _pdf_number(fixed_count, decimals=0),
+            "ratio_ou_part": _percent(fixed_count, total_accounts),
         },
     ]
     if isinstance(portfolio_frame, pd.DataFrame) and not portfolio_frame.empty and "currency_code" in portfolio_frame.columns:
@@ -11253,16 +11281,14 @@ def create_mpesa_statistics_word(
                     {
                         "analyse": "Solde comptes ouverts",
                         "devise": currency,
-                        "nombre": "-",
-                        "montant": _pdf_number(open_balance, decimals=2),
-                        "part": _percent(open_balance, total_savings_balance),
+                        "valeur": _pdf_number(open_balance, decimals=2),
+                        "ratio_ou_part": _percent(open_balance, total_savings_balance),
                     },
                     {
                         "analyse": "Solde comptes bloqués / DAT",
                         "devise": currency,
-                        "nombre": "-",
-                        "montant": _pdf_number(fixed_balance, decimals=2),
-                        "part": _percent(fixed_balance, total_savings_balance),
+                        "valeur": _pdf_number(fixed_balance, decimals=2),
+                        "ratio_ou_part": _percent(fixed_balance, total_savings_balance),
                     },
                 ]
             )
@@ -11270,14 +11296,54 @@ def create_mpesa_statistics_word(
         pd.DataFrame(account_analysis_rows),
         {
             "analyse": "Analyse",
-            "currency_code": "Devise",
             "devise": "Devise",
-            "nombre": "Nombre",
-            "montant": "Montant",
-            "part": "Part / ratio",
+            "valeur": "Valeur",
+            "ratio_ou_part": "Part / ratio",
         },
         max_rows=20,
     )
+    add_text(
+        (
+            "Commentaire : "
+            f"les comptes ouverts representent {_pdf_number(open_count, decimals=0)} compte(s), "
+            f"soit {_percent(open_count, total_accounts)} du nombre de comptes d'epargne observes. "
+            f"Les comptes bloques / DAT representent {_pdf_number(fixed_count, decimals=0)} compte(s), "
+            f"soit {_percent(fixed_count, total_accounts)}."
+        ),
+        bold_prefix="Commentaire :",
+    )
+    for currency in sorted(
+        {
+            str(row.get("devise", "")).strip()
+            for row in account_analysis_rows
+            if row.get("devise") not in {"", "-", "Toutes"}
+        }
+    ):
+        currency_rows = [row for row in account_analysis_rows if str(row.get("devise", "")).strip() == currency]
+        open_balance_text = next(
+            (row.get("valeur") for row in currency_rows if row.get("analyse") == "Solde comptes ouverts"),
+            "-",
+        )
+        open_part_text = next(
+            (row.get("ratio_ou_part") for row in currency_rows if row.get("analyse") == "Solde comptes ouverts"),
+            "non calculable",
+        )
+        fixed_balance_text = next(
+            (row.get("valeur") for row in currency_rows if row.get("analyse") == "Solde comptes bloqués / DAT"),
+            "-",
+        )
+        fixed_part_text = next(
+            (row.get("ratio_ou_part") for row in currency_rows if row.get("analyse") == "Solde comptes bloqués / DAT"),
+            "non calculable",
+        )
+        add_text(
+            (
+                f"Commentaire {currency} : "
+                f"le solde des comptes ouverts est de {open_balance_text} ({open_part_text} du portefeuille epargne + DAT {currency}); "
+                f"le solde des comptes bloques / DAT est de {fixed_balance_text} ({fixed_part_text})."
+            ),
+            bold_prefix=f"Commentaire {currency} :",
+        )
 
     add_title("3. Credits")
     credit_count = _number_value(credit_frame, "nombre_credits")
@@ -11289,17 +11355,12 @@ def create_mpesa_statistics_word(
     credit_analysis_rows: list[dict[str, Any]] = [
         {
             "analyse": "Nombre de crédits",
-            "devise": "-",
-            "credits": _pdf_number(credit_count, decimals=0),
-            "clients": _pdf_number(credit_clients, decimals=0),
-            "montant_accorde": "-",
-            "montant_rembourse": "-",
-            "taux_remboursement": "-",
-            "encours": "-",
-            "encours_sur_montant": "-",
-            "par_30j": "-",
+            "devise": "Toutes",
+            "valeur": _pdf_number(credit_count, decimals=0),
+            "ratio_ou_commentaire": f"{_pdf_number(credit_clients, decimals=0)} client(s)",
         }
     ]
+    credit_comment_rows: list[dict[str, Any]] = []
     if isinstance(credit_frame, pd.DataFrame) and not credit_frame.empty:
         for _, row in credit_frame.iterrows():
             currency = _currency_label(row.get("currency_code", ""))
@@ -11307,9 +11368,8 @@ def create_mpesa_statistics_word(
             credit_paid = _safe_float(row.get("montant_rembourse", 0))
             credit_outstanding = _safe_float(row.get("encours_total", 0))
             overdue_30 = _safe_float(row.get("encours_retard_30j", 0))
-            credit_analysis_rows.append(
+            credit_comment_rows.append(
                 {
-                    "analyse": "Crédits par devise",
                     "devise": currency,
                     "credits": _pdf_number(row.get("nombre_credits", 0), decimals=0),
                     "clients": _pdf_number(row.get("nombre_clients", 0), decimals=0),
@@ -11321,23 +11381,70 @@ def create_mpesa_statistics_word(
                     "par_30j": _percent(overdue_30, credit_outstanding),
                 }
             )
+            credit_analysis_rows.extend(
+                [
+                    {
+                        "analyse": "Crédits",
+                        "devise": currency,
+                        "valeur": _pdf_number(row.get("nombre_credits", 0), decimals=0),
+                        "ratio_ou_commentaire": f"{_pdf_number(row.get('nombre_clients', 0), decimals=0)} client(s)",
+                    },
+                    {
+                        "analyse": "Montant accordé",
+                        "devise": currency,
+                        "valeur": _pdf_number(credit_amount, decimals=2),
+                        "ratio_ou_commentaire": "Base crédit accordé",
+                    },
+                    {
+                        "analyse": "Montant remboursé observé",
+                        "devise": currency,
+                        "valeur": _pdf_number(credit_paid, decimals=2),
+                        "ratio_ou_commentaire": _percent(credit_paid, credit_amount),
+                    },
+                    {
+                        "analyse": "Encours",
+                        "devise": currency,
+                        "valeur": _pdf_number(credit_outstanding, decimals=2),
+                        "ratio_ou_commentaire": _percent(credit_outstanding, credit_amount),
+                    },
+                    {
+                        "analyse": "PAR 30j",
+                        "devise": currency,
+                        "valeur": _percent(overdue_30, credit_outstanding),
+                        "ratio_ou_commentaire": f"Encours en retard : {_pdf_number(overdue_30, decimals=2)}",
+                    },
+                ]
+            )
     add_table(
         pd.DataFrame(credit_analysis_rows),
         {
             "analyse": "Analyse",
             "devise": "Devise",
-            "credits": "Crédits",
-            "clients": "Clients",
-            "montant_accorde": "Montant accordé",
-            "montant_rembourse": "Montant remboursé",
-            "taux_remboursement": "Remboursé / accordé",
-            "encours": "Encours",
-            "encours_sur_montant": "Encours / accordé",
-            "par_30j_pct": "PAR 30j",
-            "par_30j": "PAR 30j",
+            "valeur": "Valeur",
+            "ratio_ou_commentaire": "Ratio / commentaire",
         },
         max_rows=20,
     )
+    add_text(
+        (
+            "Commentaire : "
+            f"le portefeuille observe compte {_pdf_number(credit_count, decimals=0)} credit(s) "
+            f"pour {_pdf_number(credit_clients, decimals=0)} client(s). Les montants restent presentes par devise "
+            "afin de ne pas additionner CDF et USD."
+        ),
+        bold_prefix="Commentaire :",
+    )
+    for row in credit_comment_rows:
+        currency = _currency_label(row.get("devise"))
+        add_text(
+            (
+                f"Commentaire {currency} : "
+                f"montant accorde {row.get('montant_accorde')}; montant rembourse observe {row.get('montant_rembourse')}, "
+                f"soit {row.get('taux_remboursement')} du montant accorde; encours {row.get('encours')} "
+                f"({row.get('encours_sur_montant')} du montant accorde); PAR 30j {row.get('par_30j')}."
+            ),
+            bold_prefix=f"Commentaire {currency} :",
+        )
 
     add_title("4. Transactions")
     total_operations = _number_value(overview, "operations")
@@ -11348,28 +11455,48 @@ def create_mpesa_statistics_word(
     transaction_analysis_rows: list[dict[str, Any]] = [
         {
             "analyse": "Opérations consolidées",
-            "devise": "-",
-            "operations": _pdf_number(total_operations, decimals=0),
-            "volume": "-",
-            "chiffre_affaires": "-",
-            "ratio": "-",
+            "devise": "Toutes",
+            "valeur": _pdf_number(total_operations, decimals=0),
+            "ratio_ou_variation": "Nombre d'operations",
         }
     ]
+    transaction_comment_rows: list[dict[str, Any]] = []
     if isinstance(overview, pd.DataFrame) and not overview.empty:
         for _, row in overview.iterrows():
             currency = str(row.get("currency_code", "")).strip() or "Non renseignee"
             currency_volume = _safe_float(row.get("volume_total_transactions", 0))
             currency_turnover = _safe_float(row.get("chiffre_affaires_observe", 0))
             currency_operations = _safe_float(row.get("operations", 0))
-            transaction_analysis_rows.append(
+            transaction_comment_rows.append(
                 {
-                    "analyse": "Transactions par devise",
                     "devise": currency,
                     "operations": _pdf_number(currency_operations, decimals=0),
                     "volume": _pdf_number(currency_volume, decimals=2),
                     "chiffre_affaires": _pdf_number(currency_turnover, decimals=2),
                     "ratio": _percent(currency_turnover, currency_volume),
                 }
+            )
+            transaction_analysis_rows.extend(
+                [
+                    {
+                        "analyse": "Opérations",
+                        "devise": currency,
+                        "valeur": _pdf_number(currency_operations, decimals=0),
+                        "ratio_ou_variation": "Transactions consolidees",
+                    },
+                    {
+                        "analyse": "Volume transactionnel observé",
+                        "devise": currency,
+                        "valeur": _pdf_number(currency_volume, decimals=2),
+                        "ratio_ou_variation": "Montant par devise",
+                    },
+                    {
+                        "analyse": "Chiffre d'affaires observé",
+                        "devise": currency,
+                        "valeur": _pdf_number(currency_turnover, decimals=2),
+                        "ratio_ou_variation": _percent(currency_turnover, currency_volume),
+                    },
+                ]
             )
     if isinstance(activity_frame, pd.DataFrame) and not activity_frame.empty and {"currency_code", "periode_analyse", "volume_total_transactions"}.issubset(activity_frame.columns):
         for currency, group in activity_frame.sort_values("periode_analyse").groupby("currency_code", dropna=False):
@@ -11380,10 +11507,8 @@ def create_mpesa_statistics_word(
                 {
                     "analyse": "Tendance volume",
                     "devise": _currency_label(currency),
-                    "operations": "-",
-                    "volume": f"{_pdf_number(values.iloc[0], decimals=2)} -> {_pdf_number(values.iloc[-1], decimals=2)}",
-                    "chiffre_affaires": "-",
-                    "ratio": _variation_percent(float(values.iloc[0]), float(values.iloc[-1])),
+                    "valeur": f"{_pdf_number(values.iloc[0], decimals=2)} -> {_pdf_number(values.iloc[-1], decimals=2)}",
+                    "ratio_ou_variation": _variation_percent(float(values.iloc[0]), float(values.iloc[-1])),
                 }
             )
     add_table(
@@ -11391,13 +11516,30 @@ def create_mpesa_statistics_word(
         {
             "analyse": "Analyse",
             "devise": "Devise",
-            "operations": "Opérations",
-            "volume": "Volume",
-            "chiffre_affaires": "CA observé",
-            "ratio": "Ratio / variation",
+            "valeur": "Valeur",
+            "ratio_ou_variation": "Ratio / variation",
         },
         max_rows=20,
     )
+    add_text(
+        (
+            "Commentaire : "
+            f"{_pdf_number(total_operations, decimals=0)} operation(s) consolidee(s) sont observees sur la periode. "
+            "Le volume transactionnel, le chiffre d'affaires observe et les tendances sont lus devise par devise."
+        ),
+        bold_prefix="Commentaire :",
+    )
+    for row in transaction_comment_rows:
+        currency = _currency_label(row.get("devise"))
+        add_text(
+            (
+                f"Commentaire {currency} : "
+                f"{row.get('operations')} operation(s), volume {row.get('volume')}, "
+                f"chiffre d'affaires observe {row.get('chiffre_affaires')} "
+                f"({row.get('ratio')} du volume transactionnel observe)."
+            ),
+            bold_prefix=f"Commentaire {currency} :",
+        )
     if (
         isinstance(regular_deposits_summary_frame, pd.DataFrame)
         and not regular_deposits_summary_frame.empty

@@ -33,6 +33,7 @@ Les données individuelles ne doivent pas être publiées dans la documentation 
 
 La Solution Numérique peut charger des fichiers Excel volumineux. Pour limiter les risques de crash :
 
+- l'analyse en ligne est prioritaire : les KPI, alertes, tableaux et graphiques doivent être consultables dans Streamlit avant de produire un fichier ;
 - les sources communes sont préparées une fois après téléversement ;
 - les sous-onglets principaux utilisent une navigation dynamique : seul le sous-onglet ouvert rend son contenu ;
 - les paramètres locaux des sous-onglets lourds sont regroupés dans des formulaires et ne déclenchent les calculs qu'après clic sur un bouton `Actualiser` ;
@@ -40,6 +41,7 @@ La Solution Numérique peut charger des fichiers Excel volumineux. Pour limiter 
 - après un nouveau téléversement, les validations précédentes ne sont pas réutilisées automatiquement : l'utilisateur doit relancer l'analyse voulue avec `Actualiser` ;
 - les rapports lourds sont conservés dans des caches bornés ;
 - les exports Word/PDF/Excel sont générés à la demande et gardent peu d'entrées en cache ;
+- les exports Excel volumineux suivent le parcours `Préparer` puis `Télécharger`, afin d'éviter la construction automatique des classeurs au chargement de la page ;
 - les analyses récurrentes doivent réutiliser le journal d'événements consolidé plutôt que recalculer les transactions dans chaque onglet.
 
 Cette règle ne change pas les calculs métier : elle limite seulement les calculs cachés et la mémoire conservée.

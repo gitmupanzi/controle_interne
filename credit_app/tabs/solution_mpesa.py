@@ -5,7 +5,7 @@ from datetime import time
 import hashlib
 from io import BytesIO
 import re
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 import plotly.express as px
@@ -684,6 +684,48 @@ def _create_excel_export_current_sidebar(
     )
 
 
+def _render_excel_export_on_demand(
+    *,
+    export_report: dict[str, Any],
+    prepare_label: str,
+    download_label: str,
+    file_name: str,
+    key: str,
+    print_orientation: str | None = None,
+    width: Literal["stretch", "content"] = "content",
+    help: str | None = None,
+    disabled: bool = False,
+) -> None:
+    """Prépare un export Excel seulement après action explicite de l'utilisateur."""
+
+    if st.button(
+        prepare_label,
+        key=f"{key}_prepare",
+        width=width,
+        help=help,
+        disabled=disabled,
+    ):
+        with st.spinner("Préparation du classeur Excel..."):
+            export_bytes = _create_excel_export_current_sidebar(
+                export_report,
+                print_orientation=print_orientation,
+            )
+        st.download_button(
+            download_label,
+            data=export_bytes,
+            file_name=file_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            icon=":material/download:",
+            width=width,
+            key=f"{key}_download",
+        )
+    elif not disabled:
+        st.caption(
+            "Le fichier Excel n'est pas généré automatiquement. "
+            "Cliquez sur le bouton de préparation uniquement si vous voulez l'exporter."
+        )
+
+
 @st.cache_data(show_spinner=False, max_entries=3)
 def _create_g2_dat_word_cached(
     word_report: dict[str, Any],
@@ -1099,6 +1141,7 @@ def _build_mpesa_savings_cockpit_cached(
     large_savings_usd: float,
     large_savings_cdf: float,
 ) -> dict[str, Any]:
+    operation_journal = _build_turbo_operation_events_cached(prepared)
     scoped_prepared = _prepared_data_as_of(prepared, date_end)
     return build_mpesa_savings_cockpit(
         scoped_prepared,
@@ -1109,6 +1152,8 @@ def _build_mpesa_savings_cockpit_cached(
         inactivity_threshold_days=inactivity_threshold_days,
         maturity_horizon_days=maturity_horizon_days,
         large_savings_thresholds={"USD": large_savings_usd, "CDF": large_savings_cdf},
+        turbo_events=operation_journal["events"],
+        turbo_transaction_lines=operation_journal["lines"],
     )
 
 
@@ -2746,15 +2791,17 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         ]
     }
     customer_export = {"synthese": export_summary, **customer_export}
-    export_bytes = _create_excel_export_current_sidebar(customer_export)
     excel_column = st.columns(3)[0]
-    excel_column.download_button(
-        "Telecharger le rapport complet du client",
-        data=export_bytes,
-        file_name=f"extrait_turbo_dat_client_{selected_customer}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        width="stretch",
-    )
+    with excel_column:
+        _render_excel_export_on_demand(
+            export_report=customer_export,
+            prepare_label="Préparer l'Excel client",
+            download_label="Télécharger le rapport complet du client",
+            file_name=f"extrait_turbo_dat_client_{selected_customer}.xlsx",
+            key=f"mpesa_customer_full_excel_{selected_customer}",
+            width="stretch",
+            help="Prépare le classeur Excel complet du client uniquement à la demande.",
+        )
     return filtered_report
 
 
@@ -2970,21 +3017,22 @@ def _render_dat_repayment_schedule(prepared: MpesaPreparedData) -> None:
             ),
         },
     )
-    export_bytes = _create_excel_export_current_sidebar(
-        {"dat_echeances_detail": filtered_actionable}
-    )
-    st.download_button(
-        "Telecharger les remboursements DAT a preparer",
-        data=export_bytes,
+    _render_excel_export_on_demand(
+        export_report={"dat_echeances_detail": filtered_actionable},
+        prepare_label="Préparer l'Excel des remboursements DAT",
+        download_label="Télécharger les remboursements DAT à préparer",
         file_name=(
             f"remboursements_dat_a_preparer_{pd.Timestamp(analysis_date):%Y%m%d}_"
             f"{preparation_horizon_days}j.xlsx"
         ),
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        width="stretch",
         key=(
             f"mpesa_dat_repayment_export_{pd.Timestamp(analysis_date):%Y%m%d}_"
             f"{preparation_horizon_days}j"
+        ),
+        width="stretch",
+        help=(
+            "Prépare l'Excel uniquement si vous voulez exporter les DAT échus "
+            "ou proches du terme."
         ),
     )
 
@@ -3098,15 +3146,14 @@ def _render_large_dat_summary(prepared: MpesaPreparedData) -> None:
     st.caption(f"{len(combined_view)} client(s) affiche(s), toutes devises confondues sans addition des montants.")
     _mpesa_dataframe(combined_view[display_columns], width="stretch", hide_index=True)
 
-    export_bytes = _create_excel_export_current_sidebar(
-        {"forts_dat": combined_strong_clients, "portefeuille_dat": portefeuille}
-    )
-    st.download_button(
-        "Telecharger la synthese des forts DAT",
-        data=export_bytes,
+    _render_excel_export_on_demand(
+        export_report={"forts_dat": combined_strong_clients, "portefeuille_dat": portefeuille},
+        prepare_label="Préparer l'Excel des forts DAT",
+        download_label="Télécharger la synthèse des forts DAT",
         file_name="synthese_clients_forts_dat.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="mpesa_large_dat_summary_export",
         width="stretch",
+        help="Prépare le classeur des gros DAT uniquement à la demande.",
     )
 
 
@@ -3578,14 +3625,17 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
     }
     for name, frame in cockpit.get("listes_action", {}).items():
         export_report[f"epargne_liste_{name}"] = frame
-    export_bytes = _create_excel_export_current_sidebar(export_report)
-    st.download_button(
-        "Telecharger le cockpit Epargnes",
-        data=export_bytes,
+    _render_excel_export_on_demand(
+        export_report=export_report,
+        prepare_label="Préparer l'export Excel Épargnes",
+        download_label="Télécharger le cockpit Épargnes",
         file_name=f"cockpit_epargnes_{pd.Timestamp(date_start):%Y%m%d}_{pd.Timestamp(date_end):%Y%m%d}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        width="stretch",
         key=f"mpesa_savings_cockpit_export_{pd.Timestamp(date_start):%Y%m%d}_{pd.Timestamp(date_end):%Y%m%d}",
+        width="stretch",
+        help=(
+            "Prépare le classeur Excel uniquement à la demande afin d'éviter "
+            "d'alourdir le chargement du cockpit Épargnes."
+        ),
     )
 
 
@@ -3636,7 +3686,6 @@ def _render_g2_report_export(
                 "g2_dat": g2_dat,
             }
         )
-    report_bytes = _create_excel_export_current_sidebar(export_report, print_orientation="portrait")
     word_report = dict(export_report)
     word_report["statuts_g2"] = daily_statuts
     word_report["rapport_journalier_anomalies"] = daily_anomalies
@@ -3649,12 +3698,15 @@ def _render_g2_report_export(
     file_source = "turbo_dat" if turbo_only else "g2_dat"
     excel_column, word_column = st.columns(2)
     with excel_column:
-        st.download_button(
-            "Telecharger le rapport Excel",
-            data=report_bytes,
+        _render_excel_export_on_demand(
+            export_report=export_report,
+            prepare_label="Préparer le rapport Excel",
+            download_label="Télécharger le rapport Excel",
             file_name=f"rapport_{file_source}_{period_suffix}_{direction_suffix}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"mpesa_{file_source}_excel_{period_suffix}_{direction_suffix}",
+            print_orientation="portrait",
             width="stretch",
+            help="Prépare le rapport Excel G2/DAT uniquement à la demande.",
         )
     with word_column:
         try:
@@ -4871,19 +4923,18 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
         _mpesa_dataframe(operation_display, width="stretch", hide_index=True)
 
     render_panel_title("4. Export")
-    export_bytes = _create_excel_export_current_sidebar(
-        {
+    _render_excel_export_on_demand(
+        export_report={
             "clients_perfect_dans_mpesa": clients_perfect_dans_mpesa,
             "clients_perfect_dans_turbo": clients_perfect_dans_turbo,
             "clients_perfect_dans_turbo_et_mpesa": clients_perfect_dans_turbo_et_mpesa,
-        }
-    )
-    st.download_button(
-        "Telecharger le rapprochement Solution Numérique + G2 / Clients_Perfect",
-        data=export_bytes,
+        },
+        prepare_label="Préparer l'Excel Perfect Client",
+        download_label="Télécharger le rapprochement Solution Numérique + G2 / Clients_Perfect",
         file_name="rapprochement_turbo_g2_clients_perfect.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="mpesa_perfect_client_crosscheck_export",
         width="stretch",
+        help="Prépare le classeur de rapprochement uniquement à la demande.",
     )
 
 
@@ -5318,19 +5369,21 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
         for key in export_keys
         if key in report_view and isinstance(report_view[key], pd.DataFrame) and not report_view[key].empty
     }
-    if st.button("Preparer l'export Excel du cockpit", key="mpesa_prepare_pilotage_export", width="stretch"):
-        with st.spinner("Preparation des feuilles importantes..."):
-            export_bytes = _create_excel_export_current_sidebar(export_report)
-        st.download_button(
-            "Telecharger le cockpit Solution Numérique + G2",
-            data=export_bytes,
-            file_name=f"pilotage_turbo_g2_{pd.Timestamp(report_analysis_date):%Y%m%d}.xlsx" if pd.notna(report_analysis_date) else "pilotage_turbo_g2.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            width="stretch",
-        )
-    st.caption(
-        "L'Excel est genere uniquement sur demande et contient les syntheses et listes d'action du cockpit; "
-        "aucun PDF n'est genere."
+    _render_excel_export_on_demand(
+        export_report=export_report,
+        prepare_label="Preparer l'export Excel du cockpit",
+        download_label="Telecharger le cockpit Solution Numerique + G2",
+        file_name=(
+            f"pilotage_turbo_g2_{pd.Timestamp(report_analysis_date):%Y%m%d}.xlsx"
+            if pd.notna(report_analysis_date)
+            else "pilotage_turbo_g2.xlsx"
+        ),
+        key="mpesa_prepare_pilotage_export",
+        width="stretch",
+        help=(
+            "Prepare uniquement les feuilles importantes du cockpit lorsque le classeur doit etre exporte. "
+            "Les analyses a l'ecran restent prioritaires."
+        ),
     )
 
 
@@ -5803,12 +5856,12 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         "credit_catalogue_kpi": kpi_catalog,
         **{f"credit_liste_{key}": value for key, value in action_lists.items()},
     }
-    st.download_button(
-        "Telecharger le cockpit Credits Excel",
-        data=lambda: _create_excel_export_current_sidebar(export_report),
+    _render_excel_export_on_demand(
+        export_report=export_report,
+        prepare_label="Préparer l'export Excel Crédits",
+        download_label="Télécharger le cockpit Crédits Excel",
         file_name=f"cockpit_credits_solution_numerique_{pd.Timestamp(date_start):%Y%m%d}_{pd.Timestamp(date_end):%Y%m%d}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        icon=":material/download:",
+        key=f"mpesa_credit_cockpit_export_{pd.Timestamp(date_start):%Y%m%d}_{pd.Timestamp(date_end):%Y%m%d}",
         width="content",
         help="Export Excel des syntheses, details et listes d'action credit du perimetre filtre.",
     )
@@ -6400,24 +6453,20 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             for key in export_keys
             if key in report_view and isinstance(report_view[key], pd.DataFrame)
         }
-        if st.button(
-            "Preparer l'export Pilotage financier",
+        _render_excel_export_on_demand(
+            export_report=export_report,
+            prepare_label="Preparer l'export Pilotage financier",
+            download_label="Telecharger le pilotage financier",
+            file_name=(
+                f"pilotage_financier_turbo_{pd.Timestamp(date_start):%Y%m%d}_"
+                f"{pd.Timestamp(date_end):%Y%m%d}.xlsx"
+            ),
             key="mpesa_prepare_turbo_financial_export",
             width="content",
-        ):
-            with st.spinner("Preparation du classeur..."):
-                export_bytes = _create_excel_export_current_sidebar(export_report)
-            st.download_button(
-                "Telecharger le pilotage financier",
-                data=export_bytes,
-                file_name=(
-                    f"pilotage_financier_turbo_{pd.Timestamp(date_start):%Y%m%d}_"
-                    f"{pd.Timestamp(date_end):%Y%m%d}.xlsx"
-                ),
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="mpesa_download_turbo_financial_export",
-                width="content",
-            )
+            help=(
+                "Prepare le classeur de pilotage uniquement apres validation des analyses affichees a l'ecran."
+            ),
+        )
         with st.expander("Sources et definitions des indicateurs", expanded=False):
             _mpesa_dataframe(sources, width="stretch", hide_index=True)
             _mpesa_dataframe(report_view.get("definitions", pd.DataFrame()), width="stretch", hide_index=True)
@@ -6703,23 +6752,23 @@ def _render_accounting_balances_and_journals(
                 f"{end_token}_{selection_token}"
             ),
         )
-        st.download_button(
-            "Télécharger Excel dépôts/retraits",
-            data=lambda: _create_excel_export_current_sidebar(
-                pivot_export_report,
-                print_orientation="landscape",
-            ),
+        _render_excel_export_on_demand(
+            export_report=pivot_export_report,
+            prepare_label="Préparer l'Excel dépôts/retraits",
+            download_label="Télécharger Excel dépôts/retraits",
             file_name=(
                 f"suivi_depots_retraits_turbo_{start_token}_{end_token}.xlsx"
             ),
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            icon=":material/download:",
-            on_click="ignore",
-            width="content",
-            disabled=deposit_withdrawal_pivot.empty,
             key=(
                 f"mpesa_turbo_deposit_withdrawal_excel_{start_token}_"
                 f"{end_token}_{selection_token}"
+            ),
+            print_orientation="landscape",
+            width="content",
+            disabled=deposit_withdrawal_pivot.empty,
+            help=(
+                "Prépare le classeur Excel du suivi dépôts/retraits uniquement "
+                "si le tableau filtré doit être exporté."
             ),
         )
 
@@ -6859,21 +6908,17 @@ def _render_accounting_export(
     }
     start_token = pd.Timestamp(date_start).strftime("%Y%m%d")
     end_token = pd.Timestamp(date_end).strftime("%Y%m%d")
-    if st.button(
-        "Preparer l'export comptable",
-        key=f"mpesa_prepare_accounting_export_{start_token}_{end_token}",
+    _render_excel_export_on_demand(
+        export_report=export_report,
+        prepare_label="Preparer l'export comptable",
+        download_label="Telecharger les analyses comptables",
+        file_name=f"analyses_comptables_turbo_{start_token}_{end_token}.xlsx",
+        key=f"mpesa_accounting_export_{start_token}_{end_token}",
         width="content",
-    ):
-        with st.spinner("Preparation du classeur comptable..."):
-            export_bytes = _create_excel_export_current_sidebar(export_report)
-        st.download_button(
-            "Telecharger les analyses comptables",
-            data=export_bytes,
-            file_name=f"analyses_comptables_turbo_{start_token}_{end_token}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            width="content",
-            key=f"mpesa_accounting_export_{start_token}_{end_token}",
-        )
+        help=(
+            "Prepare le classeur comptable uniquement si vous devez l'exploiter hors de l'interface."
+        ),
+    )
 
 
 def _render_diagnostics_content(prepared: MpesaPreparedData, report: dict[str, Any] | None) -> None:
@@ -7331,28 +7376,38 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                         key_prefix=f"mpesa_clients_action_filter_{selected_list}",
                     )
                 _mpesa_dataframe(selected_frame, width="stretch", hide_index=True)
-            export_report = {
-                "clients_kpi": kpi,
-                "clients_360": client_360,
-                "clients_acquisition_activation": acquisition,
-                "clients_nouveaux_comptes_actifs": new_clients_accounts,
-                "clients_segments": segments_clients,
-                "clients_segments_produits": segments_produits,
-                "clients_tranches_encours": encours_clients_tranches,
-                "clients_qualite_donnees": data_quality,
-                **{f"clients_{key}": value for key, value in action_lists.items()},
-            }
-            st.download_button(
-                "Télécharger les listes Clients Excel",
-                data=lambda: _create_excel_export_current_sidebar(export_report),
-                file_name=(
-                    f"clients_solution_numerique_{pd.Timestamp(date_start):%Y%m%d}_"
-                    f"{pd.Timestamp(date_end):%Y%m%d}.xlsx"
-                ),
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                icon=":material/download:",
-                width="content",
-            )
+
+    render_panel_title("Export du cockpit Clients")
+    st.caption(
+        "Les analyses restent consultables en ligne. Le classeur Excel Clients est prepare uniquement "
+        "si vous devez retraiter ou partager les listes."
+    )
+    export_report = {
+        "clients_kpi": kpi,
+        "clients_360": client_360,
+        "clients_acquisition_activation": acquisition,
+        "clients_nouveaux_comptes_actifs": new_clients_accounts,
+        "clients_segments": segments_clients,
+        "clients_segments_produits": segments_produits,
+        "clients_tranches_encours": encours_clients_tranches,
+        "clients_qualite_donnees": data_quality,
+        **{f"clients_{key}": value for key, value in action_lists.items()},
+    }
+    _render_excel_export_on_demand(
+        export_report=export_report,
+        prepare_label="Preparer l'Excel Clients",
+        download_label="Telecharger les listes Clients Excel",
+        file_name=(
+            f"clients_solution_numerique_{pd.Timestamp(date_start):%Y%m%d}_"
+            f"{pd.Timestamp(date_end):%Y%m%d}.xlsx"
+        ),
+        key=(
+            f"mpesa_clients_excel_{pd.Timestamp(date_start):%Y%m%d}_"
+            f"{pd.Timestamp(date_end):%Y%m%d}"
+        ),
+        width="content",
+        help="Prepare le classeur Clients uniquement a la demande.",
+    )
 
 
 @st.fragment
@@ -8279,37 +8334,39 @@ def _render_statistics_tab(
         )
     except RuntimeError as exc:
         st.warning(str(exc))
-    excel_bytes = _create_excel_export_current_sidebar(
-        {
-            key: value
-            for key, value in report_view.items()
-            if key
-            in {
-                "vue_ensemble",
-                "clients_indicateurs",
-                "clients_croissance",
-                "chiffre_affaires",
-                "activite_evolution",
-                "epargne_dat_portefeuille",
-                "credit_synthese",
-                "clients_volume_top",
-                "depots_reguliers_synthese",
-                "depots_reguliers_clients",
-                "comparaison_hebdomadaire",
-                "comparaison_annee_precedente",
-                "g2_qualite_rapprochement",
-                "g2_non_rapprochees",
-            }
-        },
-        print_orientation="portrait",
-    )
-    st.download_button(
-        "Telecharger le détail statistiques Excel",
-        data=excel_bytes,
+    statistics_excel_report = {
+        key: value
+        for key, value in report_view.items()
+        if key
+        in {
+            "vue_ensemble",
+            "clients_indicateurs",
+            "clients_croissance",
+            "chiffre_affaires",
+            "activite_evolution",
+            "epargne_dat_portefeuille",
+            "credit_synthese",
+            "clients_volume_top",
+            "depots_reguliers_synthese",
+            "depots_reguliers_clients",
+            "comparaison_hebdomadaire",
+            "comparaison_annee_precedente",
+            "g2_qualite_rapprochement",
+            "g2_non_rapprochees",
+        }
+    }
+    _render_excel_export_on_demand(
+        export_report=statistics_excel_report,
+        prepare_label="Préparer le détail statistiques Excel",
+        download_label="Télécharger le détail statistiques Excel",
         file_name=f"detail_statistiques_solution_numerique_{start_token}_{end_token}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        width="content",
         key=f"mpesa_statistics_excel_{start_token}_{end_token}",
+        print_orientation="portrait",
+        width="content",
+        help=(
+            "Prépare le classeur Excel détaillé uniquement quand vous en avez besoin. "
+            "Cela évite de ralentir l'affichage du rapport statistiques."
+        ),
     )
 
 

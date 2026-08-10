@@ -11,6 +11,8 @@ Le cockpit Clients mesure :
 - tranches d'encours par famille (`compte_ouvert`, `dat`, `credit`) et par devise ;
 - croisements avec G2 et Clients Perfect lorsqu'ils sont disponibles.
 
+Le cockpit Clients doit être lu d'abord à l'écran. Après le paramétrage de la période, de la fréquence et des seuils, l'utilisateur clique sur `Actualiser les clients`. Les KPI, tableaux et listes se mettent alors à jour en ligne. L'Excel n'est pas préparé automatiquement : le bloc `Export du cockpit Clients` apparaît comme support secondaire pour retraiter ou partager les listes uniquement lorsque l'utilisateur clique sur `Préparer l'Excel Clients`.
+
 La table `Nouveaux clients et comptes actifs par devise` répond à une question de pilotage : un client ou un compte récemment créé est-il réellement utilisé ? Elle croise `Customers` pour la date de création client, `Transactions` pour l'activité consolidée et `Savings Account` pour les positions compte ouvert et DAT. Les montants restent toujours séparés entre CDF et USD.
 
 L'interface regroupe les analyses Clients en cinq volets :
@@ -22,6 +24,8 @@ L'interface regroupe les analyses Clients en cinq volets :
 | `Nouveaux clients et comptes` | nouveaux clients, comptes ouverts et DAT créés sur la période |
 | `Client 360 et segmentation` | produits détenus, présence épargne/DAT/crédit, tranches d'encours et segmentation |
 | `Opportunités` | DAT sans crédit actif et listes commerciales prudentes |
+
+Le bloc `Export du cockpit Clients` n'est pas rattaché à une seule opportunité. Il reprend le cockpit complet : KPI, Client 360, acquisition/activation, nouveaux comptes, segmentation, tranches d'encours, qualité des données et listes d'action disponibles.
 
 ## Épargnes
 
@@ -78,3 +82,7 @@ L'interface regroupe les analyses Crédits en six volets :
 ## Séparation des lectures
 
 Épargne et crédit ne doivent pas être mélangés dans l'extrait client. Le détail transactionnel montre le compte ouvert ; les DAT et remboursements ont leurs blocs dédiés.
+
+## Exports Excel et priorité de lecture
+
+Les onglets `Clients`, `Épargnes` et `Crédits` privilégient la consultation en ligne : indicateurs, filtres, alertes et tableaux de décision sont visibles dans Streamlit après clic sur le bouton `Actualiser`. Les exports Excel sont préparés seulement à la demande afin de réduire le temps de chargement et le risque de saturation mémoire sur Streamlit Cloud.

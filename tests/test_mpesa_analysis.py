@@ -27,6 +27,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_dat_maturity_analysis,
     build_mpesa_accounting_analysis,
     build_mpesa_management_dashboard,
+    build_mpesa_clients_report,
     build_mpesa_credit_cockpit,
     build_mpesa_savings_cockpit,
     build_mpesa_comparison_windows,
@@ -5294,26 +5295,126 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("comparaison_annee_precedente", report)
         self.assertIn("Ensemble des années", document._element.xml)
         self.assertNotIn("Graphiques de synthese", word_text)
-        client_analysis_tables = [
+        compact_analysis_tables = [
             table
             for table in document.tables
-            if {"Analyse", "Devise", "Début / référence", "Fin / valeur", "Ratio / variation"}.issubset(
+            if {"Analyse", "Devise", "Valeur"}.issubset(
                 {cell.text for cell in table.rows[0].cells}
             )
         ]
-        self.assertGreaterEqual(len(client_analysis_tables), 1)
+        self.assertGreaterEqual(len(compact_analysis_tables), 4)
         client_analysis_rows = [
             " | ".join(cell.text for cell in row.cells)
-            for row in client_analysis_tables[0].rows
+            for row in compact_analysis_tables[0].rows
         ]
         self.assertTrue(
             any("Nouveaux clients observes" in row for row in client_analysis_rows)
         )
         self.assertNotIn(
             "Source",
-            {cell.text for cell in client_analysis_tables[0].rows[0].cells},
+            {cell.text for cell in compact_analysis_tables[0].rows[0].cells},
         )
+        self.assertNotIn("Début / référence", word_text)
+        self.assertNotIn("Fin / valeur", word_text)
         self.assertNotIn("Tableau limite aux 15 premieres lignes", word_text)
+
+    def test_mpesa_statistics_stays_coherent_with_clients_savings_credit_and_finance_tabs(self) -> None:
+        prepared = _sample_customer_transaction_analysis_data()
+        journal = build_turbo_operation_events(prepared.transactions)
+        common_kwargs = {
+            "date_start": "2026-07-01",
+            "date_end": "2026-07-05",
+            "frequency": "Jour",
+            "turbo_events": journal["events"],
+            "turbo_transaction_lines": journal["lines"],
+        }
+
+        statistics = build_mpesa_statistics_report(
+            prepared,
+            comparison_period="Période filtrée",
+            **common_kwargs,
+        )
+        finance = build_mpesa_turbo_financial_analysis(prepared, **common_kwargs)
+        savings = build_mpesa_savings_cockpit(prepared, **common_kwargs)
+        credits = build_mpesa_credit_cockpit(prepared, **common_kwargs)
+        clients = build_mpesa_clients_report(prepared, **common_kwargs)
+
+        stats_flow = statistics["chiffre_affaires"].set_index("currency_code").loc["CDF"]
+        finance_flow = finance["flux_synthese"].set_index("currency_code").loc["CDF"]
+        savings_flow = savings["flux_synthese"].set_index("currency_code").loc["CDF"]
+        credits_production = credits["production_synthese"].set_index("currency_code").loc["CDF"]
+        credits_repayments = credits["remboursements_synthese"].set_index("currency_code").loc["CDF"]
+
+        for column in [
+            "nombre_operations",
+            "nombre_clients",
+            "montant_entrees",
+            "montant_sorties",
+            "depots_epargne_courante",
+            "depots_dat",
+            "nouveaux_credits_decaissements",
+            "remboursements_observes",
+        ]:
+            self.assertEqual(float(stats_flow[column]), float(finance_flow[column]))
+
+        self.assertEqual(
+            float(stats_flow["depots_epargne_courante"]),
+            float(savings_flow["montant_depots_compte_ouvert"]),
+        )
+        self.assertEqual(
+            float(stats_flow["depots_dat"]),
+            float(savings_flow["montant_depots_dat"]),
+        )
+        self.assertEqual(
+            float(stats_flow["nouveaux_credits_decaissements"]),
+            float(credits_production["montant_decaisse_turbo"]),
+        )
+        self.assertEqual(
+            float(stats_flow["remboursements_observes"]),
+            float(credits_repayments["montant_rembourse"]),
+        )
+        self.assertEqual(
+            float(savings_flow["montant_remboursements_depuis_compte_ouvert"]),
+            0.0,
+            "Epargnes ne compte que les remboursements touchant le compte ouvert.",
+        )
+
+        stats_portfolio = statistics["epargne_dat_portefeuille"].set_index(
+            ["currency_code", "famille"]
+        )
+        savings_portfolio = savings["portefeuille_synthese"].set_index(
+            ["currency_code", "famille_epargne"]
+        )
+        self.assertEqual(
+            float(stats_portfolio.loc[("CDF", "Compte ouvert"), "solde_total"]),
+            float(savings_portfolio.loc[("CDF", "Compte ouvert"), "encours_actuel"]),
+        )
+        self.assertEqual(
+            float(stats_portfolio.loc[("CDF", "DAT"), "solde_total"]),
+            float(savings_portfolio.loc[("CDF", "DAT"), "encours_actuel"]),
+        )
+
+        stats_credit = statistics["credit_synthese"].set_index("currency_code").loc["CDF"]
+        credit_risk = credits["risque_synthese"].set_index("currency_code").loc["CDF"]
+        for column in [
+            "nombre_credits",
+            "nombre_clients",
+            "montant_credits",
+            "montant_rembourse",
+            "encours_total",
+        ]:
+            self.assertEqual(float(stats_credit[column]), float(credit_risk[column]))
+
+        stats_overview = statistics["vue_ensemble"].set_index("currency_code").loc["CDF"]
+        client_kpi = clients["kpi"].set_index("indicateur")
+        self.assertEqual(
+            int(stats_overview["clients_turbo_actifs_global"]),
+            int(client_kpi.loc["clients_actifs", "valeur"]),
+        )
+        self.assertEqual(
+            int(stats_overview["clients_turbo_actifs_devise"]),
+            int(stats_flow["nombre_clients"]),
+        )
 
     def test_turbo_only_g2_dat_uses_consolidated_loan_repayment_amount(self) -> None:
         transactions = prepare_transactions(
