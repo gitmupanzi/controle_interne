@@ -12,6 +12,7 @@ extra_javascript:
   - https://unpkg.com/mermaid@10.9.1/dist/mermaid.min.js
   - assets/mermaid-init.js
   - assets/sidebar-toggle.js
+  - assets/breadcrumb-links.js
 nav:
   - Accueil: index.md
   - Architecture globale: architecture_globale.md

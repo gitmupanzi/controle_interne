@@ -143,6 +143,20 @@ body {
   color: #ffffff;
 }
 
+.bb-breadcrumb-link {
+  color: var(--bb-blue) !important;
+  font-weight: 700;
+  text-decoration: none !important;
+}
+
+.bb-breadcrumb-link:hover,
+.bb-breadcrumb-link:focus {
+  color: var(--bb-blue-2) !important;
+  text-decoration: underline !important;
+  text-decoration-color: var(--bb-red) !important;
+  text-underline-offset: 0.18rem;
+}
+
 .rst-content {
   font-size: 16px;
 }
