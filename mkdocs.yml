@@ -1,4 +1,4 @@
-site_name: Documentation IMF Bisou Bisou
+﻿site_name: Documentation IMF Bisou Bisou
 site_description: Documentation des solutions Data, Contrôle Interne, Perfect Vision, Perfect Power BI et Solution Numérique.
 docs_dir: documentation_web
 site_dir: site
@@ -11,6 +11,7 @@ extra_css:
 extra_javascript:
   - https://unpkg.com/mermaid@10.9.1/dist/mermaid.min.js
   - assets/mermaid-init.js
+  - assets/sidebar-toggle.js
 nav:
   - Accueil: index.md
   - Architecture globale: architecture_globale.md
@@ -41,6 +42,14 @@ nav:
       - G2, DAT et rapprochements: solution_numerique/g2_dat_rapprochements.md
       - Statistiques et projections: solution_numerique/statistiques_projections.md
       - Tests et limites: solution_numerique/tests_limites.md
+  - Formations:
+      - Accueil: formations/index.md
+      - Solution Numérique: formations/solution_numerique.md
+      - Perfect Vision: formations/perfect_vision.md
+      - Perfect Power BI: formations/perfect_power_bi.md
+      - Cas pratiques et exercices: formations/exercices.md
+      - Glossaire pédagogique: formations/glossaire_pedagogique.md
+      - Technique pour informaticiens: formations/technique_informaticiens.md
   - Références communes:
       - Glossaire: transversal/glossaire.md
       - Conventions et devises: transversal/conventions_devises.md

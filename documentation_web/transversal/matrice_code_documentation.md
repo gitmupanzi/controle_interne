@@ -12,4 +12,4 @@
 | `credit_app/services/mpesa_analysis.py` | Solution Numérique | Règles métier et calculs |
 | `credit_app/tabs/solution_mpesa.py` | Solution Numérique | Interface et exports |
 | `tests/test_mpesa_analysis.py` | Solution Numérique | Tests et limites |
-| `skills/*/SKILL.md` | Domaine correspondant | Règles de maintenance |
+| Référentiels internes de règles | Domaine correspondant | Règles de maintenance et cohérence documentaire |

@@ -10,6 +10,7 @@
     <a href="perfect_vision/index.html" class="bb-button">Perfect Vision</a>
     <a href="perfect_power_bi/index.html" class="bb-button bb-button--light">Perfect Power BI</a>
     <a href="solution_numerique/index.html" class="bb-button bb-button--green">Solution Numérique</a>
+    <a href="formations/index.html" class="bb-button bb-button--light">Formations</a>
   </div>
 </section>
 
@@ -42,6 +43,15 @@
         projections, balances et rapprochements G2.
       </p>
       <a href="solution_numerique/index.html">Ouvrir la documentation →</a>
+    </article>
+    <article class="bb-card">
+      <span class="bb-card__tag">Formation</span>
+      <h3>Parcours pédagogiques</h3>
+      <p>
+        Supports de formation pour les utilisateurs métiers et lecture technique
+        conservée pour les informaticiens.
+      </p>
+      <a href="formations/index.html">Ouvrir les formations →</a>
     </article>
   </div>
 </section>
@@ -90,9 +100,9 @@ flowchart LR
       </tr>
     </thead>
     <tbody>
-      <tr><td><code>skills/perfect-vision</code></td><td>Règles Perfect Vision et cycles de contrôle</td></tr>
-      <tr><td><code>skills/perfect-power-bi</code></td><td>Architecture Power BI, DAX, validation et déploiement</td></tr>
-      <tr><td><code>skills/solution-mpesa</code></td><td>Règles Solution Numérique, contrats, exports et KPI</td></tr>
+      <tr><td>Référentiel Perfect Vision</td><td>Règles Perfect Vision et cycles de contrôle</td></tr>
+      <tr><td>Référentiel Perfect Power BI</td><td>Architecture Power BI, DAX, validation et déploiement</td></tr>
+      <tr><td>Référentiel Solution Numérique</td><td>Règles Solution Numérique, contrats, exports et KPI</td></tr>
       <tr><td><code>data/modelisation/requetes.sql</code></td><td>Catalogue SQL des requêtes métier</td></tr>
       <tr><td><code>data/kpi_perfect</code></td><td>PBIP, TMDL, reporting SQL et documentation KPI</td></tr>
       <tr><td><code>credit_app/services/mpesa_analysis.py</code></td><td>Calculs métier de la Solution Numérique</td></tr>

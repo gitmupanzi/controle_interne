@@ -13,7 +13,7 @@ Le cockpit Clients mesure :
 
 Le cockpit Clients doit être lu d'abord à l'écran. Après le paramétrage de la période, de la fréquence et des seuils, l'utilisateur clique sur `Actualiser les clients`. Les KPI, tableaux et listes se mettent alors à jour en ligne. L'Excel n'est pas préparé automatiquement : le bloc `Export du cockpit Clients` apparaît comme support secondaire pour retraiter ou partager les listes uniquement lorsque l'utilisateur clique sur `Préparer l'Excel Clients`.
 
-La table `Nouveaux clients et comptes actifs par devise` répond à une question de pilotage : un client ou un compte récemment créé est-il réellement utilisé ? Elle croise `Customers` pour la date de création client, `Transactions` pour l'activité consolidée et `Savings Account` pour les positions compte ouvert et DAT. Les montants restent toujours séparés entre CDF et USD.
+La table `Nouveaux clients et comptes actifs par devise` répond à une question de pilotage : un client ou un compte récemment créé est-il réellement utilisé Elle croise `Customers` pour la date de création client, `Transactions` pour l'activité consolidée et `Savings Account` pour les positions compte ouvert et DAT. Les montants restent toujours séparés entre CDF et USD.
 
 L'interface regroupe les analyses Clients en cinq volets :
 

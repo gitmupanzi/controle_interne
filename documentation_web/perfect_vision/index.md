@@ -4,12 +4,11 @@ Perfect Vision représente la source métier microfinance historique du projet.
 
 La documentation de ce domaine s'appuie principalement sur :
 
-- `skills/perfect-vision/SKILL.md`
-- `skills/perfect-vision/references/sources.md`
-- `data/modelisation/BB_VISION_PRO.sql`
-- `data/modelisation/requetes.sql`
-- `controle_interne.py`
-- les modules `credit_app/tabs/*`
+- le schéma SQL Server `BB_VISION_PRO` ;
+- le catalogue métier `data/modelisation/requetes.sql` ;
+- les règles de contrôle interne Perfect Vision ;
+- les modules d'analyse et d'affichage du tableau de bord ;
+- les tests et limites documentés.
 
 ## Rôle métier
 

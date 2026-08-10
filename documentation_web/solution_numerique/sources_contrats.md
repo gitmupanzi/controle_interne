@@ -2,7 +2,7 @@
 
 ## Contrats de données
 
-Les contrats sont documentés dans `skills/solution-mpesa/references/data-contracts.md` et implémentés principalement dans :
+Les contrats de données sont décrits dans cette documentation et implémentés principalement dans :
 
 - `credit_app/data_schema.py`
 - `credit_app/services/mpesa_analysis.py`

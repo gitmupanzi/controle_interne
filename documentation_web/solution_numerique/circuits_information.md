@@ -229,13 +229,13 @@ G2 intervient après l'opération, comme preuve ou contrôle.
 
 G2 sert à répondre à trois questions :
 
-1. La référence existe-t-elle aussi dans le relevé M-Pesa ?
-2. Le statut G2 est-il terminé ou en anomalie ?
-3. Le nom ou la contrepartie peut-il enrichir l'identité client ?
+1. La référence existe-t-elle aussi dans le relevé M-Pesa 
+2. Le statut G2 est-il terminé ou en anomalie 
+3. Le nom ou la contrepartie peut-il enrichir l'identité client 
 
-G2 ne répond pas à la question : “quel est le montant financier officiel à comptabiliser dans la Solution Numérique ?” Cette réponse vient des fichiers Solution Numérique.
+G2 ne répond pas à la question : “quel est le montant financier officiel à comptabiliser dans la Solution Numérique ” Cette réponse vient des fichiers Solution Numérique.
 
-## 5. Pourquoi plusieurs lignes pour une seule opération ?
+## 5. Pourquoi plusieurs lignes pour une seule opération 
 
 La Solution Numérique fonctionne comme un sous-registre comptable. Une opération métier peut toucher plusieurs poches :
 
@@ -259,12 +259,12 @@ Chaque poche peut produire sa propre ligne dans `Transactions`. L'application do
 
 | Question métier | Fichier prioritaire | Pourquoi |
 |---|---|---|
-| Quel mouvement a eu lieu sur la période ? | `Transactions` | C'est le journal des flux |
-| Quel est le compte ouvert ou DAT actuel ? | `Savings Account` | C'est la position actuelle de l'épargne |
-| Quel est l'encours ou statut du crédit ? | `Loans Account` | C'est la position actuelle du prêt |
-| Combien de clients sont connus ? | `Customers` | C'est le référentiel client Solution Numérique |
-| Quel est le nom client ou la preuve M-Pesa ? | `G2` | C'est le contrôle facultatif et l'enrichissement |
-| Le client existe-t-il aussi dans Perfect ? | `Clients_Perfect` | C'est le croisement analytique facultatif |
+| Quel mouvement a eu lieu sur la période | `Transactions` | C'est le journal des flux |
+| Quel est le compte ouvert ou DAT actuel | `Savings Account` | C'est la position actuelle de l'épargne |
+| Quel est l'encours ou statut du crédit | `Loans Account` | C'est la position actuelle du prêt |
+| Combien de clients sont connus | `Customers` | C'est le référentiel client Solution Numérique |
+| Quel est le nom client ou la preuve M-Pesa | `G2` | C'est le contrôle facultatif et l'enrichissement |
+| Le client existe-t-il aussi dans Perfect | `Clients_Perfect` | C'est le croisement analytique facultatif |
 
 ## 7. Cas pédagogiques issus du scénario de test
 
@@ -317,7 +317,7 @@ Le client obtient un crédit brut de 5 USD. L'intérêt de 7 % est prélevé imm
 | `Loans Account` | 1 ligne | Position du crédit |
 | `G2 15558` | 1 ligne | Preuve de sortie M-Pesa du net versé, si le rapport est chargé |
 
-#### Pourquoi 12 lignes ?
+#### Pourquoi 12 lignes 
 
 Une seule opération de crédit touche plusieurs sous-registres. Les lignes brutes ne doivent donc pas être additionnées comme si elles étaient 12 crédits.
 

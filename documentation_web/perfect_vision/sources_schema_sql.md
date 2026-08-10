@@ -6,7 +6,7 @@
 |---|---|
 | `data/modelisation/BB_VISION_PRO.sql` | Script SQL Server du schéma `BB_VISION_PRO` |
 | `data/modelisation/requetes.sql` | Catalogue des requêtes de contrôle et de reporting |
-| `skills/perfect-vision/references/sources.md` | Règles de lecture métier et sources prioritaires |
+| Référentiel de lecture Perfect Vision | Règles de lecture métier et sources prioritaires |
 
 ## Objets SQL observés
 

@@ -14,17 +14,14 @@ flowchart LR
 
 ## Sources documentaires
 
-- `skills/perfect-power-bi/SKILL.md`
-- `skills/perfect-power-bi/references/architecture-and-connectivity.md`
-- `skills/perfect-power-bi/references/semantic-model-and-pages.md`
-- `skills/perfect-power-bi/references/validation-and-deployment.md`
-- `data/kpi_perfect/reporting_sql`
-- `data/kpi_perfect/power-bi`
-- `documentation_web/perfect_power_bi/catalogue_kpi.md`
-- `documentation_web/perfect_power_bi/data_gaps.md`
-- `documentation_web/perfect_power_bi/resultats_validation.md`
-- `documentation_web/perfect_power_bi/etat_migration.md`
-- `documentation_web/perfect_power_bi/prochaines_etapes.md`
+La documentation Perfect Power BI s'appuie principalement sur :
+
+- l'architecture de reporting `BB_VISION_REPORTING` ;
+- les scripts SQL de préparation des faits et dimensions ;
+- le projet Power BI et ses mesures DAX ;
+- le catalogue KPI ;
+- les résultats de validation ;
+- les limites et données manquantes documentées.
 
 ## Objectif
 

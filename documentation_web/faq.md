@@ -37,13 +37,13 @@ Cette page regroupe les questions récurrentes par domaine afin d'aider les util
 
 ## Perfect Vision
 
-### Quelle différence y a-t-il entre Perfect Vision et Solution Numérique ?
+### Quelle différence y a-t-il entre Perfect Vision et Solution Numérique 
 
 Perfect Vision est la source métier historique de la microfinance : crédits, épargne classique, portefeuille, risques, qualité de données et indicateurs de contrôle interne.
 
 La Solution Numérique exploite les exports du portail digital pour analyser les transactions, clients, comptes ouverts, comptes bloqués, crédits digitaux, rapprochements G2 M-Pesa et extraits clients numériques.
 
-### Où trouver les analyses Perfect Vision dans l'interface ?
+### Où trouver les analyses Perfect Vision dans l'interface 
 
 Les analyses Perfect Vision se trouvent dans le parcours principal de contrôle interne, selon le cycle sélectionné dans la barre latérale : crédit, épargne ou autre cycle disponible.
 
@@ -59,27 +59,27 @@ Les onglets importants sont notamment :
 | Qualité des données | `Qualité` |
 | Export des analyses | `Export` |
 
-### À quoi servent les requêtes Perfect Vision du fichier `requetes.sql` ?
+### À quoi servent les requêtes Perfect Vision du fichier `requetes.sql` 
 
 Le fichier `data/vision/requetes.sql` recense les indicateurs, requêtes de contrôle et analyses à automatiser progressivement. Les requêtes avec un niveau d'importance élevé, notamment 9 ou 10, servent de base pour les tableaux de bord, les contrôles prioritaires et les rapports destinés à la direction.
 
 ## Perfect Power BI
 
-### Pourquoi Power BI utilise-t-il `BB_VISION_REPORTING` ?
+### Pourquoi Power BI utilise-t-il `BB_VISION_REPORTING` 
 
 La couche `BB_VISION_REPORTING` transforme les données métier en tables plus adaptées au reporting : faits, dimensions, indicateurs et périodes d'analyse. Elle évite de connecter Power BI directement à toute la complexité de `BB_VISION_PRO`.
 
-### Quel est l'objectif du projet Perfect Power BI ?
+### Quel est l'objectif du projet Perfect Power BI 
 
 L'objectif est de produire des indicateurs fiables, visuels et directement exploitables par les décideurs à partir des données Perfect Vision. Power BI doit permettre de suivre l'évolution des crédits, de l'épargne, des remboursements, des risques, de la qualité de données et des performances opérationnelles.
 
-### Pourquoi certains KPI existent dans Power BI mais pas dans Solution Numérique ?
+### Pourquoi certains KPI existent dans Power BI mais pas dans Solution Numérique 
 
 Les sources et le grain d'analyse ne sont pas les mêmes. Power BI peut s'appuyer sur la base Perfect Vision et sur une couche reporting structurée. La Solution Numérique dépend des colonnes présentes dans les exports du portail digital, comme `Transactions`, `Savings Account`, `Loans Account`, `Customers` et les rapports G2 M-Pesa facultatifs.
 
 ## Solution Numérique
 
-### Quels fichiers sont les plus importants pour la Solution Numérique ?
+### Quels fichiers sont les plus importants pour la Solution Numérique 
 
 Les fichiers principaux sont :
 
@@ -92,7 +92,7 @@ Les fichiers principaux sont :
 | 5 | Rapports `G2 M-Pesa` | Source facultative d'enrichissement du nom client et de contrôle des écritures |
 | 6 | `Clients_Perfect` | Source facultative pour les croisements Perfect / Solution Numérique |
 
-### Où trouver le cockpit client ?
+### Où trouver le cockpit client 
 
 Dans le module `Solution Numérique`, ouvrir l'onglet `Clients`.
 
@@ -108,19 +108,19 @@ Le cockpit Clients est organisé en cinq volets :
 
 Le bloc `Export du cockpit Clients` se trouve après les volets d'analyse. Il permet de préparer l'Excel complet du cockpit Clients uniquement si l'utilisateur en a besoin.
 
-### Pourquoi faut-il cliquer sur `Actualiser les clients` ?
+### Pourquoi faut-il cliquer sur `Actualiser les clients` 
 
 Les fichiers de la Solution Numérique peuvent être lourds. Pour éviter qu'un changement de date, de fréquence ou de seuil relance immédiatement tous les calculs, les paramètres sont regroupés dans un formulaire. L'analyse démarre seulement après le clic sur `Actualiser les clients`.
 
 Ce principe est aussi utilisé dans les onglets analytiques lourds comme `Épargnes`, `Crédits`, `Statistiques` et `Projections`.
 
-### Pourquoi l'Excel n'apparaît-il pas directement ?
+### Pourquoi l'Excel n'apparaît-il pas directement 
 
 La consultation en ligne est prioritaire. Les KPI, tableaux, alertes et listes sont affichés dans Streamlit pour permettre une lecture rapide. L'Excel est un support secondaire de retraitement ou de partage.
 
 Pour limiter les risques de lenteur ou de crash sur Streamlit Cloud, les gros classeurs Excel sont préparés seulement après clic sur `Préparer`, puis le bouton `Télécharger` apparaît quand le fichier est construit.
 
-### Où trouver les clients qui épargnent le plus ?
+### Où trouver les clients qui épargnent le plus 
 
 Dans l'interface Streamlit, ouvrir le module `Solution Numérique`, puis l'onglet `Épargnes`.
 
@@ -134,7 +134,7 @@ Les emplacements utiles sont :
 
 Ces analyses doivent toujours être lues devise par devise. Les montants CDF et USD ne doivent pas être additionnés.
 
-### Peut-on analyser les meilleurs clients par tranche d'argent ?
+### Peut-on analyser les meilleurs clients par tranche d'argent 
 
 Oui. Le classement `rang_client` donne les meilleurs clients un par un, tandis que `tranche_encours` regroupe les clients par niveau d'argent. Dans `Solution Numérique`, cette lecture est disponible dans :
 
@@ -144,7 +144,7 @@ Oui. Le classement `rang_client` donne les meilleurs clients un par un, tandis q
 
 Les tranches sont calculées séparément par devise. Elles ne remplacent pas le top clients ; elles le complètent.
 
-### Où trouver les épargnes ou DAT sans crédit actif ?
+### Où trouver les épargnes ou DAT sans crédit actif 
 
 Dans le module `Solution Numérique`, ouvrir l'onglet `Épargnes`, puis le sous-onglet `Concentration et opportunités`.
 
@@ -157,7 +157,7 @@ Les listes utiles sont :
 
 Ces listes sont des signaux commerciaux prudents. Elles ne constituent pas une éligibilité automatique au crédit.
 
-### Où trouver les échéances DAT et les comptes bloqués proches du terme ?
+### Où trouver les échéances DAT et les comptes bloqués proches du terme 
 
 Dans le module `Solution Numérique`, ouvrir l'onglet `Épargnes`, puis :
 
@@ -169,7 +169,7 @@ Dans le module `Solution Numérique`, ouvrir l'onglet `Épargnes`, puis :
 
 Le taux annuel DAT est paramétrable. Par défaut, la règle Bisou Bisou utilisée pour l'estimation est 11 % par an.
 
-### Où trouver les crédits en arriéré ?
+### Où trouver les crédits en arriéré 
 
 Dans le module `Solution Numérique`, ouvrir l'onglet `Crédits`, puis le sous-onglet `Opportunités et qualité`.
 
@@ -181,7 +181,7 @@ La liste principale à consulter est :
 
 Cette analyse utilise principalement `Loans Account`, notamment les informations d'encours, de statut et d'échéance.
 
-### Où trouver les crédits en PAR 30 jours ?
+### Où trouver les crédits en PAR 30 jours 
 
 Dans le module `Solution Numérique`, ouvrir l'onglet `Crédits`, puis le sous-onglet `Opportunités et qualité`.
 
@@ -193,7 +193,7 @@ La liste à consulter est :
 
 Le PAR affiché est un suivi opérationnel simplifié lorsqu'un plan d'amortissement détaillé n'est pas disponible.
 
-### Où trouver les crédits en défaut ou avec pénalités ?
+### Où trouver les crédits en défaut ou avec pénalités 
 
 Dans le module `Solution Numérique`, ouvrir l'onglet `Crédits`, puis le sous-onglet `Opportunités et qualité`.
 
@@ -204,13 +204,13 @@ Les listes utiles sont :
 | Crédits en défaut | `prets_defaulted` |
 | Crédits avec pénalités | `prets_avec_penalites` |
 
-### Pourquoi G2 M-Pesa n'est-il pas un troisième canal financier ?
+### Pourquoi G2 M-Pesa n'est-il pas un troisième canal financier 
 
 G2 M-Pesa est un rapport de contrôle. Il aide à vérifier les écritures, enrichir le nom du client et rapprocher certaines références. Il ne doit pas piloter les montants, les soldes, les DAT, les remboursements ou les crédits.
 
 La source financière principale reste la Solution Numérique.
 
-### Pourquoi CDF et USD ne sont-ils pas totalisés ensemble ?
+### Pourquoi CDF et USD ne sont-ils pas totalisés ensemble 
 
 CDF et USD sont deux devises différentes. Sans taux officiel de conversion et sans règle comptable validée, les additionner produirait un chiffre trompeur.
 
