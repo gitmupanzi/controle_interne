@@ -130,6 +130,8 @@ MPESA_SOLUTION_TAB_LABELS = (
     "Projections",
 )
 
+MPESA_DEFAULT_ANALYSIS_WINDOW_DAYS = 90
+
 
 def _format_amount(value: Any) -> str:
     try:
@@ -511,6 +513,21 @@ def _render_alert_banner(message: str) -> None:
 
 def _prepared_data_cache_key(prepared: MpesaPreparedData) -> str:
     return prepared.cache_fingerprint or f"session-object:{id(prepared)}"
+
+
+def _prepared_data_state_token(prepared: MpesaPreparedData) -> str:
+    """Token court pour isoler les filtres appliques par jeu de fichiers charge."""
+    fingerprint = _prepared_data_cache_key(prepared)
+    return hashlib.sha1(fingerprint.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
+
+def _render_deferred_analysis_notice(label: str) -> None:
+    st.info(
+        f"Les parametres de {label} sont prets. Cliquez sur Actualiser pour lancer "
+        "l'analyse sur le jeu de fichiers charge. Cette securite evite de calculer "
+        "automatiquement les onglets lourds apres un televersement.",
+        icon=":material/tune:",
+    )
 
 
 def _prepared_data_as_of(
@@ -998,7 +1015,7 @@ def _build_mpesa_statistics_report_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=2,
+    max_entries=1,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_clients_report_cached(
@@ -1068,7 +1085,7 @@ def _build_mpesa_dat_maturity_analysis_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=2,
+    max_entries=1,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_savings_cockpit_cached(
@@ -1112,7 +1129,7 @@ def _build_loan_savings_reconciliation_cached(
 
 @st.cache_data(
     show_spinner=False,
-    max_entries=2,
+    max_entries=1,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
 def _build_mpesa_credit_cockpit_cached(
@@ -3114,88 +3131,150 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         if not transaction_dates.empty
         else default_end
     )
+    default_start = max(
+        default_start,
+        default_end - pd.Timedelta(days=MPESA_DEFAULT_ANALYSIS_WINDOW_DAYS),
+    )
     if prepared.year_scope_start is not None:
         default_start = max(default_start, prepared.year_scope_start)
     scope_token = re.sub(r"[^0-9A-Za-z]+", "_", prepared.year_scope_label).strip("_") or "all"
-    controls = st.columns(4, gap="medium")
-    with controls[0]:
-        date_start = st.date_input(
-            "Date de debut",
-            value=default_start.date(),
-            key=f"mpesa_savings_date_start_{scope_token}",
-            format="DD/MM/YYYY",
-            help="Debut inclusif de la periode utilisee pour les flux observes dans Transactions.",
-        )
-    with controls[1]:
-        date_end = st.date_input(
-            "Date de fin",
-            value=default_end.date(),
-            key=f"mpesa_savings_date_end_{scope_token}",
-            format="DD/MM/YYYY",
-            help="Fin inclusive de la periode. La position Savings Account reste une photographie a cette date.",
-        )
-    with controls[2]:
-        frequency = st.selectbox(
-            "Frequence",
-            ["Jour", "Semaine", "Mois"],
-            index=2,
-            key="mpesa_savings_frequency",
-            help="Regroupement des courbes de flux : jour, semaine ou mois.",
-        )
-    with controls[3]:
-        maturity_horizon_days = st.slider(
-            "Horizon echeances DAT",
-            min_value=1,
-            max_value=90,
-            value=DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
-            step=1,
-            key="mpesa_savings_maturity_horizon_days",
-            help="Nombre de jours a regarder en avant pour preparer les remboursements DAT.",
-        )
-
-    settings = st.columns(3, gap="medium")
-    with settings[0]:
-        annual_interest_rate_pct = st.number_input(
-            "Taux d'interet annuel DAT (%)",
-            min_value=0.0,
-            max_value=100.0,
-            value=float(
-                st.session_state.get(
-                    "mpesa_dat_annual_interest_rate_pct",
-                    DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
-                )
-            ),
-            step=0.25,
-            key="mpesa_savings_dat_annual_interest_rate_pct",
-            help="11 % est la valeur Bisou Bisou par defaut. Mettre 0 pour desactiver l'estimation.",
-        )
-    with settings[1]:
-        inactivity_threshold_days = st.slider(
-            "Seuil d'inactivite observee",
-            min_value=7,
-            max_value=365,
-            value=30,
-            step=1,
-            key="mpesa_savings_inactivity_threshold_days",
-            help="Seuil analytique base sur la derniere operation observee; ce n'est pas une dormance reglementaire.",
-        )
-    with settings[2]:
-        large_savings_usd = st.number_input(
-            "Seuil forte epargne USD",
-            min_value=0.0,
-            value=100.0,
-            step=10.0,
-            key="mpesa_savings_large_usd",
-            help="Seuil expose pour identifier les clients a analyser commercialement, sans conclure a leur eligibilite.",
-        )
-    large_savings_cdf = st.number_input(
-        "Seuil forte epargne CDF",
-        min_value=0.0,
-        value=500_000.0,
-        step=50_000.0,
-        key="mpesa_savings_large_cdf",
-        help="Seuil CDF expose pour les opportunites commerciales; les devises restent separees.",
+    data_token = _prepared_data_state_token(prepared)
+    start_key = f"mpesa_savings_date_start_{scope_token}"
+    end_key = f"mpesa_savings_date_end_{scope_token}"
+    applied_filters_key = f"mpesa_savings_applied_filters_{scope_token}_{data_token}"
+    applied_at_key = f"mpesa_savings_applied_at_{scope_token}_{data_token}"
+    st.session_state.setdefault(start_key, default_start.date())
+    st.session_state.setdefault(end_key, default_end.date())
+    st.session_state.setdefault("mpesa_savings_frequency", "Mois")
+    st.session_state.setdefault(
+        "mpesa_savings_maturity_horizon_days",
+        DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
     )
+    st.session_state.setdefault(
+        "mpesa_savings_dat_annual_interest_rate_pct",
+        float(
+            st.session_state.get(
+                "mpesa_dat_annual_interest_rate_pct",
+                DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+            )
+        ),
+    )
+    st.session_state.setdefault("mpesa_savings_inactivity_threshold_days", 30)
+    st.session_state.setdefault("mpesa_savings_large_usd", 100.0)
+    st.session_state.setdefault("mpesa_savings_large_cdf", 500_000.0)
+
+    with st.form(f"mpesa_savings_filters_{scope_token}_{data_token}", border=True):
+        controls = st.columns(4, gap="medium")
+        with controls[0]:
+            st.date_input(
+                "Date de debut",
+                key=start_key,
+                format="DD/MM/YYYY",
+                help="Debut inclusif de la periode utilisee pour les flux observes dans Transactions.",
+            )
+        with controls[1]:
+            st.date_input(
+                "Date de fin",
+                key=end_key,
+                format="DD/MM/YYYY",
+                help="Fin inclusive de la periode. La position Savings Account reste une photographie a cette date.",
+            )
+        with controls[2]:
+            st.selectbox(
+                "Frequence",
+                ["Jour", "Semaine", "Mois"],
+                key="mpesa_savings_frequency",
+                help="Regroupement des courbes de flux : jour, semaine ou mois.",
+            )
+        with controls[3]:
+            st.slider(
+                "Horizon echeances DAT",
+                min_value=1,
+                max_value=90,
+                step=1,
+                key="mpesa_savings_maturity_horizon_days",
+                help="Nombre de jours a regarder en avant pour preparer les remboursements DAT.",
+            )
+
+        settings = st.columns(3, gap="medium")
+        with settings[0]:
+            st.number_input(
+                "Taux d'interet annuel DAT (%)",
+                min_value=0.0,
+                max_value=100.0,
+                step=0.25,
+                key="mpesa_savings_dat_annual_interest_rate_pct",
+                help="11 % est la valeur Bisou Bisou par defaut. Mettre 0 pour desactiver l'estimation.",
+            )
+        with settings[1]:
+            st.slider(
+                "Seuil d'inactivite observee",
+                min_value=7,
+                max_value=365,
+                step=1,
+                key="mpesa_savings_inactivity_threshold_days",
+                help="Seuil analytique base sur la derniere operation observee; ce n'est pas une dormance reglementaire.",
+            )
+        with settings[2]:
+            st.number_input(
+                "Seuil forte epargne USD",
+                min_value=0.0,
+                step=10.0,
+                key="mpesa_savings_large_usd",
+                help="Seuil expose pour identifier les clients a analyser commercialement, sans conclure a leur eligibilite.",
+            )
+        st.number_input(
+            "Seuil forte epargne CDF",
+            min_value=0.0,
+            step=50_000.0,
+            key="mpesa_savings_large_cdf",
+            help="Seuil CDF expose pour les opportunités commerciales; les devises restent separees.",
+        )
+        savings_submitted = st.form_submit_button("Actualiser l'epargne", type="primary")
+
+    if savings_submitted:
+        st.session_state[applied_filters_key] = {
+            "date_start": st.session_state[start_key],
+            "date_end": st.session_state[end_key],
+            "frequency": st.session_state["mpesa_savings_frequency"],
+            "annual_interest_rate_pct": st.session_state[
+                "mpesa_savings_dat_annual_interest_rate_pct"
+            ],
+            "inactivity_threshold_days": st.session_state[
+                "mpesa_savings_inactivity_threshold_days"
+            ],
+            "maturity_horizon_days": st.session_state[
+                "mpesa_savings_maturity_horizon_days"
+            ],
+            "large_savings_usd": st.session_state["mpesa_savings_large_usd"],
+            "large_savings_cdf": st.session_state["mpesa_savings_large_cdf"],
+        }
+        st.session_state[applied_at_key] = pd.Timestamp.now()
+
+    applied_filters = st.session_state.get(applied_filters_key)
+    if not applied_filters:
+        _render_deferred_analysis_notice("l'onglet Epargnes")
+        return
+    date_start = applied_filters.get("date_start", default_start.date())
+    date_end = applied_filters.get("date_end", default_end.date())
+    frequency = applied_filters.get("frequency", "Mois")
+    annual_interest_rate_pct = applied_filters.get(
+        "annual_interest_rate_pct",
+        DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+    )
+    inactivity_threshold_days = applied_filters.get("inactivity_threshold_days", 30)
+    maturity_horizon_days = applied_filters.get(
+        "maturity_horizon_days",
+        DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
+    )
+    large_savings_usd = applied_filters.get("large_savings_usd", 100.0)
+    large_savings_cdf = applied_filters.get("large_savings_cdf", 500_000.0)
+    if savings_submitted:
+        st.success(
+            f"Parametres Epargnes appliques : {pd.Timestamp(date_start):%d/%m/%Y} - "
+            f"{pd.Timestamp(date_end):%d/%m/%Y}, frequence {frequency}.",
+            icon=":material/check_circle:",
+        )
 
     if pd.Timestamp(date_start) > pd.Timestamp(date_end):
         st.warning("La date de debut est posterieure a la date de fin; l'analyse inverse automatiquement les bornes.")
@@ -3252,7 +3331,7 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
                 "Concentration",
                 "DAT",
                 "Echeances DAT",
-                "Opportunites",
+                "Opportunités",
                 "Controles et anomalies",
             )
         )
@@ -3438,10 +3517,10 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         _mpesa_dataframe(maturity_view.head(1000), width="stretch", hide_index=True)
 
     with sub_tabs[9]:
-        render_panel_title("Opportunites commerciales prudentes")
+        render_panel_title("Opportunités commerciales prudentes")
         opportunities = cockpit.get("opportunites", pd.DataFrame())
         if opportunities.empty:
-            st.info("Aucune opportunite analytique selon les seuils actuels.")
+            st.info("Aucune opportunité analytique selon les seuils actuels.")
         else:
             opportunity_view = _apply_local_multiselect_filters(
                 opportunities,
@@ -3906,8 +3985,9 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     period_start = None
     period_end = None
     render_panel_title(f"1. Periode analysee ({source_date_label}) [{source_label}]")
+    direction_options = ["Entrées", "Sorties"]
     if not completion_times.empty:
-        completion_key = f"{completion_times.min():%Y%m%d}_{completion_times.max():%Y%m%d}_{len(completion_times)}"
+        completion_key = f"{source_label}_{completion_times.min():%Y%m%d}_{completion_times.max():%Y%m%d}_{len(completion_times)}"
         default_completion_date = completion_times.max().date()
         if (
             completion_times.min().date() < completion_times.max().date()
@@ -3916,58 +3996,108 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             default_completion_date = (
                 completion_times.max().normalize() - pd.Timedelta(days=1)
             ).date()
-        st.caption(f"Champ temporel analysé : {source_date_label}.")
-        date_columns = st.columns(2)
-        with date_columns[0]:
-            date_start = st.date_input(
-                "Date de début",
-                value=default_completion_date,
-                min_value=completion_times.min().date(),
-                max_value=completion_times.max().date(),
-                key=f"mpesa_g2_completion_start_{completion_key}",
-                format="DD/MM/YYYY",
-                help=f"Première journée incluse selon {source_date_label}.",
-            )
-            time_start = st.time_input(
-                "Heure de debut",
-                value=time(0, 0, 0),
-                step=60,
-                key=f"mpesa_g2_completion_start_time_{completion_key}",
-                help=(
-                    "Première heure incluse le jour de début. `00:00:00` "
-                    "conserve la journée depuis son commencement."
-                ),
-            )
-        with date_columns[1]:
-            date_end = st.date_input(
-                "Date de fin",
-                value=default_completion_date,
-                min_value=completion_times.min().date(),
-                max_value=completion_times.max().date(),
-                key=f"mpesa_g2_completion_end_{completion_key}",
-                format="DD/MM/YYYY",
-                help=f"Dernière journée incluse selon {source_date_label}.",
-            )
-            time_end = st.time_input(
-                "Heure de fin",
-                value=time(23, 59, 59),
-                step=60,
-                key=f"mpesa_g2_completion_end_time_{completion_key}",
-                help=(
-                    "Dernière heure incluse le jour de fin. `23:59:59` conserve "
-                    "la journée entière."
-                ),
-            )
-        if default_completion_date < completion_times.max().date():
+    else:
+        completion_key = f"{source_label}_sans_date_{len(analysis_prepared.g2_transactions)}"
+        default_completion_date = None
+
+    data_token = _prepared_data_state_token(analysis_prepared)
+    start_key = f"mpesa_g2_completion_start_{completion_key}"
+    end_key = f"mpesa_g2_completion_end_{completion_key}"
+    start_time_key = f"mpesa_g2_completion_start_time_{completion_key}"
+    end_time_key = f"mpesa_g2_completion_end_time_{completion_key}"
+    direction_key = f"mpesa_g2_direction_filter_{completion_key}"
+    applied_filters_key = f"mpesa_g2_applied_filters_{completion_key}_{data_token}"
+    applied_at_key = f"mpesa_g2_applied_at_{completion_key}_{data_token}"
+    if default_completion_date is not None:
+        st.session_state.setdefault(start_key, default_completion_date)
+        st.session_state.setdefault(end_key, default_completion_date)
+        st.session_state.setdefault(start_time_key, time(0, 0, 0))
+        st.session_state.setdefault(end_time_key, time(23, 59, 59))
+    st.session_state.setdefault(direction_key, [])
+
+    with st.form(f"mpesa_g2_filters_{completion_key}_{data_token}", border=True):
+        if not completion_times.empty:
+            st.caption(f"Champ temporel analys? : {source_date_label}.")
+            date_columns = st.columns(2)
+            with date_columns[0]:
+                st.date_input(
+                    "Date de début",
+                    min_value=completion_times.min().date(),
+                    max_value=completion_times.max().date(),
+                    key=start_key,
+                    format="DD/MM/YYYY",
+                    help=f"Premi?re journ?e incluse selon {source_date_label}.",
+                )
+                st.time_input(
+                    "Heure de debut",
+                    step=60,
+                    key=start_time_key,
+                    help=(
+                        "Premi?re heure incluse le jour de d?but. `00:00:00` "
+                        "conserve la journ?e depuis son commencement."
+                    ),
+                )
+            with date_columns[1]:
+                st.date_input(
+                    "Date de fin",
+                    min_value=completion_times.min().date(),
+                    max_value=completion_times.max().date(),
+                    key=end_key,
+                    format="DD/MM/YYYY",
+                    help=f"Derni?re journ?e incluse selon {source_date_label}.",
+                )
+                st.time_input(
+                    "Heure de fin",
+                    step=60,
+                    key=end_time_key,
+                    help=(
+                        "Derni?re heure incluse le jour de fin. `23:59:59` conserve "
+                        "la journ?e enti?re."
+                    ),
+                )
+            if default_completion_date < completion_times.max().date():
+                st.caption(
+                    "La derniere journee complete est proposee; la journee la plus "
+                    "recente semble encore partielle."
+                )
+        else:
             st.caption(
-                "La derniere journee complete est proposee; la journee la plus "
-                "recente semble encore partielle."
+                f"{source_date_label} n'est pas disponible; l'ensemble de la source {source_label} est analyse."
             )
+        st.multiselect(
+            "Sens des flux",
+            options=direction_options,
+            key=direction_key,
+            placeholder="Tous",
+            help="Aucune s?lection = tous les sens. Le filtre s'applique ? la synth?se, au d?tail et ? l'export.",
+        )
+        g2_submitted = st.form_submit_button("Actualiser G2 / DAT", type="primary")
+
+    if g2_submitted:
+        st.session_state[applied_filters_key] = {
+            "date_start": st.session_state.get(start_key),
+            "date_end": st.session_state.get(end_key),
+            "time_start": st.session_state.get(start_time_key),
+            "time_end": st.session_state.get(end_time_key),
+            "direction_labels": list(st.session_state.get(direction_key, [])),
+        }
+        st.session_state[applied_at_key] = pd.Timestamp.now()
+
+    applied_filters = st.session_state.get(applied_filters_key)
+    if not applied_filters:
+        _render_deferred_analysis_notice("l'onglet Solution Numerique / M-Pesa")
+        return
+    date_start = applied_filters.get("date_start")
+    date_end = applied_filters.get("date_end")
+    time_start = applied_filters.get("time_start")
+    time_end = applied_filters.get("time_end")
+    selected_direction_labels = list(applied_filters.get("direction_labels") or [])
+    if not completion_times.empty:
         period_start = pd.Timestamp.combine(date_start, time_start)
         period_end = pd.Timestamp.combine(date_end, time_end)
         if period_start > period_end:
             st.error(
-                "La date et l'heure de début doivent être antérieures ou égales à la date et l'heure de fin.",
+                "La date et l'heure de d?but doivent ?tre ant?rieures ou ?gales ? la date et l'heure de fin.",
                 icon=":material/error:",
             )
             return
@@ -3978,20 +4108,6 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             time_start,
             time_end,
         )
-    else:
-        st.caption(
-            f"{source_date_label} n'est pas disponible; l'ensemble de la source {source_label} est analyse."
-        )
-
-    direction_options = ["Entrées", "Sorties"]
-    selected_direction_labels = st.multiselect(
-        "Sens des flux",
-        options=direction_options,
-        default=[],
-        key="mpesa_g2_direction_filter",
-        placeholder="Tous",
-        help="Aucune sélection = tous les sens. Le filtre s'applique à la synthèse, au détail et à l'export.",
-    )
     if not selected_direction_labels or len(selected_direction_labels) == len(direction_options):
         selected_directions = None
         direction_suffix = "tous_flux"
@@ -4005,6 +4121,11 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         direction_suffix = "sorties"
         direction_label = "Sorties"
     filtered_g2 = filter_g2_transactions_by_direction(filtered_g2, selected_directions)
+    if g2_submitted:
+        st.success(
+            f"Parametres G2 / DAT appliques : {direction_label.lower()}.",
+            icon=":material/check_circle:",
+        )
     period_text = (
         f"du {date_start:%d/%m/%Y} à {time_start:%H:%M:%S} "
         f"au {date_end:%d/%m/%Y} à {time_end:%H:%M:%S}"
@@ -5254,7 +5375,13 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
     minimum_date = combined_dates.min().date()
     maximum_date = combined_dates.max().date()
     default_end = maximum_date
-    default_start = max(minimum_date, (pd.Timestamp(default_end) - pd.Timedelta(days=90)).date())
+    default_start = max(
+        minimum_date,
+        (
+            pd.Timestamp(default_end)
+            - pd.Timedelta(days=MPESA_DEFAULT_ANALYSIS_WINDOW_DAYS)
+        ).date(),
+    )
 
     render_summary_box(
         "Cockpit Credits - Solution Numerique",
@@ -5266,56 +5393,94 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         ],
     )
 
-    with st.container(border=True):
+    data_token = _prepared_data_state_token(prepared)
+    applied_filters_key = f"mpesa_credit_applied_filters_{data_token}"
+    applied_at_key = f"mpesa_credit_applied_at_{data_token}"
+    credit_start_key = f"mpesa_credit_date_start_{data_token}"
+    credit_end_key = f"mpesa_credit_date_end_{data_token}"
+    st.session_state.setdefault(credit_start_key, default_start)
+    st.session_state.setdefault(credit_end_key, default_end)
+    st.session_state.setdefault("mpesa_credit_frequency", "Mois")
+    st.session_state.setdefault("mpesa_credit_top_exposure", 20)
+    st.session_state.setdefault(
+        "mpesa_credit_dat_rate",
+        float(DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT),
+    )
+    with st.form(f"mpesa_credit_filters_{data_token}", border=True):
         filter_cols = st.columns(5)
         with filter_cols[0]:
-            date_start = st.date_input(
+            st.date_input(
                 "Date de debut",
-                value=default_start,
                 min_value=minimum_date,
                 max_value=maximum_date,
-                key="mpesa_credit_date_start",
+                key=credit_start_key,
                 format="DD/MM/YYYY",
                 help="Premiere date incluse pour les flux de production et de remboursement. Les positions Loans Account restent des instantanes.",
             )
         with filter_cols[1]:
-            date_end = st.date_input(
+            st.date_input(
                 "Date de fin",
-                value=default_end,
                 min_value=minimum_date,
                 max_value=maximum_date,
-                key="mpesa_credit_date_end",
+                key=credit_end_key,
                 format="DD/MM/YYYY",
                 help="Derniere date incluse. Le risque simplifie et les echeances sont lus a cette date d'analyse.",
             )
         with filter_cols[2]:
-            frequency = st.selectbox(
+            st.selectbox(
                 "Frequence",
                 options=["Jour", "Semaine", "Mois"],
-                index=2,
                 key="mpesa_credit_frequency",
                 help="Regroupe uniquement les tendances de flux. Ce choix ne modifie ni les totaux ni l'instantane Loans Account.",
             )
         with filter_cols[3]:
-            high_exposure_top_n = st.number_input(
+            st.number_input(
                 "Top expositions",
                 min_value=5,
                 max_value=100,
-                value=20,
                 step=5,
                 key="mpesa_credit_top_exposure",
                 help="Nombre maximal de gros prets conserves dans les listes de concentration et d'action.",
             )
         with filter_cols[4]:
-            dat_rate = st.number_input(
+            st.number_input(
                 "Taux DAT (%)",
                 min_value=0.0,
                 max_value=100.0,
-                value=float(DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT),
                 step=0.25,
                 key="mpesa_credit_dat_rate",
                 help="Taux utilise uniquement pour les analyses DAT partagees; il ne modifie aucun montant de credit.",
             )
+        credit_submitted = st.form_submit_button("Actualiser les credits", type="primary")
+
+    if credit_submitted:
+        st.session_state[applied_filters_key] = {
+            "date_start": st.session_state[credit_start_key],
+            "date_end": st.session_state[credit_end_key],
+            "frequency": st.session_state["mpesa_credit_frequency"],
+            "high_exposure_top_n": st.session_state["mpesa_credit_top_exposure"],
+            "dat_rate": st.session_state["mpesa_credit_dat_rate"],
+        }
+        st.session_state[applied_at_key] = pd.Timestamp.now()
+
+    applied_filters = st.session_state.get(applied_filters_key)
+    if not applied_filters:
+        _render_deferred_analysis_notice("l'onglet Credits")
+        return
+    date_start = applied_filters.get("date_start", default_start)
+    date_end = applied_filters.get("date_end", default_end)
+    frequency = applied_filters.get("frequency", "Mois")
+    high_exposure_top_n = int(applied_filters.get("high_exposure_top_n", 20) or 20)
+    dat_rate = float(
+        applied_filters.get("dat_rate", DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT)
+        or 0.0
+    )
+    if credit_submitted:
+        st.success(
+            f"Parametres Credits appliques : {pd.Timestamp(date_start):%d/%m/%Y} - "
+            f"{pd.Timestamp(date_end):%d/%m/%Y}, frequence {frequency}.",
+            icon=":material/check_circle:",
+        )
 
     cockpit = _build_mpesa_credit_cockpit_cached(
         prepared,
@@ -5378,7 +5543,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 "Concentration",
                 "Credit et epargne",
                 "Cohortes a date",
-                "Listes d'action",
+                "Opportunités",
                 "Qualite des donnees",
             ]
         )
@@ -5558,21 +5723,21 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             _mpesa_dataframe(cohort_view, width="stretch", hide_index=True)
 
     with actions_tab:
-        render_panel_title("Listes d'action credit")
+        render_panel_title("Opportunités crédit")
         if not isinstance(action_lists, dict) or not action_lists:
-            st.info("Aucune liste d'action credit disponible.")
+            st.info("Aucune opportunité crédit disponible.")
         else:
             names = list(action_lists.keys())
             selected_lists = st.multiselect(
-                "Listes a afficher",
+                "Opportunités à afficher",
                 options=names,
                 default=names[:1],
                 format_func=lambda value: str(value).replace("_", " ").title(),
                 key="mpesa_credit_action_lists",
-                help="Selection multiple pour comparer plusieurs listes de suivi credit. Une selection vide masque les listes a l'ecran, mais pas l'export.",
+                help="Selection multiple pour comparer plusieurs opportunités de suivi crédit. Une selection vide masque les listes a l'ecran, mais pas l'export.",
             )
             if not selected_lists:
-                st.info("Selectionnez au moins une liste d'action.")
+                st.info("Selectionnez au moins une opportunité.")
             displayed_signatures: dict[tuple[Any, ...], str] = {}
             for name in selected_lists:
                 frame = action_lists.get(name, pd.DataFrame())
@@ -6813,58 +6978,103 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
     minimum_date = combined_dates.min().date()
     maximum_date = combined_dates.max().date()
     default_end = maximum_date
-    default_start = max(minimum_date, (pd.Timestamp(default_end) - pd.Timedelta(days=90)).date())
-    with st.container(border=True):
+    default_start = max(
+        minimum_date,
+        (
+            pd.Timestamp(default_end)
+            - pd.Timedelta(days=MPESA_DEFAULT_ANALYSIS_WINDOW_DAYS)
+        ).date(),
+    )
+    data_token = _prepared_data_state_token(prepared)
+    applied_filters_key = f"mpesa_clients_applied_filters_{data_token}"
+    applied_at_key = f"mpesa_clients_applied_at_{data_token}"
+    clients_start_key = f"mpesa_clients_date_start_{data_token}"
+    clients_end_key = f"mpesa_clients_date_end_{data_token}"
+    st.session_state.setdefault(clients_start_key, default_start)
+    st.session_state.setdefault(clients_end_key, default_end)
+    st.session_state.setdefault("mpesa_clients_frequency", "Mois")
+    st.session_state.setdefault("mpesa_clients_inactivity_threshold", 30)
+    st.session_state.setdefault("mpesa_clients_occasional_threshold", 2)
+    with st.form(f"mpesa_clients_filters_{data_token}", border=True):
         filter_cols = st.columns(5)
         with filter_cols[0]:
-            date_start = st.date_input(
+            st.date_input(
                 "Date de début",
-                value=default_start,
                 min_value=minimum_date,
                 max_value=maximum_date,
-                key="mpesa_clients_date_start",
+                key=clients_start_key,
                 format="DD/MM/YYYY",
-                help="Borne incluse pour l'activité client, les nouveaux clients et les listes d'action.",
+                help="Borne incluse pour l'activit? client, les nouveaux clients et les listes d'action.",
             )
         with filter_cols[1]:
-            date_end = st.date_input(
+            st.date_input(
                 "Date de fin",
-                value=default_end,
                 min_value=minimum_date,
                 max_value=maximum_date,
-                key="mpesa_clients_date_end",
+                key=clients_end_key,
                 format="DD/MM/YYYY",
-                help="Borne incluse. Les positions de comptes et de crédits restent des instantanés disponibles à cette date.",
+                help="Borne incluse. Les positions de comptes et de cr?dits restent des instantan?s disponibles ? cette date.",
             )
         with filter_cols[2]:
-            frequency = st.selectbox(
+            st.selectbox(
                 "Fréquence",
                 options=["Jour", "Semaine", "Mois"],
-                index=2,
                 key="mpesa_clients_frequency",
-                help="Regroupe l'acquisition et l'activité par jour, semaine ou mois sans modifier les sources.",
+                help="Regroupe l'acquisition et l'activit? par jour, semaine ou mois sans modifier les sources.",
             )
         with filter_cols[3]:
-            inactivity_threshold = st.number_input(
-                "Seuil inactivité",
+            st.number_input(
+                "Seuil inactivit?",
                 min_value=7,
                 max_value=365,
-                value=30,
                 step=7,
                 key="mpesa_clients_inactivity_threshold",
-                help="Nombre de jours sans opération pour classer un client comme inactif observé. Ce n'est pas un statut réglementaire.",
+                help="Nombre de jours sans op?ration pour classer un client comme inactif observ?. Ce n'est pas un statut r?glementaire.",
             )
         with filter_cols[4]:
-            occasional_threshold = st.number_input(
+            st.number_input(
                 "Seuil occasionnel",
                 min_value=1,
                 max_value=20,
-                value=2,
                 step=1,
                 key="mpesa_clients_occasional_threshold",
-                help="Nombre maximal d'opérations sur la période pour classer un client actif comme occasionnel.",
+                help="Nombre maximal d'op?rations sur la p?riode pour classer un client actif comme occasionnel.",
             )
+        clients_submitted = st.form_submit_button("Actualiser les clients", type="primary")
 
+    if clients_submitted:
+        st.session_state[applied_filters_key] = {
+            "date_start": st.session_state[clients_start_key],
+            "date_end": st.session_state[clients_end_key],
+            "frequency": st.session_state["mpesa_clients_frequency"],
+            "inactivity_threshold": st.session_state[
+                "mpesa_clients_inactivity_threshold"
+            ],
+            "occasional_threshold": st.session_state[
+                "mpesa_clients_occasional_threshold"
+            ],
+        }
+        st.session_state[applied_at_key] = pd.Timestamp.now()
+
+    applied_filters = st.session_state.get(applied_filters_key)
+    if not applied_filters:
+        _render_deferred_analysis_notice("l'onglet Clients")
+        return
+    date_start = applied_filters.get("date_start", default_start)
+    date_end = applied_filters.get("date_end", default_end)
+    frequency = applied_filters.get("frequency", "Mois")
+    inactivity_threshold = int(
+        applied_filters.get("inactivity_threshold", 30) or 30
+    )
+    occasional_threshold = int(
+        applied_filters.get("occasional_threshold", 2) or 2
+    )
+    if clients_submitted:
+        st.success(
+            f"Parametres Clients appliques : {pd.Timestamp(date_start):%d/%m/%Y} - "
+            f"{pd.Timestamp(date_end):%d/%m/%Y}, frequence {frequency}.",
+            icon=":material/check_circle:",
+        )
     report = _build_mpesa_clients_report_cached(
         prepared,
         date_start,
@@ -6922,7 +7132,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                 "Produits et Client 360",
                 "DAT sans crédit",
                 "Segmentation",
-                "Listes d'action",
+                "Opportunités",
             ]
         )
     )
@@ -7081,21 +7291,21 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
             _mpesa_dataframe(segments_produits, width="stretch", hide_index=True)
 
     with action_tab:
-        render_panel_title("Listes d'action")
+        render_panel_title("Opportunités clients")
         if not isinstance(action_lists, dict) or not action_lists:
-            st.info("Aucune liste d'action disponible.")
+            st.info("Aucune opportunité client disponible.")
         else:
             list_names = list(action_lists.keys())
             selected_lists = st.multiselect(
-                "Listes à afficher",
+                "Opportunités à afficher",
                 options=list_names,
                 default=list_names[:1],
                 format_func=lambda value: str(value).replace("_", " ").title(),
                 key="mpesa_clients_action_lists",
-                help="Les listes sont produites depuis Client 360. Les montants restent séparés par devise lorsqu'ils existent.",
+                help="Les opportunités sont produites depuis Client 360. Les montants restent séparés par devise lorsqu'ils existent.",
             )
             if not selected_lists:
-                st.info("Sélectionnez au moins une liste d'action.")
+                st.info("Sélectionnez au moins une opportunité.")
             for selected_list in selected_lists:
                 selected_frame = action_lists.get(selected_list, pd.DataFrame())
                 st.markdown(f"**{str(selected_list).replace('_', ' ').title()}**")
@@ -7182,7 +7392,10 @@ def _render_statistics_tab(
         ).date()
     default_start = max(
         minimum_date,
-        (pd.Timestamp(default_end) - pd.Timedelta(days=90)).date(),
+        (
+            pd.Timestamp(default_end)
+            - pd.Timedelta(days=MPESA_DEFAULT_ANALYSIS_WINDOW_DAYS)
+        ).date(),
     )
 
     filter_scope_key = f"{minimum_date:%Y%m%d}_{maximum_date:%Y%m%d}_{len(combined_dates)}"

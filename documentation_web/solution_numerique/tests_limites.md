@@ -35,6 +35,9 @@ La Solution Numérique peut charger des fichiers Excel volumineux. Pour limiter 
 
 - les sources communes sont préparées une fois après téléversement ;
 - les sous-onglets principaux utilisent une navigation dynamique : seul le sous-onglet ouvert rend son contenu ;
+- les paramètres locaux des sous-onglets lourds sont regroupés dans des formulaires et ne déclenchent les calculs qu'après clic sur un bouton `Actualiser` ;
+- la période proposée par défaut dans les onglets analytiques lourds est limitée à trois mois maximum, même si l'historique chargé est plus large ;
+- après un nouveau téléversement, les validations précédentes ne sont pas réutilisées automatiquement : l'utilisateur doit relancer l'analyse voulue avec `Actualiser` ;
 - les rapports lourds sont conservés dans des caches bornés ;
 - les exports Word/PDF/Excel sont générés à la demande et gardent peu d'entrées en cache ;
 - les analyses récurrentes doivent réutiliser le journal d'événements consolidé plutôt que recalculer les transactions dans chaque onglet.
