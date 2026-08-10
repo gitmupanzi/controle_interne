@@ -100,15 +100,25 @@ Les emplacements utiles sont :
 
 | Besoin | Sous-onglet | Liste ou tableau |
 |---|---|---|
-| Clients qui épargnent le plus | `Concentration` | Classement des gros déposants |
-| Concentration de l'épargne par client | `Concentration` | Top clients par devise |
-| Analyse des clients et comptes | `Clients et comptes` | Détail client, compte et solde |
+| Clients qui épargnent le plus | `Concentration et opportunités` | Classement des gros déposants |
+| Concentration de l'épargne par client | `Concentration et opportunités` | Top clients par devise et tranches d'encours |
+| Analyse des clients et comptes | `Portefeuille et produits` | Détail client, compte et solde |
 
 Ces analyses doivent toujours être lues devise par devise. Les montants CDF et USD ne doivent pas être additionnés.
 
+### Peut-on analyser les meilleurs clients par tranche d'argent ?
+
+Oui. Le classement `rang_client` donne les meilleurs clients un par un, tandis que `tranche_encours` regroupe les clients par niveau d'argent. Dans `Solution Numérique`, cette lecture est disponible dans :
+
+- `Épargnes > Concentration et opportunités` pour les comptes ouverts et DAT ;
+- `Clients > Client 360 et segmentation` pour les familles compte ouvert, DAT et crédit ;
+- `Crédits > Risques et concentration` pour les expositions crédit.
+
+Les tranches sont calculées séparément par devise. Elles ne remplacent pas le top clients ; elles le complètent.
+
 ### Où trouver les épargnes ou DAT sans crédit actif ?
 
-Dans le module `Solution Numérique`, ouvrir l'onglet `Épargnes`, puis le sous-onglet `Opportunités`.
+Dans le module `Solution Numérique`, ouvrir l'onglet `Épargnes`, puis le sous-onglet `Concentration et opportunités`.
 
 Les listes utiles sont :
 
@@ -125,15 +135,15 @@ Dans le module `Solution Numérique`, ouvrir l'onglet `Épargnes`, puis :
 
 | Besoin | Sous-onglet |
 |---|---|
-| DAT en cours | `DAT` |
-| Comptes bloqués échus ou bientôt à terme | `Échéances DAT` |
-| Préparation des remboursements DAT | `Échéances DAT` |
+| DAT en cours | `DAT et échéances` |
+| Comptes bloqués échus ou bientôt à terme | `DAT et échéances` |
+| Préparation des remboursements DAT | `DAT et échéances` |
 
 Le taux annuel DAT est paramétrable. Par défaut, la règle Bisou Bisou utilisée pour l'estimation est 11 % par an.
 
 ### Où trouver les crédits en arriéré ?
 
-Dans le module `Solution Numérique`, ouvrir l'onglet `Crédits`, puis le sous-onglet `Opportunités`.
+Dans le module `Solution Numérique`, ouvrir l'onglet `Crédits`, puis le sous-onglet `Opportunités et qualité`.
 
 La liste principale à consulter est :
 
@@ -145,7 +155,7 @@ Cette analyse utilise principalement `Loans Account`, notamment les informations
 
 ### Où trouver les crédits en PAR 30 jours ?
 
-Dans le module `Solution Numérique`, ouvrir l'onglet `Crédits`, puis le sous-onglet `Opportunités`.
+Dans le module `Solution Numérique`, ouvrir l'onglet `Crédits`, puis le sous-onglet `Opportunités et qualité`.
 
 La liste à consulter est :
 
@@ -157,7 +167,7 @@ Le PAR affiché est un suivi opérationnel simplifié lorsqu'un plan d'amortisse
 
 ### Où trouver les crédits en défaut ou avec pénalités ?
 
-Dans le module `Solution Numérique`, ouvrir l'onglet `Crédits`, puis le sous-onglet `Opportunités`.
+Dans le module `Solution Numérique`, ouvrir l'onglet `Crédits`, puis le sous-onglet `Opportunités et qualité`.
 
 Les listes utiles sont :
 

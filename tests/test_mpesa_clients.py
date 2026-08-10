@@ -132,6 +132,25 @@ def test_clients_report_tracks_new_clients_accounts_activity_by_currency():
     assert activation.loc[("101", "USD"), "solde_dat"] == 20.0
 
 
+def test_clients_report_groups_encours_by_amount_band_and_currency():
+    report = build_mpesa_clients_report(
+        _sample_prepared(),
+        date_start="2026-07-01",
+        date_end="2026-07-31",
+    )
+
+    tranches = report["encours_clients_tranches"].set_index(
+        ["currency_code", "famille_encours", "tranche_encours"]
+    )
+
+    assert ("USD", "compte_ouvert", "Moins de 100") in tranches.index
+    assert ("USD", "dat", "Moins de 100") in tranches.index
+    assert ("USD", "credit", "Moins de 100") in tranches.index
+    assert float(tranches.loc[("USD", "compte_ouvert", "Moins de 100"), "encours_total"]) == 5.0
+    assert float(tranches.loc[("USD", "dat", "Moins de 100"), "encours_total"]) == 20.0
+    assert float(tranches.loc[("USD", "credit", "Moins de 100"), "encours_total"]) == 3.0
+
+
 def test_clients_report_reuses_dat_without_active_credit_logic():
     report = build_mpesa_clients_report(
         _sample_prepared(),

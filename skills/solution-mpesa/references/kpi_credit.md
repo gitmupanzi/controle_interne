@@ -18,7 +18,7 @@ Ce référentiel décrit l'onglet `Crédits`. Il complète `Finance et comptabil
 | production_credit | Décaissements observés sur la période. | Événements consolidés de décaissement. | Transactions | événement x devise | oui | flux | implemente | Flux observé, pas encours historique. |
 | remboursements_observes | Remboursements détectés dans Transactions. | Événements consolidés de remboursement. | Transactions | événement x devise | oui | flux | implemente | Ne fournit pas le montant exigible. |
 | echeances_maturite | Maturité du prêt depuis `due_date`. | Échu, aujourd'hui, 0-7, 8-30, 31-60, 61-90, >90 jours. | Loans Account | prêt x devise | oui | suivi | implemente | Ce n'est pas un échéancier détaillé. |
-| concentration_credit | Concentration par prêt, client, produit et tranche. | Part des top expositions / encours de la devise. | Loans Account | devise | oui | risque | implemente | Ne jamais mélanger CDF et USD. |
+| concentration_credit | Concentration par prêt, client, produit et tranche. | Part des top expositions / encours de la devise, avec `tranche_encours` au niveau prêt et au niveau client. | Loans Account | devise | oui | risque | implemente | Ne jamais mélanger CDF et USD. |
 | cohortes_a_date | Lecture par mois de création du prêt. | Nombre, montant initial, encours, défauts observés. | Loans Account | cohorte x devise | oui | analyse | implemente | Cohorte à date, pas vraie vintage historique. |
 | credit_epargne_observee | Juxtaposition crédit, compte ouvert et DAT. | Encours crédit vs épargne observée par client/devise. | Loans + Savings | client x devise | oui | rapprochement | implemente | Analyse, pas garantie ni compensation. |
 
@@ -39,8 +39,9 @@ Ces indicateurs ne doivent pas être forcés tant qu'une source fiable n'est pas
 
 ## Règles d'interface
 
-- Organiser l'onglet en blocs : `Vue d'ensemble`, `Production`, `Portefeuille actuel`, `Remboursements`, `Risque simplifié`, `Échéances`, `Concentration`, `Crédit et épargne`, `Cohortes à date`, `Listes d'action`, `Qualité des données`.
+- Organiser l'onglet en six blocs : `Vue d'ensemble`, `Production et remboursements`, `Portefeuille et échéances`, `Risques et concentration`, `Crédit et épargne`, `Opportunités et qualité`.
+- Cette organisation remplace l'ancien découpage en 11 onglets. Conserver les analyses de production, portefeuille, remboursements, risque, échéances, concentration, crédit/épargne, cohortes, opportunités et qualité, mais les regrouper pour réduire la longueur de navigation.
+- Dans `Risques et concentration`, conserver le classement des prêts et des clients, puis ajouter la synthèse par `tranche_encours` client pour lire les niveaux d'exposition.
 - Prioriser les `multiselect` pour les filtres de devise, statut, produit, client, téléphone, échéance, tranche et liste d'action.
 - Conserver les `selectbox` uniquement pour les choix exclusifs : fréquence, mode d'affichage, horizon ou indicateur graphique unique.
 - Afficher une aide claire sur le PAR simplifié : il est construit depuis `due_date` et ne remplace pas un plan d'amortissement détaillé.
-

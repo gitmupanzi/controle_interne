@@ -3323,16 +3323,11 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         format_professional_tab_labels(
             (
                 "Vue d'ensemble",
-                "Collecte et flux",
-                "Portefeuille actuel",
-                "Clients et comptes",
-                "Activite observee",
-                "Produits",
-                "Concentration",
-                "DAT",
-                "Echeances DAT",
-                "Opportunités",
-                "Controles et anomalies",
+                "Flux et activité",
+                "Portefeuille et produits",
+                "DAT et échéances",
+                "Concentration et opportunités",
+                "Contrôles et anomalies",
             )
         )
     )
@@ -3433,7 +3428,7 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
             ]
             _mpesa_dataframe(detail_view[columns].head(1000), width="stretch", hide_index=True)
 
-    with sub_tabs[3]:
+    with sub_tabs[2]:
         new_accounts = cockpit.get("nouveaux_comptes", pd.DataFrame())
         activity = cockpit.get("activite_comptes", pd.DataFrame())
         render_panel_title("Clients et comptes")
@@ -3446,9 +3441,9 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
             )
             _mpesa_dataframe(summary, width="stretch", hide_index=True)
 
-    with sub_tabs[4]:
+    with sub_tabs[1]:
         activity = cockpit.get("activite_comptes", pd.DataFrame())
-        render_panel_title("Activite observee")
+        render_panel_title("Activité observée")
         activity_view = _apply_local_multiselect_filters(
             activity,
             ["currency_code", "famille_epargne", "statut_activite_observee", "product_name"],
@@ -3456,7 +3451,7 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         )
         _mpesa_dataframe(activity_view.head(1000), width="stretch", hide_index=True)
 
-    with sub_tabs[5]:
+    with sub_tabs[2]:
         products = cockpit.get("produits_synthese", pd.DataFrame())
         render_panel_title("Produits d'epargne")
         product_view = _apply_local_multiselect_filters(
@@ -3466,19 +3461,29 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         )
         _mpesa_dataframe(product_view, width="stretch", hide_index=True)
 
-    with sub_tabs[6]:
+    with sub_tabs[4]:
         concentration = cockpit.get("concentration_synthese", pd.DataFrame())
         clients = cockpit.get("concentration_clients", pd.DataFrame())
+        concentration_bands = cockpit.get("concentration_tranches", pd.DataFrame())
         render_panel_title("Concentration")
         _mpesa_dataframe(concentration, width="stretch", hide_index=True)
+        if not concentration_bands.empty:
+            st.markdown("**Tranches d'encours par devise**")
+            bands_view = _apply_local_multiselect_filters(
+                concentration_bands,
+                ["currency_code", "famille_epargne", "tranche_encours"],
+                key_prefix="mpesa_savings_concentration_bands_filter",
+            )
+            _mpesa_dataframe(bands_view, width="stretch", hide_index=True)
+        st.markdown("**Classement des clients**")
         clients_view = _apply_local_multiselect_filters(
             clients,
-            ["currency_code", "famille_epargne", "Nom_client", "customer_id"],
+            ["currency_code", "famille_epargne", "tranche_encours", "Nom_client", "customer_id"],
             key_prefix="mpesa_savings_concentration_clients_filter",
         )
         _mpesa_dataframe(clients_view.head(200), width="stretch", hide_index=True)
 
-    with sub_tabs[7]:
+    with sub_tabs[3]:
         dat_summary = cockpit.get("dat_synthese", pd.DataFrame())
         dat_detail = cockpit.get("dat_detail", pd.DataFrame())
         render_panel_title("DAT - position actuelle")
@@ -3504,8 +3509,8 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
             "Cette valeur sert a la preparation, pas a la comptabilisation officielle."
         )
 
-    with sub_tabs[8]:
-        render_panel_title("Echeances DAT")
+    with sub_tabs[3]:
+        render_panel_title("Échéances DAT")
         maturity_summary = cockpit.get("dat_echeances_synthese", pd.DataFrame())
         maturity_detail = cockpit.get("dat_echeances_detail", pd.DataFrame())
         _mpesa_dataframe(maturity_summary, width="stretch", hide_index=True)
@@ -3516,7 +3521,7 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         )
         _mpesa_dataframe(maturity_view.head(1000), width="stretch", hide_index=True)
 
-    with sub_tabs[9]:
+    with sub_tabs[4]:
         render_panel_title("Opportunités commerciales prudentes")
         opportunities = cockpit.get("opportunites", pd.DataFrame())
         if opportunities.empty:
@@ -3537,8 +3542,8 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
             ],
         )
 
-    with sub_tabs[10]:
-        render_panel_title("Controles et anomalies")
+    with sub_tabs[5]:
+        render_panel_title("Contrôles et anomalies")
         quality_view = _apply_local_multiselect_filters(
             quality,
             ["statut", "controle"],
@@ -3564,6 +3569,7 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         "epargne_produits_synthese": cockpit.get("produits_synthese", pd.DataFrame()),
         "epargne_concentration_synthese": cockpit.get("concentration_synthese", pd.DataFrame()),
         "epargne_concentration_clients": cockpit.get("concentration_clients", pd.DataFrame()),
+        "epargne_concentration_tranches": cockpit.get("concentration_tranches", pd.DataFrame()),
         "epargne_dat_detail": cockpit.get("dat_detail", pd.DataFrame()),
         "epargne_dat_echeances": cockpit.get("dat_echeances_detail", pd.DataFrame()),
         "epargne_opportunites": cockpit.get("opportunites", pd.DataFrame()),
@@ -5505,6 +5511,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
     maturity_detail = cockpit.get("echeances_detail", pd.DataFrame())
     concentration_loans = cockpit.get("concentration_prets", pd.DataFrame())
     concentration_clients = cockpit.get("concentration_clients", pd.DataFrame())
+    concentration_client_bands = cockpit.get("concentration_clients_tranches", pd.DataFrame())
     concentration_summary = cockpit.get("concentration_synthese", pd.DataFrame())
     concentration_products = cockpit.get("concentration_produits", pd.DataFrame())
     concentration_bands = cockpit.get("concentration_tranches", pd.DataFrame())
@@ -5521,30 +5528,20 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
     tabs_container = st.container(key=tabs_key)
     (
         overview_tab,
-        production_tab,
-        portfolio_tab,
-        repayment_tab,
-        risk_tab,
-        maturity_tab,
-        concentration_tab,
+        production_repayment_tab,
+        portfolio_maturity_tab,
+        risk_concentration_tab,
         savings_tab,
-        cohort_tab,
-        actions_tab,
-        quality_tab,
+        opportunities_quality_tab,
     ) = tabs_container.tabs(
         format_professional_tab_labels(
             [
                 "Vue d'ensemble",
-                "Production",
-                "Portefeuille actuel",
-                "Remboursements",
-                "Risque simplifie",
-                "Echeances",
-                "Concentration",
-                "Credit et epargne",
-                "Cohortes a date",
-                "Opportunités",
-                "Qualite des donnees",
+                "Production et remboursements",
+                "Portefeuille et échéances",
+                "Risques et concentration",
+                "Crédit et épargne",
+                "Opportunités et qualité",
             ]
         )
     )
@@ -5582,7 +5579,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 )
             _mpesa_dataframe(overview, width="stretch", hide_index=True)
 
-    with production_tab:
+    with production_repayment_tab:
         render_panel_title("Production de credit sur la periode")
         if production_summary.empty and production_detail.empty:
             st.info("Aucun decaissement de credit observe sur la periode filtree.")
@@ -5596,7 +5593,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 )
                 _mpesa_dataframe(production_view, width="stretch", height=420, hide_index=True)
 
-    with portfolio_tab:
+    with portfolio_maturity_tab:
         render_panel_title("Portefeuille actuel depuis Loans Account")
         if portfolio_summary.empty:
             st.info("Chargez Loans Account pour obtenir la position actuelle du portefeuille.")
@@ -5616,7 +5613,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 )
                 _mpesa_dataframe(status_view, width="stretch", hide_index=True)
 
-    with repayment_tab:
+    with production_repayment_tab:
         render_panel_title("Remboursements observes")
         if repayment_summary.empty and repayment_detail.empty:
             st.info("Aucun remboursement observe sur la periode filtree.")
@@ -5629,7 +5626,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             )
             _mpesa_dataframe(repayment_view, width="stretch", height=440, hide_index=True)
 
-    with risk_tab:
+    with risk_concentration_tab:
         render_panel_title("Risque simplifie")
         st.info(
             "Indicateur simplifie construit depuis la date d'echeance disponible dans Loans Account. Il ne remplace pas un PAR issu d'un plan d'amortissement detaille."
@@ -5645,7 +5642,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             )
             _mpesa_dataframe(risk_view, width="stretch", height=460, hide_index=True)
 
-    with maturity_tab:
+    with portfolio_maturity_tab:
         render_panel_title("Echeances et maturite des prets")
         st.caption("Vue construite depuis due_date. Elle indique la maturite du pret, pas un echeancier detaille de mensualites.")
         if maturity_summary.empty:
@@ -5664,7 +5661,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             )
             _mpesa_dataframe(maturity_detail_view, width="stretch", height=460, hide_index=True)
 
-    with concentration_tab:
+    with risk_concentration_tab:
         render_panel_title("Concentration du portefeuille")
         if concentration_loans.empty and concentration_clients.empty:
             st.info("Aucune concentration calculable sans encours credit positif.")
@@ -5679,7 +5676,13 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 )
                 _mpesa_dataframe(top_loans_view, width="stretch", height=420, hide_index=True)
             with st.expander("Top clients, produits et tranches", expanded=False):
-                _mpesa_dataframe(_currency_filter(concentration_clients, key_prefix="mpesa_credit_top_clients"), width="stretch", hide_index=True)
+                top_clients_view = _apply_local_multiselect_filters(
+                    concentration_clients,
+                    ["currency_code", "tranche_encours", "customer_id"],
+                    key_prefix="mpesa_credit_top_clients",
+                )
+                _mpesa_dataframe(top_clients_view, width="stretch", hide_index=True)
+                _mpesa_dataframe(_currency_filter(concentration_client_bands, key_prefix="mpesa_credit_client_bands"), width="stretch", hide_index=True)
                 _mpesa_dataframe(_currency_filter(concentration_products, key_prefix="mpesa_credit_products"), width="stretch", hide_index=True)
                 _mpesa_dataframe(_currency_filter(concentration_bands, key_prefix="mpesa_credit_bands"), width="stretch", hide_index=True)
 
@@ -5709,7 +5712,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 )
                 _mpesa_dataframe(controls_view, width="stretch", hide_index=True)
 
-    with cohort_tab:
+    with portfolio_maturity_tab:
         render_panel_title("Cohortes a date de situation")
         st.caption("Analyse par mois de creation du pret. Ce n'est pas une courbe vintage historique complete.")
         if cohorts.empty:
@@ -5722,7 +5725,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             )
             _mpesa_dataframe(cohort_view, width="stretch", hide_index=True)
 
-    with actions_tab:
+    with opportunities_quality_tab:
         render_panel_title("Opportunités crédit")
         if not isinstance(action_lists, dict) or not action_lists:
             st.info("Aucune opportunité crédit disponible.")
@@ -5759,7 +5762,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 displayed_signatures[signature] = display_name
                 _mpesa_dataframe(frame, width="stretch", height=360, hide_index=True)
 
-    with quality_tab:
+    with opportunities_quality_tab:
         render_panel_title("Qualite des donnees et KPI non calculables")
         if data_quality.empty:
             st.success("Aucun controle qualite credit a signaler.")
@@ -5788,6 +5791,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         "credit_echeances_detail": maturity_detail,
         "credit_concentration_prets": concentration_loans,
         "credit_concentration_clients": concentration_clients,
+        "credit_concentration_clients_tranches": concentration_client_bands,
         "credit_concentration_synthese": concentration_summary,
         "credit_concentration_produits": concentration_products,
         "credit_concentration_tranches": concentration_bands,
@@ -7089,6 +7093,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
     new_clients_accounts = report.get("nouveaux_clients_comptes_activation", pd.DataFrame())
     segments_clients = report.get("segments_clients", pd.DataFrame())
     segments_produits = report.get("segments_produits", pd.DataFrame())
+    encours_clients_tranches = report.get("encours_clients_tranches", pd.DataFrame())
     dat_without_credit = report.get("dat_sans_credit_actif", pd.DataFrame())
     data_quality = report.get("qualite_donnees", pd.DataFrame())
     action_lists = report.get("listes_action", {})
@@ -7115,23 +7120,17 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
     tabs_container = st.container(key=tabs_key)
     (
         overview_tab,
-        activity_tab,
-        acquisition_tab,
+        activity_activation_tab,
         new_accounts_tab,
         client_360_tab,
-        dat_tab,
-        segmentation_tab,
-        action_tab,
+        opportunities_tab,
     ) = tabs_container.tabs(
         format_professional_tab_labels(
             [
                 "Vue d'ensemble",
-                "Activité",
-                "Acquisition et activation",
-                "Nouveaux comptes actifs",
-                "Produits et Client 360",
-                "DAT sans crédit",
-                "Segmentation",
+                "Activité et activation",
+                "Nouveaux clients et comptes",
+                "Client 360 et segmentation",
                 "Opportunités",
             ]
         )
@@ -7148,7 +7147,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                 st.error(f"{len(alerts)} contrôle(s) client nécessitent une vérification.")
             _mpesa_dataframe(data_quality, width="stretch", hide_index=True)
 
-    with activity_tab:
+    with activity_activation_tab:
         render_panel_title("Activité et inactivité observées")
         activity_columns = [
             "client_key",
@@ -7171,7 +7170,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
         else:
             st.info("Aucun client à afficher.")
 
-    with acquisition_tab:
+    with activity_activation_tab:
         render_panel_title("Acquisition et activation")
         if not acquisition.empty:
             st.caption("Nouveaux clients et nouveaux clients actifs par période. Le taux d'activation reste un ratio, pas un montant.")
@@ -7265,7 +7264,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
         else:
             st.info("Aucune vue Client 360 disponible.")
 
-    with dat_tab:
+    with opportunities_tab:
         render_panel_title("Clients DAT sans crédit actif")
         st.caption(
             "Cette liste signale un potentiel commercial crédit. Elle ne constitue pas une décision d'éligibilité."
@@ -7280,7 +7279,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
         else:
             st.success("Aucun DAT positif sans crédit actif détecté avec les sources chargées.")
 
-    with segmentation_tab:
+    with client_360_tab:
         render_panel_title("Segmentation objective")
         left, right = st.columns(2)
         with left:
@@ -7289,8 +7288,16 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
         with right:
             st.markdown("**Segments produits**")
             _mpesa_dataframe(segments_produits, width="stretch", hide_index=True)
+        if not encours_clients_tranches.empty:
+            st.markdown("**Tranches d'encours par famille et devise**")
+            tranche_view = _apply_local_multiselect_filters(
+                encours_clients_tranches,
+                ["currency_code", "famille_encours", "tranche_encours"],
+                key_prefix="mpesa_clients_encours_tranches_filter",
+            )
+            _mpesa_dataframe(tranche_view, width="stretch", hide_index=True)
 
-    with action_tab:
+    with opportunities_tab:
         render_panel_title("Opportunités clients")
         if not isinstance(action_lists, dict) or not action_lists:
             st.info("Aucune opportunité client disponible.")
@@ -7331,6 +7338,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                 "clients_nouveaux_comptes_actifs": new_clients_accounts,
                 "clients_segments": segments_clients,
                 "clients_segments_produits": segments_produits,
+                "clients_tranches_encours": encours_clients_tranches,
                 "clients_qualite_donnees": data_quality,
                 **{f"clients_{key}": value for key, value in action_lists.items()},
             }
@@ -7403,6 +7411,7 @@ def _render_statistics_tab(
     end_widget_key = f"mpesa_statistics_end_widget_{filter_scope_key}"
     applied_filters_key = f"mpesa_statistics_applied_filters_{filter_scope_key}"
     applied_at_key = f"mpesa_statistics_applied_at_{filter_scope_key}"
+    applied_filters_version = 2
     if start_widget_key not in st.session_state:
         st.session_state[start_widget_key] = default_start
     if end_widget_key not in st.session_state:
@@ -7413,15 +7422,7 @@ def _render_statistics_tab(
         st.session_state[end_widget_key] = default_end
     st.session_state.setdefault("mpesa_statistics_frequency", "Mois")
     st.session_state.setdefault("mpesa_statistics_top_n_clients", 50)
-    st.session_state.setdefault(
-        applied_filters_key,
-        {
-            "date_debut": st.session_state[start_widget_key],
-            "date_fin": st.session_state[end_widget_key],
-            "frequence": st.session_state["mpesa_statistics_frequency"],
-            "top_n_clients": st.session_state["mpesa_statistics_top_n_clients"],
-        },
-    )
+    pending_comparison_period = _selected_mpesa_comparison_period()
 
     with st.form("mpesa_statistics_filters"):
         start_col, end_col, frequency_col, top_col = st.columns([1.0, 1.0, 1.0, 1.0])
@@ -7476,19 +7477,41 @@ def _render_statistics_tab(
 
     if statistics_submitted:
         st.session_state[applied_filters_key] = {
+            "_version": applied_filters_version,
             "date_debut": st.session_state[start_widget_key],
             "date_fin": st.session_state[end_widget_key],
             "frequence": st.session_state["mpesa_statistics_frequency"],
             "top_n_clients": st.session_state["mpesa_statistics_top_n_clients"],
+            "comparison_period": pending_comparison_period,
         }
         st.session_state[applied_at_key] = pd.Timestamp.now()
 
     applied_filters = st.session_state.get(applied_filters_key, {})
+    if applied_filters.get("_version") != applied_filters_version:
+        applied_filters = {}
+        st.session_state.pop(applied_filters_key, None)
+        st.session_state.pop(applied_at_key, None)
+    if not applied_filters:
+        st.info(
+            "Parametrez la periode, la frequence et le nombre de clients a afficher, "
+            "puis cliquez sur `Actualiser les statistiques` pour lancer les calculs.",
+            icon=":material/tune:",
+        )
+        st.caption(
+            "Aucune statistique n'est calculee avant validation afin d'eviter un "
+            "chargement lourd inutile au premier affichage."
+        )
+        return
     selected_start_date = applied_filters.get("date_debut", default_start)
     selected_end_date = applied_filters.get("date_fin", default_end)
     frequency = applied_filters.get("frequence", "Mois")
     top_n_clients = int(applied_filters.get("top_n_clients", 50) or 50)
-    comparison_period = _selected_mpesa_comparison_period()
+    comparison_period = str(
+        applied_filters.get("comparison_period", DEFAULT_MPESA_COMPARISON_PERIOD)
+        or DEFAULT_MPESA_COMPARISON_PERIOD
+    )
+    if comparison_period not in MPESA_COMPARISON_PERIOD_OPTIONS:
+        comparison_period = DEFAULT_MPESA_COMPARISON_PERIOD
 
     if selected_start_date > selected_end_date:
         st.error("La date de debut doit etre anterieure ou egale a la date de fin.", icon=":material/error:")
@@ -7566,6 +7589,8 @@ def _render_statistics_tab(
     portfolio = report_view.get("epargne_dat_portefeuille", pd.DataFrame())
     credit_summary = report_view.get("credit_synthese", pd.DataFrame())
     top_clients = report_view.get("clients_volume_top", pd.DataFrame())
+    regular_deposits_summary = report_view.get("depots_reguliers_synthese", pd.DataFrame())
+    regular_deposits_clients = report_view.get("depots_reguliers_clients", pd.DataFrame())
     source_priority = report_view.get("priorite_sources", pd.DataFrame())
     weekly_comparison = report_view.get("comparaison_hebdomadaire", pd.DataFrame())
     annual_comparison = report_view.get(
@@ -7956,6 +7981,82 @@ def _render_statistics_tab(
                     "chiffre_affaires_observe": st.column_config.NumberColumn("CA observe", format="%.2f"),
                 },
             )
+        if isinstance(regular_deposits_summary, pd.DataFrame) and not regular_deposits_summary.empty:
+            st.markdown("**Régularité des dépôts sur compte ouvert**")
+            st.caption(
+                "Score = nombre de jours avec dépôt / nombre de jours de la période. "
+                "Le calcul utilise les événements consolidés de Transactions et reste séparé par devise."
+            )
+            regular_cards: list[tuple[str, str, str, str]] = []
+            for currency, group in regular_deposits_summary.groupby("currency_code", dropna=False):
+                clients_count = _sum_column(group, "clients")
+                deposit_amount = _sum_column(group, "montant_depots")
+                regular_count = _sum_column(
+                    group.loc[
+                        group["categorie_regularite"].astype(str).isin(
+                            ["Très régulier", "Régulier"]
+                        )
+                    ],
+                    "clients",
+                )
+                regular_cards.extend(
+                    [
+                        (
+                            f"Déposants [{currency}]",
+                            _format_count(clients_count),
+                            "Clients avec au moins un dépôt sur compte ouvert",
+                            "blue",
+                        ),
+                        (
+                            f"Déposants réguliers [{currency}]",
+                            _format_count(regular_count),
+                            "Catégories Très régulier et Régulier",
+                            "green",
+                        ),
+                        (
+                            f"Montant déposé [{currency}]",
+                            _format_amount(deposit_amount),
+                            "Dépôts compte ouvert, sans total multidevise",
+                            "orange",
+                        ),
+                    ]
+                )
+            render_kpi_cards(regular_cards)
+            _mpesa_dataframe(
+                regular_deposits_summary,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                    "categorie_regularite": st.column_config.TextColumn("Catégorie"),
+                    "clients": st.column_config.NumberColumn("Clients", format="%d"),
+                    "nombre_depots": st.column_config.NumberColumn("Dépôts", format="%d"),
+                    "jours_avec_depot_moyen": st.column_config.NumberColumn("Jours avec dépôt moyen", format="%.2f"),
+                    "montant_depots": st.column_config.NumberColumn("Montant déposé", format="%.2f"),
+                    "score_regularite_moyen_pct": st.column_config.NumberColumn("Score moyen", format="%.2f%%"),
+                    "depot_moyen": st.column_config.NumberColumn("Dépôt moyen", format="%.2f"),
+                },
+            )
+            if isinstance(regular_deposits_clients, pd.DataFrame) and not regular_deposits_clients.empty:
+                with st.expander("Afficher les clients qui déposent régulièrement", expanded=False):
+                    _mpesa_dataframe(
+                        regular_deposits_clients.head(int(top_n_clients)),
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "rang_regularite": st.column_config.NumberColumn("Rang", format="%d"),
+                            "customer_id": st.column_config.TextColumn("Client", pinned=True),
+                            "nom_client": st.column_config.TextColumn("Nom client"),
+                            "telephone": st.column_config.TextColumn("Téléphone"),
+                            "currency_code": st.column_config.TextColumn("Devise"),
+                            "nombre_depots": st.column_config.NumberColumn("Dépôts", format="%d"),
+                            "jours_avec_depot": st.column_config.NumberColumn("Jours avec dépôt", format="%d"),
+                            "montant_depots": st.column_config.NumberColumn("Montant déposé", format="%.2f"),
+                            "depot_moyen": st.column_config.NumberColumn("Dépôt moyen", format="%.2f"),
+                            "score_regularite_pct": st.column_config.NumberColumn("Score régularité", format="%.2f%%"),
+                            "categorie_regularite": st.column_config.TextColumn("Catégorie"),
+                        },
+                    )
         if not top_clients.empty:
             st.markdown("**Top clients par volume de transactions**")
             top_view = top_clients.sort_values(["currency_code", "rang_volume"]).head(
@@ -8171,13 +8272,45 @@ def _render_statistics_tab(
         st.download_button(
             "Telecharger le rapport statistiques Word",
             data=word_bytes,
-            file_name=f"rapport_statistiques_solution_turbo_{start_token}_{end_token}.docx",
+            file_name=f"rapport_statistiques_solution_numerique_{start_token}_{end_token}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             width="content",
             key=f"mpesa_statistics_word_{start_token}_{end_token}",
         )
     except RuntimeError as exc:
         st.warning(str(exc))
+    excel_bytes = _create_excel_export_current_sidebar(
+        {
+            key: value
+            for key, value in report_view.items()
+            if key
+            in {
+                "vue_ensemble",
+                "clients_indicateurs",
+                "clients_croissance",
+                "chiffre_affaires",
+                "activite_evolution",
+                "epargne_dat_portefeuille",
+                "credit_synthese",
+                "clients_volume_top",
+                "depots_reguliers_synthese",
+                "depots_reguliers_clients",
+                "comparaison_hebdomadaire",
+                "comparaison_annee_precedente",
+                "g2_qualite_rapprochement",
+                "g2_non_rapprochees",
+            }
+        },
+        print_orientation="portrait",
+    )
+    st.download_button(
+        "Telecharger le détail statistiques Excel",
+        data=excel_bytes,
+        file_name=f"detail_statistiques_solution_numerique_{start_token}_{end_token}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        width="content",
+        key=f"mpesa_statistics_excel_{start_token}_{end_token}",
+    )
 
 
 def _forecast_period_label(frequency: str) -> str:

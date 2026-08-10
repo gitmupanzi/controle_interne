@@ -35,7 +35,7 @@ Ce referentiel decrit l'onglet `Epargnes`. Il transforme l'ancien affichage cent
 | comptes_actifs_observes | Comptes lies a un client/devise ayant un mouvement observe. | Derniere operation observee <= seuil. | Transactions + Savings Account | compte | oui | flux_periode | implemente | Approximation au niveau client/devise si l'evenement ne porte pas `savings_id`. |
 | nouveaux_comptes | Comptes crees dans la periode. | `date_creation_compte` dans la periode. | Savings Account | compte | oui | stock_actuel | implemente | Creation de compte, pas creation client. |
 | produits_epargne | Encours et comptes par produit. | Aggregation produit/devise/famille. | Savings Account | produit x devise | oui | stock_actuel | implemente | Pas de croissance historique produit sans snapshots. |
-| concentration_epargne | Part des top clients. | Top 5/10/20 clients / encours de la devise. | Savings Account | devise x famille | oui | stock_actuel | implemente | Ne pas appeler Top 10 clients un pourcentage de clients. |
+| concentration_epargne | Part des top clients et tranches d'encours. | Top 5/10/20 clients / encours de la devise, puis regroupement `tranche_encours`. | Savings Account | devise x famille | oui | stock_actuel | implemente | Ne pas appeler Top 10 clients un pourcentage de clients; ne jamais mélanger les devises. |
 | echeances_dat | Tranches d'echeance DAT. | Echu, aujourd'hui, 0-7, 8-30, 31-60, 61-90, >90 jours. | Savings Account | DAT x devise | oui | suivi | implemente | Basee sur `maturity_date`. |
 | interet_estime_dat | Estimation de preparation du remboursement DAT. | capital * taux annuel / 100 * duree contractuelle jours / 365. | Savings Account | DAT | oui | estimation | implemente | Estimation non comptable; taux 11 % par defaut, 0 autorise. |
 | historique_encours_epargne | Evolution historique des encours. | Non calculable avec un seul snapshot. | Snapshots Savings Account successifs | periode x devise | oui | stock_historique | data_gap | Ne pas tracer une evolution de solde depuis le seul solde actuel. |
@@ -49,16 +49,13 @@ Ce referentiel decrit l'onglet `Epargnes`. Il transforme l'ancien affichage cent
 Sous-sous-onglets attendus :
 
 1. `Vue d'ensemble`
-2. `Collecte et flux`
-3. `Portefeuille actuel`
-4. `Clients et comptes`
-5. `Activite observee`
-6. `Produits`
-7. `Concentration`
-8. `DAT`
-9. `Echeances DAT`
-10. `Opportunites`
-11. `Controles et anomalies`
+2. `Flux et activite` : collecte, retraits, remboursements depuis compte ouvert et activite observee.
+3. `Portefeuille et produits` : portefeuille actuel, detail des comptes, nouveaux comptes, clients et produits.
+4. `DAT et echeances` : position DAT, estimation d'interet, DAT echus ou bientot a terme.
+5. `Concentration et opportunites` : concentration des encours, tranches d'encours par devise, gros epargnants, DAT sans credit actif et forte epargne sans credit.
+6. `Controles et anomalies` : qualite des donnees, catalogue KPI, limites et listes de verification.
+
+Cette organisation remplace l'ancien decoupage en 11 onglets. Les analyses restent disponibles, mais les blocs proches sont regroupes pour reduire la longueur de navigation.
 
 ## Filtres et aides utilisateur
 

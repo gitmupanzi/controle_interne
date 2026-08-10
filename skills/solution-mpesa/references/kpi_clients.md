@@ -33,6 +33,16 @@ Conserver `methode_rapprochement` et `statut_confiance`. Ne jamais rapprocher un
 | `taux_activation_nouveaux_clients` | `nouveaux_clients_actifs / nouveaux_clients`. |
 | `clients_sans_mouvement` | Clients de la population de référence sans événement valide sur la période. |
 
+## Tranches d'encours client
+
+Ajouter une synthèse par `tranche_encours` au grain `client x devise x famille` pour lire la structure des avoirs ou expositions :
+
+- `compte_ouvert` : solde du compte ouvert issu de `Savings Account` ;
+- `dat` : solde des comptes bloqués / DAT issu de `Savings Account` ;
+- `credit` : encours crédit issu de `Loans Account`.
+
+Cette lecture complète le classement des meilleurs clients. Elle ne doit jamais additionner CDF et USD, ni fusionner épargne, DAT et crédit dans un seul montant global.
+
 ## Nouveaux clients et comptes actifs par devise
 
 Ajouter une table de lecture au grain `client x devise` pour répondre à une question opérationnelle simple : les clients ou comptes nouvellement créés commencent-ils réellement à utiliser la Solution Numérique ?
@@ -82,12 +92,24 @@ Les seuils `Seuil inactivité` et `Seuil occasionnel` sont visibles et modifiabl
 
 Réutiliser la logique `dat_sans_credit_actif` du cockpit financier. La liste signale un `potentiel_commercial_credit`; elle ne doit jamais être présentée comme une éligibilité automatique.
 
+## Organisation de l'onglet
+
+Sous-sous-onglets attendus :
+
+1. `Vue d'ensemble` : KPI et qualité des données.
+2. `Activité et activation` : activité, inactivité, acquisition et activation.
+3. `Nouveaux clients et comptes` : nouveaux clients, comptes ouverts et DAT créés sur la période.
+4. `Client 360 et segmentation` : produits détenus, Client 360, segments comportementaux et segments produits.
+5. `Opportunités` : DAT sans crédit actif et listes commerciales prudentes.
+
+Cette organisation remplace l'ancien découpage en 8 onglets. Les analyses restent disponibles, mais les blocs proches sont regroupés pour réduire la longueur de navigation.
+
 ## Exports
 
-Les listes d'action sont exportées en Excel. Lorsque l'option globale `Renommer automatiquement les colonnes` est active, les colonnes visibles et celles du fichier Excel suivent le même format utilisateur en `snake_case`.
+Les opportunités sont exportées en Excel. Lorsque l'option globale `Renommer automatiquement les colonnes` est active, les colonnes visibles et celles du fichier Excel suivent le même format utilisateur en `snake_case`.
 
 ## Filtres et libellés utilisateur
 
 - Les colonnes visibles dans l'écran et dans l'export doivent rester en français fonctionnel.
-- Le numéro de téléphone est une clé principale : il doit être disponible comme filtre `multiselect` dans les vues nominatives (`Activité`, `Client 360`, `DAT sans crédit actif`, `Listes d'action`).
-- Les listes catégorielles et les listes d'action doivent privilégier `multiselect` lorsqu'un utilisateur peut vouloir comparer plusieurs segments, statuts ou listes en même temps.
+- Le numéro de téléphone est une clé principale : il doit être disponible comme filtre `multiselect` dans les vues nominatives (`Activité et activation`, `Client 360 et segmentation`, `Opportunités`).
+- Les listes catégorielles et les opportunités doivent privilégier `multiselect` lorsqu'un utilisateur peut vouloir comparer plusieurs segments, statuts ou listes en même temps.

@@ -33,6 +33,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_forecast_report,
     build_mpesa_g2_statistics_quality,
     build_mpesa_statistics_report,
+    build_mpesa_regular_deposit_analysis,
     build_mpesa_weekly_comparison,
     build_mpesa_year_over_year_comparison,
     build_mpesa_turbo_financial_analysis,
@@ -5250,6 +5251,15 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(int(growth.iloc[-1]["clients_turbo_cumules"]), 1)
         self.assertIn("epargne_dat_portefeuille", report)
         self.assertFalse(report["epargne_dat_portefeuille"].empty)
+        self.assertIn("depots_reguliers_synthese", report)
+        self.assertFalse(report["depots_reguliers_synthese"].empty)
+        regular_deposits = report["depots_reguliers_clients"].set_index(
+            ["customer_id", "currency_code"]
+        )
+        self.assertEqual(
+            float(regular_deposits.loc[("CLIENT-ANALYSE", "CDF"), "montant_depots"]),
+            100.0,
+        )
         self.assertEqual(report["perimetre_annuel"], "Ensemble des années")
 
         document = Document(BytesIO(create_mpesa_statistics_word(report)))
@@ -5269,6 +5279,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("2. Comptes ouverts et comptes bloques", word_text)
         self.assertIn("3. Credits", word_text)
         self.assertIn("4. Transactions", word_text)
+        self.assertIn("Régularité des dépôts", word_text)
         self.assertIn("4.1 Qualité du rapprochement G2", word_text)
         self.assertNotIn("Sources et importance", word_text)
         self.assertIn("Annexe 1. Vue d'ensemble", word_text)
@@ -5283,18 +5294,26 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("comparaison_annee_precedente", report)
         self.assertIn("Ensemble des années", document._element.xml)
         self.assertNotIn("Graphiques de synthese", word_text)
-        client_growth_tables = [
+        client_analysis_tables = [
             table
             for table in document.tables
-            if {"Periode", "Nouveaux clients", "Clients cumules"}.issubset(
+            if {"Analyse", "Devise", "Début / référence", "Fin / valeur", "Ratio / variation"}.issubset(
                 {cell.text for cell in table.rows[0].cells}
             )
         ]
-        self.assertEqual(len(client_growth_tables), 1)
+        self.assertGreaterEqual(len(client_analysis_tables), 1)
+        client_analysis_rows = [
+            " | ".join(cell.text for cell in row.cells)
+            for row in client_analysis_tables[0].rows
+        ]
+        self.assertTrue(
+            any("Nouveaux clients observes" in row for row in client_analysis_rows)
+        )
         self.assertNotIn(
             "Source",
-            {cell.text for cell in client_growth_tables[0].rows[0].cells},
+            {cell.text for cell in client_analysis_tables[0].rows[0].cells},
         )
+        self.assertNotIn("Tableau limite aux 15 premieres lignes", word_text)
 
     def test_turbo_only_g2_dat_uses_consolidated_loan_repayment_amount(self) -> None:
         transactions = prepare_transactions(
@@ -5468,26 +5487,26 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIsNone(full.year_scope_start)
         self.assertIsNone(full.year_scope_end)
 
-    def test_mpesa_comparison_windows_support_microfinance_week_and_filtered_period(self) -> None:
-        microfinance = build_mpesa_comparison_windows(
+    def test_mpesa_comparison_windows_default_to_rolling_7_days_and_filtered_period(self) -> None:
+        rolling = build_mpesa_comparison_windows(
             date_end="2026-07-25",
             date_start="2026-04-20",
-            comparison_period="Semaine microfinance (lundi)",
+            comparison_period="7 jours glissants",
         )
         self.assertEqual(
-            microfinance["date_debut_periode_courante"],
-            pd.Timestamp("2026-07-20"),
+            rolling["date_debut_periode_courante"],
+            pd.Timestamp("2026-07-19"),
         )
         self.assertEqual(
-            microfinance["date_fin_periode_courante"],
+            rolling["date_fin_periode_courante"],
             pd.Timestamp("2026-07-25"),
         )
         self.assertEqual(
-            microfinance["date_debut_periode_precedente"],
-            pd.Timestamp("2026-07-13"),
+            rolling["date_debut_periode_precedente"],
+            pd.Timestamp("2026-07-12"),
         )
         self.assertEqual(
-            microfinance["date_fin_periode_precedente"],
+            rolling["date_fin_periode_precedente"],
             pd.Timestamp("2026-07-18"),
         )
 
@@ -5518,14 +5537,55 @@ class MpesaAnalysisTests(unittest.TestCase):
             transactions=pd.DataFrame(),
             current_savings=pd.DataFrame(
                 [
-                    {"savings_id": "OPEN-PREV", "customer_id": "C1", "created_at": "2026-07-14"},
-                    {"savings_id": "OPEN-CURR", "customer_id": "C2", "created_at": "2026-07-20"},
+                    {
+                        "savings_id": "OPEN-PREV",
+                        "customer_id": "C1",
+                        "currency_code": "CDF",
+                        "balance": 40,
+                        "created_at": "2026-07-14",
+                    },
+                    {
+                        "savings_id": "OPEN-CURR",
+                        "customer_id": "C2",
+                        "currency_code": "CDF",
+                        "balance": 80,
+                        "created_at": "2026-07-20",
+                    },
+                    {
+                        "savings_id": "OPEN-CURR-USD",
+                        "customer_id": "C4",
+                        "currency_code": "USD",
+                        "balance": 25,
+                        "created_at": "2026-07-20",
+                    },
                 ]
             ),
             fixed_savings=pd.DataFrame(
                 [
-                    {"savings_id": "DAT-PREV", "customer_id": "C1", "date_activated": "2026-07-13"},
-                    {"savings_id": "DAT-CURR", "customer_id": "C2", "date_activated": "2026-07-21"},
+                    {
+                        "savings_id": "DAT-PREV",
+                        "customer_id": "C1",
+                        "currency_code": "CDF",
+                        "balance": 50,
+                        "date_activated": "2026-07-13",
+                        "maturity_date": "2026-07-15",
+                    },
+                    {
+                        "savings_id": "DAT-CURR",
+                        "customer_id": "C2",
+                        "currency_code": "CDF",
+                        "balance": 100,
+                        "date_activated": "2026-07-21",
+                        "maturity_date": "2026-07-21",
+                    },
+                    {
+                        "savings_id": "DAT-PREV-USD",
+                        "customer_id": "C5",
+                        "currency_code": "USD",
+                        "balance": 10,
+                        "date_activated": "2026-07-14",
+                        "maturity_date": "2026-07-15",
+                    },
                 ]
             ),
             loans=pd.DataFrame(
@@ -5535,6 +5595,7 @@ class MpesaAnalysisTests(unittest.TestCase):
                         "customer_id": "C1",
                         "currency_code": "CDF",
                         "loan_amount": 100,
+                        "loan_balance": 40,
                         "created_at": "2026-07-14",
                     },
                     {
@@ -5542,6 +5603,7 @@ class MpesaAnalysisTests(unittest.TestCase):
                         "customer_id": "C2",
                         "currency_code": "CDF",
                         "loan_amount": 200,
+                        "loan_balance": 80,
                         "created_at": "2026-07-20",
                     },
                     {
@@ -5549,6 +5611,7 @@ class MpesaAnalysisTests(unittest.TestCase):
                         "customer_id": "C3",
                         "currency_code": "CDF",
                         "loan_amount": 300,
+                        "loan_balance": 60,
                         "created_at": "2026-07-22",
                     },
                 ]
@@ -5660,6 +5723,28 @@ class MpesaAnalysisTests(unittest.TestCase):
         credit_amount = indexed.loc[("montant_nouveaux_credits", "CDF")]
         self.assertEqual(float(credit_amount["valeur_semaine_courante"]), 500.0)
         self.assertEqual(float(credit_amount["valeur_semaine_precedente"]), 100.0)
+        credit_outstanding = indexed.loc[("encours_credits_crees", "CDF")]
+        self.assertEqual(float(credit_outstanding["valeur_semaine_courante"]), 140.0)
+        self.assertEqual(float(credit_outstanding["valeur_semaine_precedente"]), 40.0)
+
+        open_savings_outstanding = indexed.loc[("encours_epargne_ouverte_creee", "CDF")]
+        self.assertEqual(float(open_savings_outstanding["valeur_semaine_courante"]), 80.0)
+        self.assertEqual(float(open_savings_outstanding["valeur_semaine_precedente"]), 40.0)
+        fixed_savings_outstanding = indexed.loc[("encours_epargne_bloquee_creee", "CDF")]
+        self.assertEqual(float(fixed_savings_outstanding["valeur_semaine_courante"]), 100.0)
+        self.assertEqual(float(fixed_savings_outstanding["valeur_semaine_precedente"]), 50.0)
+        dat_maturity_count = indexed.loc[("dat_bientot_echus_volume", "CDF")]
+        self.assertEqual(float(dat_maturity_count["valeur_semaine_courante"]), 1.0)
+        self.assertEqual(float(dat_maturity_count["valeur_semaine_precedente"]), 1.0)
+        dat_maturity_amount = indexed.loc[("encours_dat_bientot_echus", "CDF")]
+        self.assertEqual(float(dat_maturity_amount["valeur_semaine_courante"]), 100.0)
+        self.assertEqual(float(dat_maturity_amount["valeur_semaine_precedente"]), 50.0)
+        dat_credit_conversion = indexed.loc[("taux_conversion_dat_credit", "CDF")]
+        self.assertEqual(float(dat_credit_conversion["valeur_semaine_courante"]), 100.0)
+        self.assertEqual(float(dat_credit_conversion["valeur_semaine_precedente"]), 100.0)
+        savings_without_credit = indexed.loc[("encours_epargne_sans_credit", "USD")]
+        self.assertEqual(float(savings_without_credit["valeur_semaine_courante"]), 25.0)
+        self.assertEqual(float(savings_without_credit["valeur_semaine_precedente"]), 10.0)
 
         volume_cdf = indexed.loc[("volume_transactions", "CDF")]
         volume_usd = indexed.loc[("volume_transactions", "USD")]
@@ -5675,6 +5760,85 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(turnover_cdf["valeur_semaine_precedente"]), 10.0)
         self.assertEqual(float(turnover_usd["valeur_semaine_courante"]), 2.0)
         self.assertEqual(float(turnover_usd["valeur_semaine_precedente"]), 0.0)
+
+    def test_mpesa_regular_deposit_analysis_scores_clients_by_deposit_days(self) -> None:
+        events = pd.DataFrame(
+            [
+                {
+                    "event_key": f"C1-{day}",
+                    "customer_id": "C1",
+                    "telephone": "0810000001",
+                    "Nom_client": "CLIENT REGULIER",
+                    "currency_code": "CDF",
+                    "created_at": f"2026-08-0{day} 08:00:00",
+                    "depot_normal_mpesa": 100,
+                    "depot_dat_mpesa": 0,
+                }
+                for day in range(1, 6)
+            ]
+            + [
+                {
+                    "event_key": f"C2-{day}",
+                    "customer_id": "C2",
+                    "telephone": "0810000002",
+                    "Nom_client": "CLIENT OCCASIONNEL",
+                    "currency_code": "CDF",
+                    "created_at": f"2026-08-0{day} 09:00:00",
+                    "depot_normal_mpesa": 50,
+                    "depot_dat_mpesa": 0,
+                }
+                for day in [1, 7]
+            ]
+            + [
+                {
+                    "event_key": "C3-DAT",
+                    "customer_id": "C3",
+                    "telephone": "0810000003",
+                    "Nom_client": "CLIENT DAT",
+                    "currency_code": "USD",
+                    "created_at": "2026-08-03 10:00:00",
+                    "depot_normal_mpesa": 0,
+                    "depot_dat_mpesa": 1000,
+                },
+                {
+                    "event_key": "C4-USD",
+                    "customer_id": "C4",
+                    "telephone": "0810000004",
+                    "Nom_client": "CLIENT USD",
+                    "currency_code": "USD",
+                    "created_at": "2026-08-04 10:00:00",
+                    "depot_normal_mpesa": 25,
+                    "depot_dat_mpesa": 0,
+                },
+            ]
+        )
+
+        result = build_mpesa_regular_deposit_analysis(
+            events,
+            date_start="2026-08-01",
+            date_end="2026-08-07",
+        )
+        clients = result["clients"].set_index(["customer_id", "currency_code"])
+        self.assertEqual(float(clients.loc[("C1", "CDF"), "montant_depots"]), 500.0)
+        self.assertEqual(int(clients.loc[("C1", "CDF"), "jours_avec_depot"]), 5)
+        self.assertAlmostEqual(
+            float(clients.loc[("C1", "CDF"), "score_regularite_pct"]),
+            100 * 5 / 7,
+        )
+        self.assertEqual(
+            clients.loc[("C1", "CDF"), "categorie_regularite"],
+            "Très régulier",
+        )
+        self.assertEqual(
+            clients.loc[("C2", "CDF"), "categorie_regularite"],
+            "Occasionnel",
+        )
+        self.assertNotIn(("C3", "USD"), clients.index)
+        self.assertEqual(float(clients.loc[("C4", "USD"), "montant_depots"]), 25.0)
+
+        summary = result["synthese"].set_index(["currency_code", "categorie_regularite"])
+        self.assertEqual(int(summary.loc[("CDF", "Très régulier"), "clients"]), 1)
+        self.assertEqual(int(summary.loc[("CDF", "Occasionnel"), "clients"]), 1)
 
     def test_mpesa_year_over_year_comparison_uses_same_calendar_dates(self) -> None:
         prepared = MpesaPreparedData(
@@ -7466,6 +7630,10 @@ class TestLoanSavingsReconciliation(unittest.TestCase):
         self.assertTrue(
             report["statuts_portefeuille"]["valeur_statut"].map(type).eq(str).all()
         )
+        credit_clients = report["concentration_clients"].set_index(["currency_code", "customer_id"])
+        self.assertEqual(credit_clients.loc[("USD", "C1"), "tranche_encours"], "Moins de 100")
+        client_bands = report["concentration_clients_tranches"].set_index(["currency_code", "tranche_encours"])
+        self.assertEqual(float(client_bands.loc[("CDF", "Moins de 500 000"), "encours_total"]), 1000.0)
 
     def test_credit_cockpit_excel_export_contains_credit_sheets(self) -> None:
         report = {
@@ -7681,6 +7849,10 @@ class TestLoanSavingsReconciliation(unittest.TestCase):
             report["catalogue_kpi"].set_index("kpi").loc["renouvellement_dat", "statut"],
             "data_gap",
         )
+        top_clients = report["concentration_clients"].set_index(["currency_code", "famille_epargne", "customer_id"])
+        self.assertEqual(top_clients.loc[("USD", "DAT", "C1"), "tranche_encours"], "100 a 499,99")
+        saving_bands = report["concentration_tranches"].set_index(["currency_code", "famille_epargne", "tranche_encours"])
+        self.assertEqual(float(saving_bands.loc[("USD", "DAT", "100 a 499,99"), "encours_actuel"]), 100.0)
         self.assertIn("forte_epargne_sans_credit", report["listes_action"])
         self.assertFalse(report["opportunites"].empty)
 
