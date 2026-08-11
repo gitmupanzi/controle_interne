@@ -6315,12 +6315,23 @@ def build_mpesa_accounting_analysis(
         normal_savings & normalized_descriptions.eq("retrait vers m-pesa"),
         0.0,
     )
+    fixed_savings = scoped["account_type"].eq("FIXED SAVINGS")
+    scoped["depot_dat_observe"] = scoped["cr"].where(
+        fixed_savings & normalized_descriptions.eq("depot bloque"),
+        0.0,
+    )
+    scoped["retrait_dat_observe"] = scoped["dr"].where(
+        fixed_savings & normalized_descriptions.str.contains("retrait compte bloque", na=False),
+        0.0,
+    )
     scoped["nombre_depots_epargne_observes"] = (
         scoped["depot_epargne_observe"].gt(0).astype(int)
     )
     scoped["nombre_retraits_epargne_observes"] = (
         scoped["retrait_epargne_observe"].gt(0).astype(int)
     )
+    scoped["nombre_depots_dat_observes"] = scoped["depot_dat_observe"].gt(0).astype(int)
+    scoped["nombre_retraits_dat_observes"] = scoped["retrait_dat_observe"].gt(0).astype(int)
     savings_flows_by_client = (
         scoped.groupby(["customer_id", "currency_code"], as_index=False, dropna=False)
         .agg(
@@ -6328,11 +6339,19 @@ def build_mpesa_accounting_analysis(
             retraits_epargne_observes=("retrait_epargne_observe", "sum"),
             nombre_depots_epargne_observes=("nombre_depots_epargne_observes", "sum"),
             nombre_retraits_epargne_observes=("nombre_retraits_epargne_observes", "sum"),
+            depots_dat_observes=("depot_dat_observe", "sum"),
+            retraits_dat_observes=("retrait_dat_observe", "sum"),
+            nombre_depots_dat_observes=("nombre_depots_dat_observes", "sum"),
+            nombre_retraits_dat_observes=("nombre_retraits_dat_observes", "sum"),
         )
     )
     savings_flows_by_client["mouvement_net_epargne_observe"] = (
         savings_flows_by_client["depots_epargne_observes"]
         - savings_flows_by_client["retraits_epargne_observes"]
+    )
+    savings_flows_by_client["mouvement_net_dat_observe"] = (
+        savings_flows_by_client["depots_dat_observes"]
+        - savings_flows_by_client["retraits_dat_observes"]
     )
     balance_clients = balance_clients.merge(
         savings_flows_by_client,
@@ -6365,6 +6384,10 @@ def build_mpesa_accounting_analysis(
             retraits_epargne_observes=("retrait_epargne_observe", "sum"),
             nombre_depots_epargne_observes=("nombre_depots_epargne_observes", "sum"),
             nombre_retraits_epargne_observes=("nombre_retraits_epargne_observes", "sum"),
+            depots_dat_observes=("depot_dat_observe", "sum"),
+            retraits_dat_observes=("retrait_dat_observe", "sum"),
+            nombre_depots_dat_observes=("nombre_depots_dat_observes", "sum"),
+            nombre_retraits_dat_observes=("nombre_retraits_dat_observes", "sum"),
         )
     )
     daily_client_balance = (
@@ -6407,6 +6430,10 @@ def build_mpesa_accounting_analysis(
     daily_client_balance["mouvement_net_epargne_observe"] = (
         daily_client_balance["depots_epargne_observes"]
         - daily_client_balance["retraits_epargne_observes"]
+    )
+    daily_client_balance["mouvement_net_dat_observe"] = (
+        daily_client_balance["depots_dat_observes"]
+        - daily_client_balance["retraits_dat_observes"]
     )
     daily_client_balance = daily_client_balance.sort_values(
         ["date_operation", "currency_code", "customer_id"]
@@ -6554,6 +6581,11 @@ def build_mpesa_accounting_analysis(
         "depots_epargne_observes",
         "retraits_epargne_observes",
         "mouvement_net_epargne_observe",
+        "depots_dat_observes",
+        "retraits_dat_observes",
+        "mouvement_net_dat_observe",
+        "nombre_depots_dat_observes",
+        "nombre_retraits_dat_observes",
     ]:
         if column not in balance_clients.columns:
             balance_clients[column] = 0.0
@@ -20451,6 +20483,9 @@ def build_filtered_turbo_daily_balance_report(
         "depots_epargne_observes",
         "retraits_epargne_observes",
         "mouvement_net_epargne_observe",
+        "depots_dat_observes",
+        "retraits_dat_observes",
+        "mouvement_net_dat_observe",
         "total_debit",
         "total_credit",
         "solde_debiteur_mouvement",
@@ -20460,6 +20495,8 @@ def build_filtered_turbo_daily_balance_report(
         "nombre_operations",
         "nombre_lignes",
         "operations_a_verifier",
+        "nombre_depots_dat_observes",
+        "nombre_retraits_dat_observes",
     ]
     for column in monetary_columns + count_columns:
         if column not in daily.columns:
@@ -20522,14 +20559,41 @@ def build_filtered_turbo_daily_balance_report(
 def build_filtered_turbo_deposit_withdrawal_pivot_report(
     report: dict[str, Any],
     filtered_client_balance: pd.DataFrame,
+    *,
+    account_family: str = "compte_ouvert",
 ) -> dict[str, pd.DataFrame]:
     """Construit le suivi pivot depots/retraits inspire du releve Vodacom.
 
     Le tableau conserve une ligne par client, operation et devise. Les colonnes
-    journalieres affichent les montants observes sur le compte ouvert
-    ``NORMAL SAVINGS``; le score mesure la frequence de l'operation sur le
-    nombre de jours couverts par la periode filtree.
+    journalieres affichent les montants observes sur le compte choisi; le score
+    mesure la frequence de l'operation sur le nombre de jours couverts par la
+    periode filtree.
     """
+    normalized_family = normalize_label(account_family)
+    is_dat_follow_up = normalized_family in {"dat", "fixed savings", "compte bloque"}
+    amount_columns = (
+        {
+            "depot": "depots_dat_observes",
+            "retrait": "retraits_dat_observes",
+            "nombre_depot": "nombre_depots_dat_observes",
+            "nombre_retrait": "nombre_retraits_dat_observes",
+            "solde": "solde_dat_observe",
+            "result_key": "suivi_depots_retraits_dat_pivot",
+            "famille": "DAT",
+            "source_mouvements": "Transactions - FIXED SAVINGS",
+        }
+        if is_dat_follow_up
+        else {
+            "depot": "depots_epargne_observes",
+            "retrait": "retraits_epargne_observes",
+            "nombre_depot": "nombre_depots_epargne_observes",
+            "nombre_retrait": "nombre_retraits_epargne_observes",
+            "solde": "solde_epargne_courante_observe",
+            "result_key": "suivi_depots_retraits_pivot",
+            "famille": "Compte ouvert",
+            "source_mouvements": "Transactions - NORMAL SAVINGS",
+        }
+    )
     daily_report = build_filtered_turbo_daily_balance_report(
         report,
         filtered_client_balance,
@@ -20544,6 +20608,7 @@ def build_filtered_turbo_deposit_withdrawal_pivot_report(
         "balance_clients": pd.DataFrame(),
         "balance_clients_par_date": daily,
         "suivi_depots_retraits_pivot": pd.DataFrame(),
+        "suivi_depots_retraits_dat_pivot": pd.DataFrame(),
         "selection": pd.DataFrame(),
     }
     if daily.empty or not {"date_operation", "customer_id", "currency_code"}.issubset(daily.columns):
@@ -20586,7 +20651,7 @@ def build_filtered_turbo_deposit_withdrawal_pivot_report(
     if not selected_positions.empty and {
         "customer_id",
         "currency_code",
-        "solde_epargne_courante_observe",
+        amount_columns["solde"],
     }.issubset(selected_positions.columns):
         selected_positions["__customer_key"] = clean_identifier(
             selected_positions["customer_id"]
@@ -20594,22 +20659,22 @@ def build_filtered_turbo_deposit_withdrawal_pivot_report(
         selected_positions["__currency_key"] = clean_text(
             selected_positions["currency_code"]
         ).str.upper()
-        selected_positions["solde_epargne_courante_observe"] = pd.to_numeric(
-            selected_positions["solde_epargne_courante_observe"],
+        selected_positions[amount_columns["solde"]] = pd.to_numeric(
+            selected_positions[amount_columns["solde"]],
             errors="coerce",
         ).fillna(0.0)
         position_lookup = {
             (row["__customer_key"], row["__currency_key"]): float(
-                row["solde_epargne_courante_observe"]
+                row[amount_columns["solde"]]
             )
             for _, row in selected_positions.iterrows()
         }
 
     for column in [
-        "depots_epargne_observes",
-        "retraits_epargne_observes",
-        "nombre_depots_epargne_observes",
-        "nombre_retraits_epargne_observes",
+        amount_columns["depot"],
+        amount_columns["retrait"],
+        amount_columns["nombre_depot"],
+        amount_columns["nombre_retrait"],
     ]:
         if column not in daily.columns:
             daily[column] = 0.0
@@ -20627,18 +20692,18 @@ def build_filtered_turbo_deposit_withdrawal_pivot_report(
             if not _is_empty_text(name_text)
             else customer_text
         )
-        deposit_total = float(group["depots_epargne_observes"].sum())
-        withdrawal_total = float(group["retraits_epargne_observes"].sum())
+        deposit_total = float(group[amount_columns["depot"]].sum())
+        withdrawal_total = float(group[amount_columns["retrait"]].sum())
         period_balance = deposit_total - withdrawal_total
         client_key = clean_identifier(pd.Series([customer_id])).iloc[0]
         currency_key = clean_text(pd.Series([currency_code])).str.upper().iloc[0]
-        client_open_balance = position_lookup.get(
+        client_position_balance = position_lookup.get(
             (client_key, currency_key),
             period_balance,
         )
         for operation, amount_column, count_column in [
-            ("Depot", "depots_epargne_observes", "nombre_depots_epargne_observes"),
-            ("Retrait", "retraits_epargne_observes", "nombre_retraits_epargne_observes"),
+            ("Depot", amount_columns["depot"], amount_columns["nombre_depot"]),
+            ("Retrait", amount_columns["retrait"], amount_columns["nombre_retrait"]),
         ]:
             operation_count = int(group[count_column].sum())
             score_pct = 100 * operation_count / day_count if day_count else np.nan
@@ -20648,6 +20713,7 @@ def build_filtered_turbo_deposit_withdrawal_pivot_report(
                 "telephone": phone_text,
                 "client": client_label,
                 "operation": operation,
+                "famille_compte": amount_columns["famille"],
                 "currency_code": currency_code,
                 "nombre_operations_suivi": operation_count,
                 "nombre_jours_periode": day_count,
@@ -20657,7 +20723,7 @@ def build_filtered_turbo_deposit_withdrawal_pivot_report(
                     + (f" ({score_pct:.1f}%)" if pd.notna(score_pct) else "")
                 ),
                 "total": float(group[amount_column].sum()),
-                "solde": client_open_balance,
+                "solde": client_position_balance,
             }
             daily_amounts = (
                 group.groupby("date_operation", dropna=False)[amount_column]
@@ -20674,6 +20740,7 @@ def build_filtered_turbo_deposit_withdrawal_pivot_report(
             [
                 "client",
                 "operation",
+                "famille_compte",
                 "currency_code",
                 *date_columns,
                 "total",
@@ -20704,6 +20771,8 @@ def build_filtered_turbo_deposit_withdrawal_pivot_report(
                 "solde_net_periode": total_deposits - total_withdrawals,
                 "nombre_depots": int(deposits["nombre_operations_suivi"].sum()) if not deposits.empty else 0,
                 "nombre_retraits": int(withdrawals["nombre_operations_suivi"].sum()) if not withdrawals.empty else 0,
+                "famille_compte": amount_columns["famille"],
+                "source_mouvements": amount_columns["source_mouvements"],
             }
         )
     summary = pd.DataFrame(summary_rows)
@@ -20726,7 +20795,13 @@ def build_filtered_turbo_deposit_withdrawal_pivot_report(
         "synthese": summary,
         "balance_clients": pivot,
         "balance_clients_par_date": daily,
-        "suivi_depots_retraits_pivot": pivot,
+        amount_columns["result_key"]: pivot,
+        "suivi_depots_retraits_pivot": (
+            pd.DataFrame() if is_dat_follow_up else pivot
+        ),
+        "suivi_depots_retraits_dat_pivot": (
+            pivot if is_dat_follow_up else pd.DataFrame()
+        ),
         "selection": selection,
     }
 
@@ -21435,7 +21510,7 @@ def create_g2_dat_word(
         source_label_normalized == "turbo"
         or source_label.casefold().startswith("solution num")
     )
-    source_display_label = "Solution Bisou Bisou Digital" if turbo_only else "rapport G2 M-Pesa"
+    source_display_label = "Solution Bisou Bisou Digital" if turbo_only else "Solution Numérique/G2"
     flow_display_label = "Solution Numérique" if turbo_only else source_display_label
     report_scope = "Solution Numérique / M-Pesa"
     daily_pivot = report.get("rapport_journalier_pivot", pd.DataFrame())
@@ -21898,6 +21973,7 @@ def create_excel_export(
         ("accounting_portfolio_positions", "Positions_Portefeuille_Turbo"),
         ("accounting_g2_controls", "Controle_G2_Turbo"),
         ("suivi_depots_retraits_pivot", "Suivi_Depots_Retraits"),
+        ("suivi_depots_retraits_dat_pivot", "Suivi_Depots_Retraits_DAT"),
         ("clients_kpi", "Clients_KPI"),
         ("clients_360", "Clients_360"),
         ("clients_acquisition_activation", "Clients_Acquisition"),

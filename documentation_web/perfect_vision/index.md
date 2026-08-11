@@ -26,6 +26,22 @@ Le projet exploite les données Perfect Vision à travers :
 ## Parcourir Perfect Vision
 
 <div class="bb-link-grid">
+  <a class="bb-link-card" href="cycle_client.html">
+    <span>Cycle client</span>
+    Référentiel adhérents, identité, téléphone, comptes rattachés et qualité CRM.
+  </a>
+  <a class="bb-link-card" href="cycle_epargne.html">
+    <span>Cycle épargne</span>
+    Comptes ordinaires, DAT, produits d'épargne, mouvements, soldes et comptes dormants.
+  </a>
+  <a class="bb-link-card" href="cycle_credit.html">
+    <span>Cycle crédit</span>
+    Dossiers, prêts, cycles, échéanciers, remboursements, PAR, garanties et concentration.
+  </a>
+  <a class="bb-link-card" href="cycle_conformite.html">
+    <span>Conformité</span>
+    LBC-FT, alertes, déclarations, sanctions, qualité des données et reporting réglementaire.
+  </a>
   <a class="bb-link-card" href="sources_schema_sql.html">
     <span>Sources</span>
     Schéma SQL, tables, vues et fichiers de référence.

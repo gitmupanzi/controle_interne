@@ -9,6 +9,59 @@ Les contrats de données sont décrits dans cette documentation et implémentés
 - `credit_app/tabs/solution_mpesa.py`
 - `tests/test_solution_mpesa_uploads.py`
 
+La page [Modèle relationnel des fichiers](modele_relationnel.md) présente ces fichiers comme des tables logiques reliées par `customer_id`, `msisdn1`, `reference_id`, `loan_id`, `savings_id` et `ref_no`.
+
+## Modèle logique simplifié
+
+```mermaid
+erDiagram
+    CUSTOMERS {
+        string customer_id PK "identifiant_client_si_disponible"
+        string msisdn1 UK "telephone_client"
+        datetime created_at "date_creation"
+    }
+    TRANSACTIONS {
+        string id PK "identifiant_ligne"
+        string customer_id FK "identifiant_client"
+        string msisdn1 FK "telephone_client"
+        string reference_id FK "reference_metier"
+        string ref_no FK "reference_operation"
+        string currency_code "devise"
+    }
+    SAVINGS_ACCOUNT {
+        string savings_id PK "identifiant_compte_epargne"
+        string customer_id FK "identifiant_client"
+        string msisdn1 FK "telephone_client"
+        string product_id "identifiant_produit"
+        string currency_code "devise"
+    }
+    LOANS_ACCOUNT {
+        string loan_id PK "identifiant_credit"
+        string customer_id FK "identifiant_client"
+        string msisdn1 FK "telephone_client"
+        string savings_account_id FK "compte_epargne_lie"
+        string currency_code "devise"
+    }
+    G2_TRANSACTIONS {
+        string Receipt_No PK "numero_recu_g2"
+        string Linked_Transaction_ID FK "transaction_liee"
+        datetime Completion_Time "date_finalisation"
+        string Currency "devise"
+    }
+    CLIENTS_PERFECT {
+        string code_client PK "code_client_perfect"
+        string telephone UK "telephone_normalise"
+        string num_manuel "numero_manuel"
+    }
+    CUSTOMERS ||--o{ TRANSACTIONS : "customer_id / msisdn1"
+    CUSTOMERS ||--o{ SAVINGS_ACCOUNT : "customer_id / msisdn1"
+    CUSTOMERS ||--o{ LOANS_ACCOUNT : "customer_id / msisdn1"
+    SAVINGS_ACCOUNT ||--o{ TRANSACTIONS : "savings_id / reference_id"
+    LOANS_ACCOUNT ||--o{ TRANSACTIONS : "loan_id / reference_id"
+    TRANSACTIONS }o--o| G2_TRANSACTIONS : "ref_no / Receipt No."
+    CUSTOMERS }o--o| CLIENTS_PERFECT : "msisdn1 / téléphone normalisé"
+```
+
 ## Colonnes principales
 
 ### Transactions

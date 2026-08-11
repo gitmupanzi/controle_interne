@@ -46,6 +46,7 @@ DECLARE @seuil_5k_usd_cdf float = {args.threshold_5k_cdf};
 DECLARE @seuil_10k_usd_cdf float = {args.threshold_10k_cdf};
 DECLARE @id_devise_reporting int = {devise};
 DECLARE @taux_usd_cdf decimal(19,6) = {args.usd_cdf_rate};
+DECLARE @convertir_affichage_cdf bit = 1;
 {query_sql}
 """
 

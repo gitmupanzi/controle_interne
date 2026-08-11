@@ -12,6 +12,8 @@ Le fichier `data/modelisation/requetes.sql` documente les requêtes avec :
 
 L'audit du catalogue montre des requêtes de niveau 9 et 10, donc prioritaires pour le contrôle interne et le reporting.
 
+Pour consulter la liste complète et commentée des requêtes prioritaires, utiliser la page [Requêtes prioritaires 9 et 10](requetes_prioritaires.md). Elle présente les requêtes par cycle, avec une lecture simple pour les décideurs et les équipes métier.
+
 ## Cycles fortement représentés
 
 | Cycle | Exemples de contrôles |

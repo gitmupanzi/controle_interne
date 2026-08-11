@@ -6693,7 +6693,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Fréquence temporelle", text)
         self.assertIn("Heure la plus fréquente : 10h", text)
         self.assertNotIn("Jour de semaine le plus actif", text)
-        self.assertIn("Synthese des flux rapport G2 M-Pesa par devise", text)
+        self.assertIn("Synthese des flux Solution Numérique/G2 par devise", text)
         self.assertIn("Point de vigilance", text)
         self.assertIn("CDF : 1 transaction(s) Completed, 1 client(s) distinct(s)", text)
         self.assertIn("USD : 1 transaction(s) Completed, 1 client(s) distinct(s)", text)
@@ -6815,7 +6815,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             for table in fallback_document.tables
             if table.rows and table.rows[0].cells[0].text == "Devise"
         ]
-        self.assertIn("Synthese des flux rapport G2 M-Pesa par devise", fallback_text)
+        self.assertIn("Synthese des flux Solution Numérique/G2 par devise", fallback_text)
         self.assertNotIn("Aucune donnee disponible.", fallback_text)
         self.assertEqual(len(flow_tables), 2)
         self.assertEqual(flow_tables[0].rows[1].cells[0].text, "CDF")

@@ -575,12 +575,19 @@ def render_conformite_quality_extension(
     mapping_df: pd.DataFrame,
 ) -> None:
     working = _copy_frame(standardized_df)
-    controles_df = _subset(working, analyse_prefix="155_", type_ligne="CONTROLE_QUALITE")
+    has_quality_signature = any(column in working.columns for column in ["severite", "criticite", "nombre_anomalies"])
+    has_lineage_signature = any(column in working.columns for column in ["analyse", "analyse_source", "type_element", "type_ligne"])
+    controles_df = (
+        _subset(working, analyse_prefix="155_", type_ligne="CONTROLE_QUALITE")
+        if has_quality_signature or has_lineage_signature
+        else pd.DataFrame(columns=working.columns)
+    )
     controle_column = _canonical_text_column(controles_df, "rubrique", "controle")
     nombre_column = _first_existing_column(controles_df, ["nombre", "nombre_anomalies"])
+    severity_column = _first_existing_column(controles_df, ["severite", "criticite", "niveau_risque"])
     critiques = (
-        int(controles_df["severite"].astype("string").str.upper().eq("CRITIQUE").sum())
-        if "severite" in controles_df.columns
+        int(controles_df[severity_column].astype("string").str.upper().eq("CRITIQUE").sum())
+        if severity_column
         else 0
     )
     total_anomalies_156 = _sum_numeric(controles_df, nombre_column) if nombre_column else 0.0
@@ -610,11 +617,17 @@ def render_conformite_quality_extension(
 
     left, right = st.columns(2)
     with left:
-        severity_df = controles_df["severite"].fillna("Non renseigné").astype(str).value_counts().reset_index()
-        severity_df.columns = ["severite", "nombre_controles"]
-        fig = px.bar(severity_df, x="severite", y="nombre_controles", color_discrete_sequence=["#d97b16"])
-        style_standard_vertical_bar(fig, height=320, tickangle=-20)
-        st_plot(fig, key="conformite_quality_severite", height=320)
+        if severity_column:
+            severity_df = controles_df[severity_column].fillna("Non renseigné").astype(str).value_counts().reset_index()
+            severity_df.columns = ["severite", "nombre_controles"]
+            fig = px.bar(severity_df, x="severite", y="nombre_controles", color_discrete_sequence=["#d97b16"])
+            style_standard_vertical_bar(fig, height=320, tickangle=-20)
+            st_plot(fig, key="conformite_quality_severite", height=320)
+        else:
+            st.info(
+                "La colonne de sévérité n'est pas disponible dans ce fichier. "
+                "Ce graphique est alimenté par Q155/Q156, pas par la synthèse Q38 seule."
+            )
     with right:
         if nombre_column and controle_column:
             action_df = controles_df.sort_values(nombre_column, ascending=False).head(10)

@@ -37,7 +37,7 @@ flowchart LR
 
 ## Règle centrale
 
-La Solution Numérique est la source financière principale. Le rapport G2 M-Pesa sert à enrichir l'identité du client et à contrôler les écritures, mais il ne remplace jamais les montants, dates, soldes, DAT, crédits ou remboursements issus de la Solution Numérique.
+La Solution Numérique est la source financière principale. Le Solution Numérique/G2 sert à enrichir l'identité du client et à contrôler les écritures, mais il ne remplace jamais les montants, dates, soldes, DAT, crédits ou remboursements issus de la Solution Numérique.
 
 ## 1. Lorsqu'il y a une transaction
 
@@ -208,7 +208,7 @@ Un remboursement peut aussi produire plusieurs lignes :
 
 Dans l'extrait client, le remboursement est affiché s'il touche le compte ouvert. Dans Finance et Crédits, il est analysé comme remboursement observé, avec séparation du capital, des intérêts et des pénalités lorsque les lignes permettent cette ventilation.
 
-## 4. Rôle du rapport G2 M-Pesa
+## 4. Rôle du Solution Numérique/G2
 
 G2 intervient après l'opération, comme preuve ou contrôle.
 

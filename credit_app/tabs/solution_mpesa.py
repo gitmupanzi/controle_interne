@@ -1312,6 +1312,48 @@ def _filter_value_options(series: pd.Series) -> list[str]:
     return sorted(cleaned.tolist(), key=lambda value: str(value).casefold())
 
 
+MPESA_PHONE_FILTER_COLUMNS: tuple[str, ...] = (
+    "telephone",
+    "msisdn1",
+    "msisdn",
+    "telephone_credit",
+    "telephone_epargne",
+    "phone_prefixe",
+    "numero_telephone",
+    "numero_telephone_msisdn",
+)
+
+
+def _deduplicate_phone_filter_columns(
+    df: pd.DataFrame,
+    filter_columns: list[str],
+) -> list[str]:
+    """Conserve un seul filtre telephone meme si plusieurs variantes existent."""
+
+    phone_columns = [
+        column
+        for column in filter_columns
+        if column in MPESA_PHONE_FILTER_COLUMNS and column in df.columns
+    ]
+    selected_phone_column: str | None = None
+    for column in phone_columns:
+        if _filter_value_options(df[column]):
+            selected_phone_column = column
+            break
+    if selected_phone_column is None and phone_columns:
+        selected_phone_column = phone_columns[0]
+
+    unique_columns: list[str] = []
+    for column in filter_columns:
+        if column in MPESA_PHONE_FILTER_COLUMNS:
+            if column == selected_phone_column and column not in unique_columns:
+                unique_columns.append(column)
+            continue
+        if column not in unique_columns:
+            unique_columns.append(column)
+    return unique_columns
+
+
 def _apply_local_multiselect_filters(
     df: pd.DataFrame,
     filter_columns: list[str],
@@ -1322,6 +1364,7 @@ def _apply_local_multiselect_filters(
         return pd.DataFrame()
 
     available_columns = [column for column in filter_columns if column in df.columns]
+    available_columns = _deduplicate_phone_filter_columns(df, available_columns)
     if not available_columns:
         return df.copy()
 
@@ -1336,9 +1379,12 @@ def _apply_local_multiselect_filters(
         options = _filter_value_options(df[column])
         if not options:
             continue
+        label = visible_column_names.get(column, column)
+        if column in MPESA_PHONE_FILTER_COLUMNS:
+            label = "numero_telephone" if _mpesa_user_column_rename_enabled() else "telephone"
         with widgets[index % len(widgets)]:
             selected_values = st.multiselect(
-                visible_column_names.get(column, column),
+                label,
                 options=options,
                 default=[],
                 key=f"{key_prefix}_{column}",
@@ -1352,6 +1398,22 @@ def _apply_local_multiselect_filters(
     for column, selected_values in active_filters.items():
         filtered = filtered.loc[filtered[column].astype("string").str.strip().isin(selected_values)].copy()
     return filtered.reset_index(drop=True)
+
+
+def _with_phone_filter_columns(*columns: str) -> list[str]:
+    """Ajoute les variantes de telephone comme filtres multiselect prioritaires."""
+
+    ordered_columns = [
+        *columns,
+        "telephone",
+        "msisdn1",
+        "msisdn",
+        "telephone_credit",
+        "telephone_epargne",
+        "phone_prefixe",
+        "numero_telephone",
+    ]
+    return list(dict.fromkeys(ordered_columns))
 
 
 def _dataframe_display_signature(df: pd.DataFrame) -> tuple[Any, ...]:
@@ -3409,7 +3471,7 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         render_panel_title("Flux de periode")
         flux_view = _apply_local_multiselect_filters(
             flux,
-            ["currency_code"],
+            _with_phone_filter_columns("currency_code", "customer_id"),
             key_prefix="mpesa_savings_flux_filter",
         )
         _mpesa_dataframe(flux_view, width="stretch", hide_index=True)
@@ -3458,7 +3520,14 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         with st.expander("Afficher le detail des comptes", expanded=False):
             detail_view = _apply_local_multiselect_filters(
                 detail,
-                ["currency_code", "famille_epargne", "product_name", "status"],
+                _with_phone_filter_columns(
+                    "currency_code",
+                    "famille_epargne",
+                    "product_name",
+                    "status",
+                    "customer_id",
+                    "Nom_client",
+                ),
                 key_prefix="mpesa_savings_portfolio_detail_filter",
             )
             columns = [
@@ -3493,7 +3562,14 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         render_panel_title("Activité observée")
         activity_view = _apply_local_multiselect_filters(
             activity,
-            ["currency_code", "famille_epargne", "statut_activite_observee", "product_name"],
+            _with_phone_filter_columns(
+                "currency_code",
+                "famille_epargne",
+                "statut_activite_observee",
+                "product_name",
+                "customer_id",
+                "Nom_client",
+            ),
             key_prefix="mpesa_savings_activity_filter",
         )
         _mpesa_dataframe(activity_view.head(1000), width="stretch", hide_index=True)
@@ -3525,7 +3601,13 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         st.markdown("**Classement des clients**")
         clients_view = _apply_local_multiselect_filters(
             clients,
-            ["currency_code", "famille_epargne", "tranche_encours", "Nom_client", "customer_id"],
+            _with_phone_filter_columns(
+                "currency_code",
+                "famille_epargne",
+                "tranche_encours",
+                "Nom_client",
+                "customer_id",
+            ),
             key_prefix="mpesa_savings_concentration_clients_filter",
         )
         _mpesa_dataframe(clients_view.head(200), width="stretch", hide_index=True)
@@ -3537,7 +3619,14 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         _mpesa_dataframe(dat_summary, width="stretch", hide_index=True)
         dat_view = _apply_local_multiselect_filters(
             dat_detail,
-            ["currency_code", "product_name", "status", "tranche_echeance"],
+            _with_phone_filter_columns(
+                "currency_code",
+                "product_name",
+                "status",
+                "tranche_echeance",
+                "customer_id",
+                "Nom_client",
+            ),
             key_prefix="mpesa_savings_dat_filter",
         )
         dat_columns = [
@@ -3563,7 +3652,14 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         _mpesa_dataframe(maturity_summary, width="stretch", hide_index=True)
         maturity_view = _apply_local_multiselect_filters(
             maturity_detail,
-            ["currency_code", "tranche_echeance", "statut_preparation_remboursement", "product_name"],
+            _with_phone_filter_columns(
+                "currency_code",
+                "tranche_echeance",
+                "statut_preparation_remboursement",
+                "product_name",
+                "customer_id",
+                "Nom_client",
+            ),
             key_prefix="mpesa_savings_maturity_filter",
         )
         _mpesa_dataframe(maturity_view.head(1000), width="stretch", hide_index=True)
@@ -3576,7 +3672,7 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         else:
             opportunity_view = _apply_local_multiselect_filters(
                 opportunities,
-                ["currency_code", "opportunite", "Nom_client", "customer_id"],
+                _with_phone_filter_columns("currency_code", "opportunite", "Nom_client", "customer_id"),
                 key_prefix="mpesa_savings_opportunity_filter",
             )
             _mpesa_dataframe(opportunity_view.head(1000), width="stretch", hide_index=True)
@@ -3604,6 +3700,20 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
             if not isinstance(frame, pd.DataFrame) or frame.empty:
                 continue
             with st.expander(list_key.replace("_", " ").title(), expanded=False):
+                frame = _apply_local_multiselect_filters(
+                    frame,
+                    _with_phone_filter_columns(
+                        "currency_code",
+                        "famille_epargne",
+                        "product_name",
+                        "status",
+                        "tranche_echeance",
+                        "opportunite",
+                        "customer_id",
+                        "Nom_client",
+                    ),
+                    key_prefix=f"mpesa_savings_action_{list_key}",
+                )
                 _mpesa_dataframe(frame.head(1000), width="stretch", hide_index=True)
 
     export_report: dict[str, Any] = {
@@ -4025,7 +4135,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             cache_fingerprint=f"{_prepared_data_cache_key(prepared)}|g2:turbo-proxy",
         )
         st.info(
-            "Mode Solution Numérique seule : le rapport est construit sans rapport G2 M-Pesa. "
+            "Mode Solution Numérique seule : le rapport est construit sans Solution Numérique/G2. "
             "Les operations sont deduites de `ref_no`, `account_type`, `description`, `dr`, `cr` et `created_at`. "
             "Les noms, statuts, soldes et delais du rapport G2 ainsi que les controles croises G2/Solution Numérique ne sont pas disponibles."
         )
@@ -5408,7 +5518,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         render_panel_title("Credits du client")
         credits_view = _apply_local_multiselect_filters(
             report["credits"],
-            ["currency_code", "status_name", "loan_id"],
+            _with_phone_filter_columns("currency_code", "status_name", "loan_id", "customer_id"),
             key_prefix="mpesa_client_loans_filter",
         )
         st.caption(f"{len(credits_view)} credit(s) affiche(s).")
@@ -5641,7 +5751,12 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             if not production_detail.empty:
                 production_view = _apply_local_multiselect_filters(
                     production_detail,
-                    ["currency_code", "customer_id", "type_operation", "statut_controle_turbo"],
+                    _with_phone_filter_columns(
+                        "currency_code",
+                        "customer_id",
+                        "type_operation",
+                        "statut_controle_turbo",
+                    ),
                     key_prefix="mpesa_credit_production_detail",
                 )
                 _mpesa_dataframe(production_view, width="stretch", height=420, hide_index=True)
@@ -5654,7 +5769,15 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             _mpesa_dataframe(_currency_filter(portfolio_summary, key_prefix="mpesa_credit_portfolio_summary"), width="stretch", hide_index=True)
             detail_view = _apply_local_multiselect_filters(
                 portfolio_detail,
-                ["currency_code", "status_name", "defaulted", "is_rollover", "is_grace_period", "loan_product_id", "customer_id", "msisdn1"],
+                _with_phone_filter_columns(
+                    "currency_code",
+                    "status_name",
+                    "defaulted",
+                    "is_rollover",
+                    "is_grace_period",
+                    "loan_product_id",
+                    "customer_id",
+                ),
                 key_prefix="mpesa_credit_portfolio_detail",
             )
             _mpesa_dataframe(detail_view, width="stretch", height=520, hide_index=True)
@@ -5674,7 +5797,13 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             _mpesa_dataframe(_currency_filter(repayment_summary, key_prefix="mpesa_credit_repayment_summary"), width="stretch", hide_index=True)
             repayment_view = _apply_local_multiselect_filters(
                 repayment_detail,
-                ["currency_code", "customer_id", "type_operation", "origine_remboursement", "statut_controle_turbo"],
+                _with_phone_filter_columns(
+                    "currency_code",
+                    "customer_id",
+                    "type_operation",
+                    "origine_remboursement",
+                    "statut_controle_turbo",
+                ),
                 key_prefix="mpesa_credit_repayment_detail",
             )
             _mpesa_dataframe(repayment_view, width="stretch", height=440, hide_index=True)
@@ -5690,7 +5819,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             _mpesa_dataframe(_currency_filter(risk_summary, key_prefix="mpesa_credit_risk_summary"), width="stretch", hide_index=True)
             risk_view = _apply_local_multiselect_filters(
                 risk_detail,
-                ["currency_code", "statut_risque", "status_name", "customer_id"],
+                _with_phone_filter_columns("currency_code", "statut_risque", "status_name", "customer_id"),
                 key_prefix="mpesa_credit_risk_detail",
             )
             _mpesa_dataframe(risk_view, width="stretch", height=460, hide_index=True)
@@ -5709,7 +5838,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             _mpesa_dataframe(maturity_view, width="stretch", hide_index=True)
             maturity_detail_view = _apply_local_multiselect_filters(
                 maturity_detail,
-                ["currency_code", "tranche_echeance", "status_name", "customer_id", "msisdn1"],
+                _with_phone_filter_columns("currency_code", "tranche_echeance", "status_name", "customer_id"),
                 key_prefix="mpesa_credit_maturity_detail",
             )
             _mpesa_dataframe(maturity_detail_view, width="stretch", height=460, hide_index=True)
@@ -5724,14 +5853,14 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             with st.expander("Top prets par encours", expanded=True):
                 top_loans_view = _apply_local_multiselect_filters(
                     concentration_loans,
-                    ["currency_code", "loan_product_id", "customer_id", "msisdn1"],
+                    _with_phone_filter_columns("currency_code", "loan_product_id", "customer_id"),
                     key_prefix="mpesa_credit_top_loans",
                 )
                 _mpesa_dataframe(top_loans_view, width="stretch", height=420, hide_index=True)
             with st.expander("Top clients, produits et tranches", expanded=False):
                 top_clients_view = _apply_local_multiselect_filters(
                     concentration_clients,
-                    ["currency_code", "tranche_encours", "customer_id"],
+                    _with_phone_filter_columns("currency_code", "tranche_encours", "customer_id"),
                     key_prefix="mpesa_credit_top_clients",
                 )
                 _mpesa_dataframe(top_clients_view, width="stretch", hide_index=True)
@@ -5750,7 +5879,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             _mpesa_dataframe(_currency_filter(credit_savings_summary, key_prefix="mpesa_credit_savings_summary"), width="stretch", hide_index=True)
             savings_view = _apply_local_multiselect_filters(
                 credit_savings_clients,
-                ["currency_code", "statut_rapprochement", "customer_id", "telephone_credit"],
+                _with_phone_filter_columns("currency_code", "statut_rapprochement", "customer_id"),
                 key_prefix="mpesa_credit_savings_clients",
             )
             _mpesa_dataframe(savings_view, width="stretch", height=480, hide_index=True)
@@ -5760,7 +5889,11 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 _render_alert_banner(f"{len(credit_savings_controls)} rapprochement(s) credit/epargne necessitent une verification.")
                 controls_view = _apply_local_multiselect_filters(
                     credit_savings_controls,
-                    ["currency_code", "customer_id", "telephone_credit", "methode_rapprochement_epargne"],
+                    _with_phone_filter_columns(
+                        "currency_code",
+                        "customer_id",
+                        "methode_rapprochement_epargne",
+                    ),
                     key_prefix="mpesa_credit_savings_controls",
                 )
                 _mpesa_dataframe(controls_view, width="stretch", hide_index=True)
@@ -5802,7 +5935,13 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 if isinstance(frame, pd.DataFrame) and not frame.empty:
                     frame = _apply_local_multiselect_filters(
                         frame,
-                        ["currency_code", "status_name", "customer_id", "msisdn1", "loan_product_id", "tranche_echeance"],
+                        _with_phone_filter_columns(
+                            "currency_code",
+                            "status_name",
+                            "customer_id",
+                            "loan_product_id",
+                            "tranche_echeance",
+                        ),
                         key_prefix=f"mpesa_credit_action_{name}",
                     )
                 signature = _dataframe_display_signature(frame)
@@ -6232,7 +6371,11 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             with st.expander("Afficher le detail des remboursements", expanded=False):
                 repayment_view = _apply_local_multiselect_filters(
                     repayments_detail,
-                    ["currency_code", "mode_remboursement_observe", "statut_controle_turbo"],
+                    _with_phone_filter_columns(
+                        "currency_code",
+                        "mode_remboursement_observe",
+                        "statut_controle_turbo",
+                    ),
                     key_prefix="mpesa_turbo_repayment_filter",
                 )
                 _mpesa_dataframe(repayment_view.head(1000), width="stretch", hide_index=True)
@@ -6285,7 +6428,12 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         with st.expander("Afficher les credits a suivre", expanded=False):
             credit_view = _apply_local_multiselect_filters(
                 credit_detail,
-                ["currency_code", "statut_risque", "status_name", "customer_id"],
+                _with_phone_filter_columns(
+                    "currency_code",
+                    "statut_risque",
+                    "status_name",
+                    "customer_id",
+                ),
                 key_prefix="mpesa_turbo_credit_filter",
             ) if not credit_detail.empty else credit_detail
             _mpesa_dataframe(credit_view.head(1000), width="stretch", hide_index=True)
@@ -6313,7 +6461,12 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             style_standard_horizontal_bar(fig, height=430)
             st_plot(fig, key="mpesa_turbo_savings_clients", height=430)
             with st.expander("Afficher l'activite epargne client", expanded=False):
-                _mpesa_dataframe(savings_activity.head(1000), width="stretch", hide_index=True)
+                savings_activity_view = _apply_local_multiselect_filters(
+                    savings_activity,
+                    _with_phone_filter_columns("currency_code", "customer_id"),
+                    key_prefix="mpesa_turbo_savings_activity_filter",
+                )
+                _mpesa_dataframe(savings_activity_view.head(1000), width="stretch", hide_index=True)
 
         frequent = report_view.get("depots_frequents_hebdo", pd.DataFrame())
         deposit_bands = report_view.get("tranches_depots", pd.DataFrame())
@@ -6323,7 +6476,12 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         if not frequent.empty:
             frequent_only = frequent.loc[frequent["deposant_frequent_3_plus"]].copy()
             with st.expander("Afficher les clients avec au moins trois depots par semaine", expanded=False):
-                _mpesa_dataframe(frequent_only.head(1000), width="stretch", hide_index=True)
+                frequent_view = _apply_local_multiselect_filters(
+                    frequent_only,
+                    _with_phone_filter_columns("currency_code", "customer_id"),
+                    key_prefix="mpesa_turbo_frequent_deposits_filter",
+                )
+                _mpesa_dataframe(frequent_view.head(1000), width="stretch", hide_index=True)
 
         render_panel_title("DAT a preparer et DAT sans credit actif")
         dat_summary = report_view.get("dat_echeances_synthese", pd.DataFrame())
@@ -6331,14 +6489,24 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         if not dat_summary.empty:
             _mpesa_dataframe(dat_summary, width="stretch", hide_index=True)
         with st.expander("Afficher les DAT positifs sans credit actif dans la meme devise", expanded=False):
-            _mpesa_dataframe(dat_without_credit.head(1000), width="stretch", hide_index=True)
+            dat_without_credit_view = _apply_local_multiselect_filters(
+                dat_without_credit,
+                _with_phone_filter_columns("currency_code", "customer_id"),
+                key_prefix="mpesa_turbo_dat_without_credit_filter",
+            )
+            _mpesa_dataframe(dat_without_credit_view.head(1000), width="stretch", hide_index=True)
 
         render_panel_title("Credits et epargne disponible, sans compensation")
         credit_savings = report_view.get("credits_epargne_disponible", pd.DataFrame())
         if credit_savings.empty:
             st.info("Aucune position credit/epargne consolidable.")
         else:
-            _mpesa_dataframe(credit_savings.head(1000), width="stretch", hide_index=True)
+            credit_savings_view = _apply_local_multiselect_filters(
+                credit_savings,
+                _with_phone_filter_columns("currency_code", "customer_id"),
+                key_prefix="mpesa_turbo_credit_savings_filter",
+            )
+            _mpesa_dataframe(credit_savings_view.head(1000), width="stretch", hide_index=True)
 
         _render_accounting_portfolio(accounting_view)
 
@@ -6384,7 +6552,7 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         else:
             alert_view = _apply_local_multiselect_filters(
                 alerts,
-                ["currency_code", "alerte", "customer_id"],
+                _with_phone_filter_columns("currency_code", "alerte", "customer_id"),
                 key_prefix="mpesa_turbo_alert_filter",
             )
             _render_alert_banner(
@@ -6402,11 +6570,16 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         if inactive.empty:
             st.success("Aucun mouvement rattache a un compte epargne/DAT inactif sur la periode.")
         else:
+            inactive_view = _apply_local_multiselect_filters(
+                inactive,
+                _with_phone_filter_columns("currency_code", "customer_id"),
+                key_prefix="mpesa_turbo_inactive_movements_filter",
+            )
             _render_alert_banner(
-                f"{len(inactive)} mouvement(s) sur compte inactif necessitent une verification."
+                f"{len(inactive_view)} mouvement(s) sur compte inactif necessitent une verification."
             )
             _mpesa_dataframe(
-                inactive.head(1000),
+                inactive_view.head(1000),
                 width="stretch",
                 hide_index=True,
             )
@@ -6547,7 +6720,7 @@ def _render_accounting_balances_and_journals(
     balance_clients = report["balance_clients"]
     client_view = _apply_local_multiselect_filters(
         balance_clients,
-        ["currency_code", "Nom_client", "telephone", "customer_id"],
+        _with_phone_filter_columns("currency_code", "Nom_client", "customer_id"),
         key_prefix="mpesa_accounting_client_balance_filter",
     )
     client_columns = [
@@ -6569,7 +6742,12 @@ def _render_accounting_balances_and_journals(
         else:
             auxiliary_view = _apply_local_multiselect_filters(
                 auxiliary,
-                ["currency_code", "famille_position", "nature_comptable_indicative", "customer_id"],
+                _with_phone_filter_columns(
+                    "currency_code",
+                    "famille_position",
+                    "nature_comptable_indicative",
+                    "customer_id",
+                ),
                 key_prefix="mpesa_accounting_auxiliary_filter",
             )
             _mpesa_dataframe(auxiliary_view, width="stretch", hide_index=True)
@@ -6611,12 +6789,21 @@ def _render_accounting_balances_and_journals(
     with st.expander("Afficher le journal des operations", expanded=False):
         operation_view = _apply_local_multiselect_filters(
             report.get("journal_operations", pd.DataFrame()),
-            ["currency_code", "statut_controle_operation", "customer_id"],
+            _with_phone_filter_columns(
+                "currency_code",
+                "statut_controle_operation",
+                "customer_id",
+            ),
             key_prefix="mpesa_accounting_operation_journal_filter",
         )
         _mpesa_dataframe(operation_view, width="stretch", hide_index=True)
     with st.expander("Afficher le journal brut des ecritures", expanded=False):
-        _mpesa_dataframe(report.get("journal_ecritures", pd.DataFrame()), width="stretch", hide_index=True)
+        entry_view = _apply_local_multiselect_filters(
+            report.get("journal_ecritures", pd.DataFrame()),
+            _with_phone_filter_columns("currency_code", "account_type", "customer_id"),
+            key_prefix="mpesa_accounting_entry_journal_filter",
+        )
+        _mpesa_dataframe(entry_view, width="stretch", hide_index=True)
 
     render_panel_title("Export de la balance observée")
     st.caption(
@@ -6773,6 +6960,90 @@ def _render_accounting_balances_and_journals(
         )
 
 
+    render_panel_title("Suivi des dépôts et retraits de DAT par client")
+    st.caption(
+        "Cette restitution est séparée du compte ouvert : elle suit uniquement "
+        "les mouvements du compte bloqué `FIXED SAVINGS`, notamment les dépôts "
+        "DAT et les retraits ou retours du compte bloqué observés sur la période."
+    )
+    dat_pivot_export_report = build_filtered_turbo_deposit_withdrawal_pivot_report(
+        report,
+        client_view,
+        account_family="dat",
+    )
+    dat_deposit_withdrawal_pivot = dat_pivot_export_report.get(
+        "suivi_depots_retraits_dat_pivot",
+        pd.DataFrame(),
+    )
+    dat_pivot_day_count = (
+        int(
+            pd.to_numeric(
+                dat_deposit_withdrawal_pivot["nombre_jours_periode"],
+                errors="coerce",
+            )
+            .fillna(0)
+            .max()
+        )
+        if not dat_deposit_withdrawal_pivot.empty
+        and "nombre_jours_periode" in dat_deposit_withdrawal_pivot.columns
+        else 0
+    )
+    st.caption(
+        f"Périmètre exporté : {len(dat_deposit_withdrawal_pivot)} ligne(s) client × opération DAT × devise, "
+        f"sur {dat_pivot_day_count} jour(s)."
+    )
+    with st.expander(
+        "Afficher le tableau croisé DAT",
+        expanded=False,
+    ):
+        hidden_columns = {
+            "customer_id",
+            "Nom_client",
+            "telephone",
+            "nombre_operations_suivi",
+            "nombre_jours_periode",
+            "score_pct",
+        }
+        dat_pivot_columns = [
+            column
+            for column in dat_deposit_withdrawal_pivot.columns
+            if column not in hidden_columns
+        ]
+        _mpesa_dataframe(
+            dat_deposit_withdrawal_pivot[dat_pivot_columns],
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "client": st.column_config.TextColumn("Client"),
+                "operation": st.column_config.TextColumn("Opération"),
+                "famille_compte": st.column_config.TextColumn("Famille"),
+                "currency_code": st.column_config.TextColumn("Devise"),
+                "total": st.column_config.NumberColumn("Total"),
+                "solde": st.column_config.NumberColumn("Solde DAT"),
+                "score": st.column_config.TextColumn("Score"),
+            },
+        )
+    _render_excel_export_on_demand(
+        export_report=dat_pivot_export_report,
+        prepare_label="Préparer l'Excel DAT",
+        download_label="Télécharger Excel DAT",
+        file_name=(
+            f"suivi_depots_retraits_dat_turbo_{start_token}_{end_token}.xlsx"
+        ),
+        key=(
+            f"mpesa_turbo_dat_deposit_withdrawal_excel_{start_token}_"
+            f"{end_token}_{selection_token}"
+        ),
+        print_orientation="landscape",
+        width="content",
+        disabled=dat_deposit_withdrawal_pivot.empty,
+        help=(
+            "Prépare le classeur Excel du suivi des dépôts et retraits DAT "
+            "uniquement lorsque vous voulez l'exporter."
+        ),
+    )
+
+
 def _render_accounting_flows(report: dict[str, pd.DataFrame]) -> None:
     """Ajoute les flux et produits comptables au volet d'activite."""
     render_panel_title("Flux et produits financiers observes")
@@ -6796,7 +7067,7 @@ def _render_accounting_flows(report: dict[str, pd.DataFrame]) -> None:
             with st.expander("Afficher le detail des produits financiers", expanded=False):
                 product_detail_view = _apply_local_multiselect_filters(
                     product_detail,
-                    ["currency_code", "account_type"],
+                    _with_phone_filter_columns("currency_code", "account_type", "customer_id"),
                     key_prefix="mpesa_turbo_financial_product_filter",
                 )
                 _mpesa_dataframe(
@@ -6868,14 +7139,33 @@ def _render_accounting_controls(
             f"{control_count} signal(aux) comptable(s) necessitent une verification."
         )
     with st.expander("Afficher les operations a verifier", expanded=False):
-        _mpesa_dataframe(
+        operation_controls_view = _apply_local_multiselect_filters(
             operation_controls,
+            _with_phone_filter_columns(
+                "currency_code",
+                "statut_controle_operation",
+                "customer_id",
+            ),
+            key_prefix="mpesa_accounting_operation_controls_filter",
+        )
+        _mpesa_dataframe(
+            operation_controls_view,
             width="stretch",
             hide_index=True,
         )
     with st.expander("Afficher les variations de solde a verifier", expanded=False):
-        _mpesa_dataframe(
+        balance_controls_view = _apply_local_multiselect_filters(
             balance_controls,
+            _with_phone_filter_columns(
+                "currency_code",
+                "statut_controle_solde",
+                "account_type",
+                "customer_id",
+            ),
+            key_prefix="mpesa_accounting_balance_controls_filter",
+        )
+        _mpesa_dataframe(
+            balance_controls_view,
             width="stretch",
             hide_index=True,
         )

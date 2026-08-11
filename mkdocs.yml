@@ -18,8 +18,13 @@ nav:
   - Architecture globale: architecture_globale.md
   - Perfect Vision:
       - Présentation: perfect_vision/index.md
+      - Cycle client: perfect_vision/cycle_client.md
+      - Cycle épargne: perfect_vision/cycle_epargne.md
+      - Cycle crédit: perfect_vision/cycle_credit.md
+      - Conformité: perfect_vision/cycle_conformite.md
       - Sources et schéma SQL: perfect_vision/sources_schema_sql.md
       - Requêtes, cycles et KPI: perfect_vision/requetes_cycles_kpi.md
+      - Requêtes prioritaires 9 et 10: perfect_vision/requetes_prioritaires.md
       - Tableau de bord Streamlit: perfect_vision/streamlit.md
       - Tests et limites: perfect_vision/tests_limites.md
   - Perfect Power BI:
@@ -36,6 +41,7 @@ nav:
   - Solution Numérique:
       - Présentation: solution_numerique/index.md
       - Sources et contrats de données: solution_numerique/sources_contrats.md
+      - Modèle relationnel des fichiers: solution_numerique/modele_relationnel.md
       - Circuit d'information: solution_numerique/circuits_information.md
       - Extraits clients: solution_numerique/extraits_clients.md
       - Finance, balances et journaux: solution_numerique/finance_balances.md

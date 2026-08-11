@@ -26,6 +26,10 @@ Turbo / Solution Numérique constitue la source opérationnelle principale. G2 e
     <span>Sources et contrats</span>
     Transactions, Savings Account, Loans Account, Customers, G2 et colonnes attendues.
   </a>
+  <a class="bb-link-card" href="modele_relationnel.html">
+    <span>Modèle relationnel</span>
+    Lecture des fichiers Excel comme des tables : clés, relations, cardinalités et pont Perfect Vision.
+  </a>
   <a class="bb-link-card" href="circuits_information.html">
     <span>Circuit d'information</span>
     Comment les lignes sont générées lors d'une transaction, d'une épargne, d'un DAT ou d'un crédit.
