@@ -21816,6 +21816,131 @@ def create_g2_dat_word(
     return buffer.getvalue()
 
 
+MPESA_DIRECTION_PRIORITY_SHEETS = {
+    "Clients_KPI",
+    "Clients_Acquisition",
+    "Nouveaux_Clients_Actifs",
+    "Clients_Actifs",
+    "Clients_Sans_Mouvement",
+    "Clients_Multi_Produits",
+    "DAT_Sans_Credit",
+    "Credit_Vue_Ensemble",
+    "Credit_Portefeuille",
+    "Credit_Risque_Synthese",
+    "Liste_Prets_Echus",
+    "Liste_Prets_PAR30",
+    "Liste_Prets_Penalites",
+    "Credit_Top_Clients",
+    "Credit_Tranches_Clients",
+    "Credit_Epargne_Clients_360",
+    "Epargne_Vue_Ensemble",
+    "Epargne_Portefeuille",
+    "Epargne_Flux",
+    "Epargne_DAT",
+    "Epargne_Echeances_DAT",
+    "Epargne_Top_Clients",
+    "Epargne_Tranches",
+    "Epargne_DAT_Sans_Credit",
+    "Epargne_Forte_Sans_Credit",
+    "Epargne_Qualite",
+}
+
+
+MPESA_OPERATIONAL_TECHNICAL_COLUMN_EXACT_KEYS = {
+    "",
+    "id",
+    "index",
+    "row",
+    "source",
+    "sources",
+    "source_systeme",
+    "source_system",
+    "systeme_source",
+    "fichier",
+    "fichier_source",
+    "ordre",
+    "ordre_import",
+    "ordre_fichier_import",
+    "import_row_order",
+    "ligne_source",
+    "ligne_import",
+    "position_ligne",
+    "cle",
+    "key",
+    "hash",
+    "debug",
+}
+
+MPESA_OPERATIONAL_TECHNICAL_COLUMN_PREFIXES = (
+    "__",
+    "cle_",
+    "key_",
+    "hash_",
+    "debug_",
+    "raw_",
+    "brut_",
+    "ordre_",
+    "import_",
+    "fichier_source",
+    "source_",
+    "trace_",
+    "tracabilite_technique",
+)
+
+MPESA_OPERATIONAL_TECHNICAL_COLUMN_SUFFIXES = (
+    "_key",
+    "_hash",
+    "_raw",
+    "_brut",
+    "_source",
+    "_technique",
+    "_normalized",
+    "_normalise",
+)
+
+MPESA_OPERATIONAL_TECHNICAL_COLUMN_CONTAINS = (
+    "fichier_source",
+    "import_row",
+    "ordre_fichier",
+    "source_mouvements",
+    "source_analytique",
+    "source_savings",
+    "debug",
+)
+
+
+def _normalize_export_column_key(column: Any) -> str:
+    text = normalize_label(column)
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_")
+
+
+def _is_operational_technical_column(column: Any) -> bool:
+    key = _normalize_export_column_key(column)
+    if key in MPESA_OPERATIONAL_TECHNICAL_COLUMN_EXACT_KEYS:
+        return True
+    if key.startswith(MPESA_OPERATIONAL_TECHNICAL_COLUMN_PREFIXES):
+        return True
+    if key.endswith(MPESA_OPERATIONAL_TECHNICAL_COLUMN_SUFFIXES):
+        return True
+    return any(token in key for token in MPESA_OPERATIONAL_TECHNICAL_COLUMN_CONTAINS)
+
+
+def _prepare_operational_priority_sheet(frame: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+    """Allège les feuilles clés destinées à la Direction et aux opérations."""
+    if sheet_name not in MPESA_DIRECTION_PRIORITY_SHEETS:
+        return frame
+    operational = frame.dropna(axis=1, how="all").copy()
+    columns_to_drop = [
+        column
+        for column in operational.columns
+        if _is_operational_technical_column(column)
+    ]
+    if columns_to_drop:
+        operational = operational.drop(columns=columns_to_drop, errors="ignore")
+    return operational
+
+
 def create_excel_export(
     report: dict[str, Any],
     *,
@@ -22018,8 +22143,12 @@ def create_excel_export(
             if sheet_name == "DAT_En_Cours" and "jours_avant_echeance" in safe_frame.columns:
                 safe_frame = safe_frame.rename(columns={"jours_avant_echeance": "Jours restants"})
             safe_frame = prepare_dataframe_for_display(safe_frame, enabled=rename_user_columns)
-            safe_frame.to_excel(writer, sheet_name=sheet_name[:31], index=False)
-            worksheet = writer.sheets[sheet_name[:31]]
+            safe_frame = _prepare_operational_priority_sheet(safe_frame, sheet_name)
+            excel_sheet_name = sheet_name[:31]
+            safe_frame.to_excel(writer, sheet_name=excel_sheet_name, index=False)
+            worksheet = writer.sheets[excel_sheet_name]
+            if sheet_name in MPESA_DIRECTION_PRIORITY_SHEETS:
+                worksheet.sheet_properties.tabColor = "FF0000"
             worksheet.freeze_panes = "A2"
             worksheet.auto_filter.ref = worksheet.dimensions
             if print_orientation:

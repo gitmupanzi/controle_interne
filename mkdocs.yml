@@ -45,7 +45,9 @@ nav:
       - Circuit d'information: solution_numerique/circuits_information.md
       - Extraits clients: solution_numerique/extraits_clients.md
       - Finance, balances et journaux: solution_numerique/finance_balances.md
-      - Clients, épargnes et crédits: solution_numerique/clients_epargnes_credits.md
+      - Clients: solution_numerique/clients.md
+      - Épargnes: solution_numerique/epargnes.md
+      - Crédits: solution_numerique/credits.md
       - G2, DAT et rapprochements: solution_numerique/g2_dat_rapprochements.md
       - Statistiques et projections: solution_numerique/statistiques_projections.md
       - Tests et limites: solution_numerique/tests_limites.md

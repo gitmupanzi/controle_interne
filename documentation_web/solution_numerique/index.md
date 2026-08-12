@@ -42,9 +42,17 @@ Turbo / Solution Numérique constitue la source opérationnelle principale. G2 e
     <span>Finance et balances</span>
     Balance observée, journaux, suivi dépôts/retraits et exports.
   </a>
-  <a class="bb-link-card" href="clients_epargnes_credits.html">
-    <span>Clients, épargnes, crédits</span>
-    Cockpits, comptes ouverts, comptes bloqués, portefeuille crédit et remboursements.
+  <a class="bb-link-card" href="clients.html">
+    <span>Clients</span>
+    Base client, activation, nouveaux clients actifs, Client 360 et opportunités.
+  </a>
+  <a class="bb-link-card" href="epargnes.html">
+    <span>Épargnes</span>
+    Comptes ouverts, DAT, échéances, concentration et opportunités épargne.
+  </a>
+  <a class="bb-link-card" href="credits.html">
+    <span>Crédits</span>
+    Portefeuille crédit, remboursements, échéances, risques et concentration.
   </a>
   <a class="bb-link-card" href="g2_dat_rapprochements.html">
     <span>G2 et DAT</span>
