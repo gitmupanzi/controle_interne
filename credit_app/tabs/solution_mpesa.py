@@ -8551,7 +8551,9 @@ def _render_statistics_tab(
     growth = report_view.get("clients_croissance", pd.DataFrame())
     turnover = report_view.get("chiffre_affaires", pd.DataFrame())
     portfolio = report_view.get("epargne_dat_portefeuille", pd.DataFrame())
+    portfolio_period = report_view.get("epargne_dat_portefeuille_periode", pd.DataFrame())
     credit_summary = report_view.get("credit_synthese", pd.DataFrame())
+    credit_summary_period = report_view.get("credit_synthese_periode", pd.DataFrame())
     top_clients = report_view.get("clients_volume_top", pd.DataFrame())
     regular_deposits_summary = report_view.get("depots_reguliers_synthese", pd.DataFrame())
     regular_deposits_clients = report_view.get("depots_reguliers_clients", pd.DataFrame())
@@ -8718,7 +8720,7 @@ def _render_statistics_tab(
 
     with st.expander("2. Comptes ouverts et comptes bloques", expanded=False):
         st.caption(
-            "Ce bloc suit les positions d'epargne : comptes ouverts, DAT/comptes bloques, soldes et clients concernes."
+            "Ce bloc suit les positions d'epargne arretees a la date de fin, puis les comptes crees ou actives sur la periode."
         )
         _render_weekly_comparison(
             weekly_comparison,
@@ -8789,10 +8791,30 @@ def _render_statistics_tab(
                     "solde_total": st.column_config.NumberColumn("Solde total", format="%.2f"),
                 },
             )
+            if isinstance(portfolio_period, pd.DataFrame) and not portfolio_period.empty:
+                st.markdown("**Comptes crees ou actives sur la periode**")
+                st.caption(
+                    "Cette lecture garde le solde instantane des comptes crees ou actives "
+                    "pendant la periode filtree. Elle complete la position arretee a la date de fin."
+                )
+                _mpesa_dataframe(
+                    portfolio_period,
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                        "famille": st.column_config.TextColumn("Famille"),
+                        "nombre_comptes": st.column_config.NumberColumn("Comptes", format="%d"),
+                        "comptes_solde_positif": st.column_config.NumberColumn("Comptes positifs", format="%d"),
+                        "clients": st.column_config.NumberColumn("Clients", format="%d"),
+                        "solde_total": st.column_config.NumberColumn("Solde instantane", format="%.2f"),
+                        "perimetre_encours": st.column_config.TextColumn("Perimetre"),
+                    },
+                )
 
     with st.expander("3. Credits", expanded=False):
         st.caption(
-            "Ce bloc suit le portefeuille credit : credits accordes, encours, remboursements et risque observe."
+            "Ce bloc suit le portefeuille credit arrete a la date de fin, puis les credits crees sur la periode."
         )
         _render_weekly_comparison(
             weekly_comparison,
@@ -8858,6 +8880,20 @@ def _render_statistics_tab(
                     "currency_code": st.column_config.TextColumn("Devise", pinned=True),
                 },
             )
+            if isinstance(credit_summary_period, pd.DataFrame) and not credit_summary_period.empty:
+                st.markdown("**Credits crees sur la periode**")
+                st.caption(
+                    "Cette lecture presente les credits crees dans la periode filtree, "
+                    "avec leur encours instantane a la date de fin."
+                )
+                _mpesa_dataframe(
+                    credit_summary_period,
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                    },
+                )
 
     with st.expander("4. Transactions", expanded=False):
         st.caption(
@@ -9254,7 +9290,9 @@ def _render_statistics_tab(
             "chiffre_affaires",
             "activite_evolution",
             "epargne_dat_portefeuille",
+            "epargne_dat_portefeuille_periode",
             "credit_synthese",
+            "credit_synthese_periode",
             "clients_volume_top",
             "depots_reguliers_synthese",
             "depots_reguliers_clients",

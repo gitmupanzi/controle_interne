@@ -7102,6 +7102,167 @@ def count_mpesa_loaded_customers(prepared: MpesaPreparedData) -> int:
     return int(reference["client_key"].nunique())
 
 
+def _mpesa_statistics_first_date(frame: pd.DataFrame, *columns: str) -> pd.Series:
+    """Retourne la premiere date exploitable parmi plusieurs colonnes."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return pd.Series(dtype="datetime64[ns]")
+    dates = pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
+    for column in columns:
+        if column in frame.columns:
+            dates = dates.combine_first(pd.to_datetime(frame[column], errors="coerce"))
+    return dates
+
+
+def _mpesa_statistics_snapshot_mask(
+    frame: pd.DataFrame,
+    *,
+    as_of_date: pd.Timestamp,
+    creation_columns: tuple[str, ...],
+    closed_column: str | None = None,
+    status_column: str | None = None,
+) -> pd.Series:
+    """Filtre prudent d'un instantane pour une position arretee a date fin.
+
+    Les fichiers Savings Account et Loans Account sont des instantanes. Pour un
+    rapport arrete a une date, on garde les lignes creees/activees avant ou a la
+    date de fin. Lorsqu'une date de cloture existe et precede la fin de journee,
+    la ligne n'est plus une position active a cette date.
+    """
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return pd.Series(dtype=bool)
+    period_end_exclusive = pd.Timestamp(as_of_date).normalize() + pd.Timedelta(days=1)
+    creation_dates = _mpesa_statistics_first_date(frame, *creation_columns)
+    mask = creation_dates.isna() | creation_dates.lt(period_end_exclusive)
+    closed_dates = (
+        pd.to_datetime(frame[closed_column], errors="coerce")
+        if closed_column and closed_column in frame.columns
+        else pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
+    )
+    if not closed_dates.empty:
+        mask &= closed_dates.isna() | closed_dates.ge(period_end_exclusive)
+    if status_column and status_column in frame.columns:
+        status = clean_text(frame[status_column]).str.upper()
+        closed_without_date = (
+            closed_dates.isna()
+            & status.str.contains("CLOSED|CLOT|CLOTURE|FERME|CANCEL", na=False)
+        )
+        mask &= ~closed_without_date
+    return mask.fillna(False)
+
+
+def _mpesa_statistics_savings_portfolios(
+    prepared: MpesaPreparedData,
+    *,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+) -> dict[str, pd.DataFrame]:
+    """Construit les positions epargne/DAT a date fin et la lecture de periode."""
+    positions = _mpesa_savings_prepare_positions(
+        prepared.current_savings,
+        prepared.fixed_savings,
+        as_of_date=end_date,
+        annual_interest_rate_pct=None,
+    )
+    empty = {"stock_date_fin": pd.DataFrame(), "periode": pd.DataFrame()}
+    if positions.empty:
+        return empty
+
+    positions = positions.copy()
+    positions["date_creation_compte"] = pd.to_datetime(
+        positions.get("date_creation_compte", pd.Series(pd.NaT, index=positions.index)),
+        errors="coerce",
+    )
+    positions["date_closed"] = pd.to_datetime(
+        positions.get("date_closed", pd.Series(pd.NaT, index=positions.index)),
+        errors="coerce",
+    )
+    positions["balance"] = pd.to_numeric(positions.get("balance"), errors="coerce").fillna(0.0)
+    positions["client_key"] = _mpesa_statistics_client_key(positions, prefer_phone=False)
+
+    def _summarize(frame: pd.DataFrame, scope_label: str) -> pd.DataFrame:
+        if frame.empty:
+            return pd.DataFrame()
+        grouped = (
+            frame.groupby(["currency_code", "famille_epargne"], as_index=False, dropna=False)
+            .agg(
+                nombre_comptes=("savings_id", "nunique"),
+                comptes_solde_positif=(
+                    "balance",
+                    lambda values: int(
+                        pd.to_numeric(values, errors="coerce").fillna(0).gt(0).sum()
+                    ),
+                ),
+                clients=(
+                    "client_key",
+                    lambda values: clean_identifier(values).replace("", pd.NA).nunique(),
+                ),
+                solde_total=("balance", "sum"),
+            )
+            .rename(columns={"famille_epargne": "famille"})
+            .sort_values(["currency_code", "famille"])
+            .reset_index(drop=True)
+        )
+        grouped["perimetre_encours"] = scope_label
+        grouped["date_fin_reference"] = pd.Timestamp(end_date).normalize()
+        return grouped
+
+    stock_mask = _mpesa_statistics_snapshot_mask(
+        positions,
+        as_of_date=end_date,
+        creation_columns=("date_creation_compte", "date_activated", "date_approved", "created_at"),
+        closed_column="date_closed",
+        status_column="status",
+    )
+    period_end_exclusive = pd.Timestamp(end_date).normalize() + pd.Timedelta(days=1)
+    period_mask = (
+        positions["date_creation_compte"].notna()
+        & positions["date_creation_compte"].ge(pd.Timestamp(start_date).normalize())
+        & positions["date_creation_compte"].lt(period_end_exclusive)
+    )
+
+    return {
+        "stock_date_fin": _summarize(
+            positions.loc[stock_mask].copy(),
+            "Position arretee a la date de fin",
+        ),
+        "periode": _summarize(
+            positions.loc[period_mask].copy(),
+            "Comptes crees/actives sur la periode",
+        ),
+    }
+
+
+def _mpesa_statistics_credit_period_summary(
+    prepared: MpesaPreparedData,
+    *,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+) -> pd.DataFrame:
+    """Resume les credits crees sur la periode, avec leur encours instantane."""
+    loans = prepared.loans.copy() if isinstance(prepared.loans, pd.DataFrame) else pd.DataFrame()
+    if loans.empty:
+        return pd.DataFrame()
+    loan_dates = _mpesa_statistics_first_date(loans, "created_at")
+    period_end_exclusive = pd.Timestamp(end_date).normalize() + pd.Timedelta(days=1)
+    period_loans = loans.loc[
+        loan_dates.notna()
+        & loan_dates.ge(pd.Timestamp(start_date).normalize())
+        & loan_dates.lt(period_end_exclusive)
+    ].copy()
+    if period_loans.empty:
+        return pd.DataFrame()
+    summary = build_mpesa_credit_risk_analysis(period_loans, as_of_date=end_date).get(
+        "synthese",
+        pd.DataFrame(),
+    )
+    if summary.empty:
+        return summary
+    summary = summary.copy()
+    summary["perimetre_encours"] = "Credits crees sur la periode"
+    summary["date_fin_reference"] = pd.Timestamp(end_date).normalize()
+    return summary
+
+
 def _mpesa_clients_identity_candidates(
     prepared: MpesaPreparedData,
 ) -> pd.DataFrame:
@@ -10303,38 +10464,28 @@ def build_mpesa_statistics_report(
             + pd.to_numeric(activity_evolution.get("montant_sorties", 0), errors="coerce").fillna(0.0)
         )
 
-    current = prepared.current_savings.copy() if isinstance(prepared.current_savings, pd.DataFrame) else pd.DataFrame()
-    fixed = prepared.fixed_savings.copy() if isinstance(prepared.fixed_savings, pd.DataFrame) else pd.DataFrame()
-    portfolio_rows: list[pd.DataFrame] = []
-    for family, frame in [("Compte ouvert", current), ("DAT", fixed)]:
-        if frame.empty or "currency_code" not in frame.columns:
-            continue
-        tmp = frame.copy()
-        tmp["currency_code"] = clean_text(tmp["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
-        tmp["balance"] = numeric_column(tmp, "balance")
-        tmp["client_key"] = _mpesa_statistics_client_key(tmp, prefer_phone=False)
-        grouped = (
-            tmp.groupby("currency_code", as_index=False, dropna=False)
-            .agg(
-                famille=("currency_code", lambda _: family),
-                nombre_comptes=("balance", "size"),
-                comptes_solde_positif=("balance", lambda values: int(pd.to_numeric(values, errors="coerce").fillna(0).gt(0).sum())),
-                clients=("client_key", lambda values: clean_identifier(values).replace("", pd.NA).nunique()),
-                solde_total=("balance", "sum"),
-            )
-        )
-        portfolio_rows.append(grouped)
-    savings_portfolio = (
-        concat_frames_stable(portfolio_rows).sort_values(["currency_code", "famille"]).reset_index(drop=True)
-        if portfolio_rows
-        else pd.DataFrame()
+    savings_portfolios = _mpesa_statistics_savings_portfolios(
+        prepared,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    savings_portfolio = savings_portfolios.get("stock_date_fin", pd.DataFrame())
+    savings_portfolio_period = savings_portfolios.get("periode", pd.DataFrame())
+    credit_summary = finance.get("credit_synthese", pd.DataFrame()).copy()
+    if isinstance(credit_summary, pd.DataFrame) and not credit_summary.empty:
+        credit_summary["perimetre_encours"] = "Position arretee a la date de fin"
+        credit_summary["date_fin_reference"] = end_date
+    credit_summary_period = _mpesa_statistics_credit_period_summary(
+        prepared,
+        start_date=start_date,
+        end_date=end_date,
     )
 
     overview_rows: list[dict[str, Any]] = []
     currencies = sorted(
         set(turnover.get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
         | set(savings_portfolio.get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
-        | set(finance.get("credit_synthese", pd.DataFrame()).get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
+        | set(credit_summary.get("currency_code", pd.Series(dtype=str)).dropna().astype(str))
     )
     for currency in currencies:
         turnover_row = turnover.loc[turnover["currency_code"].eq(currency)].head(1) if not turnover.empty else pd.DataFrame()
@@ -10469,7 +10620,9 @@ def build_mpesa_statistics_report(
         "chiffre_affaires": turnover,
         "activite_evolution": activity_evolution,
         "epargne_dat_portefeuille": savings_portfolio,
-        "credit_synthese": finance.get("credit_synthese", pd.DataFrame()),
+        "epargne_dat_portefeuille_periode": savings_portfolio_period,
+        "credit_synthese": credit_summary,
+        "credit_synthese_periode": credit_summary_period,
         "clients_volume_top": finance.get("concentration_transactions_clients", pd.DataFrame()),
         "depots_reguliers_synthese": regular_deposits["synthese"],
         "depots_reguliers_clients": regular_deposits["clients"],
@@ -10536,6 +10689,24 @@ def build_mpesa_statistics_report(
                         "ni une normalité statistique ni la causalité d'un événement externe."
                     ),
                     "source": "Sources Solution Numérique uniquement",
+                },
+                {
+                    "indicateur": "Encours a la date de fin",
+                    "definition": (
+                        "Position arretee au dernier jour du rapport : comptes epargne/DAT "
+                        "et credits crees avant ou a la date de fin, en excluant les comptes "
+                        "clotures avant cette date lorsque la date de cloture est disponible."
+                    ),
+                    "source": "Savings Account et Loans Account [Solution Numerique]",
+                },
+                {
+                    "indicateur": "Encours de periode",
+                    "definition": (
+                        "Lecture d'activite : solde instantane des comptes ou credits crees "
+                        "ou actives pendant la periode filtree. Ce n'est pas un historique "
+                        "complet de l'encours moyen de la periode."
+                    ),
+                    "source": "Savings Account et Loans Account [Solution Numerique]",
                 },
                 {
                     "indicateur": "Taux de rapprochement G2",
@@ -10824,7 +10995,12 @@ def create_mpesa_statistics_word(
     growth_frame = statistics_report.get("clients_croissance", pd.DataFrame())
     turnover_frame = statistics_report.get("chiffre_affaires", pd.DataFrame())
     portfolio_frame = statistics_report.get("epargne_dat_portefeuille", pd.DataFrame())
+    portfolio_period_frame = statistics_report.get(
+        "epargne_dat_portefeuille_periode",
+        pd.DataFrame(),
+    )
     credit_frame = statistics_report.get("credit_synthese", pd.DataFrame())
+    credit_period_frame = statistics_report.get("credit_synthese_periode", pd.DataFrame())
     regular_deposits_summary_frame = statistics_report.get(
         "depots_reguliers_synthese",
         pd.DataFrame(),
@@ -11284,7 +11460,8 @@ def create_mpesa_statistics_word(
     total_accounts = open_count + fixed_count
     add_text(
         "Lecture : les comptes ouverts correspondent aux comptes d'epargne courante. "
-        "Les comptes bloques correspondent aux DAT. Les soldes proviennent de Savings Account."
+        "Les comptes bloques correspondent aux DAT. Les soldes proviennent de Savings Account "
+        "et sont arretes a la date de fin du rapport."
     )
     account_analysis_rows: list[dict[str, Any]] = [
         {
@@ -11334,6 +11511,25 @@ def create_mpesa_statistics_word(
         },
         max_rows=20,
     )
+    if isinstance(portfolio_period_frame, pd.DataFrame) and not portfolio_period_frame.empty:
+        add_text(
+            "Lecture complementaire de periode : le tableau suivant reprend les comptes crees ou actives "
+            "entre la date de debut et la date de fin. Le solde affiche reste le solde instantane observe "
+            "dans Savings Account, pas un encours moyen historique."
+        )
+        add_table(
+            portfolio_period_frame,
+            {
+                "currency_code": "Devise",
+                "famille": "Famille",
+                "nombre_comptes": "Comptes",
+                "comptes_solde_positif": "Comptes positifs",
+                "clients": "Clients",
+                "solde_total": "Solde instantane",
+                "perimetre_encours": "Perimetre",
+            },
+            max_rows=20,
+        )
     add_text(
         (
             "Commentaire : "
@@ -11382,7 +11578,7 @@ def create_mpesa_statistics_word(
     credit_clients = _number_value(credit_frame, "nombre_clients")
     add_text(
         "Lecture : le credit est restitue depuis Loans Account. L'encours et le PAR restent des positions "
-        "observees et doivent etre lus separement par devise."
+        "arretees a la date de fin et doivent etre lus separement par devise."
     )
     credit_analysis_rows: list[dict[str, Any]] = [
         {
@@ -11457,6 +11653,26 @@ def create_mpesa_statistics_word(
         },
         max_rows=20,
     )
+    if isinstance(credit_period_frame, pd.DataFrame) and not credit_period_frame.empty:
+        add_text(
+            "Lecture complementaire de periode : le tableau suivant reprend les credits crees "
+            "entre la date de debut et la date de fin, avec leur encours instantane a la date de fin."
+        )
+        add_table(
+            credit_period_frame,
+            {
+                "currency_code": "Devise",
+                "nombre_credits": "Credits",
+                "nombre_clients": "Clients",
+                "montant_credits": "Montant accorde",
+                "montant_rembourse": "Montant rembourse",
+                "encours_total": "Encours instantane",
+                "encours_retard_30j": "Encours retard 30j",
+                "par_30j_pct": "PAR 30j",
+                "perimetre_encours": "Perimetre",
+            },
+            max_rows=20,
+        )
     add_text(
         (
             "Commentaire : "
@@ -12543,6 +12759,8 @@ def build_mpesa_turbo_financial_analysis(
                     ["currency_code", "customer_id"], as_index=False, dropna=False
                 )
                 .agg(
+                    Nom_client=("Nom_client", concat_unique),
+                    numero_client=("msisdn1", concat_unique),
                     nombre_credits=("loan_id", "nunique"),
                     encours_total=("encours_total", "sum"),
                     encours_retard_1j=(
@@ -21926,11 +22144,87 @@ def _is_operational_technical_column(column: Any) -> bool:
     return any(token in key for token in MPESA_OPERATIONAL_TECHNICAL_COLUMN_CONTAINS)
 
 
+MPESA_EXPORT_CLIENT_NAME_KEYS = {
+    "nom_client",
+    "nom_complet",
+    "client",
+    "customer",
+}
+
+MPESA_EXPORT_CLIENT_NUMBER_PRIORITY_KEYS = [
+    "numero_client",
+    "numero_telephone",
+    "telephone",
+    "telephone_client",
+    "telephone_credit",
+    "telephone_epargne",
+    "msisdn",
+    "msisdn1",
+    "phone_prefixe",
+    "id_client",
+    "customer_id",
+]
+
+
+def _ensure_operational_client_number_column(frame: pd.DataFrame) -> pd.DataFrame:
+    """Ajoute `numero_client` aux feuilles operationnelles avec nom client."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame
+    normalized_columns = {
+        _normalize_export_column_key(column): column for column in frame.columns
+    }
+    name_column = next(
+        (
+            normalized_columns[key]
+            for key in MPESA_EXPORT_CLIENT_NAME_KEYS
+            if key in normalized_columns
+        ),
+        None,
+    )
+    if name_column is None:
+        return frame
+    number_source_column = next(
+        (
+            normalized_columns[key]
+            for key in MPESA_EXPORT_CLIENT_NUMBER_PRIORITY_KEYS
+            if key in normalized_columns
+        ),
+        None,
+    )
+    if number_source_column is None:
+        return frame
+
+    result = frame.copy()
+    number_values = clean_text(result[number_source_column])
+    existing_number_column = normalized_columns.get("numero_client")
+    if existing_number_column is not None:
+        existing_values = clean_text(result[existing_number_column])
+        result[existing_number_column] = existing_values.where(
+            existing_values.astype("string").fillna("").str.strip().ne(""),
+            number_values,
+        )
+        target_column = existing_number_column
+    else:
+        insert_at = list(result.columns).index(name_column)
+        result.insert(insert_at, "numero_client", number_values)
+        target_column = "numero_client"
+
+    priority_columns: list[Any] = []
+    for candidate in ["customer_id", "id_client", target_column, name_column]:
+        column = normalized_columns.get(candidate) if candidate != target_column else target_column
+        if column in result.columns and column not in priority_columns:
+            priority_columns.append(column)
+    remaining_columns = [column for column in result.columns if column not in priority_columns]
+    return result[priority_columns + remaining_columns]
+
+
 def _prepare_operational_priority_sheet(frame: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     """Allège les feuilles clés destinées à la Direction et aux opérations."""
     if sheet_name not in MPESA_DIRECTION_PRIORITY_SHEETS:
         return frame
-    operational = frame.dropna(axis=1, how="all").copy()
+    operational = _ensure_operational_client_number_column(
+        frame.dropna(axis=1, how="all").copy()
+    )
     columns_to_drop = [
         column
         for column in operational.columns

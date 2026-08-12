@@ -5252,6 +5252,8 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(int(growth.iloc[-1]["clients_turbo_cumules"]), 1)
         self.assertIn("epargne_dat_portefeuille", report)
         self.assertFalse(report["epargne_dat_portefeuille"].empty)
+        self.assertIn("epargne_dat_portefeuille_periode", report)
+        self.assertIn("credit_synthese_periode", report)
         self.assertIn("depots_reguliers_synthese", report)
         self.assertFalse(report["depots_reguliers_synthese"].empty)
         regular_deposits = report["depots_reguliers_clients"].set_index(
@@ -5280,6 +5282,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("2. Comptes ouverts et comptes bloques", word_text)
         self.assertIn("3. Credits", word_text)
         self.assertIn("4. Transactions", word_text)
+        self.assertIn("Lecture complementaire de periode", word_text)
         self.assertIn("Régularité des dépôts", word_text)
         self.assertIn("4.1 Qualité du rapprochement G2", word_text)
         self.assertNotIn("Sources et importance", word_text)
@@ -6592,6 +6595,32 @@ class MpesaAnalysisTests(unittest.TestCase):
             self.assertEqual(worksheet.page_setup.orientation, "portrait")
             self.assertEqual(worksheet.page_setup.fitToWidth, 1)
             self.assertEqual(worksheet.print_title_rows, "$1:$1")
+
+    def test_priority_cockpit_exports_keep_client_number_with_client_name(self) -> None:
+        content = create_excel_export(
+            {
+                "credit_concentration_clients": pd.DataFrame(
+                    [
+                        {
+                            "customer_id": "C001",
+                            "Nom_client": "CLIENT TEST",
+                            "msisdn1": "243811111111",
+                            "currency_code": "USD",
+                            "nombre_credits": 2,
+                            "encours_total": 150,
+                        }
+                    ]
+                )
+            }
+        )
+
+        exported = pd.read_excel(BytesIO(content), sheet_name="Credit_Top_Clients")
+        self.assertIn("numero_client", exported.columns)
+        self.assertEqual(str(exported.loc[0, "numero_client"]), "243811111111")
+        self.assertLess(
+            list(exported.columns).index("numero_client"),
+            list(exported.columns).index("Nom_client"),
+        )
 
     def test_g2_dat_word_is_editable_and_uses_the_short_executive_structure(self) -> None:
         from docx import Document

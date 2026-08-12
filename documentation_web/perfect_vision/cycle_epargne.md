@@ -147,6 +147,30 @@ Les mouvements expliquent les flux ; le compte explique la position.
 | 141 | `141_cycle_epargne_mouvements_sur_comptes_clotures_bloques_ou_inactifs` | Mouvements sur comptes clôturés, bloqués ou inactifs. |
 | 154 | `154_cycle_conformite_comptes_dormants_reactives` | Comptes dormants réactivés. |
 
+## Requêtes recommandées pour le cockpit Épargnes
+
+Le cockpit Épargnes doit suivre les comptes ouverts, les DAT, les soldes, les dépôts, les retraits, les comptes dormants et les opportunités commerciales prudentes. Les montants doivent toujours rester séparés par devise.
+
+| Priorité | Requête | Export | Utilité pour le cockpit | Commentaire |
+|---:|---:|---|---|---|
+| 1 | `124` | `124_cycle_epargne_streamlit` | Source large du cycle épargne : comptes, produits, mouvements, soldes et données client. | Base complète pour construire ou vérifier les analyses épargne. |
+| 2 | `103` | `103_cycle_epargne_dashboard_epargne_solde_et_comptes_par_mois_produit_et_agence` | Soldes épargne, nombre de comptes et solde moyen par produit, agence et mois. | Requête très utile pour suivre l'évolution du portefeuille épargne. |
+| 3 | `113` | `113_cycle_epargne_activite_epargne_par_client_produit_et_agence_sur_la_periode` | Activité épargne par client, produit et agence sur la période. | Permet de voir qui alimente réellement son compte et sur quels produits. |
+| 4 | `056` | `56_cycle_epargne_depots_et_retraits_par_client_compte_agence_devise_et_produit` | Dépôts et retraits par client, compte, agence, devise et produit. | Donne la lecture opérationnelle des flux d'épargne, séparée par devise. |
+| 5 | `057` | `57_cycle_epargne_analyse_des_gros_mouvements_par_periode` | Gros mouvements par période. | Aide à repérer les mouvements importants qui méritent une revue. |
+| 6 | `092` | `92_cycle_epargne_clients_avec_depots_frequents_par_semaine_sur_la_periode` | Clients qui déposent régulièrement sur la période. | Utile pour identifier les clients disciplinés ou à fort potentiel commercial. |
+| 7 | `093` | `93_cycle_epargne_clients_avec_depots_par_tranche_usd_cdf_sur_la_periode` | Dépôts par tranche de montant et par devise. | Classe les dépôts selon des seuils faciles à suivre par les opérations et la conformité. |
+| 8 | `110` | `110_cycle_epargne_comptes_epargne_inactifs_ou_dormants_avec_solde_a_la_date_de_fin` | Comptes inactifs ou dormants avec solde à la date de fin. | Sert à préparer les relances, le suivi des comptes dormants et les actions de nettoyage. |
+| 9 | `111` | `111_cycle_epargne_clotures_et_rapatriements_de_comptes_epargne_sur_la_periode` | Clôtures, réouvertures et rapatriements de comptes épargne. | Permet de suivre l'attrition et les sorties du portefeuille épargne. |
+| 10 | `112` | `112_cycle_epargne_frais_de_tenue_de_compte_reserves_et_exonerations_epargne_sur_la_periode` | Frais de tenue, réserves et exonérations. | Aide à contrôler les revenus de frais et les traitements préférentiels éventuels. |
+| 11 | `137` | `137_cycle_epargne_depots_et_retraits_epargne_avec_sens_comptable_incoherent` | Dépôts/retraits avec sens comptable incohérent. | Requête de contrôle prioritaire pour éviter une lecture fausse des flux. |
+| 12 | `138` | `138_cycle_epargne_comptes_epargne_avec_solde_negatif_apres_mouvement_debit` | Comptes passés en solde négatif après mouvement débit. | Alerte importante, car un compte épargne ne devrait pas devenir négatif sans justification. |
+| 13 | `141` | `141_cycle_epargne_mouvements_sur_comptes_clotures_bloques_ou_inactifs` | Mouvements sur comptes clôturés, bloqués ou inactifs. | Isole les opérations qui touchent des comptes qui ne devraient plus recevoir de mouvements courants. |
+| 14 | `144` | `144_cycle_credit_clients_avec_dat_sans_credits_en_cours` | Clients avec DAT sans crédit en cours, avec indication si le DAT garantit le crédit d'un autre client. | Base d'opportunités commerciales prudentes et de suivi des DAT engagés en garantie, sans constituer une décision automatique d'octroi. |
+| 15 | `147` | `147_cycle_credit_comptes_ordinaires_et_disponibilites_clients` | Disponibilités des clients ayant impayé ou échéance. | Rapproche l'épargne disponible avec les besoins de suivi crédit ou recouvrement. |
+
+Feuilles cockpit conseillées : `Epargne_Socle`, `Epargne_Activite_Client`, `Epargne_Solde_Produit_Agence`, `Epargne_Depots_Retraits`, `Epargne_Depots_Frequents`, `Epargne_DAT_Sans_Credit`, `Epargne_Comptes_Dormants`, `Epargne_Anomalies_Solde`, `Epargne_Gros_Mouvements`.
+
 ## Lecture analytique
 
 ```mermaid

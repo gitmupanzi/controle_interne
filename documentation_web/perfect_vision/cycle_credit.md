@@ -180,6 +180,34 @@ Chaque échéance peut être remboursée en une ou plusieurs fois.
 | 146 | `146_cycle_credit_liste_detaillee_des_clients_avec_echeances_sur_la_periode` | Échéances clients sur une période. |
 | 147 | `147_cycle_credit_comptes_ordinaires_et_disponibilites_clients` | Disponibilités clients avec impayé ou échéance. |
 
+## Requêtes recommandées pour le cockpit Crédits
+
+Le cockpit Crédits doit suivre le portefeuille, les décaissements, les échéances, le PAR, les impayés, les remboursements, les garanties et la concentration du risque. Les indicateurs d'encours et de PAR doivent être lus à une date de situation, tandis que les décaissements et remboursements se lisent sur une période.
+
+| Priorité | Requête | Export | Utilité pour le cockpit | Commentaire |
+|---:|---:|---|---|---|
+| 1 | `123` | `123_cycle_credit_streamlit` | Source large du cycle crédit : prêts, dossiers, cycles, clients, produits et dates. | Base complète pour alimenter les analyses crédit et les contrôles transversaux. |
+| 2 | `096` | `96_cycle_credit_dashboard_par_details_credit_a_la_date_de_fin` | Détail PAR, provision et encours à la date de fin. | Requête centrale pour suivre le risque réel du portefeuille à une date donnée. |
+| 3 | `098` | `98_cycle_credit_dashboard_top_encours_credits_par_client` | Top encours crédits par client. | Met en évidence les plus fortes expositions individuelles. |
+| 4 | `145` | `145_cycle_credit_liste_detaillee_des_prets_avec_impayes` | Liste détaillée des prêts avec impayés à la date de situation. | Feuille prioritaire pour le recouvrement et la surveillance des impayés. |
+| 5 | `091` | `91_cycle_credit_credits_en_cours_ou_termines_avec_echeances_impayees_sur_la_periode` | Crédits avec échéances impayées sur la période. | Permet de voir les impayés liés à une période précise, même si le crédit est terminé. |
+| 6 | `095` | `95_cycle_credit_credits_en_cours_ou_termines_avec_echeances_sans_impayees_sur_la_periode` | Crédits avec échéances totalement remboursées sur la période. | Donne la population saine pour comparer avec les crédits à problème. |
+| 7 | `097` | `97_cycle_credit_dashboard_synthese_par_et_provision_par_produit_et_agence` | Synthèse PAR/provision par produit et agence. | Aide la Direction à localiser le risque par agence et par produit. |
+| 8 | `099` | `99_cycle_credit_dashboard_decaissements_mensuels_par_agence_et_produit` | Décaissements mensuels par agence et produit. | Sert à suivre la production crédit et les tendances commerciales. |
+| 9 | `100` | `100_cycle_credit_dashboard_echeances_futures_des_prets_en_cours` | Échéances futures des prêts en cours. | Prépare les relances et les prévisions de remboursement. |
+| 10 | `105` | `105_cycle_credit_dashboard_concentration_top_10_pourcent_des_encours` | Concentration du portefeuille sur les plus gros encours. | Permet de mesurer si le risque est concentré sur peu de clients ou dossiers. |
+| 11 | `106` | `106_cycle_credit_dashboard_couverture_credit_par_epargne_et_garanties` | Couverture crédit par épargne, cautions et garanties. | Compare le risque crédit aux protections disponibles. |
+| 12 | `114` | `114_cycle_credit_pipeline_credit_et_delais_instruction_decision_decaissement` | Pipeline crédit et délais instruction/décision/décaissement. | Mesure l'efficacité du processus crédit avant décaissement. |
+| 13 | `116` | `116_cycle_credit_couverture_caution_et_garanties_par_rapport_au_credit_accorde` | Couverture caution et garanties par rapport au crédit accordé. | Contrôle si les garanties attendues couvrent correctement le crédit accordé. |
+| 14 | `136` | `136_cycle_credit_remboursements_credit_encaisses_mais_non_imputes_correctement_au_pret` | Remboursements encaissés mais non imputés correctement. | Requête critique pour éviter qu'un paiement client ne reste mal ventilé. |
+| 15 | `142` | `142_cycle_credit_credits_decaisses_sans_mouvement_comptable_coherent` | Crédits décaissés sans mouvement comptable cohérent. | Vérifie que le décaissement crédit a bien une trace comptable cohérente. |
+| 16 | `143` | `143_cycle_credit_remboursements_credit_recus_apres_echeance_a_suivre_pour_par` | Remboursements reçus après échéance, utiles pour le suivi PAR. | Aide à comprendre la discipline de remboursement et les retards récurrents. |
+| 17 | `146` | `146_cycle_credit_liste_detaillee_des_clients_avec_echeances_sur_la_periode` | Échéances clients sur une période. | Liste de travail pour planifier les relances et suivre les échéances attendues. |
+| 18 | `158` | `158_cycle_conformite_detail_credits_reporting_lbc_ft` | Détail des crédits alimentant le reporting LBC-FT. | Sert à justifier les lignes crédit du reporting réglementaire. |
+| 19 | `161` | `161_cycle_credit_rapport_comparatif_portefeuille_credit_par_anciennete_et_produit` | Rapport comparatif du portefeuille crédit par ancienneté de retard et par produit. | Reproduit le besoin opérationnel du service Crédit : portefeuille sain, retard, PAR 30, PAR 60, PAR 90, production et écart entre deux dates, sans mélanger les devises. |
+
+Feuilles cockpit conseillées : `Credit_Socle`, `Credit_PAR_Detail`, `Credit_Impaye`, `Credit_Top_Clients`, `Credit_Echeances_Futures`, `Credit_Decaissements`, `Credit_Concentration`, `Credit_Couverture_Epargne`, `Credit_Remboursements_Tardifs`, `Credit_Anomalies_Imputation`, `Credit_Pipeline`.
+
 ## Lecture analytique
 
 ```mermaid

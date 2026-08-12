@@ -25,6 +25,19 @@ Pour consulter la liste complète et commentée des requêtes prioritaires, util
 | CRM clients | doublons, données essentielles, comptes clients |
 | Conformité | alertes, qualité KYC, clients et comptes |
 
+## Où lire les requêtes par cockpit
+
+Les requêtes utiles aux cockpits sont maintenant rangées dans chaque cycle :
+
+| Besoin | Page à consulter |
+|---|---|
+| Cockpit Clients | [Cycle client](cycle_client.md) |
+| Cockpit Épargnes | [Cycle épargne](cycle_epargne.md) |
+| Cockpit Crédits | [Cycle crédit](cycle_credit.md) |
+| Reporting réglementaire et LBC-FT | [Conformité](cycle_conformite.md) |
+
+Cette organisation évite de mélanger les sujets. Le lecteur qui travaille sur les clients lit le cycle client ; celui qui prépare l'épargne lit le cycle épargne ; celui qui suit le portefeuille crédit lit le cycle crédit.
+
 ## Exemples de requêtes critiques
 
 | Export | Objectif |

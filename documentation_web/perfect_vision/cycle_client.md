@@ -126,6 +126,26 @@ Le compte devient ensuite le point d'entrée vers les mouvements, l'épargne, le
 | 122 | `122_cycle_crm_clients_controle_qualite_des_numeros_de_telephone_clients` | Qualité des numéros de téléphone. |
 | 148 | `148_cycle_crm_clients_liste_unique_des_clients_avec_telephone_et_nombre_de_comptes` | Liste unique client/téléphone/nombre de comptes. |
 
+## Requêtes recommandées pour le cockpit Clients
+
+Le cockpit Clients doit aider à connaître la base client, la qualité des informations, l'activité réelle et les points de relance possibles. La priorité est de garder des feuilles exploitables par la Direction et les équipes opérationnelles : nom client, numéro de téléphone, agence, devise, statut, activité, solde ou exposition lorsque c'est utile.
+
+| Priorité | Requête | Export | Utilité pour le cockpit | Commentaire |
+|---:|---:|---|---|---|
+| 1 | `148` | `148_cycle_crm_clients_liste_unique_des_clients_avec_telephone_et_nombre_de_comptes` | Liste unique des clients avec téléphone et nombre de comptes. | Requête essentielle pour appeler, retrouver ou rapprocher rapidement un client. |
+| 2 | `125` | `125_cycle_crm_clients_streamlit` | Source large du cycle client : KYC, segmentation, rattachements et informations CRM. | Sert de base complète lorsque l'équipe veut analyser la qualité et la structure du référentiel client. |
+| 3 | `157` | `157_cycle_clients_socle_indicateurs_par_client_et_devise` | Socle décisionnel par client et par devise : comptes, épargne, crédits, DAT, échéances et intérêts. | Donne une vue client 360 sans mélanger les devises ; utile pour les tableaux de bord Direction. |
+| 4 | `090` | `90_cycle_crm_clients_liste_des_clients_avec_leurs_comptes_et_devises` | Portefeuille client-compte avec devise et agence. | Permet de vérifier si les comptes sont correctement rattachés aux clients. |
+| 5 | `122` | `122_cycle_crm_clients_controle_qualite_des_numeros_de_telephone_clients` | Contrôle qualité des numéros de téléphone. | Important pour la Solution Numérique, car le téléphone est la clé de rapprochement la plus pratique. |
+| 6 | `042` | `42_cycle_operations_depot_retrait_depots_et_retraits_agreges_par_client` | Dépôts et retraits agrégés par client. | Mesure l'activité réelle du client et aide à distinguer les clients actifs des clients simplement enregistrés. |
+| 7 | `043` | `43_cycle_operations_depot_retrait_top_clients_par_volume_de_mouvements` | Top clients par volume de mouvements sur la période. | Aide à identifier les clients les plus importants ou les plus sensibles en volume. |
+| 8 | `041` | `41_cycle_operations_depot_retrait_clients_avec_forte_activite_mais_donnees_kyc_incompletes_ou_atypiques` | Clients actifs mais avec KYC incomplet ou atypique. | Prioritaire pour éviter qu'une forte activité financière repose sur un dossier client insuffisant. |
+| 9 | `121` | `121_cycle_crm_clients_departs_et_retours_clients_avec_exposition_epargne_credit` | Départs et retours clients avec exposition épargne/crédit. | Utile pour suivre le risque et les actions de rétention lorsqu'un client quitte ou revient. |
+| 10 | `159` | `159_cycle_conformite_clients_depots_retraits_superieurs_equivalent_10k_usd` | Clients avec dépôts ou retraits supérieurs ou égaux à l'équivalent 10 000 USD. | Sert à repérer les clients à examiner dans le cadre conformité et LBC-FT. |
+| 11 | `160` | `160_cycle_conformite_detail_depots_retraits_superieurs_equivalent_10k_usd` | Détail opération par opération des mouvements sensibles. | Fournit la preuve détaillée derrière la synthèse des mouvements sensibles. |
+
+Feuilles cockpit conseillées : `Clients_Socle`, `Clients_Uniques_Telephone`, `Clients_Comptes_Devises`, `Clients_Actifs_Mouvements`, `Clients_KYC_A_Verifier`, `Clients_Top_Volumes`, `Clients_Depots_Retraits_10K`.
+
 ## Points de contrôle
 
 - Un client sans téléphone fiable devient difficile à rapprocher avec la Solution Numérique.
