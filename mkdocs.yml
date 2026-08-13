@@ -22,6 +22,7 @@ nav:
       - Cycle épargne: perfect_vision/cycle_epargne.md
       - Cycle crédit: perfect_vision/cycle_credit.md
       - Conformité: perfect_vision/cycle_conformite.md
+      - Money Provider: perfect_vision/money_provider.md
       - Sources et schéma SQL: perfect_vision/sources_schema_sql.md
       - Requêtes, cycles et KPI: perfect_vision/requetes_cycles_kpi.md
       - Requêtes prioritaires 9 et 10: perfect_vision/requetes_prioritaires.md

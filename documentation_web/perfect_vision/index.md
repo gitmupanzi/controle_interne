@@ -12,7 +12,7 @@ La documentation de ce domaine s'appuie principalement sur :
 
 ## Rôle métier
 
-Perfect Vision permet de suivre les cycles de contrôle interne : opérations de dépôt/retrait, comptabilité, crédit, épargne, conformité, surveillance, portefeuille, risques et qualité des données.
+Perfect Vision permet de suivre les cycles de contrôle interne : opérations de dépôt/retrait, comptabilité, crédit, épargne, conformité, Money Provider, surveillance, portefeuille, risques et qualité des données.
 
 ## Rôle technique
 
@@ -41,6 +41,10 @@ Le projet exploite les données Perfect Vision à travers :
   <a class="bb-link-card" href="cycle_conformite.html">
     <span>Conformité</span>
     LBC-FT, alertes, déclarations, sanctions, qualité des données et reporting réglementaire.
+  </a>
+  <a class="bb-link-card" href="money_provider.html">
+    <span>Money Provider</span>
+    Opérations de monnaie électronique, agents, comptes provider, frais, commissions et rapprochements API.
   </a>
   <a class="bb-link-card" href="sources_schema_sql.html">
     <span>Sources</span>
@@ -75,3 +79,4 @@ flowchart LR
     PY --> UI
     UI --> EXP
 ```
+
