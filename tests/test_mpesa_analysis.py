@@ -5400,7 +5400,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             for row in compact_analysis_tables[0].rows
         ]
         self.assertTrue(
-            any("Nouveaux comptes clients créés sur la période" in row for row in client_analysis_rows)
+            any("Nouveaux numéros clients créés sur la période" in row for row in client_analysis_rows)
         )
         self.assertNotIn(
             "Source",

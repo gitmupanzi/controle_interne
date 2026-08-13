@@ -43,14 +43,14 @@ Ajouter une synthèse par `tranche_encours` au grain `client x devise x famille`
 
 Cette lecture complète le classement des meilleurs clients. Elle ne doit jamais additionner CDF et USD, ni fusionner épargne, DAT et crédit dans un seul montant global.
 
-## Nouveaux clients et comptes actifs par devise
+## Nouveaux numeros clients et produits actifs par devise
 
-Ajouter une table de lecture au grain `client x devise` pour répondre à une question opérationnelle simple : les clients ou comptes nouvellement créés commencent-ils réellement à utiliser la Solution Numérique ?
+Ajouter une table de lecture au grain `compte client x devise` pour répondre à une question opérationnelle simple : les nouveaux numeros clients ou produits nouvellement créés commencent-ils réellement à utiliser la Solution Numérique ?
 
 La population comprend :
 
-- les clients dont `Customers.created_at` tombe dans la période ;
-- les comptes ouverts et DAT dont la date de création/approbation/activation disponible dans `Savings Account` tombe dans la période.
+- les numeros clients dont `Customers.created_at` tombe dans la période ;
+- les produits d'epargne ouverte et DAT dont la date de création/approbation/activation disponible dans `Savings Account` tombe dans la période.
 
 Colonnes attendues :
 
@@ -59,8 +59,8 @@ Colonnes attendues :
 | `client_key`, `customer_id`, `numero_telephone`, `nom_client` | Identification canonique du client. |
 | `date_creation_client` | Date de création issue de `Customers` lorsque disponible. |
 | `currency_code` | Devise de lecture. Les montants ne sont jamais totalisés entre devises. |
-| `nouveau_client`, `nouveau_compte_ouvert_periode`, `nouveau_dat_periode` | Nature de la nouveauté observée sur la période. |
-| `actif_periode`, `statut_activation` | Indique si le client ou le compte a eu au moins une transaction consolidée. |
+| `nouveau_client`, `nouveau_compte_ouvert_periode`, `nouveau_dat_periode` | Nature de la nouveauté observée : nouveau numero client, nouveau produit d'epargne ouverte ou nouveau produit DAT. |
+| `actif_periode`, `statut_activation` | Indique si le compte client ou le produit a eu au moins une transaction consolidée. |
 | `nombre_transactions`, `volume_transactions_observe` | Activité issue de `Transactions`, au grain d'événement métier consolidé. |
 | `solde_compte_ouvert`, `solde_dat` | Positions issues de `Savings Account`, séparées par devise. |
 
@@ -98,7 +98,7 @@ Sous-sous-onglets attendus :
 
 1. `Vue d'ensemble` : KPI et qualité des données.
 2. `Activité et activation` : activité, inactivité, acquisition et activation.
-3. `Nouveaux clients et comptes` : nouveaux clients, comptes ouverts et DAT créés sur la période.
+3. `Nouveaux numeros clients et produits` : nouveaux numeros clients, produits d'epargne ouverte et produits DAT créés sur la période.
 4. `Client 360 et segmentation` : produits détenus, Client 360, segments comportementaux et segments produits.
 5. `Opportunités` : DAT sans crédit actif et listes commerciales prudentes.
 

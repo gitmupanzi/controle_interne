@@ -22,8 +22,8 @@ Le cockpit Clients mesure :
 - les comptes clients chargés depuis `Customers` ;
 - les comptes clients connus à la date de fin ;
 - les comptes clients actifs sur la période ;
-- les créations de comptes clients ;
-- les nouveaux comptes clients et produits créés sur la période ;
+- les créations de numéros clients ;
+- les nouveaux numéros clients et produits créés sur la période ;
 - l'activité transactionnelle des nouveaux clients ;
 - les soldes de compte ouvert et DAT par devise ;
 - les tranches d'encours par famille (`compte_ouvert`, `dat`, `credit`) et par devise ;
@@ -39,19 +39,19 @@ L'Excel n'est pas préparé automatiquement : le bloc `Export du cockpit Clients
 |---|---|
 | `Vue d'ensemble` | KPI clients et qualité des données. |
 | `Activité et activation` | Activité observée, inactivité, acquisition et activation. |
-| `Nouveaux clients et comptes` | Nouveaux clients, comptes ouverts et DAT créés sur la période. |
+| `Nouveaux numéros clients et produits` | Nouveaux numéros clients, produits d'épargne ouverte et produits DAT créés sur la période. |
 | `Client 360 et segmentation` | Produits détenus, présence épargne/DAT/crédit, tranches d'encours et segmentation. |
 | `Opportunités` | DAT sans crédit actif et listes commerciales prudentes. |
 
-## Nouveaux clients et comptes actifs
+## Nouveaux numéros clients et produits actifs
 
-La table `Nouveaux clients et comptes actifs par devise` répond à une question de pilotage : un client ou un compte récemment créé est-il réellement utilisé ?
+La table `Nouveaux numéros clients et produits actifs par devise` répond à une question de pilotage : un numéro client ou un produit récemment créé est-il réellement utilisé ?
 
 Elle croise :
 
-- `Customers` pour la date de création client ;
+- `Customers` pour la date de création du numéro client ;
 - `Transactions` pour l'activité consolidée ;
-- `Savings Account` pour les positions compte ouvert et DAT.
+- `Savings Account` pour les positions des produits d'épargne ouverte et DAT.
 
 Les montants restent toujours séparés entre CDF et USD.
 

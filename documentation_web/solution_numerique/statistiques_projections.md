@@ -24,7 +24,9 @@ Le rapport Word et l'export Excel utilisent donc cette lecture :
 | Ancienne lecture à éviter | Lecture recommandée |
 |---|---|
 | Clients actifs | Comptes clients actifs |
+| Nouveaux comptes clients | Nouveaux numéros clients |
 | Clients avec DAT positif | Comptes clients avec produit DAT positif |
+| Nouveaux comptes ouverts | Nouveaux produits d'épargne ouverte |
 | Comptes bloqués / DAT | Produits DAT / comptes bloqués |
 | Comptes crédit | Produits crédit |
 

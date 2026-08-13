@@ -102,7 +102,7 @@ Le cockpit Clients est organisé en cinq volets :
 |---|---|
 | KPI, référentiel et qualité des données | `Vue d'ensemble` |
 | Clients actifs, inactifs, acquisition et activation | `Activité et activation` |
-| Nouveaux clients et comptes créés sur la période | `Nouveaux clients et comptes` |
+| Nouveaux numéros clients et produits créés sur la période | `Nouveaux numéros clients et produits` |
 | Vue Client 360, produits détenus et tranches d'encours | `Client 360 et segmentation` |
 | DAT sans crédit actif et listes commerciales prudentes | `Opportunités` |
 

@@ -765,8 +765,8 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
             "comptes clients connus a la date de fin": "Comptes clients crees avant ou a la date de fin du rapport.",
             "comptes clients actifs sur la periode": "Comptes clients ayant au moins une operation metier consolidee pendant la periode.",
             "comptes clients actifs": "Comptes clients ayant au moins une operation metier consolidee pendant la periode.",
-            "nouveaux comptes clients crees sur la periode": "Comptes clients dont la date de creation tombe dans la periode analysee.",
-            "nouveaux comptes clients": "Comptes clients dont la date de creation tombe dans la periode comparee.",
+            "nouveaux numeros clients crees sur la periode": "Nouveaux numeros de telephone apparus dans Customers dans la periode analysee.",
+            "nouveaux numeros clients": "Nouveaux numeros de telephone apparus dans Customers dans la periode comparee.",
             "comptes clients avec produit dat positif et produit credit actif": "Comptes clients portant un produit DAT strictement superieur a zero et un produit credit actif.",
             "comptes clients avec produit dat positif": "Comptes clients portant au moins un produit DAT dont le solde est strictement superieur a zero.",
             "produits dat comptes bloques a la date d arrete": "Nombre de produits DAT ou comptes bloques observes dans Savings Account a la date de fin.",
@@ -774,7 +774,11 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
             "montant des nouveaux produits dat sur la periode": "Montant des produits DAT crees ou actives pendant la periode analysee.",
             "produits d epargne ouverts a la date d arrete": "Nombre de produits d'epargne ouverts observes dans Savings Account a la date de fin.",
             "encours des produits d epargne ouverts a la date d arrete": "Solde des produits d'epargne ouverts a la date de fin, par devise.",
-            "nouveaux produits d epargne ouverts sur la periode": "Produits d'epargne ouverts crees ou actives pendant la periode analysee.",
+            "nouveaux produits d epargne ouverte sur la periode": "Produits d'epargne ouverte crees ou actives pendant la periode analysee.",
+            "nouveaux produits d epargne ouverte": "Produits d'epargne ouverte crees ou actives pendant la periode comparee.",
+            "encours des produits d epargne ouverte crees actives": "Solde instantane des produits d'epargne ouverte crees ou actives dans la periode comparee.",
+            "nouveaux produits dat comptes bloques": "Produits DAT ou comptes bloques crees ou actives pendant la periode comparee.",
+            "encours des produits dat comptes bloques crees actives": "Montant bloque des produits DAT crees ou actives dans la periode comparee.",
             "comptes clients avec produits epargne dat sans produit credit actif": "Comptes clients ayant un produit d'epargne ou DAT positif sans produit credit actif dans la meme devise.",
             "encours des produits epargne dat sans produit credit actif": "Montant d'epargne ou de DAT positif detenu par les comptes clients sans credit actif.",
             "dat arrivant a echeance": "DAT positifs dont l'echeance arrive dans l'horizon de preparation.",
@@ -944,11 +948,11 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
                     "commentaire": "Solde disponible sur les comptes ouverts.",
                 },
                 {
-                    "indicateur_operationnel": "Nouveaux produits d'epargne ouverts sur la periode",
+                    "indicateur_operationnel": "Nouveaux produits d'epargne ouverte sur la periode",
                     "devise": currency,
                     "valeur": _numeric_sum(period_open, "nombre_comptes"),
                     "nature": "Nombre",
-                    "commentaire": "Comptes ouverts crees ou actives sur la periode.",
+                    "commentaire": "Produits d'epargne ouverte crees ou actives sur la periode.",
                 },
                 {
                     "indicateur_operationnel": "Comptes clients avec produits epargne/DAT sans produit credit actif",
@@ -8313,8 +8317,8 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
         ("Clients connus", _format_count(kpi_value("clients_connus_solution_numerique")), "Toutes sources Solution Numérique", "slate"),
         ("Clients actifs", _format_count(kpi_value("clients_actifs")), f"Du {pd.Timestamp(date_start):%d/%m/%Y} au {pd.Timestamp(date_end):%d/%m/%Y}", "green"),
         ("Taux actifs", _format_percent(kpi_value("taux_clients_actifs")), "Dénominateur explicite dans la table KPI", "orange"),
-        ("Nouveaux clients", _format_count(kpi_value("nouveaux_clients")), "Customers.created_at dans la période", "blue"),
-        ("Activation nouveaux", _format_percent(kpi_value("taux_activation_nouveaux_clients")), "Nouveaux clients actifs / nouveaux clients", "green"),
+        ("Nouveaux numéros clients", _format_count(kpi_value("nouveaux_clients")), "Customers.created_at dans la période", "blue"),
+        ("Activation nouveaux", _format_percent(kpi_value("taux_activation_nouveaux_clients")), "Nouveaux numéros clients actifs / nouveaux numéros clients", "green"),
         ("Sans mouvement", _format_count(kpi_value("clients_sans_mouvement")), "Population de référence sans événement", "red"),
     ]
     render_kpi_cards(cards)
@@ -8333,7 +8337,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
             [
                 "Vue d'ensemble",
                 "Activité et activation",
-                "Nouveaux clients et comptes",
+                "Nouveaux numéros clients et produits",
                 "Client 360 et segmentation",
                 "Opportunités",
             ]
@@ -8393,24 +8397,24 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
     with activity_activation_tab:
         render_panel_title("Acquisition et activation")
         _render_block_help(
-            "Ce bloc compare les creations de clients avec leur activation reelle. "
-            "Un client cree n'est considere actif que lorsqu'une operation est observee."
+            "Ce bloc compare les creations de numeros clients avec leur activation reelle. "
+            "Un numero client cree n'est considere actif que lorsqu'une operation est observee."
         )
         if not acquisition.empty:
-            st.caption("Nouveaux clients et nouveaux clients actifs par période. Le taux d'activation reste un ratio, pas un montant.")
+            st.caption("Nouveaux numeros clients et nouveaux numeros clients actifs par période. Le taux d'activation reste un ratio, pas un montant.")
             st.line_chart(acquisition, x="periode", y=["nouveaux_clients", "nouveaux_clients_actifs"])
             _mpesa_dataframe(acquisition, width="stretch", hide_index=True)
         else:
             st.info("Aucune création client exploitable sur le périmètre.")
 
     with new_accounts_tab:
-        render_panel_title("Nouveaux clients et comptes actifs par devise")
+        render_panel_title("Nouveaux numéros clients et produits actifs par devise")
         _render_block_help(
-            "Ce bloc repere les clients et comptes crees sur la periode, puis verifie "
-            "s'ils ont deja des transactions, un solde de compte ouvert ou un DAT par devise."
+            "Ce bloc repere les numeros clients et produits crees sur la periode, puis verifie "
+            "s'ils ont deja des transactions, un solde d'epargne ouverte ou un DAT par devise."
         )
         st.caption(
-            "Cette analyse repère les clients créés sur la période et les comptes épargne/DAT créés sur la période, puis vérifie s'ils ont eu des transactions. Les soldes restent séparés par devise."
+            "Cette analyse repère les numéros clients créés sur la période et les produits épargne ouverte/DAT créés sur la période, puis vérifie s'ils ont eu des transactions. Les soldes restent séparés par devise."
         )
         display_columns = [
             "client_key",

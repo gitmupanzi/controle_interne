@@ -7498,9 +7498,9 @@ def _mpesa_statistics_operational_client_summary(
                 "commentaire": "Comptes clients ayant au moins une opération sur la période.",
             },
             {
-                "indicateur": "Nouveaux comptes clients créés sur la période",
+                "indicateur": "Nouveaux numéros clients créés sur la période",
                 "valeur": int(new_clients),
-                "commentaire": "Comptes clients créés sur la période filtrée.",
+                "commentaire": "Nouveaux numéros de téléphone apparus dans Customers sur la période filtrée.",
             },
             {
                 "indicateur": "Comptes clients avec produit DAT positif et produit crédit actif",
@@ -9340,7 +9340,7 @@ def build_mpesa_weekly_comparison(
     _add_row(
         bloc="Clients",
         indicator_key="nouveaux_clients",
-        label="Nouveaux comptes clients",
+        label="Nouveaux numéros clients",
         current_value=int(customer_current["client_key"].nunique()) if not customer_current.empty else 0,
         previous_value=int(customer_previous["client_key"].nunique()) if not customer_previous.empty else 0,
         unit="nombre",
@@ -9391,16 +9391,16 @@ def build_mpesa_weekly_comparison(
         (
             prepared.current_savings,
             "nouveaux_comptes_ouverts",
-            "Nouveaux comptes ouverts",
+            "Nouveaux produits d'épargne ouverte",
             "encours_epargne_ouverte_creee",
-            "Encours des comptes ouverts créés/activés",
+            "Encours des produits d'épargne ouverte créés/activés",
         ),
         (
             prepared.fixed_savings,
             "nouveaux_dat",
-            "Nouveaux comptes bloqués / DAT",
+            "Nouveaux produits DAT / comptes bloqués",
             "encours_epargne_bloquee_creee",
-            "Encours des comptes bloqués / DAT créés/activés",
+            "Encours des produits DAT / comptes bloqués créés/activés",
         ),
     ]:
         frame = account_frame if isinstance(account_frame, pd.DataFrame) else pd.DataFrame()
@@ -10382,15 +10382,15 @@ def build_mpesa_forecast_report(
             date_values=customer_reference["date_creation"],
             bloc="Clients et comptes",
             indicator_key="nouveaux_clients",
-            label="Nouveaux clients",
+            label="Nouveaux numéros clients",
             unit="nombre",
             source="Customers [Solution Numérique]",
             unique_values=customer_reference["client_key"],
         )
 
     for account_frame, key, label in [
-        (prepared.current_savings, "nouveaux_comptes_ouverts", "Nouveaux comptes ouverts"),
-        (prepared.fixed_savings, "nouveaux_dat", "Nouveaux comptes bloqués / DAT"),
+        (prepared.current_savings, "nouveaux_comptes_ouverts", "Nouveaux produits d'épargne ouverte"),
+        (prepared.fixed_savings, "nouveaux_dat", "Nouveaux produits DAT / comptes bloqués"),
     ]:
         if not isinstance(account_frame, pd.DataFrame) or account_frame.empty:
             continue
@@ -11443,8 +11443,8 @@ def create_mpesa_statistics_word(
             "comptes clients connus a la date de fin": "Comptes clients crees avant ou a la date de fin du rapport.",
             "comptes clients actifs sur la periode": "Comptes clients ayant au moins une operation metier consolidee pendant la periode.",
             "comptes clients actifs": "Comptes clients ayant au moins une operation metier consolidee pendant la periode.",
-            "nouveaux comptes clients crees sur la periode": "Comptes clients dont la date de creation tombe entre la date de debut et la date de fin.",
-            "nouveaux comptes clients": "Comptes clients dont la date de creation tombe dans la periode comparee.",
+            "nouveaux numeros clients crees sur la periode": "Nouveaux numeros de telephone apparus dans Customers entre la date de debut et la date de fin.",
+            "nouveaux numeros clients": "Nouveaux numeros de telephone apparus dans Customers dans la periode comparee.",
             "comptes clients avec produit dat positif et produit credit actif": "Comptes clients portant un produit DAT strictement superieur a zero et un produit credit actif.",
             "comptes clients avec produit dat positif": "Comptes clients portant au moins un produit DAT dont le solde est strictement superieur a zero.",
             "produits dat comptes bloques a la date darrete": "Nombre de produits DAT ou comptes bloques observes dans Savings Account a la date de fin.",
@@ -11452,7 +11452,11 @@ def create_mpesa_statistics_word(
             "montant des nouveaux produits dat sur la periode": "Montant des produits DAT crees ou actives pendant la periode analysee.",
             "produits depargne ouverts a la date darrete": "Nombre de produits d'epargne ouverts observes dans Savings Account a la date de fin.",
             "encours des produits depargne ouverts a la date darrete": "Solde des produits d'epargne ouverts a la date de fin, par devise.",
-            "nouveaux produits depargne ouverts sur la periode": "Produits d'epargne ouverts crees ou actives pendant la periode analysee.",
+            "nouveaux produits depargne ouverte sur la periode": "Produits d'epargne ouverte crees ou actives pendant la periode analysee.",
+            "nouveaux produits depargne ouverte": "Produits d'epargne ouverte crees ou actives pendant la periode comparee.",
+            "encours des produits depargne ouverte crees actives": "Solde instantane des produits d'epargne ouverte crees ou actives dans la periode comparee.",
+            "nouveaux produits dat comptes bloques": "Produits DAT ou comptes bloques crees ou actives pendant la periode comparee.",
+            "encours des produits dat comptes bloques crees actives": "Montant bloque des produits DAT crees ou actives dans la periode comparee.",
             "comptes clients avec produits depargne dat sans produit credit actif": "Comptes clients ayant un produit d'epargne ou DAT positif sans produit credit actif dans la meme devise.",
             "encours des produits epargne dat sans produit credit actif": "Montant d'epargne ou de DAT positif detenu par les comptes clients sans credit actif.",
             "dat arrivant a echeance": "DAT positifs dont l'echeance arrive dans l'horizon de preparation.",
@@ -11650,11 +11654,11 @@ def create_mpesa_statistics_word(
                     "commentaire": "Solde des comptes d'épargne ouverts.",
                 },
                 {
-                    "indicateur": "Nouveaux produits d'épargne ouverts sur la période",
+                    "indicateur": "Nouveaux produits d'épargne ouverte sur la période",
                     "devise": currency,
                     "valeur": _number_value(period_open, "nombre_comptes"),
                     "type_valeur": "Nombre",
-                    "commentaire": "Comptes ouverts créés ou activés sur la période.",
+                    "commentaire": "Produits d'épargne ouverte créés ou activés sur la période.",
                 },
                 {
                     "indicateur": "Comptes clients avec produits épargne/DAT sans produit crédit actif",
