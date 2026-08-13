@@ -62,6 +62,7 @@ from credit_app.services.mpesa_analysis import (
     build_perfect_client_crosscheck,
     create_excel_export,
     enrich_transactions_with_g2_customer_names,
+    enrich_turbo_proxy_with_g2_history,
     enrich_turbo_with_g2_customer_names,
     filter_g2_transactions_by_completion_time,
     filter_g2_transactions_by_direction,
@@ -3686,6 +3687,85 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(report["pivot"].iloc[0]["montant_total_sorties"]), 50.0)
         self.assertFalse(build_g2_retention_report(prepared, daily_detail=report["detail"])["mensuelle"].empty)
 
+    def test_g2_historical_file_does_not_limit_turbo_period_and_flags_gap(self) -> None:
+        transactions = prepare_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "id": 1,
+                        "customer_id": 37370,
+                        "msisdn1": "243821064833",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "REF-AOUT-001",
+                        "currency_code": "USD",
+                        "dr": 20,
+                        "cr": 0,
+                        "bal_before": 25,
+                        "bal_after": 5,
+                        "ref_no": "REF-AOUT-001",
+                        "description": "M-Pesa Depot",
+                        "created_at": "2026-08-05 09:00:00",
+                    },
+                    {
+                        "id": 2,
+                        "customer_id": 37370,
+                        "msisdn1": "243821064833",
+                        "account_type": "NORMAL SAVINGS",
+                        "reference_id": "SA-AOUT-001",
+                        "currency_code": "USD",
+                        "dr": 0,
+                        "cr": 20,
+                        "bal_before": 0,
+                        "bal_after": 20,
+                        "ref_no": "REF-AOUT-001",
+                        "description": "Epargne depot",
+                        "created_at": "2026-08-05 09:00:00",
+                    },
+                ]
+            )
+        )
+        g2_history = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "Receipt No.": "REF-JUILLET-001",
+                        "Completion Time": "2026-07-20 10:00:00",
+                        "Initiation Time": "2026-07-20 09:59:00",
+                        "Details": "BisouBisouC2B",
+                        "Transaction Status": "Completed",
+                        "Currency": "USD",
+                        "Paid In": 5,
+                        "Withdrawn": 0,
+                        "Opposite Party": "243821064833 - MUPANZI KITSHI BENJAMIN",
+                    }
+                ]
+            )
+        )
+        proxy = build_turbo_only_g2_transactions(transactions)
+        enriched_proxy = enrich_turbo_proxy_with_g2_history(proxy, g2_history)
+        prepared = MpesaPreparedData(
+            transactions=transactions,
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            load_report=build_load_report({}, {}),
+            g2_transactions=enriched_proxy,
+        )
+
+        report = build_g2_daily_savings_report(prepared)
+        detail = report["detail"]
+
+        self.assertEqual(len(detail), 1)
+        self.assertEqual(pd.Timestamp(detail.iloc[0]["date"]).date().isoformat(), "2026-08-05")
+        self.assertEqual(detail.iloc[0]["nom_client_g2_historique"], "MUPANZI KITSHI BENJAMIN")
+        self.assertEqual(detail.iloc[0]["couverture_g2_operation"], "Hors couverture G2 - a verifier")
+        self.assertEqual(float(report["pivot"].iloc[0]["montant_total_entrees"]), 20.0)
+        self.assertEqual(len(report["anomalies"]), 1)
+        self.assertIn(
+            "Controle G2 indisponible sur la periode",
+            report["anomalies"].iloc[0]["motif_anomalie"],
+        )
+
     def test_daily_g2_report_counts_duplicate_receipt_once_and_exports_anomaly(self) -> None:
         duplicate_rows = [
             {
@@ -5242,7 +5322,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(int(overview["clients_turbo_actifs"]), 1)
         client_indicators = report["clients_indicateurs"].set_index("indicateur")
         self.assertEqual(
-            int(client_indicators.loc["Clients du fichier Customers charge", "valeur"]),
+            int(client_indicators.loc["Comptes clients du fichier Customers chargé", "valeur"]),
             2,
         )
         self.assertGreater(float(overview["volume_total_transactions"]), 0)
@@ -5275,43 +5355,52 @@ class MpesaAnalysisTests(unittest.TestCase):
             ]
         )
         self.assertIn("Rapport statistiques - Solution Numérique", word_text)
-        self.assertIn("Clients du fichier Customers charge", word_text)
-        self.assertIn("Clients du fichier Customers charge | - | 2", word_text)
-        self.assertIn("Clients connus a la date de fin | - | 1", word_text)
-        self.assertIn("1. Clients", word_text)
-        self.assertIn("2. Comptes ouverts et comptes bloques", word_text)
-        self.assertIn("3. Credits", word_text)
-        self.assertIn("4. Transactions", word_text)
-        self.assertIn("Lecture complementaire de periode", word_text)
-        self.assertIn("Régularité des dépôts", word_text)
-        self.assertIn("4.1 Qualité du rapprochement G2", word_text)
-        self.assertNotIn("Sources et importance", word_text)
-        self.assertIn("Annexe 1. Vue d'ensemble", word_text)
-        self.assertNotIn("Annexe 3. Definitions", word_text)
-        self.assertIn("Chiffre d'affaires observe", word_text)
-        self.assertIn("Solution Numérique uniquement", word_text)
-        self.assertIn("Période filtrée", word_text)
+        self.assertIn("Synthèse opérationnelle", word_text)
+        self.assertIn("Comparaison avec la période précédente", word_text)
+        self.assertIn("Comptes clients recensés dans Customers", word_text)
         self.assertIn(
-            "Comparaison avec la même période de l'année précédente",
+            "Comptes clients recensés dans Customers | Comptes clients distincts du fichier Customers chargé; un compte client correspond au numéro de téléphone. | - | 2",
             word_text,
         )
+        self.assertIn(
+            "Comptes clients connus à la date d'arrêté | Comptes clients créés avant ou à la date de fin. | - | 1",
+            word_text,
+        )
+        self.assertIn("Indicateur | Explication | Devise", word_text)
+        self.assertIn("Comptes clients avec produit DAT positif et produit crédit actif", word_text)
+        self.assertIn("1. Clients", word_text)
+        self.assertIn("2. Épargnes et DAT", word_text)
+        self.assertIn("3. Crédits", word_text)
+        self.assertIn("Produits DAT / comptes bloqués à la date d'arrêté", word_text)
+        self.assertIn("Encours des produits d'épargne ouverts à la date d'arrêté", word_text)
+        self.assertIn("Produits crédit à la date d'arrêté", word_text)
+        self.assertIn("Encours des produits crédit à la date d'arrêté", word_text)
+        self.assertIn("Taux de conversion DAT en crédit", word_text)
+        self.assertNotIn("4. Transactions", word_text)
+        self.assertNotIn("Régularité des dépôts", word_text)
+        self.assertNotIn("Qualité du rapprochement G2", word_text)
+        self.assertNotIn("Sources et importance", word_text)
+        self.assertNotIn("Annexe 1. Vue d'ensemble", word_text)
+        self.assertNotIn("Annexe 3. Definitions", word_text)
+        self.assertIn("Solution Numérique uniquement", word_text)
+        self.assertNotIn("Comparaison avec la même période de l'année précédente", word_text)
         self.assertIn("comparaison_annee_precedente", report)
-        self.assertIn("Ensemble des années", document._element.xml)
         self.assertNotIn("Graphiques de synthese", word_text)
+        self.assertNotIn("Remboursements observés", word_text)
         compact_analysis_tables = [
             table
             for table in document.tables
-            if {"Analyse", "Devise", "Valeur"}.issubset(
+            if {"Indicateur opérationnel", "Devise", "Valeur"}.issubset(
                 {cell.text for cell in table.rows[0].cells}
             )
         ]
-        self.assertGreaterEqual(len(compact_analysis_tables), 4)
+        self.assertGreaterEqual(len(compact_analysis_tables), 3)
         client_analysis_rows = [
             " | ".join(cell.text for cell in row.cells)
             for row in compact_analysis_tables[0].rows
         ]
         self.assertTrue(
-            any("Nouveaux clients observes" in row for row in client_analysis_rows)
+            any("Nouveaux comptes clients créés sur la période" in row for row in client_analysis_rows)
         )
         self.assertNotIn(
             "Source",
@@ -6171,13 +6260,26 @@ class MpesaAnalysisTests(unittest.TestCase):
             ]
         )
 
-        self.assertIn("aucun montant n'est totalise entre devises", word_text)
-        self.assertIn("Volume transactionnel observe | CDF", word_text)
-        self.assertIn("Volume transactionnel observe | USD", word_text)
-        self.assertIn("Chiffre d'affaires observe | CDF", word_text)
-        self.assertIn("Chiffre d'affaires observe | USD", word_text)
-        self.assertNotIn("Volume total observe | 110,00", word_text)
-        self.assertNotIn("Chiffre d'affaires observe | 6,00", word_text)
+        self.assertIn("Les montants restent toujours séparés par devise", word_text)
+        self.assertIn(
+            "Encours des produits d'épargne ouverts à la date d'arrêté | Solde des comptes d'épargne ouverts. | CDF | 100.00",
+            word_text,
+        )
+        self.assertIn(
+            "Encours des produits d'épargne ouverts à la date d'arrêté | Solde des comptes d'épargne ouverts. | USD | 10.00",
+            word_text,
+        )
+        self.assertIn(
+            "Encours des produits crédit à la date d'arrêté | Encours total observé dans Loans Account. | CDF | 60.00",
+            word_text,
+        )
+        self.assertIn(
+            "Encours des produits crédit à la date d'arrêté | Encours total observé dans Loans Account. | USD | 8.00",
+            word_text,
+        )
+        self.assertNotIn("Volume transactionnel observe", word_text)
+        self.assertNotIn("Chiffre d'affaires observe", word_text)
+        self.assertNotIn("110.00", word_text)
 
     def test_turbo_financial_analysis_uses_one_event_grain_and_never_g2_amounts(self) -> None:
         prepared = _sample_customer_transaction_analysis_data()
@@ -6621,6 +6723,51 @@ class MpesaAnalysisTests(unittest.TestCase):
             list(exported.columns).index("numero_client"),
             list(exported.columns).index("Nom_client"),
         )
+
+    def test_priority_cockpit_exports_include_encours_a_date_sheets(self) -> None:
+        content = create_excel_export(
+            {
+                "credit_encours_a_date": pd.DataFrame(
+                    [
+                        {
+                            "loan_id": "LN-001",
+                            "customer_id": "C001",
+                            "Nom_client": "CLIENT CREDIT",
+                            "msisdn1": "243811111111",
+                            "currency_code": "USD",
+                            "loan_balance": 120,
+                            "fichier_source": "loans.xlsx",
+                        }
+                    ]
+                ),
+                "epargne_encours_a_date": pd.DataFrame(
+                    [
+                        {
+                            "savings_id": "SAV-001",
+                            "customer_id": "C002",
+                            "Nom_client": "CLIENT EPARGNE",
+                            "msisdn1": "243822222222",
+                            "currency_code": "CDF",
+                            "balance": 2500,
+                            "fichier_source_epargne_turbo": "savings.xlsx",
+                        }
+                    ]
+                ),
+            }
+        )
+        workbook = pd.ExcelFile(BytesIO(content), engine="openpyxl")
+
+        self.assertIn("Credit_Encours_A_Date", workbook.sheet_names)
+        self.assertIn("Epargne_Encours_A_Date", workbook.sheet_names)
+        credit_sheet = pd.read_excel(workbook, sheet_name="Credit_Encours_A_Date")
+        savings_sheet = pd.read_excel(workbook, sheet_name="Epargne_Encours_A_Date")
+
+        self.assertIn("numero_client", credit_sheet.columns)
+        self.assertIn("numero_client", savings_sheet.columns)
+        self.assertEqual(str(credit_sheet.loc[0, "numero_client"]), "243811111111")
+        self.assertEqual(str(savings_sheet.loc[0, "numero_client"]), "243822222222")
+        self.assertNotIn("fichier_source", credit_sheet.columns)
+        self.assertNotIn("fichier_source_epargne_turbo", savings_sheet.columns)
 
     def test_g2_dat_word_is_editable_and_uses_the_short_executive_structure(self) -> None:
         from docx import Document

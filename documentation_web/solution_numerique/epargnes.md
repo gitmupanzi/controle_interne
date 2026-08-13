@@ -56,17 +56,17 @@ Pour rendre le cockpit opérationnel, les feuilles clés écartent les colonnes 
 | Priorité | Feuille | Lecture recommandée |
 |---:|---|---|
 | 1 | `Epargne_Vue_Ensemble` | Synthèse générale des comptes ouverts, comptes bloqués et DAT. |
-| 2 | `Epargne_Portefeuille` | Position du portefeuille par devise, famille d'épargne, produit et statut. |
-| 3 | `Epargne_Flux` | Dépôts, retraits et mouvements observés sur la période. |
-| 4 | `Epargne_DAT` | Liste des DAT en cours avec capital, échéance et situation. |
-| 5 | `Epargne_Echeances_DAT` | DAT qui arrivent bientôt à terme ou qui sont échus : préparation du remboursement. |
-| 6 | `Epargne_Top_Clients` | Clients qui épargnent le plus, par devise et par famille d'encours. |
-| 7 | `Epargne_Tranches` | Répartition des clients par tranche d'encours, plus lisible qu'un simple rang individuel. |
-| 8 | `Epargne_DAT_Sans_Credit` | Clients avec DAT sans crédit actif : opportunités commerciales prudentes. |
-| 9 | `Epargne_Forte_Sans_Credit` | Clients avec forte épargne sans crédit actif : base d'analyse commerciale, sans décision automatique. |
-| 10 | `Epargne_Qualite` | Qualité des données, anomalies et limites de lecture. |
+| 2 | `Epargne_Encours_A_Date` | Liste opérationnelle des encours épargnes à la date de situation : comptes ouverts, comptes bloqués, DAT, solde, statut et produit. |
+| 3 | `Epargne_DAT` | Liste des DAT en cours avec capital, échéance et situation. |
+| 4 | `Epargne_Echeances_DAT` | DAT qui arrivent bientôt à terme ou qui sont échus : préparation du remboursement. |
+| 5 | `Epargne_Top_Clients` | Clients qui épargnent le plus, par devise et par famille d'encours. |
+| 6 | `Epargne_Tranches` | Répartition des clients par tranche d'encours, plus lisible qu'un simple rang individuel. |
+| 7 | `Epargne_DAT_Sans_Credit` | Clients avec DAT sans crédit actif : opportunités commerciales prudentes. |
+| 8 | `Epargne_Forte_Sans_Credit` | Clients avec forte épargne sans crédit actif : base d'analyse commerciale, sans décision automatique. |
+| 9 | `Epargne_Qualite` | Qualité des données, anomalies et limites de lecture. |
+| 10 | `Epargne_Qualite_A_Revoir` | Liste opérationnelle des comptes dont la qualité des données mérite une revue. |
 
-Lecture Direction : commencer par `Epargne_Vue_Ensemble`, `Epargne_Portefeuille`, `Epargne_DAT`, `Epargne_Echeances_DAT` et `Epargne_Top_Clients`. Ces feuilles permettent de suivre les dépôts, les comptes bloqués, les échéances DAT et la concentration de l'épargne.
+Lecture Direction : commencer par `Epargne_Vue_Ensemble`, `Epargne_Encours_A_Date`, `Epargne_DAT`, `Epargne_Echeances_DAT` et `Epargne_Top_Clients`. Ces feuilles permettent de suivre les comptes ouverts, les comptes bloqués, les échéances DAT et la concentration de l'épargne. Les feuilles de flux détaillés restent consultables dans l'application, mais ne sont pas exportées par défaut dans le cockpit partagé.
 
 ## À retenir
 

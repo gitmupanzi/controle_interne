@@ -1,6 +1,6 @@
 ---
 name: perfect-vision
-description: Analyser la base Microsoft SQL Server BB_VISION_PRO et maintenir le tableau de bord Streamlit Perfect Vision, retrouver tables et colonnes dans le schéma, sélectionner ou adapter les requêtes de contrôle interne, expliquer les jointures et produire des requêtes SELECT sûres. Utiliser pour toute question ou modification sur Perfect Vision, BB_VISION_PRO, ses sous-onglets, les opérations, adhérents, comptes, épargne, crédits, HDPM, rapprochements API, indicateurs ou extractions d'audit issues des fichiers SQL du projet.
+description: Analyser la base Microsoft SQL Server BB_VISION_PRO, maintenir le tableau de bord Streamlit Perfect Vision et documenter clairement les cycles, requêtes, modèles relationnels, indicateurs et exports. Retrouver tables et colonnes dans le schéma, sélectionner ou adapter les requêtes de contrôle interne, expliquer les jointures et produire des requêtes SELECT sûres. Utiliser pour toute question ou modification sur Perfect Vision, BB_VISION_PRO, ses sous-onglets, les opérations, adhérents, comptes, épargne, crédits, HDPM, rapprochements API, indicateurs, documentation web ou extractions d'audit issues des fichiers SQL du projet.
 ---
 
 # Perfect Vision
@@ -17,6 +17,20 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 6. Afficher la requête complète avec `--number N`, puis vérifier séparément les colonnes techniques internes et les colonnes métier du `SELECT` final.
 7. Valider les paramètres de dates, devise, seuils et statut d'annulation avant toute exécution.
 8. Livrer la requête, ses hypothèses, les champs de sortie et les contrôles de cohérence.
+9. Si une requête, un cycle ou un cockpit est ajouté ou modifié, mettre à jour la documentation web correspondante dans `documentation_web/perfect_vision/`, puis reconstruire `site/` avec `mkdocs build --clean` lorsque le changement concerne les pages publiées.
+
+## Documentation Perfect Vision
+
+- Rédiger une documentation explicite, simple et utile aux décideurs, aux opérations, à la conformité et aux informaticiens.
+- Dans chaque page de cycle (`cycle_client`, `cycle_epargne`, `cycle_credit`, `cycle_conformite`), organiser `Requêtes utiles` comme un tableau décisionnel avec au minimum : `Priorité`, `N°`, `Export`, `Ce que la requête apporte`, `Commentaire`.
+- Prioriser les requêtes qui aident directement à la décision avant les contrôles techniques. Exemples : `162_cycle_credit_encours_credit_detaille_a_date` pour les encours crédits hebdomadaires, `163_cycle_epargne_encours_epargne_detaille_a_date` pour les encours épargne hebdomadaires, `161` pour le rapport portefeuille crédit, `149` et `158` pour le reporting conformité.
+- Dans la colonne `Commentaire`, expliquer concrètement pourquoi la requête est utile, qui peut l'utiliser, à quelle fréquence, et quelle décision ou action elle facilite.
+- Éviter les listes de requêtes non hiérarchisées. Une documentation utile doit répondre à la question : “quelle requête dois-je utiliser pour décider ou agir ?”
+- Pour les modèles relationnels, donner une lecture métier en phrase simple après le schéma. Exemple : “Un adhérent peut avoir un ou plusieurs comptes; un compte peut avoir plusieurs mouvements; les mouvements expliquent les flux et le compte explique la position.”
+- Dans les schémas relationnels, afficher les attributs servant de clés primaires (`PK`) et de clés secondaires (`FK`) quand ils sont nécessaires pour comprendre les jointures.
+- Garder les explications techniques dans les sections destinées aux informaticiens. Pour les utilisateurs métier, privilégier les libellés simples : client, téléphone, compte, prêt, produit, devise, encours, retard, échéance, statut, action ou commentaire.
+- Ne pas documenter une requête comme validée si elle n'a pas été testée. Indiquer clairement les limites, hypothèses et éventuelles couvertures partielles.
+- Après modification documentaire, contrôler l'encodage UTF-8 et éviter les caractères mal rendus dans `documentation_web/` et `site/`.
 
 ## Règles SQL
 
@@ -38,6 +52,9 @@ Travailler à partir du schéma et du catalogue SQL réels de BB_VISION_PRO. Ne 
 - Pour les lignes crédit 15 à 24 du canevas LBC-FT, calculer le stock à `@date_fin` par devise avec `dbo.extra_credits_view` et `dbo.fct_perf_extra_encours(@date_fin, id_pret)`. Ne jamais filtrer uniquement sur `date_decaissement`, car cette colonne peut être vide dans `BB_VISION_PROD`; utiliser une date de référence `COALESCE(date_decaissement, date_effet, date_debut_cycle, date_demande)`. Dédoublonner ensuite par `id_pret` avec le cycle le plus récent afin d'éviter de compter plusieurs cycles du même prêt. Les lignes fondées sur des libellés de produit, objet de financement, secteur, typologie client ou profession doivent être marquées `PARTIEL` tant que la Conformité n'a pas validé la nomenclature officielle. La ligne 24 peut utiliser `DOSSIERS_CREDIT.MNT_EPG_OBLIGATOIRE` comme approximation des crédits garantis par DAT, avec une mention explicite de cette limite.
 - Les requêtes conformité qui alimentent un canevas réglementaire doivent exposer une colonne de traçabilité comme `regle_alimentation`, `operations_incluses`, `origine_donnee` ou `commentaire`, afin que chaque `ligne_reporting` indique clairement les tables sources, les types d'opérations, les seuils appliqués et les limites de couverture. Une ligne sans traçabilité métier est considérée incomplète.
 - Pour les analyses operationnelles du cycle credit, exposer `PAR60` des qu'une requete expose `PAR30` et `PAR90`. Le suivi minimum attendu est `PAR1`, `PAR30`, `PAR60`, `PAR90` et, si disponible, `PAR180`, toujours calcule sur l'encours actif et separe par devise.
+- Pour optimiser les requetes lourdes du catalogue, prioriser les tables temporaires locales indexees dans `tempdb` sur les CTE tres reutilisees. Les requetes a surveiller en priorite sont `038`, `106`, `123`, `124`, `126`, `142`, `144`, `145`, `147`, `157`, `162` et `163`. Conserver les calculs internes dans les `#temp`, mais garder le `SELECT` final lisible par les utilisateurs : client, telephone, produit, devise, date, montant, statut, action ou motif utile; eviter les identifiants techniques redondants.
+- Pour l'envoi hebdomadaire des encours, utiliser `162_cycle_credit_encours_credit_detaille_a_date` pour les credits et `163_cycle_epargne_encours_epargne_detaille_a_date` pour l'epargne. Ces exports doivent prioriser les informations utiles aux utilisateurs : client, telephone, compte ou pret, produit, devise, encours, retard ou dernier mouvement, agence, gestionnaire et commentaire/action metier. Les colonnes techniques ne restent visibles que si elles sont necessaires pour retrouver la piece source.
+- Pour la requete `144_cycle_credit_clients_avec_dat_sans_credits_en_cours`, verifier les garanties DAT par les deux chemins possibles : `GARANTIES.ID_OPERATION_DEPOT -> OPERATIONS_DAT` et `CAUTIONS_FINANCIERE_COMPTE.ID_COMPTE_ADHERENT -> DOSSIERS_DAT.ID_COMPTE_DAT`. Si `GARANTIES` est vide et si les cautions financieres pointent uniquement vers des comptes ordinaires/DAV, la mention `DAT utilise comme garantie` doit rester `Non`; ce n'est pas une anomalie de calcul.
 - Distinguer les sources back-office et API avant de les réunir avec `UNION ALL`.
 - Éviter `NOLOCK` pour les contrôles nécessitant une image cohérente, sauf demande explicite et risque documenté.
 - Signaler toute jointure incertaine et la confirmer dans le schéma ou dans une requête existante.

@@ -1,6 +1,8 @@
 # Solution Numérique — Clients
 
-Le cockpit `Clients` mesure la base client, l'activation et les opportunités de suivi commercial à partir des sources Solution Numérique.
+Le cockpit `Clients` mesure la base des comptes clients, l'activation et les opportunités de suivi commercial à partir des sources Solution Numérique.
+
+Dans ce module, un compte client correspond au numéro de téléphone normalisé. Ce compte client peut porter plusieurs produits : épargne ouverte, DAT / compte bloqué et crédit. Cette convention facilite le rapprochement avec Perfect Vision et évite de lire un produit comme s'il représentait toute la relation client.
 
 ## Sources utilisées
 
@@ -17,11 +19,11 @@ Le cockpit `Clients` mesure la base client, l'activation et les opportunités de
 
 Le cockpit Clients mesure :
 
-- les clients chargés depuis `Customers` ;
-- les clients connus à la date de fin ;
-- les clients actifs sur la période ;
-- les créations de clients ;
-- les nouveaux clients et comptes créés sur la période ;
+- les comptes clients chargés depuis `Customers` ;
+- les comptes clients connus à la date de fin ;
+- les comptes clients actifs sur la période ;
+- les créations de comptes clients ;
+- les nouveaux comptes clients et produits créés sur la période ;
 - l'activité transactionnelle des nouveaux clients ;
 - les soldes de compte ouvert et DAT par devise ;
 - les tranches d'encours par famille (`compte_ouvert`, `dat`, `credit`) et par devise ;
@@ -67,12 +69,14 @@ Pour rendre le cockpit opérationnel, les feuilles clés écartent les colonnes 
 | 4 | `Clients_Actifs` | Liste opérationnelle des clients qui utilisent réellement la Solution Numérique sur la période. |
 | 5 | `Clients_Sans_Mouvement` | Clients connus ou créés mais sans mouvement observé : base de relance ou de diagnostic. |
 | 6 | `Clients_Multi_Produits` | Clients utilisant plusieurs produits : compte ouvert, DAT, crédit ou activité transactionnelle. |
-| 7 | `DAT_Sans_Credit` | Clients avec DAT mais sans crédit actif : opportunités commerciales prudentes, jamais une décision automatique d'octroi. |
+| 7 | `Clients_Tranches` | Répartition des clients par tranche d'encours, pour lire la concentration sans rester seulement sur un top individuel. |
+| 8 | `DAT_Sans_Credit` | Clients avec DAT mais sans crédit actif : opportunités commerciales prudentes, jamais une décision automatique d'octroi. |
+| 9 | `Clients_Qualite` | Points de qualité de données utiles au contrôle avant partage ou décision. |
 
-Lecture Direction : commencer par `Clients_KPI`, puis lire `Clients_Acquisition`, `Nouveaux_Clients_Actifs` et `Clients_Sans_Mouvement`. Ces feuilles répondent à la question simple : la base client grandit-elle et devient-elle active ?
+Lecture Direction : commencer par `Clients_KPI`, puis lire `Clients_Acquisition`, `Nouveaux_Clients_Actifs` et `Clients_Sans_Mouvement`. Ces feuilles répondent à la question simple : la base client grandit-elle et devient-elle active ? Le grand détail `Clients_360` reste une vue de diagnostic, mais il n'est pas exporté par défaut dans le cockpit partagé afin d'alléger le fichier.
 
 ## À retenir
 
-- Un client actif est un client avec une activité observée dans `Transactions`, pas seulement un client présent dans `Customers`.
-- Le numéro de téléphone normalisé reste la clé terrain principale de recherche.
+- Un compte client actif est un numéro de téléphone avec une activité observée dans `Transactions`, pas seulement une ligne présente dans `Customers`.
+- Le numéro de téléphone normalisé reste la clé terrain principale de recherche et de rapprochement.
 - Les opportunités commerciales restent prudentes : elles aident à prioriser une revue humaine, pas à automatiser une décision.

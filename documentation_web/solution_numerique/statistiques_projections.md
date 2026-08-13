@@ -9,6 +9,27 @@ L'onglet Statistiques est organisé en blocs repliables :
 3. Crédits ;
 4. Transactions.
 
+## Vocabulaire métier du rapport
+
+Dans le rapport statistique, le mot `compte client` désigne le numéro de téléphone normalisé. C'est la clé terrain la plus simple pour rapprocher les fichiers de la Solution Numérique et, à terme, Perfect Vision.
+
+Un même compte client peut porter plusieurs produits financiers :
+
+- un ou plusieurs produits d'épargne ouverte ;
+- un ou plusieurs produits DAT / comptes bloqués ;
+- un ou plusieurs produits crédit.
+
+Le rapport Word et l'export Excel utilisent donc cette lecture :
+
+| Ancienne lecture à éviter | Lecture recommandée |
+|---|---|
+| Clients actifs | Comptes clients actifs |
+| Clients avec DAT positif | Comptes clients avec produit DAT positif |
+| Comptes bloqués / DAT | Produits DAT / comptes bloqués |
+| Comptes crédit | Produits crédit |
+
+Cette convention évite de confondre la personne, son numéro de téléphone et les produits qu'elle détient. Elle rapproche aussi la Solution Numérique du raisonnement classique de Perfect Vision : un compte client peut avoir plusieurs produits.
+
 Les filtres principaux sont :
 
 - date de début ;

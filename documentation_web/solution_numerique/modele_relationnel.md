@@ -67,7 +67,9 @@ erDiagram
 
 ## Narratif métier
 
-Le modèle peut se lire comme une histoire. Tout commence par un client identifié dans `CUSTOMERS` (clients). Ce fichier donne la base : un numéro de téléphone `msisdn1` (téléphone client), parfois un `customer_id` (identifiant client), et la date à laquelle le client est connu dans le portail numérique.
+Le modèle peut se lire comme une histoire. Tout commence par un compte client identifié dans `CUSTOMERS` (clients). Dans la Solution Numérique, le compte client correspond au numéro de téléphone normalisé `msisdn1` (téléphone client). Le champ `customer_id` (identifiant client) reste utile techniquement, mais la clé métier prioritaire pour parler aux équipes et rapprocher avec Perfect Vision est le téléphone.
+
+Un compte client peut porter plusieurs produits financiers : un produit d'épargne ouverte, un ou plusieurs produits DAT / comptes bloqués, et éventuellement un ou plusieurs produits crédit. Cette lecture est proche de Perfect Vision : un compte ou adhérent peut être relié à plusieurs produits.
 
 Quand ce client fait une opération, le portail ne crée pas seulement une ligne “simple”. Il écrit l'opération dans `TRANSACTIONS` (transactions). Ce fichier est le journal des mouvements : il dit quelle poche comptable est touchée avec `account_type` (type de compte), quelle devise est utilisée avec `currency_code` (devise), quel montant entre avec `cr` (crédit / entrée), quel montant sort avec `dr` (débit / sortie), et quel est le solde avant/après avec `bal_before` (solde avant) et `bal_after` (solde après).
 
@@ -172,7 +174,7 @@ Dans une vraie base de données, une clé primaire identifie une ligne de maniè
 
 | Table logique | Clé primaire logique | Clés secondaires / étrangères logiques | Commentaire |
 |---|---|---|---|
-| `CUSTOMERS` | `customer_id` (identifiant_client), si présent ; sinon `msisdn1` (telephone_client) devient la clé pratique | `msisdn1` (telephone_client) | Le fichier `Customers` ne contient parfois que `msisdn1`; dans ce cas le téléphone normalisé devient la clé de rapprochement. |
+| `CUSTOMERS` | `msisdn1` (telephone_client) pour le compte client ; `customer_id` (identifiant_client) reste une clé technique si présente | `customer_id` (identifiant_client), `created_at` (date_creation) | Pour les analyses métier et le rapprochement Perfect Vision, le téléphone normalisé est prioritaire. |
 | `TRANSACTIONS` | `id` (identifiant_ligne) | `customer_id` (identifiant_client), `msisdn1` (telephone_client), `reference_id` (reference_metier), `ref_no` (reference_operation), `currency_code` (devise) | C'est le journal des écritures. `reference_id` rapproche avec `savings_id` ou `loan_id`; `ref_no` rapproche avec G2. |
 | `SAVINGS_ACCOUNT` | `savings_id` (identifiant_compte_epargne) | `customer_id` (identifiant_client), `msisdn1` (telephone_client), `product_id` (identifiant_produit), `currency_code` (devise) | Un client peut avoir plusieurs comptes ouverts ou DAT. |
 | `LOANS_ACCOUNT` | `loan_id` (identifiant_credit) | `customer_id` (identifiant_client), `msisdn1` (telephone_client), `savings_account_id` (identifiant_compte_epargne_lie), `currency_code` (devise) | Un client peut avoir plusieurs crédits ; le champ `savings_account_id` peut aider à rapprocher le prêt avec le compte d'épargne lié. |
@@ -198,8 +200,8 @@ Même si les sources sont des fichiers Excel, on peut raisonner comme avec une b
 | Phrase métier | Lecture base de données | Exemple concret |
 |---|---|---|
 | Un client peut faire plusieurs transactions. | `CUSTOMERS` 1 → n `TRANSACTIONS` | Un même `customer_id` (identifiant client) peut apparaître sur plusieurs lignes de `TRANSACTIONS`. |
-| Un client peut avoir plusieurs comptes d'épargne. | `CUSTOMERS` 1 → n `SAVINGS_ACCOUNT` | Un même `msisdn1` (téléphone client) peut avoir un compte ouvert et plusieurs DAT. |
-| Un client peut avoir plusieurs crédits. | `CUSTOMERS` 1 → n `LOANS_ACCOUNT` | Un même `customer_id` peut avoir plusieurs `loan_id` (identifiant crédit). |
+| Un compte client peut avoir plusieurs produits d'épargne. | `CUSTOMERS` 1 → n `SAVINGS_ACCOUNT` | Un même `msisdn1` (téléphone client) peut avoir un compte ouvert et plusieurs DAT. |
+| Un compte client peut avoir plusieurs produits crédit. | `CUSTOMERS` 1 → n `LOANS_ACCOUNT` | Un même `msisdn1` ou `customer_id` peut avoir plusieurs `loan_id` (identifiant crédit). |
 | Un compte d'épargne peut générer plusieurs écritures. | `SAVINGS_ACCOUNT` 1 → n `TRANSACTIONS` | Un `savings_id` (identifiant compte épargne) peut être retrouvé dans `reference_id` (référence métier). |
 | Un crédit peut générer plusieurs écritures. | `LOANS_ACCOUNT` 1 → n `TRANSACTIONS` | Un `loan_id` (identifiant crédit) peut apparaître dans plusieurs lignes de `reference_id`. |
 | Une transaction peut avoir une preuve G2. | `TRANSACTIONS` 0/1 → 1 `G2_TRANSACTIONS` | `ref_no` (référence opération) peut correspondre à `Receipt No.` (numéro reçu G2). |
@@ -210,18 +212,19 @@ Même si les sources sont des fichiers Excel, on peut raisonner comme avec une b
 Dans une base SQL, on dirait :
 
 ```text
-Un client possède zéro, un ou plusieurs comptes.
-Un compte appartient à un seul client.
-Un compte peut avoir plusieurs mouvements.
+Un compte client correspond au numéro de téléphone.
+Un compte client possède zéro, un ou plusieurs produits.
+Un produit appartient à un seul compte client.
+Un produit peut avoir plusieurs mouvements.
 Un mouvement appartient à une seule opération ou référence métier.
 ```
 
 Dans la Solution Numérique, la même idée devient :
 
 ```text
-Un client dans Customers peut avoir plusieurs lignes dans Savings Account.
-Chaque ligne Savings Account représente un compte ouvert ou un DAT.
-Chaque compte peut être touché par plusieurs lignes dans Transactions.
+Un compte client dans Customers peut avoir plusieurs lignes dans Savings Account.
+Chaque ligne Savings Account représente un produit d'épargne ouvert ou un produit DAT.
+Chaque produit peut être touché par plusieurs lignes dans Transactions.
 Les lignes Transactions expliquent les flux ; Savings Account explique la position actuelle.
 ```
 

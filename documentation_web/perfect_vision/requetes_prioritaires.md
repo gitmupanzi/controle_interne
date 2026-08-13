@@ -15,7 +15,7 @@ Cette page expose les requêtes les plus importantes du catalogue `data/modelisa
 |---|---:|---|
 | Opérations dépôt/retrait | 20 | Sécuriser la saisie, la validation, les annulations, les volumes et les comportements transactionnels. |
 | Comptable et financier | 12 | Contrôler l’équilibre débit/crédit, le lien opération-comptabilité et les écritures journalières. |
-| Épargne | 19 | Surveiller les comptes, les produits, les mouvements, les DAT, les dépôts fréquents et les soldes à risque. |
+| Épargne | 20 | Surveiller les comptes, les produits, les mouvements, les DAT, les dépôts fréquents, les encours hebdomadaires et les soldes à risque. |
 | CRM clients | 9 | Améliorer le référentiel client, le téléphone, les doublons, les comptes et la qualité KYC. |
 | Money Provider | 5 | Contrôler les opérations mobiles/API et leur comptabilisation. |
 | Crédit | 33 | Suivre demandes, octrois, encours, impayés, remboursements, garanties, échéances et opportunités liées à l’épargne. |
@@ -27,7 +27,7 @@ Cette page expose les requêtes les plus importantes du catalogue `data/modelisa
 | Likelemba | 1 | Alimenter les analyses de tontine et groupes. |
 | Conformité | 9 | Alimenter et justifier le reporting LBC-FT, les alertes, déclarations, profils de risque et sanctions. |
 | Clients | 1 | Produire le socle client par devise pour les indicateurs transversaux. |
-| **Total** | **117** | Requêtes de niveau 9 ou 10 extraites du catalogue. |
+| **Total** | **118** | Requêtes de niveau 9 ou 10 extraites du catalogue. |
 
 ## Comment choisir une requête
 
@@ -36,10 +36,25 @@ Cette page expose les requêtes les plus importantes du catalogue `data/modelisa
 | Vérifier les opérations non validées, annulées ou doublonnées | Opérations dépôt/retrait | Q03 à Q11, Q23, Q36 à Q45 |
 | Contrôler l’équilibre comptable | Comptable et financier | Q14, Q15, Q21, Q139, Q140 |
 | Trouver les clients qui épargnent beaucoup ou régulièrement | Épargne | Q57, Q92, Q93, Q113 |
+| Produire les encours épargne hebdomadaires | Épargne | Q163 |
+| Produire les encours crédits hebdomadaires | Crédit | Q162 |
 | Identifier les DAT sans crédit actif | Crédit / Épargne | Q144 |
 | Suivre les crédits en retard, impayés ou à échéance | Crédit | Q91, Q96, Q100, Q143, Q145, Q146 |
 | Préparer le reporting LBC-FT | Conformité | Q149, Q150, Q151, Q152, Q153, Q154, Q155, Q156, Q158 |
 | Produire le socle Power BI Clients | Clients | Q157 |
+
+## Priorités crédit pour la Direction et les Opérations
+
+Les requêtes crédit de niveau 9 ou 10 doivent être regroupées autour de quatre usages simples. Cette lecture évite de présenter trop de colonnes techniques et aide chaque équipe à choisir le bon fichier.
+
+| Usage | Requêtes principales | À regarder en priorité | Colonnes à éviter dans l'affichage utilisateur |
+|---|---|---|---|
+| Analyse de la qualité du portefeuille de crédit | Q096, Q097, Q145, Q161, Q162 | Encours, impayés, retard, PAR1, PAR30, PAR60, PAR90, produit, devise, gestionnaire. | Identifiants internes multiples lorsque le numéro de prêt ou le code client suffit. |
+| Évaluation des politiques d'octroi | Q069, Q071, Q073, Q106, Q116, Q142 | Validation, couverture épargne/caution/garantie, cohérence du décaissement, motif d'écart. | Colonnes de jointure, états techniques intermédiaires, champs dupliqués. |
+| Stratégie de stabilisation du PAR | Q100, Q143, Q145, Q146, Q147, Q161 | Échéances proches, remboursements tardifs, clients à relancer, comptes disponibles par devise. | Totaux mélangeant USD et CDF, compensation automatique non validée. |
+| Suivi des indicateurs clés | Q096, Q097, Q098, Q099, Q105, Q109, Q123, Q162 | Encours, production, top clients, concentration, taux de remboursement, évolution mensuelle. | Colonnes vides ou constantes, colonnes de debug, champs uniquement utiles au développeur. |
+
+Point de vigilance sur Q144 : le champ `DAT utilisé comme garantie` doit être fondé sur un rattachement réel au compte DAT. Les chemins contrôlés sont `GARANTIES -> OPERATIONS_DAT` et `CAUTIONS_FINANCIERE_COMPTE -> DOSSIERS_DAT`. Si les cautions financières pointent vers des comptes ordinaires/DAV, le DAT n'est pas considéré comme garantie.
 
 ## Catalogue prioritaire détaillé
 
@@ -108,6 +123,7 @@ Cette page expose les requêtes les plus importantes du catalogue `data/modelisa
 | 137 | 10 | `137_cycle_epargne_depots_et_retraits_epargne_avec_sens_comptable_incoherent` | Verifier que les depots creditent le compte client et que les retraits le debitent dans les mouvements comptables. | rapproche OPERATIONS_EPG avec la CTE locale mouvements_comptables sur le compte client. En microfinance, une mauvaise orientation debit/credit fausse directement le solde du membre. | Hebdomadaire |
 | 138 | 10 | `138_cycle_epargne_comptes_epargne_avec_solde_negatif_apres_mouvement_debit` | Detecter les retraits ou debits qui font passer un compte epargne client en solde negatif. | reconstruit le solde avant periode puis applique les mouvements de la CTE locale mouvements_comptables dans l'ordre chronologique. Sauf autorisation de decouvert, un solde negatif est un risque client et caisse. | Hebdomadaire |
 | 141 | 10 | `141_cycle_epargne_mouvements_sur_comptes_clotures_bloques_ou_inactifs` | Identifier les mouvements passes sur des comptes clients qui ne devraient plus recevoir d'operations courantes. | renforce le controle des comptes clotures/inactifs en ajoutant client, produit, sens, montant et motif de risque pour faciliter la regularisation. | Hebdomadaire |
+| 163 | 10 | `163_cycle_epargne_encours_epargne_detaille_a_date` | Produire la liste hebdomadaire des comptes epargne avec leur encours a une date de situation. | une ligne represente un compte actif ou non cloture a @date_fin. Le fichier garde les colonnes utiles aux utilisateurs : client, telephone, compte, produit, devise, encours, dernier mouvement, agence, gestionnaire et statut d'encours. | Hebdomadaire |
 
 ### CRM clients
 

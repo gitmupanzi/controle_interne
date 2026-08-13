@@ -2575,6 +2575,133 @@ def build_turbo_only_g2_transactions(transactions: pd.DataFrame | None) -> pd.Da
     return proxy
 
 
+def enrich_turbo_proxy_with_g2_history(
+    turbo_proxy: pd.DataFrame | None,
+    g2_transactions: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Enrichit un proxy Solution Numérique avec l'identite historique G2.
+
+    La periode et les montants restent portes par Transactions Solution
+    Numérique. G2 sert uniquement a completer l'identite du client et a signaler
+    si l'operation analysee sort de la couverture temporelle du releve G2 charge.
+    """
+    if not isinstance(turbo_proxy, pd.DataFrame) or turbo_proxy.empty:
+        return pd.DataFrame() if turbo_proxy is None else turbo_proxy.copy()
+
+    proxy = turbo_proxy.copy()
+    for column, default in {
+        "couverture_g2_operation": "G2 absent",
+        "source_identite_g2": "G2 absent",
+        "nom_client_g2_historique": pd.NA,
+        "opposite_party_g2_historique": pd.NA,
+        "telephone_g2_historique": pd.NA,
+        "receipt_no_g2_historique": pd.NA,
+        "date_derniere_trace_g2_client": pd.NaT,
+    }.items():
+        if column not in proxy.columns:
+            proxy[column] = default
+
+    if not isinstance(g2_transactions, pd.DataFrame) or g2_transactions.empty:
+        return proxy
+
+    g2 = g2_transactions.copy()
+    if "phone_prefixe" not in g2.columns:
+        if "opposite_party" in g2.columns:
+            g2["phone_prefixe"] = normalize_phone(
+                _extract_phone_from_opposite_party(g2["opposite_party"])
+            )
+        elif "phone" in g2.columns:
+            g2["phone_prefixe"] = normalize_phone(g2["phone"])
+        else:
+            g2["phone_prefixe"] = pd.NA
+    if "Nom_client" not in g2.columns and "opposite_party" in g2.columns:
+        g2["Nom_client"] = _extract_customer_name_from_opposite_party(
+            g2["opposite_party"]
+        )
+
+    g2_dates = pd.to_datetime(
+        g2.get("completion_time", pd.Series(pd.NaT, index=g2.index)),
+        errors="coerce",
+    )
+    proxy_dates = pd.to_datetime(
+        proxy.get("completion_time", pd.Series(pd.NaT, index=proxy.index)),
+        errors="coerce",
+    )
+    if g2_dates.notna().any():
+        g2_min = g2_dates.min()
+        g2_max = g2_dates.max()
+        inside_coverage = proxy_dates.between(g2_min, g2_max, inclusive="both")
+        proxy["couverture_g2_operation"] = np.select(
+            [proxy_dates.isna(), inside_coverage],
+            ["Date operation Solution Numerique non disponible", "Dans couverture G2"],
+            default="Hors couverture G2 - a verifier",
+        )
+    else:
+        proxy["couverture_g2_operation"] = (
+            "G2 charge sans periode exploitable - a verifier"
+        )
+
+    g2 = g2.assign(
+        __completion_time=g2_dates,
+        __receipt_no=clean_identifier(
+            g2.get("receipt_no", pd.Series("", index=g2.index))
+        ),
+        __phone=normalize_phone(
+            g2.get("phone_prefixe", g2.get("phone", pd.Series("", index=g2.index)))
+        ),
+    ).sort_values("__completion_time", na_position="first")
+
+    g2_by_receipt = {
+        str(row["__receipt_no"]): row
+        for _, row in g2.loc[g2["__receipt_no"].astype("string").fillna("").ne("")].iterrows()
+    }
+    g2_by_phone = {
+        str(row["__phone"]): row
+        for _, row in g2.loc[g2["__phone"].astype("string").fillna("").ne("")].iterrows()
+    }
+
+    proxy_receipts = clean_identifier(
+        proxy.get("receipt_no", pd.Series("", index=proxy.index))
+    )
+    proxy_phones = normalize_phone(
+        proxy.get("phone_prefixe", proxy.get("phone", proxy.get("opposite_party", pd.Series("", index=proxy.index))))
+    )
+
+    for index in proxy.index:
+        receipt = str(proxy_receipts.loc[index] or "")
+        phone = str(proxy_phones.loc[index] or "")
+        matched_row = None
+        source_identity = ""
+        if receipt and receipt in g2_by_receipt:
+            matched_row = g2_by_receipt[receipt]
+            source_identity = "Receipt No = ref_no"
+        elif phone and phone in g2_by_phone:
+            matched_row = g2_by_phone[phone]
+            source_identity = "Telephone historique G2"
+
+        if matched_row is None:
+            proxy.at[index, "source_identite_g2"] = "Telephone Solution Numerique uniquement"
+            continue
+
+        opposite_party = matched_row.get("opposite_party", pd.NA)
+        customer_name = matched_row.get("Nom_client", pd.NA)
+        matched_phone = matched_row.get("__phone", pd.NA)
+        if not _is_empty_text(opposite_party):
+            proxy.at[index, "opposite_party"] = opposite_party
+            proxy.at[index, "opposite_party_g2_historique"] = opposite_party
+        if not _is_empty_text(customer_name):
+            proxy.at[index, "Nom_client"] = customer_name
+            proxy.at[index, "nom_client_g2_historique"] = customer_name
+        proxy.at[index, "telephone_g2_historique"] = matched_phone
+        proxy.at[index, "receipt_no_g2_historique"] = matched_row.get("__receipt_no", pd.NA)
+        proxy.at[index, "date_derniere_trace_g2_client"] = matched_row.get(
+            "__completion_time", pd.NaT
+        )
+        proxy.at[index, "source_identite_g2"] = source_identity
+
+    return proxy
+
+
 def _contains_pipe_value(values: object, expected: object) -> bool:
     if _is_empty_text(values) or _is_empty_text(expected):
         return False
@@ -2818,7 +2945,10 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
             g2_amount = g2_amount_for_match.loc[index]
             if pd.isna(g2_date) or pd.isna(g2_amount):
                 continue
-            is_turbo_proxy = source_mode_for_match.loc[index] == "turbo seul"
+            is_turbo_proxy = source_mode_for_match.loc[index] in {
+                "turbo seul",
+                "solution numerique seule",
+            }
             if is_turbo_proxy and linked_key_for_match.loc[index]:
                 candidates = output_candidates.loc[
                     output_candidates["cle_sortie_turbo"]
@@ -3153,6 +3283,19 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
     output.loc[turbo_only, "Observation"] = (
         "Analyse Solution Numérique seule : controles independants G2/Solution Numérique non applicables."
     )
+    coverage_g2 = clean_text(
+        output.get("couverture_g2_operation", pd.Series("", index=output.index))
+    )
+    coverage_g2_norm = coverage_g2.apply(normalize_label)
+    g2_coverage_gap = turbo_only & (
+        coverage_g2_norm.str.contains("hors couverture g2", na=False)
+        | coverage_g2_norm.str.contains("sans periode exploitable", na=False)
+    )
+    output.loc[g2_coverage_gap, "Observation"] = (
+        "G2 est charge comme source d'identite ou de controle, mais il ne couvre pas "
+        "la date de cette operation Solution Numerique. Verification G2 a completer "
+        "si le releve correspondant devient disponible."
+    )
     turbo_direct = turbo_only & output["ref_no_portal"].astype("string").fillna("").ne("")
     turbo_output = turbo_only & output["reference_sortie_turbo"].astype("string").fillna("").ne("")
     output.loc[turbo_direct, "methode_rapprochement_turbo"] = (
@@ -3201,6 +3344,9 @@ def _enrich_g2_with_portal_controls(g2: pd.DataFrame, transactions: pd.DataFrame
                 reasons.append(label)
         if row.get("controle_date") == "Ecart de date":
             reasons.append("Ecart de date de creation")
+        coverage_status = normalize_label(row.get("couverture_g2_operation", ""))
+        if "hors couverture g2" in coverage_status or "sans periode exploitable" in coverage_status:
+            reasons.append("Controle G2 indisponible sur la periode")
         candidates = pd.to_numeric(
             pd.Series([row.get("nombre_candidats_sortie_turbo")]), errors="coerce"
         ).iloc[0]
@@ -4208,6 +4354,13 @@ def build_g2_daily_savings_report(prepared: MpesaPreparedData) -> dict[str, pd.D
         "details",
         "opposite_party",
         "Nom_client",
+        "couverture_g2_operation",
+        "source_identite_g2",
+        "nom_client_g2_historique",
+        "opposite_party_g2_historique",
+        "telephone_g2_historique",
+        "receipt_no_g2_historique",
+        "date_derniere_trace_g2_client",
         "phone_prefixe",
         "duree",
         "compte_cree",
@@ -6970,7 +7123,7 @@ def _mpesa_statistics_source_rows(prepared: MpesaPreparedData) -> pd.DataFrame:
             "Indispensable",
             prepared.transactions,
             "created_at",
-            "Mouvements, volume d'activite, chiffre d'affaires observe, clients actifs et tendances.",
+            "Mouvements, volume d'activite, chiffre d'affaires observe, comptes clients actifs et tendances.",
         ),
         (
             2,
@@ -6978,7 +7131,7 @@ def _mpesa_statistics_source_rows(prepared: MpesaPreparedData) -> pd.DataFrame:
             "Indispensable",
             concat_frames_stable([prepared.current_savings, prepared.fixed_savings]),
             "updated_at",
-            "Comptes ouverts, DAT, soldes d'epargne et positions instantanees.",
+            "Produits d'epargne ouverts, produits DAT, soldes d'epargne et positions instantanees.",
         ),
         (
             3,
@@ -6986,7 +7139,7 @@ def _mpesa_statistics_source_rows(prepared: MpesaPreparedData) -> pd.DataFrame:
             "Tres important",
             prepared.loans,
             "updated_at",
-            "Credits, encours, portefeuille et risque.",
+            "Produits credit, encours, portefeuille et risque.",
         ),
         (
             4,
@@ -6994,7 +7147,7 @@ def _mpesa_statistics_source_rows(prepared: MpesaPreparedData) -> pd.DataFrame:
             "Important",
             prepared.customers,
             "created_at",
-            "Referentiel client et courbe de creation des clients.",
+            "Referentiel des comptes clients et courbe de creation des numeros clients.",
         ),
         (
             5,
@@ -7163,7 +7316,12 @@ def _mpesa_statistics_savings_portfolios(
         as_of_date=end_date,
         annual_interest_rate_pct=None,
     )
-    empty = {"stock_date_fin": pd.DataFrame(), "periode": pd.DataFrame()}
+    empty = {
+        "stock_date_fin": pd.DataFrame(),
+        "periode": pd.DataFrame(),
+        "stock_detail": pd.DataFrame(),
+        "periode_detail": pd.DataFrame(),
+    }
     if positions.empty:
         return empty
 
@@ -7220,15 +7378,19 @@ def _mpesa_statistics_savings_portfolios(
         & positions["date_creation_compte"].lt(period_end_exclusive)
     )
 
+    stock_detail = positions.loc[stock_mask].copy().reset_index(drop=True)
+    period_detail = positions.loc[period_mask].copy().reset_index(drop=True)
     return {
         "stock_date_fin": _summarize(
-            positions.loc[stock_mask].copy(),
+            stock_detail,
             "Position arretee a la date de fin",
         ),
         "periode": _summarize(
-            positions.loc[period_mask].copy(),
+            period_detail,
             "Comptes crees/actives sur la periode",
         ),
+        "stock_detail": stock_detail,
+        "periode_detail": period_detail,
     }
 
 
@@ -7261,6 +7423,244 @@ def _mpesa_statistics_credit_period_summary(
     summary["perimetre_encours"] = "Credits crees sur la periode"
     summary["date_fin_reference"] = pd.Timestamp(end_date).normalize()
     return summary
+
+
+def _mpesa_active_loan_detail(prepared: MpesaPreparedData, *, end_date: pd.Timestamp) -> pd.DataFrame:
+    detail = build_mpesa_credit_risk_analysis(
+        prepared.loans,
+        as_of_date=end_date,
+    ).get("detail", pd.DataFrame())
+    if not isinstance(detail, pd.DataFrame) or detail.empty:
+        return pd.DataFrame()
+    detail = detail.copy()
+    detail["currency_code"] = clean_text(
+        detail.get("currency_code", pd.Series("", index=detail.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    detail["customer_id"] = clean_identifier(
+        detail.get("customer_id", pd.Series("", index=detail.index))
+    )
+    detail["encours_total"] = pd.to_numeric(
+        detail.get("encours_total", pd.Series(0.0, index=detail.index)),
+        errors="coerce",
+    ).fillna(0.0)
+    return detail.loc[detail["encours_total"].gt(0)].copy().reset_index(drop=True)
+
+
+def _mpesa_statistics_operational_client_summary(
+    *,
+    loaded_clients: int,
+    known_clients: int,
+    active_clients: int,
+    new_clients: int,
+    savings_stock_detail: pd.DataFrame,
+    active_loans_detail: pd.DataFrame,
+) -> pd.DataFrame:
+    fixed_positive = (
+        savings_stock_detail.loc[
+            savings_stock_detail.get("famille_epargne", pd.Series("", index=savings_stock_detail.index)).astype(str).eq("DAT")
+            & pd.to_numeric(
+                savings_stock_detail.get("balance", pd.Series(0, index=savings_stock_detail.index)),
+                errors="coerce",
+            ).fillna(0).gt(0)
+        ].copy()
+        if isinstance(savings_stock_detail, pd.DataFrame) and not savings_stock_detail.empty
+        else pd.DataFrame()
+    )
+    dat_clients = set(
+        _mpesa_statistics_client_key(fixed_positive, prefer_phone=True)
+        .replace("", pd.NA)
+        .dropna()
+        .astype(str)
+    )
+    credit_clients = set(
+        _mpesa_statistics_client_key(active_loans_detail, prefer_phone=True)
+        .replace("", pd.NA)
+        .dropna()
+        .astype(str)
+        if isinstance(active_loans_detail, pd.DataFrame) and not active_loans_detail.empty
+        else []
+    )
+    return pd.DataFrame(
+        [
+            {
+                "indicateur": "Comptes clients recensés dans Customers",
+                "valeur": int(loaded_clients),
+                "commentaire": "Comptes clients distincts du fichier Customers chargé; un compte client correspond au numéro de téléphone.",
+            },
+            {
+                "indicateur": "Comptes clients connus à la date d'arrêté",
+                "valeur": int(known_clients),
+                "commentaire": "Comptes clients créés avant ou à la date de fin.",
+            },
+            {
+                "indicateur": "Comptes clients actifs sur la période",
+                "valeur": int(active_clients),
+                "commentaire": "Comptes clients ayant au moins une opération sur la période.",
+            },
+            {
+                "indicateur": "Nouveaux comptes clients créés sur la période",
+                "valeur": int(new_clients),
+                "commentaire": "Comptes clients créés sur la période filtrée.",
+            },
+            {
+                "indicateur": "Comptes clients avec produit DAT positif et produit crédit actif",
+                "valeur": len(dat_clients & credit_clients),
+                "commentaire": "Comptes clients portant un produit DAT strictement supérieur à zéro et au moins un produit crédit actif.",
+            },
+            {
+                "indicateur": "Comptes clients avec produit DAT positif",
+                "valeur": len(dat_clients),
+                "commentaire": "Comptes clients portant au moins un produit DAT dont le solde est strictement supérieur à zéro.",
+            },
+        ]
+    )
+
+
+def _mpesa_statistics_savings_without_active_credit(
+    savings_stock_detail: pd.DataFrame,
+    active_loans_detail: pd.DataFrame,
+) -> pd.DataFrame:
+    if not isinstance(savings_stock_detail, pd.DataFrame) or savings_stock_detail.empty:
+        return pd.DataFrame()
+    savings = savings_stock_detail.copy()
+    savings["balance"] = pd.to_numeric(
+        savings.get("balance", pd.Series(0.0, index=savings.index)),
+        errors="coerce",
+    ).fillna(0.0)
+    savings["client_key"] = _mpesa_statistics_client_key(savings, prefer_phone=True)
+    savings["currency_code"] = clean_text(
+        savings.get("currency_code", pd.Series("", index=savings.index))
+    ).str.upper().replace("", "NON RENSEIGNEE")
+    savings = savings.loc[
+        savings["balance"].gt(0)
+        & savings["client_key"].astype(str).str.strip().ne("")
+    ].copy()
+    if savings.empty:
+        return pd.DataFrame()
+    credit_pairs = set()
+    if isinstance(active_loans_detail, pd.DataFrame) and not active_loans_detail.empty:
+        loans = active_loans_detail.copy()
+        loans["client_key"] = _mpesa_statistics_client_key(loans, prefer_phone=True)
+        loans["currency_code"] = clean_text(loans.get("currency_code", pd.Series("", index=loans.index))).str.upper().replace("", "NON RENSEIGNEE")
+        credit_pairs = set(
+            loans.loc[
+                loans["client_key"].astype(str).str.strip().ne(""),
+                ["client_key", "currency_code"],
+            ]
+            .itertuples(index=False, name=None)
+        )
+    savings["a_credit_actif_meme_devise"] = [
+        (customer_id, currency_code) in credit_pairs
+        for customer_id, currency_code in savings[["client_key", "currency_code"]].itertuples(index=False, name=None)
+    ]
+    without_credit = savings.loc[~savings["a_credit_actif_meme_devise"]].copy()
+    if without_credit.empty:
+        return pd.DataFrame()
+    return (
+        without_credit.groupby("currency_code", as_index=False, dropna=False)
+        .agg(
+            clients=("client_key", "nunique"),
+            encours=("balance", "sum"),
+        )
+        .rename(
+            columns={
+                "currency_code": "devise",
+                "clients": "nombre_clients_epargne_sans_credit_actif",
+                "encours": "encours_epargne_sans_credit_actif",
+            }
+        )
+        .sort_values("devise")
+        .reset_index(drop=True)
+    )
+
+
+def _mpesa_statistics_dat_maturing_summary(
+    savings_stock_detail: pd.DataFrame,
+    *,
+    horizon_days: int = DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
+) -> pd.DataFrame:
+    if not isinstance(savings_stock_detail, pd.DataFrame) or savings_stock_detail.empty:
+        return pd.DataFrame()
+    dat = savings_stock_detail.copy()
+    dat = dat.loc[
+        dat.get("famille_epargne", pd.Series("", index=dat.index)).astype(str).eq("DAT")
+    ].copy()
+    if dat.empty:
+        return pd.DataFrame()
+    dat["balance"] = pd.to_numeric(dat.get("balance", pd.Series(0, index=dat.index)), errors="coerce").fillna(0.0)
+    dat["jours_avant_echeance"] = pd.to_numeric(
+        dat.get("jours_avant_echeance", pd.Series(np.nan, index=dat.index)),
+        errors="coerce",
+    )
+    dat["currency_code"] = clean_text(dat.get("currency_code", pd.Series("", index=dat.index))).str.upper().replace("", "NON RENSEIGNEE")
+    dat = dat.loc[
+        dat["balance"].gt(0)
+        & dat["jours_avant_echeance"].ge(0)
+        & dat["jours_avant_echeance"].le(int(horizon_days))
+    ].copy()
+    if dat.empty:
+        return pd.DataFrame()
+    return (
+        dat.groupby("currency_code", as_index=False, dropna=False)
+        .agg(
+            nombre_dat_arrivant_echeance=("savings_id", "nunique"),
+            encours_dat_arrivant_echeance=("balance", "sum"),
+        )
+        .rename(columns={"currency_code": "devise"})
+        .sort_values("devise")
+        .reset_index(drop=True)
+    )
+
+
+def _mpesa_statistics_dat_credit_conversion_summary(
+    savings_stock_detail: pd.DataFrame,
+    active_loans_detail: pd.DataFrame,
+) -> pd.DataFrame:
+    if (
+        not isinstance(savings_stock_detail, pd.DataFrame)
+        or savings_stock_detail.empty
+        or not isinstance(active_loans_detail, pd.DataFrame)
+    ):
+        return pd.DataFrame()
+    dat = savings_stock_detail.copy()
+    dat["balance"] = pd.to_numeric(dat.get("balance", pd.Series(0, index=dat.index)), errors="coerce").fillna(0.0)
+    dat["client_key"] = _mpesa_statistics_client_key(dat, prefer_phone=True)
+    dat["currency_code"] = clean_text(dat.get("currency_code", pd.Series("", index=dat.index))).str.upper().replace("", "NON RENSEIGNEE")
+    dat = dat.loc[
+        dat.get("famille_epargne", pd.Series("", index=dat.index)).astype(str).eq("DAT")
+        & dat["balance"].gt(0)
+        & dat["client_key"].astype(str).str.strip().ne("")
+    ].copy()
+    if dat.empty:
+        return pd.DataFrame()
+    loans = active_loans_detail.copy() if isinstance(active_loans_detail, pd.DataFrame) else pd.DataFrame()
+    if not loans.empty:
+        loans["client_key"] = _mpesa_statistics_client_key(loans, prefer_phone=True)
+        loans["currency_code"] = clean_text(loans.get("currency_code", pd.Series("", index=loans.index))).str.upper().replace("", "NON RENSEIGNEE")
+    loan_pairs = set(
+        loans.loc[
+            loans["client_key"].astype(str).str.strip().ne(""),
+            ["client_key", "currency_code"],
+        ].itertuples(index=False, name=None)
+        if not loans.empty
+        else []
+    )
+    rows: list[dict[str, Any]] = []
+    for currency, group in dat.groupby("currency_code", dropna=False):
+        dat_pairs = set(group[["client_key", "currency_code"]].itertuples(index=False, name=None))
+        eligible = len(dat_pairs)
+        converted = len(dat_pairs & loan_pairs)
+        rows.append(
+            {
+                "devise": currency,
+                "clients_dat_positif": eligible,
+                "clients_dat_avec_credit_actif": converted,
+                "taux_conversion_dat_credit_pct": (
+                    converted / eligible * 100 if eligible else np.nan
+                ),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("devise").reset_index(drop=True)
 
 
 def _mpesa_clients_identity_candidates(
@@ -8910,14 +9310,14 @@ def build_mpesa_weekly_comparison(
         return int(len(frame))
 
     def _active_clients(frame: pd.DataFrame) -> int:
-        if frame.empty or "customer_id" not in frame.columns:
+        if frame.empty:
             return 0
-        return int(clean_identifier(frame["customer_id"]).replace("", pd.NA).nunique())
+        return int(_mpesa_statistics_client_key(frame, prefer_phone=True).replace("", pd.NA).nunique())
 
     _add_row(
         bloc="Clients",
         indicator_key="clients_actifs",
-        label="Clients actifs",
+        label="Comptes clients actifs",
         current_value=_active_clients(event_current),
         previous_value=_active_clients(event_previous),
         unit="nombre",
@@ -8940,7 +9340,7 @@ def build_mpesa_weekly_comparison(
     _add_row(
         bloc="Clients",
         indicator_key="nouveaux_clients",
-        label="Nouveaux clients",
+        label="Nouveaux comptes clients",
         current_value=int(customer_current["client_key"].nunique()) if not customer_current.empty else 0,
         previous_value=int(customer_previous["client_key"].nunique()) if not customer_previous.empty else 0,
         unit="nombre",
@@ -9148,7 +9548,7 @@ def build_mpesa_weekly_comparison(
         if not active_loans.empty:
             active_loans["client_key"] = _mpesa_statistics_client_key(
                 active_loans,
-                prefer_phone=False,
+                prefer_phone=True,
             )
             active_loans["currency_key"] = (
                 clean_text(active_loans["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
@@ -9175,7 +9575,7 @@ def build_mpesa_weekly_comparison(
             if scoped.empty:
                 continue
             scoped["periode_comparee"] = period_label
-            scoped["client_key"] = _mpesa_statistics_client_key(scoped, prefer_phone=False)
+            scoped["client_key"] = _mpesa_statistics_client_key(scoped, prefer_phone=True)
             scoped["currency_code"] = (
                 clean_text(scoped["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
             )
@@ -9203,7 +9603,7 @@ def build_mpesa_weekly_comparison(
             _add_row(
                 bloc="Comptes",
                 indicator_key="clients_epargne_sans_credit",
-                label="Clients avec épargne sans crédit actif",
+                label="Comptes clients avec produits d'épargne sans produit crédit actif",
                 current_value=int(
                     clean_identifier(current_savings_no_credit.get("client_key", pd.Series(dtype=str)))
                     .replace("", pd.NA)
@@ -9222,7 +9622,7 @@ def build_mpesa_weekly_comparison(
             _add_row(
                 bloc="Comptes",
                 indicator_key="encours_epargne_sans_credit",
-                label="Encours épargne sans crédit actif",
+                label="Encours des produits d'épargne sans produit crédit actif",
                 current_value=_sum_balance(current_savings_no_credit),
                 previous_value=_sum_balance(previous_savings_no_credit),
                 unit="montant",
@@ -9328,7 +9728,7 @@ def build_mpesa_weekly_comparison(
                 ].copy()
                 if scoped.empty:
                     return 0, 0, np.nan
-                scoped["client_key"] = _mpesa_statistics_client_key(scoped, prefer_phone=False)
+                scoped["client_key"] = _mpesa_statistics_client_key(scoped, prefer_phone=True)
                 client_keys = (
                     clean_identifier(scoped["client_key"]).replace("", pd.NA).dropna().astype(str)
                 )
@@ -9365,7 +9765,7 @@ def build_mpesa_weekly_comparison(
                 _add_row(
                     bloc="Comptes",
                     indicator_key="clients_dat_convertis_credit",
-                    label="Clients DAT avec crédit actif",
+                    label="Comptes clients DAT avec produit crédit actif",
                     current_value=current_converted,
                     previous_value=previous_converted,
                     unit="nombre",
@@ -9376,7 +9776,7 @@ def build_mpesa_weekly_comparison(
                 _add_row(
                     bloc="Comptes",
                     indicator_key="clients_dat_eligibles_conversion",
-                    label="Clients avec DAT positif",
+                    label="Comptes clients avec produit DAT positif",
                     current_value=current_denominator,
                     previous_value=previous_denominator,
                     unit="nombre",
@@ -10333,15 +10733,18 @@ def build_mpesa_statistics_report(
         ].copy()
     total_known_clients = int(customer_reference["client_key"].nunique()) if not customer_reference.empty else 0
     active_clients = (
-        int(clean_identifier(events["customer_id"]).replace("", pd.NA).nunique())
-        if not events.empty and "customer_id" in events.columns
+        int(_mpesa_statistics_client_key(events, prefer_phone=True).replace("", pd.NA).nunique())
+        if not events.empty
         else 0
     )
     active_clients_by_currency: dict[str, int] = {}
     if not events.empty and {"customer_id", "currency_code"}.issubset(events.columns):
         currency_clients = events.copy()
         currency_clients["currency_code"] = clean_text(currency_clients["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
-        currency_clients["client_key"] = clean_identifier(currency_clients["customer_id"]).replace("", pd.NA)
+        currency_clients["client_key"] = _mpesa_statistics_client_key(
+            currency_clients,
+            prefer_phone=True,
+        ).replace("", pd.NA)
         active_clients_by_currency = {
             str(currency): int(group["client_key"].dropna().nunique())
             for currency, group in currency_clients.groupby("currency_code", dropna=False)
@@ -10471,7 +10874,12 @@ def build_mpesa_statistics_report(
     )
     savings_portfolio = savings_portfolios.get("stock_date_fin", pd.DataFrame())
     savings_portfolio_period = savings_portfolios.get("periode", pd.DataFrame())
-    credit_summary = finance.get("credit_synthese", pd.DataFrame()).copy()
+    savings_stock_detail = savings_portfolios.get("stock_detail", pd.DataFrame())
+    savings_period_detail = savings_portfolios.get("periode_detail", pd.DataFrame())
+    credit_summary = build_mpesa_credit_risk_analysis(
+        prepared.loans,
+        as_of_date=end_date,
+    ).get("synthese", pd.DataFrame()).copy()
     if isinstance(credit_summary, pd.DataFrame) and not credit_summary.empty:
         credit_summary["perimetre_encours"] = "Position arretee a la date de fin"
         credit_summary["date_fin_reference"] = end_date
@@ -10479,6 +10887,35 @@ def build_mpesa_statistics_report(
         prepared,
         start_date=start_date,
         end_date=end_date,
+    )
+    active_loans_detail = _mpesa_active_loan_detail(prepared, end_date=end_date)
+    new_clients_count = 0
+    if not customer_reference.empty and "date_creation" in customer_reference.columns:
+        customer_dates = pd.to_datetime(customer_reference["date_creation"], errors="coerce")
+        new_clients_count = int(
+            customer_reference.loc[
+                customer_dates.notna()
+                & customer_dates.ge(start_date)
+                & customer_dates.lt(end_date + pd.Timedelta(days=1)),
+                "client_key",
+            ].nunique()
+        )
+    clients_operational = _mpesa_statistics_operational_client_summary(
+        loaded_clients=total_loaded_clients,
+        known_clients=total_known_clients,
+        active_clients=active_clients,
+        new_clients=new_clients_count,
+        savings_stock_detail=savings_stock_detail,
+        active_loans_detail=active_loans_detail,
+    )
+    savings_without_credit = _mpesa_statistics_savings_without_active_credit(
+        savings_stock_detail,
+        active_loans_detail,
+    )
+    dat_maturing = _mpesa_statistics_dat_maturing_summary(savings_stock_detail)
+    dat_credit_conversion = _mpesa_statistics_dat_credit_conversion_summary(
+        savings_stock_detail,
+        active_loans_detail,
     )
 
     overview_rows: list[dict[str, Any]] = []
@@ -10536,25 +10973,26 @@ def build_mpesa_statistics_report(
     client_indicators = pd.DataFrame(
         [
             {
-                "indicateur": "Clients du fichier Customers charge",
+                "indicateur": "Comptes clients du fichier Customers chargé",
                 "valeur": loaded_clients_value,
                 "definition": (
-                    "Nombre de clients distincts presents dans Customers "
-                    "apres preparation, avant le filtre de date de fin."
+                    "Nombre de comptes clients distincts présents dans Customers "
+                    "après préparation, avant le filtre de date de fin. Le numéro "
+                    "de téléphone est la clé métier prioritaire."
                 ),
             },
             {
-                "indicateur": "Clients connus a la date de fin",
+                "indicateur": "Comptes clients connus à la date de fin",
                 "valeur": total_known_clients,
                 "definition": (
-                    "Clients crees avant ou a la date de fin du rapport."
+                    "Comptes clients créés avant ou à la date de fin du rapport."
                 ),
             },
             {
-                "indicateur": "Clients actifs sur la periode",
+                "indicateur": "Comptes clients actifs sur la période",
                 "valeur": active_clients,
                 "definition": (
-                    "Clients ayant au moins une operation sur la periode filtree."
+                    "Comptes clients ayant au moins une opération sur la période filtrée."
                 ),
             },
         ]
@@ -10615,12 +11053,16 @@ def build_mpesa_statistics_report(
         "priorite_sources": source_priority,
         "clients_reference": customer_reference,
         "clients_indicateurs": client_indicators,
+        "clients_operationnels": clients_operational,
         "clients_croissance": customer_growth,
         "vue_ensemble": overview,
         "chiffre_affaires": turnover,
         "activite_evolution": activity_evolution,
         "epargne_dat_portefeuille": savings_portfolio,
         "epargne_dat_portefeuille_periode": savings_portfolio_period,
+        "epargne_sans_credit_actif": savings_without_credit,
+        "dat_arrivant_echeance": dat_maturing,
+        "dat_conversion_credit": dat_credit_conversion,
         "credit_synthese": credit_summary,
         "credit_synthese_periode": credit_summary_period,
         "clients_volume_top": finance.get("concentration_transactions_clients", pd.DataFrame()),
@@ -10637,18 +11079,18 @@ def build_mpesa_statistics_report(
         "definitions": pd.DataFrame(
             [
                 {
-                    "indicateur": "Clients actifs",
-                    "definition": "Clients ayant au moins une operation sur la periode filtree.",
+                    "indicateur": "Comptes clients actifs",
+                    "definition": "Comptes clients, identifies prioritairement par numero de telephone, ayant au moins une operation sur la periode filtree.",
                     "source": "Transactions [Solution Numérique]",
                 },
                 {
-                    "indicateur": "Clients connus",
-                    "definition": "Clients du fichier Customers connus a la date de fin du rapport; sinon clients observes dans les sources chargees.",
+                    "indicateur": "Comptes clients connus",
+                    "definition": "Comptes clients du fichier Customers connus a la date de fin du rapport; sinon comptes clients observes dans les sources chargees.",
                     "source": "Customers [Solution Numérique] puis sources observées",
                 },
                 {
-                    "indicateur": "Clients charges",
-                    "definition": "Clients distincts presents dans le referentiel Customers charge, avant le filtre de date de fin du rapport.",
+                    "indicateur": "Comptes clients charges",
+                    "definition": "Comptes clients distincts presents dans le referentiel Customers charge, avant le filtre de date de fin du rapport.",
                     "source": "Customers [Solution Numérique] puis sources observées",
                 },
                 {
@@ -10815,15 +11257,13 @@ def create_mpesa_statistics_word(
     for run in criteria_title.paragraphs[0].runs:
         run.bold = True
         run.font.color.rgb = RGBColor(255, 255, 255)
-    criteria = header.cell(1, 1).add_table(rows=6, cols=2)
+    criteria = header.cell(1, 1).add_table(rows=4, cols=2)
     for row_index, (label, value) in enumerate(
         [
             ("Periode :", period_text),
-            ("Perimetre annuel :", annual_scope_text),
             ("Frequence :", frequency_text),
             ("Comparaison :", comparison_period_text),
-            ("Comparaison annuelle :", MPESA_YEAR_OVER_YEAR_LABEL),
-            ("Source des montants :", "Solution Numérique uniquement"),
+            ("Source des encours :", "Savings Account et Loans Account"),
         ]
     ):
         criteria.cell(row_index, 0).text = label
@@ -10846,7 +11286,9 @@ def create_mpesa_statistics_word(
         "Ce rapport restitue les statistiques operationnelles issues de la Solution Numérique. "
         "Source des montants : Solution Numérique uniquement. "
         "G2 et Perfect sont des sources facultatives d'enrichissement ou de controle; "
-        "ils ne modifient pas les montants, les soldes, les DAT ni les credits."
+        "ils ne modifient pas les montants, les soldes, les DAT ni les credits. "
+        "Les positions a date et les flux de periode sont volontairement separes afin "
+        "d'eviter de confondre un encours observe avec un mouvement transactionnel."
     )
 
     def format_value(value: Any, column: str) -> str:
@@ -10985,6 +11427,405 @@ def create_mpesa_statistics_word(
     def _currency_label(value: Any) -> str:
         text = str(value).strip().upper()
         return text or "NON RENSEIGNEE"
+
+    def _format_operational_value(value: Any, *, value_type: str = "nombre") -> str:
+        if value_type == "pct":
+            parsed = pd.to_numeric(value, errors="coerce")
+            return "-" if pd.isna(parsed) else f"{float(parsed):.2f} %"
+        return _pdf_number(value, decimals=2 if value_type == "montant" else 0)
+
+    def _indicator_explanation(label: Any, fallback: str = "") -> str:
+        normalized = normalize_label(label)
+        definitions = {
+            "comptes clients recenses dans customers": "Nombre de comptes clients distincts presents dans le fichier Customers charge; le numero de telephone est la cle metier prioritaire.",
+            "comptes clients du fichier customers charge": "Nombre de comptes clients distincts presents dans le fichier Customers charge; le numero de telephone est la cle metier prioritaire.",
+            "comptes clients connus a la date darrete": "Comptes clients crees avant ou a la date de fin du rapport.",
+            "comptes clients connus a la date de fin": "Comptes clients crees avant ou a la date de fin du rapport.",
+            "comptes clients actifs sur la periode": "Comptes clients ayant au moins une operation metier consolidee pendant la periode.",
+            "comptes clients actifs": "Comptes clients ayant au moins une operation metier consolidee pendant la periode.",
+            "nouveaux comptes clients crees sur la periode": "Comptes clients dont la date de creation tombe entre la date de debut et la date de fin.",
+            "nouveaux comptes clients": "Comptes clients dont la date de creation tombe dans la periode comparee.",
+            "comptes clients avec produit dat positif et produit credit actif": "Comptes clients portant un produit DAT strictement superieur a zero et un produit credit actif.",
+            "comptes clients avec produit dat positif": "Comptes clients portant au moins un produit DAT dont le solde est strictement superieur a zero.",
+            "produits dat comptes bloques a la date darrete": "Nombre de produits DAT ou comptes bloques observes dans Savings Account a la date de fin.",
+            "encours des produits dat comptes bloques a la date darrete": "Montant bloque dans les produits DAT a la date de fin, par devise.",
+            "montant des nouveaux produits dat sur la periode": "Montant des produits DAT crees ou actives pendant la periode analysee.",
+            "produits depargne ouverts a la date darrete": "Nombre de produits d'epargne ouverts observes dans Savings Account a la date de fin.",
+            "encours des produits depargne ouverts a la date darrete": "Solde des produits d'epargne ouverts a la date de fin, par devise.",
+            "nouveaux produits depargne ouverts sur la periode": "Produits d'epargne ouverts crees ou actives pendant la periode analysee.",
+            "comptes clients avec produits depargne dat sans produit credit actif": "Comptes clients ayant un produit d'epargne ou DAT positif sans produit credit actif dans la meme devise.",
+            "encours des produits epargne dat sans produit credit actif": "Montant d'epargne ou de DAT positif detenu par les comptes clients sans credit actif.",
+            "dat arrivant a echeance": "DAT positifs dont l'echeance arrive dans l'horizon de preparation.",
+            "encours dat arrivant a echeance": "Montant bloque des DAT positifs arrivant bientot a echeance.",
+            "produits credit a la date darrete": "Nombre de produits credit presents dans Loans Account a la date de fin.",
+            "encours des produits credit a la date darrete": "Montant restant du portefeuille credit a la date de fin.",
+            "montant des nouveaux produits credit sur la periode": "Montant des credits crees pendant la periode analysee.",
+            "taux de conversion dat en credit": "Part des comptes clients avec produit DAT positif qui ont aussi un produit credit actif.",
+        }
+        return definitions.get(normalized, str(fallback or "Definition metier de l'indicateur."))
+
+    def _row_lookup(
+        frame: pd.DataFrame,
+        *,
+        currency: Any,
+        family: str | None = None,
+    ) -> pd.DataFrame:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            return pd.DataFrame()
+        result = frame.copy()
+        if "currency_code" in result.columns:
+            result = result.loc[
+                clean_text(result["currency_code"]).str.upper().eq(_currency_label(currency))
+            ].copy()
+        elif "devise" in result.columns:
+            result = result.loc[
+                clean_text(result["devise"]).str.upper().eq(_currency_label(currency))
+            ].copy()
+        if family is not None and "famille" in result.columns:
+            result = result.loc[result["famille"].astype(str).eq(family)].copy()
+        return result
+
+    overview_frame = statistics_report.get("vue_ensemble", pd.DataFrame())
+    client_operational_frame = statistics_report.get("clients_operationnels", pd.DataFrame())
+    portfolio_frame = statistics_report.get("epargne_dat_portefeuille", pd.DataFrame())
+    portfolio_period_frame = statistics_report.get("epargne_dat_portefeuille_periode", pd.DataFrame())
+    savings_without_credit_frame = statistics_report.get("epargne_sans_credit_actif", pd.DataFrame())
+    dat_maturing_frame = statistics_report.get("dat_arrivant_echeance", pd.DataFrame())
+    dat_conversion_frame = statistics_report.get("dat_conversion_credit", pd.DataFrame())
+    credit_frame = statistics_report.get("credit_synthese", pd.DataFrame())
+    credit_period_frame = statistics_report.get("credit_synthese_periode", pd.DataFrame())
+    weekly_comparison = statistics_report.get("comparaison_hebdomadaire", pd.DataFrame())
+
+    add_title("Synthèse opérationnelle")
+    add_text(
+        "Ce rapport privilégie les indicateurs utiles au pilotage du portefeuille. "
+        "Dans la Solution Numérique, un compte client correspond au numéro de téléphone; "
+        "ce compte peut porter plusieurs produits financiers : épargne ouverte, DAT et crédit. "
+        "Les encours sont lus à la date d'arrêté depuis `Savings Account` et `Loans Account`; "
+        "les créations de comptes ou de crédits sont lues sur la période analysée. "
+        "Les montants restent toujours séparés par devise."
+    )
+
+    if isinstance(weekly_comparison, pd.DataFrame) and not weekly_comparison.empty:
+        add_title("Comparaison avec la période précédente")
+        comparable = weekly_comparison.copy()
+        excluded_keys = {
+            "volume_transactions",
+            "chiffre_affaires_observe",
+            "operations_turbo",
+            "remboursements_observes",
+            "depots_dat",
+            "depots_epargne_courante",
+        }
+        if "indicator_key" in comparable.columns:
+            comparable = comparable.loc[
+                ~comparable["indicator_key"].astype(str).isin(excluded_keys)
+            ].copy()
+        if "bloc" in comparable.columns:
+            comparable = comparable.loc[
+                ~comparable["bloc"].astype(str).eq("Transactions")
+            ].copy()
+        if "indicateur" in comparable.columns:
+            normalized_indicator = comparable["indicateur"].apply(normalize_label)
+            comparable = comparable.loc[
+                ~normalized_indicator.str.contains("remboursement|depot", na=False)
+            ].copy()
+        comparison_rows: list[dict[str, Any]] = []
+        for _, row in comparable.iterrows():
+            unit = str(row.get("unite", "") or "")
+            value_type = "pct" if unit == "pourcentage" else "montant" if unit == "montant" else "nombre"
+            current_value = pd.to_numeric(row.get("valeur_semaine_courante"), errors="coerce")
+            previous_value = pd.to_numeric(row.get("valeur_semaine_precedente"), errors="coerce")
+            evolution = pd.to_numeric(row.get("evolution_pct"), errors="coerce")
+            if pd.isna(previous_value):
+                evolution_text = "Référence indisponible"
+            elif float(previous_value) == 0 and pd.notna(current_value) and float(current_value) > 0:
+                evolution_text = "Nouvelle activité"
+            elif pd.isna(evolution):
+                evolution_text = "Non calculable"
+            else:
+                evolution_text = f"{float(evolution):+.1f} %"
+            comparison_rows.append(
+                {
+                    "bloc": row.get("bloc", ""),
+                    "indicateur": row.get("indicateur", ""),
+                    "explication": _indicator_explanation(row.get("indicateur", "")),
+                    "devise": _currency_label(row.get("currency_code", "")) if str(row.get("currency_code", "") or "").strip() else "-",
+                    "periode_courante": _format_operational_value(current_value, value_type=value_type),
+                    "periode_precedente": _format_operational_value(previous_value, value_type=value_type),
+                    "evolution": evolution_text,
+                }
+            )
+        add_table(
+            pd.DataFrame(comparison_rows),
+            {
+                "bloc": "Bloc",
+                "indicateur": "Indicateur",
+                "explication": "Explication",
+                "devise": "Devise",
+                "periode_courante": "Période analysée",
+                "periode_precedente": "Période précédente",
+                "evolution": "Évolution",
+            },
+            max_rows=40,
+        )
+
+    add_title("1. Clients")
+    if isinstance(client_operational_frame, pd.DataFrame) and not client_operational_frame.empty:
+        client_display = client_operational_frame.copy()
+        client_display["explication"] = client_display.get(
+            "commentaire",
+            pd.Series("", index=client_display.index),
+        )
+        client_display["devise"] = "-"
+        add_table(
+            client_display,
+            {
+                "indicateur": "Indicateur opérationnel",
+                "explication": "Explication",
+                "devise": "Devise",
+                "valeur": "Valeur",
+            },
+            max_rows=20,
+        )
+    else:
+        add_text("Aucun indicateur client opérationnel disponible.")
+
+    add_title("2. Épargnes et DAT")
+    savings_rows: list[dict[str, Any]] = []
+    currencies = sorted(
+        set(
+            clean_text(portfolio_frame.get("currency_code", pd.Series(dtype=str))).str.upper().replace("", "NON RENSEIGNEE")
+            if isinstance(portfolio_frame, pd.DataFrame) and not portfolio_frame.empty and "currency_code" in portfolio_frame.columns
+            else pd.Series(dtype=str)
+        )
+        | set(
+            clean_text(credit_frame.get("currency_code", pd.Series(dtype=str))).str.upper().replace("", "NON RENSEIGNEE")
+            if isinstance(credit_frame, pd.DataFrame) and not credit_frame.empty and "currency_code" in credit_frame.columns
+            else pd.Series(dtype=str)
+        )
+    )
+    for currency in currencies:
+        stock_dat = _row_lookup(portfolio_frame, currency=currency, family="DAT")
+        period_dat = _row_lookup(portfolio_period_frame, currency=currency, family="DAT")
+        stock_open = _row_lookup(portfolio_frame, currency=currency, family="Compte ouvert")
+        period_open = _row_lookup(portfolio_period_frame, currency=currency, family="Compte ouvert")
+        without_credit = _row_lookup(savings_without_credit_frame, currency=currency)
+        maturing = _row_lookup(dat_maturing_frame, currency=currency)
+        savings_rows.extend(
+            [
+                {
+                    "indicateur": "Produits DAT / comptes bloqués à la date d'arrêté",
+                    "devise": currency,
+                    "valeur": _number_value(stock_dat, "nombre_comptes"),
+                    "type_valeur": "Nombre",
+                    "commentaire": "Position issue de Savings Account.",
+                },
+                {
+                    "indicateur": "Encours des produits DAT / comptes bloqués à la date d'arrêté",
+                    "devise": currency,
+                    "valeur": _number_value(stock_dat, "solde_total"),
+                    "type_valeur": "Montant",
+                    "commentaire": "Somme des soldes DAT a la date d'arrete; un DAT positif est strictement superieur a zero.",
+                },
+                {
+                    "indicateur": "Montant des nouveaux produits DAT sur la période",
+                    "devise": currency,
+                    "valeur": _number_value(period_dat, "solde_total"),
+                    "type_valeur": "Montant",
+                    "commentaire": "DAT créés ou activés entre la date de début et la date de fin.",
+                },
+                {
+                    "indicateur": "Produits d'épargne ouverts à la date d'arrêté",
+                    "devise": currency,
+                    "valeur": _number_value(stock_open, "nombre_comptes"),
+                    "type_valeur": "Nombre",
+                    "commentaire": "Position issue de Savings Account.",
+                },
+                {
+                    "indicateur": "Encours des produits d'épargne ouverts à la date d'arrêté",
+                    "devise": currency,
+                    "valeur": _number_value(stock_open, "solde_total"),
+                    "type_valeur": "Montant",
+                    "commentaire": "Solde des comptes d'épargne ouverts.",
+                },
+                {
+                    "indicateur": "Nouveaux produits d'épargne ouverts sur la période",
+                    "devise": currency,
+                    "valeur": _number_value(period_open, "nombre_comptes"),
+                    "type_valeur": "Nombre",
+                    "commentaire": "Comptes ouverts créés ou activés sur la période.",
+                },
+                {
+                    "indicateur": "Comptes clients avec produits épargne/DAT sans produit crédit actif",
+                    "devise": currency,
+                    "valeur": _number_value(without_credit, "nombre_clients_epargne_sans_credit_actif"),
+                    "type_valeur": "Nombre",
+                    "commentaire": "Piste commerciale prudente, pas une éligibilité automatique.",
+                },
+                {
+                    "indicateur": "Encours des produits épargne/DAT sans produit crédit actif",
+                    "devise": currency,
+                    "valeur": _number_value(without_credit, "encours_epargne_sans_credit_actif"),
+                    "type_valeur": "Montant",
+                    "commentaire": "Encours détenu par des clients sans crédit actif dans la même devise.",
+                },
+                {
+                    "indicateur": "DAT arrivant à échéance",
+                    "devise": currency,
+                    "valeur": _number_value(maturing, "nombre_dat_arrivant_echeance"),
+                    "type_valeur": "Nombre",
+                    "commentaire": f"DAT dont l'échéance arrive dans les {DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS} prochains jours.",
+                },
+                {
+                    "indicateur": "Encours DAT arrivant à échéance",
+                    "devise": currency,
+                    "valeur": _number_value(maturing, "encours_dat_arrivant_echeance"),
+                    "type_valeur": "Montant",
+                    "commentaire": "Montant à préparer pour le remboursement ou le renouvellement.",
+                },
+            ]
+        )
+    savings_display = pd.DataFrame(savings_rows)
+    if not savings_display.empty:
+        savings_display["explication"] = savings_display.get(
+            "commentaire",
+            pd.Series("", index=savings_display.index),
+        )
+        savings_display["valeur"] = [
+            _format_operational_value(row.valeur, value_type="montant" if row.type_valeur == "Montant" else "nombre")
+            for row in savings_display.itertuples(index=False)
+        ]
+    add_table(
+        savings_display,
+        {
+            "indicateur": "Indicateur opérationnel",
+            "explication": "Explication",
+            "devise": "Devise",
+            "valeur": "Valeur",
+            "type_valeur": "Nature",
+        },
+        max_rows=60,
+    )
+
+    add_title("3. Crédits")
+    credit_rows: list[dict[str, Any]] = []
+    for currency in currencies:
+        stock_credit = _row_lookup(credit_frame, currency=currency)
+        period_credit = _row_lookup(credit_period_frame, currency=currency)
+        conversion = _row_lookup(dat_conversion_frame, currency=currency)
+        credit_rows.extend(
+            [
+                {
+                    "indicateur": "Produits crédit à la date d'arrêté",
+                    "devise": currency,
+                    "valeur": _number_value(stock_credit, "nombre_credits"),
+                    "type_valeur": "Nombre",
+                    "commentaire": "Position issue de Loans Account.",
+                },
+                {
+                    "indicateur": "Encours des produits crédit à la date d'arrêté",
+                    "devise": currency,
+                    "valeur": _number_value(stock_credit, "encours_total"),
+                    "type_valeur": "Montant",
+                    "commentaire": "Encours total observé dans Loans Account.",
+                },
+                {
+                    "indicateur": "Montant des nouveaux produits crédit sur la période",
+                    "devise": currency,
+                    "valeur": _number_value(period_credit, "montant_credits"),
+                    "type_valeur": "Montant",
+                    "commentaire": "Crédits créés sur la période, lus depuis Loans Account.",
+                },
+                {
+                    "indicateur": "Taux de conversion DAT en crédit",
+                    "devise": currency,
+                    "valeur": _first_number(conversion, "taux_conversion_dat_credit_pct"),
+                    "type_valeur": "Pourcentage",
+                    "commentaire": "Comptes clients avec produit DAT positif ayant aussi un produit crédit actif.",
+                },
+            ]
+        )
+    credit_display = pd.DataFrame(credit_rows)
+    if not credit_display.empty:
+        credit_display["explication"] = credit_display.get(
+            "commentaire",
+            pd.Series("", index=credit_display.index),
+        )
+        credit_display["valeur"] = [
+            _format_operational_value(
+                row.valeur,
+                value_type="pct" if row.type_valeur == "Pourcentage" else "montant" if row.type_valeur == "Montant" else "nombre",
+            )
+            for row in credit_display.itertuples(index=False)
+        ]
+    add_table(
+        credit_display,
+        {
+            "indicateur": "Indicateur opérationnel",
+            "explication": "Explication",
+            "devise": "Devise",
+            "valeur": "Valeur",
+            "type_valeur": "Nature",
+        },
+        max_rows=40,
+    )
+
+    footer = section.footer.paragraphs[0]
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer_run = footer.add_run(
+        f"Rapport genere le {generated_at:%d/%m/%Y %H:%M} - Solution Bisou Bisou Digital"
+    )
+    footer_run.font.size = Pt(8)
+    footer_run.font.color.rgb = RGBColor(110, 125, 140)
+
+    document.core_properties.title = "Rapport statistiques - Solution Numérique"
+    document.core_properties.subject = "Statistiques opérationnelles Solution Numérique"
+    document.core_properties.author = "Solution Controle Interne"
+    buffer = BytesIO()
+    document.save(buffer)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+    add_title("Regles de source")
+    add_text(
+        "Cette lecture evite une confusion importante : les encours sont des stocks arretes "
+        "dans les fichiers de position, tandis que les transactions expliquent les flux de la periode."
+    )
+    source_rule_rows = pd.DataFrame(
+        [
+            {
+                "analyse": "Encours credits a une date",
+                "source": "Loans Account",
+                "role": "Position credit : solde, encours, statut, echeance, interets, frais et penalites disponibles.",
+            },
+            {
+                "analyse": "Encours epargnes et DAT a une date",
+                "source": "Savings Account",
+                "role": "Position epargne : compte ouvert, compte bloque / DAT, solde, produit, statut et echeance.",
+            },
+            {
+                "analyse": "Repli epargne si Savings Account complet absent",
+                "source": "Customers with Current Savings Account / Customers with Fixed Savings Account",
+                "role": "Vues resumees acceptees en compatibilite; elles ne remplacent pas la source complete lorsqu'elle est chargee.",
+            },
+            {
+                "analyse": "Flux de periode",
+                "source": "Transactions",
+                "role": "Mouvements observes : depots, retraits, remboursements, decaissements et operations DAT.",
+            },
+            {
+                "analyse": "Identite et controle",
+                "source": "G2 et Perfect facultatifs",
+                "role": "Enrichissement du nom client et preuve de rapprochement; pas de recalcul des montants.",
+            },
+        ]
+    )
+    add_table(
+        source_rule_rows,
+        {"analyse": "Analyse", "source": "Source", "role": "Role dans le rapport"},
+        max_rows=10,
+    )
 
     add_title("Synthese executive")
     overview = statistics_report.get("vue_ensemble", pd.DataFrame())
@@ -11461,7 +12302,8 @@ def create_mpesa_statistics_word(
     add_text(
         "Lecture : les comptes ouverts correspondent aux comptes d'epargne courante. "
         "Les comptes bloques correspondent aux DAT. Les soldes proviennent de Savings Account "
-        "et sont arretes a la date de fin du rapport."
+        "ou, en repli, de ses vues resumees Current/Fixed Savings Account. Ils sont arretes "
+        "a la date de fin du rapport et ne sont pas recalcules depuis Transactions."
     )
     account_analysis_rows: list[dict[str, Any]] = [
         {
@@ -11578,7 +12420,9 @@ def create_mpesa_statistics_word(
     credit_clients = _number_value(credit_frame, "nombre_clients")
     add_text(
         "Lecture : le credit est restitue depuis Loans Account. L'encours et le PAR restent des positions "
-        "arretees a la date de fin et doivent etre lus separement par devise."
+        "arretees a la date de fin et doivent etre lus separement par devise. Transactions sert "
+        "a mesurer les flux de periode, notamment les remboursements observes, pas a reconstituer "
+        "l'encours credit de reference."
     )
     credit_analysis_rows: list[dict[str, Any]] = [
         {
@@ -14203,6 +15047,20 @@ def build_mpesa_savings_cockpit(
         as_of_date=end_date,
         annual_interest_rate_pct=annual_interest_rate_pct,
     )
+    if not positions.empty:
+        snapshot_mask = _mpesa_statistics_snapshot_mask(
+            positions,
+            as_of_date=end_date,
+            creation_columns=(
+                "date_creation_compte",
+                "created_at",
+                "date_approved",
+                "date_activated",
+            ),
+            closed_column="date_closed",
+            status_column="status",
+        )
+        positions = positions.loc[snapshot_mask].copy().reset_index(drop=True)
     result["portefeuille_detail"] = positions
     if positions.empty:
         result["qualite_donnees"] = pd.DataFrame(
@@ -14246,7 +15104,7 @@ def build_mpesa_savings_cockpit(
     )
 
     dat_maturity = build_mpesa_dat_maturity_analysis(
-        prepared.fixed_savings,
+        result["dat_detail"],
         as_of_date=end_date,
         annual_interest_rate_pct=annual_interest_rate_pct,
         preparation_horizon_days=maturity_horizon_days,
@@ -22041,6 +22899,8 @@ MPESA_DIRECTION_PRIORITY_SHEETS = {
     "Clients_Actifs",
     "Clients_Sans_Mouvement",
     "Clients_Multi_Produits",
+    "Clients_Tranches",
+    "Clients_Qualite",
     "DAT_Sans_Credit",
     "Credit_Vue_Ensemble",
     "Credit_Portefeuille",
@@ -22048,11 +22908,14 @@ MPESA_DIRECTION_PRIORITY_SHEETS = {
     "Liste_Prets_Echus",
     "Liste_Prets_PAR30",
     "Liste_Prets_Penalites",
+    "Liste_Prets_Defaulted",
+    "Credit_Encours_A_Date",
     "Credit_Top_Clients",
     "Credit_Tranches_Clients",
     "Credit_Epargne_Clients_360",
     "Epargne_Vue_Ensemble",
     "Epargne_Portefeuille",
+    "Epargne_Encours_A_Date",
     "Epargne_Flux",
     "Epargne_DAT",
     "Epargne_Echeances_DAT",
@@ -22061,6 +22924,7 @@ MPESA_DIRECTION_PRIORITY_SHEETS = {
     "Epargne_DAT_Sans_Credit",
     "Epargne_Forte_Sans_Credit",
     "Epargne_Qualite",
+    "Epargne_Qualite_A_Revoir",
 }
 
 
@@ -22316,6 +23180,7 @@ def create_excel_export(
         ("loan_savings_detail", "Credit_Epargne_Detail"),
         ("loan_savings_controls", "Controle_Credit_Epargne"),
         ("credit_vue_ensemble", "Credit_Vue_Ensemble"),
+        ("credit_encours_a_date", "Credit_Encours_A_Date"),
         ("credit_portefeuille_synthese", "Credit_Portefeuille"),
         ("credit_portefeuille_detail", "Credit_Detail"),
         ("credit_statuts_portefeuille", "Credit_Statuts"),
@@ -22347,6 +23212,7 @@ def create_excel_export(
         ("credit_liste_prets_echeance_30j", "Liste_Echeance_30j"),
         ("credit_liste_rapprochement_epargne_ambigu", "Liste_Epargne_Ambigue"),
         ("epargne_vue_ensemble", "Epargne_Vue_Ensemble"),
+        ("epargne_encours_a_date", "Epargne_Encours_A_Date"),
         ("epargne_portefeuille_synthese", "Epargne_Portefeuille"),
         ("epargne_portefeuille_detail", "Epargne_Detail"),
         ("epargne_flux_synthese", "Epargne_Flux"),
@@ -22408,6 +23274,14 @@ def create_excel_export(
         ("clients_clients_inactifs_observes", "Clients_Inactifs"),
         ("clients_clients_multi_produits", "Clients_Multi_Produits"),
         ("clients_clients_dat_sans_credit_actif", "DAT_Sans_Credit"),
+        ("stats_comparaison_operationnelle", "Stats_Comparaison"),
+        ("stats_clients_operationnels", "Stats_Clients"),
+        ("stats_epargne_operationnelle", "Stats_Epargne_Oper"),
+        ("stats_credit_operationnel", "Stats_Credits_Oper"),
+        ("clients_operationnels", "Stats_Clients_Source"),
+        ("epargne_sans_credit_actif", "Stats_Epargne_Sans_Credit"),
+        ("dat_arrivant_echeance", "Stats_DAT_Echeance"),
+        ("dat_conversion_credit", "Stats_DAT_Credit"),
         ("vue_ensemble", "Stats_Vue_Ensemble"),
         ("clients_indicateurs", "Stats_Clients_KPI"),
         ("clients_croissance", "Stats_Croissance_Clients"),

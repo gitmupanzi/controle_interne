@@ -157,28 +157,32 @@ Chaque échéance peut être remboursée en une ou plusieurs fois.
 
 ## Requêtes utiles
 
-| N° | Export | Ce que la requête contrôle |
-|---:|---|---|
-| 060 | `60_cycle_credit_prets_incomplets_sans_dossier_sans_compte_credit_sans_compte_epargne_ou_sans_cycle` | Prêts incomplets. |
-| 069 | `69_cycle_credit_prets_decaisses_sans_validation_prealable_exploitable` | Décaissements sans validation préalable exploitable. |
-| 071 | `71_cycle_credit_caution_financiere_insuffisante_par_rapport_au_dossier` | Caution insuffisante. |
-| 072 | `72_cycle_credit_garanties_sans_garant_identifiable_ou_sans_piece_exploitable` | Garanties inexploitables. |
-| 073 | `73_cycle_credit_dossiers_avec_analyse_obligatoire_absente_ou_inachevee` | Analyse obligatoire absente ou inachevée. |
-| 085 | `85_cycle_credit_clients_qui_terminent_leur_credit_par_mois_ou_sur_la_periode` | Clients qui terminent leur crédit. |
-| 091 | `91_cycle_credit_credits_en_cours_ou_termines_avec_echeances_impayees_sur_la_periode` | Crédits avec échéances impayées. |
-| 096 | `96_cycle_credit_dashboard_par_details_credit_a_la_date_de_fin` | Détail PAR à date. |
-| 098 | `98_cycle_credit_dashboard_top_encours_credits_par_client` | Top encours crédits par client. |
-| 099 | `99_cycle_credit_dashboard_decaissements_mensuels_par_agence_et_produit` | Décaissements mensuels. |
-| 100 | `100_cycle_credit_dashboard_echeances_futures_des_prets_en_cours` | Échéances futures. |
-| 105 | `105_cycle_credit_dashboard_concentration_top_10_pourcent_des_encours` | Concentration du portefeuille. |
-| 106 | `106_cycle_credit_dashboard_couverture_credit_par_epargne_et_garanties` | Couverture crédit par épargne et garanties. |
-| 116 | `116_cycle_credit_couverture_caution_et_garanties_par_rapport_au_credit_accorde` | Couverture caution/garantie. |
-| 136 | `136_cycle_credit_remboursements_credit_encaisses_mais_non_imputes_correctement_au_pret` | Remboursements encaissés non imputés correctement. |
-| 142 | `142_cycle_credit_credits_decaisses_sans_mouvement_comptable_coherent` | Décaissements sans mouvement comptable cohérent. |
-| 143 | `143_cycle_credit_remboursements_credit_recus_apres_echeance_a_suivre_pour_par` | Remboursements après échéance. |
-| 145 | `145_cycle_credit_liste_detaillee_des_prets_avec_impayes` | Liste des prêts avec impayés. |
-| 146 | `146_cycle_credit_liste_detaillee_des_clients_avec_echeances_sur_la_periode` | Échéances clients sur une période. |
-| 147 | `147_cycle_credit_comptes_ordinaires_et_disponibilites_clients` | Disponibilités clients avec impayé ou échéance. |
+Les requêtes ci-dessous sont classées en privilégiant d'abord les analyses de portefeuille, de recouvrement et de décision, puis les contrôles d'octroi ou d'anomalies.
+
+| Priorité | N° | Export | Ce que la requête apporte | Commentaire |
+|---:|---:|---|---|---|
+| 1 | 162 | `162_cycle_credit_encours_credit_detaille_a_date` | Encours crédit détaillé à la date de situation. | Requête de référence pour l'envoi hebdomadaire des encours crédits : client, téléphone, produit, devise, encours, impayés, retard, PAR1/PAR30/PAR60/PAR90/PAR180 et action recommandée. |
+| 2 | 161 | `161_cycle_credit_rapport_comparatif_portefeuille_credit_par_anciennete_et_produit` | Rapport comparatif du portefeuille par ancienneté de retard et par produit. | Reproduit la logique du rapport opérationnel crédit : portefeuille sain, crédits en retard, PAR, production et écarts entre deux dates. |
+| 3 | 096 | `96_cycle_credit_dashboard_par_details_credit_a_la_date_de_fin` | Détail PAR à date. | Base analytique du risque crédit : encours, provision, retard et ventilation PAR par devise. |
+| 4 | 145 | `145_cycle_credit_liste_detaillee_des_prets_avec_impayes` | Liste des prêts avec impayés. | À utiliser pour le recouvrement : elle donne les prêts à traiter et le solde restant dû. |
+| 5 | 146 | `146_cycle_credit_liste_detaillee_des_clients_avec_echeances_sur_la_periode` | Échéances clients sur une période. | Utile pour préparer les relances à venir et suivre les montants attendus par date. |
+| 6 | 100 | `100_cycle_credit_dashboard_echeances_futures_des_prets_en_cours` | Échéances futures. | Donne une vision prévisionnelle des remboursements attendus. |
+| 7 | 098 | `98_cycle_credit_dashboard_top_encours_credits_par_client` | Top encours crédits par client. | Sert à surveiller les plus fortes expositions individuelles. |
+| 8 | 105 | `105_cycle_credit_dashboard_concentration_top_10_pourcent_des_encours` | Concentration du portefeuille. | Aide la Direction à mesurer si le risque est concentré sur peu de clients. |
+| 9 | 106 | `106_cycle_credit_dashboard_couverture_credit_par_epargne_et_garanties` | Couverture crédit par épargne et garanties. | Rapproche l'encours crédit avec l'épargne, les cautions et les garanties disponibles. |
+| 10 | 147 | `147_cycle_credit_comptes_ordinaires_et_disponibilites_clients` | Disponibilités clients avec impayé ou échéance. | Aide à orienter le recouvrement, sans présenter l'épargne disponible comme une compensation automatique. |
+| 11 | 099 | `99_cycle_credit_dashboard_decaissements_mensuels_par_agence_et_produit` | Décaissements mensuels. | Utile pour suivre la production crédit et les produits qui portent l'activité. |
+| 12 | 085 | `85_cycle_credit_clients_qui_terminent_leur_credit_par_mois_ou_sur_la_periode` | Clients qui terminent leur crédit. | Aide à préparer les renouvellements prudents et la fidélisation. |
+| 13 | 091 | `91_cycle_credit_credits_en_cours_ou_termines_avec_echeances_impayees_sur_la_periode` | Crédits avec échéances impayées. | Sert à vérifier les échéances de période non totalement couvertes. |
+| 14 | 143 | `143_cycle_credit_remboursements_credit_recus_apres_echeance_a_suivre_pour_par` | Remboursements après échéance. | Important pour comprendre le comportement de remboursement, même si le paiement finit par être encaissé. |
+| 15 | 136 | `136_cycle_credit_remboursements_credit_encaisses_mais_non_imputes_correctement_au_pret` | Remboursements encaissés non imputés correctement. | Protège le client et le portefeuille : un paiement mal imputé peut créer un faux retard. |
+| 16 | 069 | `69_cycle_credit_prets_decaisses_sans_validation_prealable_exploitable` | Décaissements sans validation préalable exploitable. | Contrôle d'octroi prioritaire : un crédit décaissé doit avoir une validation exploitable. |
+| 17 | 071 | `71_cycle_credit_caution_financiere_insuffisante_par_rapport_au_dossier` | Caution insuffisante. | À suivre pour mesurer les écarts entre politique d'octroi et couverture constatée. |
+| 18 | 116 | `116_cycle_credit_couverture_caution_et_garanties_par_rapport_au_credit_accorde` | Couverture caution/garantie. | Donne une lecture plus large de la couverture du crédit accordé. |
+| 19 | 072 | `72_cycle_credit_garanties_sans_garant_identifiable_ou_sans_piece_exploitable` | Garanties inexploitables. | Contrôle documentaire : une garantie sans garant exploitable fragilise le dossier. |
+| 20 | 073 | `73_cycle_credit_dossiers_avec_analyse_obligatoire_absente_ou_inachevee` | Analyse obligatoire absente ou inachevée. | Aide à revoir la qualité d'instruction avant ou après octroi. |
+| 21 | 142 | `142_cycle_credit_credits_decaisses_sans_mouvement_comptable_coherent` | Décaissements sans mouvement comptable cohérent. | Contrôle comptable : un décaissement doit être cohérent avec les écritures associées. |
+| 22 | 060 | `60_cycle_credit_prets_incomplets_sans_dossier_sans_compte_credit_sans_compte_epargne_ou_sans_cycle` | Prêts incomplets. | Contrôle structurel pour identifier les prêts dont les rattachements techniques sont insuffisants. |
 
 ## Requêtes recommandées pour le cockpit Crédits
 
@@ -207,6 +211,28 @@ Le cockpit Crédits doit suivre le portefeuille, les décaissements, les échéa
 | 19 | `161` | `161_cycle_credit_rapport_comparatif_portefeuille_credit_par_anciennete_et_produit` | Rapport comparatif du portefeuille crédit par ancienneté de retard et par produit. | Reproduit le besoin opérationnel du service Crédit : portefeuille sain, retard, PAR 30, PAR 60, PAR 90, production et écart entre deux dates, sans mélanger les devises. |
 
 Feuilles cockpit conseillées : `Credit_Socle`, `Credit_PAR_Detail`, `Credit_Impaye`, `Credit_Top_Clients`, `Credit_Echeances_Futures`, `Credit_Decaissements`, `Credit_Concentration`, `Credit_Couverture_Epargne`, `Credit_Remboursements_Tardifs`, `Credit_Anomalies_Imputation`, `Credit_Pipeline`.
+
+## Requêtes prioritaires pour le pilotage du portefeuille
+
+Ces requêtes sont à mettre en avant dans les cockpits et les rapports crédit, car elles répondent directement aux questions de pilotage : qualité du portefeuille, respect de la politique d'octroi, stabilisation du PAR et suivi des indicateurs clés. Les colonnes visibles doivent rester opérationnelles : nom du client, téléphone, produit, devise, montant, date, retard, statut, action recommandée ou commentaire métier. Les identifiants techniques restent utiles dans les calculs, mais ne doivent pas alourdir les tableaux remis aux utilisateurs.
+
+| Axe de pilotage | Requêtes à privilégier | Lecture métier |
+|---|---|---|
+| Analyse de la qualité du portefeuille de crédit | `096`, `097`, `145`, `161`, `162` | Mesurer l'encours actif, les retards, les tranches PAR, les impayés et la concentration par produit ou par client. |
+| Évaluation des politiques d'octroi de crédit | `069`, `071`, `073`, `106`, `116`, `142` | Vérifier que le crédit accordé respecte les validations, la couverture par épargne ou caution, et la cohérence comptable du décaissement. |
+| Stratégie de stabilisation du PAR | `100`, `143`, `145`, `146`, `147`, `161` | Identifier les échéances proches, les remboursements tardifs, les prêts en retard et les disponibilités pouvant orienter les actions de recouvrement. |
+| Suivi des indicateurs clés | `096`, `097`, `098`, `099`, `105`, `109`, `123`, `162` | Alimenter les KPI : encours, nouveaux décaissements, top expositions, PAR1, PAR30, PAR60, PAR90, remboursement et production. |
+
+### Lecture des garanties DAT dans la requête 144
+
+La requête 144 ne doit pas conclure qu'un DAT garantit un crédit simplement parce que le client possède un DAT. Le lien doit être prouvé dans la base.
+
+Deux chemins sont contrôlés :
+
+- `GARANTIES.ID_OPERATION_DEPOT` vers `OPERATIONS_DAT`, lorsque la garantie est portée par une opération DAT ;
+- `CAUTIONS_FINANCIERE_COMPTE.ID_COMPTE_ADHERENT` vers `DOSSIERS_DAT.ID_COMPTE_DAT`, lorsque la caution financière pointe directement vers un compte DAT.
+
+Lors du test sur `BB_VISION_PROD`, la table `GARANTIES` était vide et les cautions financières observées pointaient vers des comptes ordinaires/DAV, pas vers des comptes DAT. Dans ce cas, la valeur `DAT utilisé comme garantie = Non` est cohérente. Si Perfect Vision commence à utiliser des comptes DAT comme caution, cette logique doit permettre de les détecter.
 
 ## Lecture analytique
 

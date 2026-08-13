@@ -9,9 +9,10 @@
 | Solution Numérique | Module analytique pour les opérations digitales, M-Pesa, clients, épargne, crédits et statistiques |
 | M-Pesa | Service mobile money utilisé dans les opérations numériques |
 | G2 | Rapport M-Pesa de contrôle et d'enrichissement d'identité |
+| Compte client | Dans la Solution Numérique, numéro de téléphone normalisé servant de compte principal du client. Un compte client peut porter plusieurs produits : épargne ouverte, DAT et crédit. |
 | DAT | Dépôt à terme / compte bloqué |
-| Compte ouvert | Compte d'épargne courant du client |
-| Crédit | Prêt accordé au client |
+| Compte ouvert | Produit d'épargne courant rattaché au compte client |
+| Crédit | Produit de prêt accordé au compte client |
 | Encours | Montant restant ou position actuelle selon le domaine |
 | PAR | Portfolio at Risk, portefeuille à risque |
 | KPI | Indicateur clé de performance |

@@ -115,16 +115,19 @@ Le compte devient ensuite le point d'entrée vers les mouvements, l'épargne, le
 
 ## Requêtes utiles
 
-| N° | Export | Ce que la requête contrôle |
-|---:|---|---|
-| 024 | `24_cycle_crm_clients_adherents_inscrits_en_doublon_par_code` | Clients en doublon par code. |
-| 025 | `25_cycle_crm_clients_adherents_sans_informations_essentielles` | Clients sans informations essentielles. |
-| 026 | `26_cycle_crm_clients_adherents_non_valides_ou_droit_d_adhesion_non_paye` | Clients non validés ou droit d'adhésion non payé. |
-| 028 | `28_cycle_crm_clients_adherents_sans_compte_adherent_ou_avec_compte_adherent_introuvable` | Clients sans compte ou avec rattachement incohérent. |
-| 090 | `90_cycle_crm_clients_liste_des_clients_avec_leurs_comptes_et_devises` | Liste client + comptes + devises. |
-| 121 | `121_cycle_crm_clients_departs_et_retours_clients_avec_exposition_epargne_credit` | Départs/retours avec exposition épargne/crédit. |
-| 122 | `122_cycle_crm_clients_controle_qualite_des_numeros_de_telephone_clients` | Qualité des numéros de téléphone. |
-| 148 | `148_cycle_crm_clients_liste_unique_des_clients_avec_telephone_et_nombre_de_comptes` | Liste unique client/téléphone/nombre de comptes. |
+Les requêtes ci-dessous sont classées en privilégiant d'abord l'aide à la décision, puis les contrôles de qualité de données.
+
+| Priorité | N° | Export | Ce que la requête apporte | Commentaire |
+|---:|---:|---|---|---|
+| 1 | 157 | `157_cycle_clients_socle_indicateurs_par_client_et_devise` | Socle client décisionnel par devise : activité, exposition épargne/crédit, échéances et indicateurs utiles au tableau de bord. | À privilégier pour Power BI ou un cockpit Direction, car il donne une lecture 360 sans mélanger USD et CDF. |
+| 2 | 090 | `90_cycle_crm_clients_liste_des_clients_avec_leurs_comptes_et_devises` | Liste client + comptes + devises. | Utile pour retrouver les comptes rattachés à un client et contrôler la couverture des devises. |
+| 3 | 148 | `148_cycle_crm_clients_liste_unique_des_clients_avec_telephone_et_nombre_de_comptes` | Liste unique client/téléphone/nombre de comptes. | Très pratique pour les équipes terrain : le téléphone devient une clé de contact et de rapprochement. |
+| 4 | 121 | `121_cycle_crm_clients_departs_et_retours_clients_avec_exposition_epargne_credit` | Départs/retours avec exposition épargne/crédit. | Aide à voir l'impact commercial et financier des clients partis ou revenus. |
+| 5 | 122 | `122_cycle_crm_clients_controle_qualite_des_numeros_de_telephone_clients` | Qualité des numéros de téléphone. | Indispensable avant relance, rapprochement Solution Numérique ou connexion à d'autres sources. |
+| 6 | 024 | `24_cycle_crm_clients_adherents_inscrits_en_doublon_par_code` | Clients en doublon par code. | Contrôle de qualité pour éviter une lecture fausse du nombre de clients. |
+| 7 | 025 | `25_cycle_crm_clients_adherents_sans_informations_essentielles` | Clients sans informations essentielles. | À utiliser pour compléter les dossiers KYC et améliorer la fiabilité des analyses. |
+| 8 | 026 | `26_cycle_crm_clients_adherents_non_valides_ou_droit_d_adhesion_non_paye` | Clients non validés ou droit d'adhésion non payé. | Permet d'isoler les clients dont le statut administratif doit être revu. |
+| 9 | 028 | `28_cycle_crm_clients_adherents_sans_compte_adherent_ou_avec_compte_adherent_introuvable` | Clients sans compte ou avec rattachement incohérent. | Contrôle structurel : un client sans compte rattaché peut perturber les analyses épargne/crédit. |
 
 ## Requêtes recommandées pour le cockpit Clients
 

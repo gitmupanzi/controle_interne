@@ -6,6 +6,7 @@ from html import escape as html_escape
 import hashlib
 from io import BytesIO
 import re
+import unicodedata
 from typing import Any, Literal
 
 import pandas as pd
@@ -80,6 +81,7 @@ from credit_app.services.mpesa_analysis import (
     create_turbo_balance_word,
     count_mpesa_loaded_customers,
     enrich_transactions_with_g2_customer_names,
+    enrich_turbo_proxy_with_g2_history,
     enrich_turbo_with_g2_customer_names,
     filter_g2_transactions_by_completion_time,
     filter_g2_transactions_by_direction,
@@ -728,6 +730,326 @@ def _render_excel_export_on_demand(
             "Le fichier Excel n'est pas généré automatiquement. "
             "Cliquez sur le bouton de préparation uniquement si vous voulez l'exporter."
         )
+
+
+def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> dict[str, pd.DataFrame]:
+    """Construit les feuilles Excel operationnelles du rapport Statistiques."""
+
+    def _frame(key: str) -> pd.DataFrame:
+        value = report_view.get(key, pd.DataFrame())
+        return value.copy() if isinstance(value, pd.DataFrame) else pd.DataFrame()
+
+    def _currency(value: Any) -> str:
+        text = str(value or "").strip().upper()
+        return text or "NON RENSEIGNEE"
+
+    def _numeric_sum(frame: pd.DataFrame, column: str) -> float:
+        if frame.empty or column not in frame.columns:
+            return 0.0
+        return float(pd.to_numeric(frame[column], errors="coerce").fillna(0).sum())
+
+    def _first_number(frame: pd.DataFrame, column: str) -> float:
+        if frame.empty or column not in frame.columns:
+            return 0.0
+        values = pd.to_numeric(frame[column], errors="coerce").dropna()
+        return float(values.iloc[0]) if not values.empty else 0.0
+
+    def _explain_indicator(label: Any, fallback: str = "") -> str:
+        normalized = unicodedata.normalize("NFKD", str(label or "").strip().lower())
+        normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+        normalized = re.sub(r"[^a-z0-9]+", " ", normalized).strip()
+        definitions = {
+            "comptes clients recenses dans customers": "Nombre de comptes clients distincts presents dans le fichier Customers charge; le numero de telephone est la cle metier prioritaire.",
+            "comptes clients du fichier customers charge": "Nombre de comptes clients distincts presents dans le fichier Customers charge; le numero de telephone est la cle metier prioritaire.",
+            "comptes clients connus a la date d arrete": "Comptes clients crees avant ou a la date de fin du rapport.",
+            "comptes clients connus a la date de fin": "Comptes clients crees avant ou a la date de fin du rapport.",
+            "comptes clients actifs sur la periode": "Comptes clients ayant au moins une operation metier consolidee pendant la periode.",
+            "comptes clients actifs": "Comptes clients ayant au moins une operation metier consolidee pendant la periode.",
+            "nouveaux comptes clients crees sur la periode": "Comptes clients dont la date de creation tombe dans la periode analysee.",
+            "nouveaux comptes clients": "Comptes clients dont la date de creation tombe dans la periode comparee.",
+            "comptes clients avec produit dat positif et produit credit actif": "Comptes clients portant un produit DAT strictement superieur a zero et un produit credit actif.",
+            "comptes clients avec produit dat positif": "Comptes clients portant au moins un produit DAT dont le solde est strictement superieur a zero.",
+            "produits dat comptes bloques a la date d arrete": "Nombre de produits DAT ou comptes bloques observes dans Savings Account a la date de fin.",
+            "encours des produits dat comptes bloques a la date d arrete": "Montant bloque dans les produits DAT a la date de fin, par devise.",
+            "montant des nouveaux produits dat sur la periode": "Montant des produits DAT crees ou actives pendant la periode analysee.",
+            "produits d epargne ouverts a la date d arrete": "Nombre de produits d'epargne ouverts observes dans Savings Account a la date de fin.",
+            "encours des produits d epargne ouverts a la date d arrete": "Solde des produits d'epargne ouverts a la date de fin, par devise.",
+            "nouveaux produits d epargne ouverts sur la periode": "Produits d'epargne ouverts crees ou actives pendant la periode analysee.",
+            "comptes clients avec produits epargne dat sans produit credit actif": "Comptes clients ayant un produit d'epargne ou DAT positif sans produit credit actif dans la meme devise.",
+            "encours des produits epargne dat sans produit credit actif": "Montant d'epargne ou de DAT positif detenu par les comptes clients sans credit actif.",
+            "dat arrivant a echeance": "DAT positifs dont l'echeance arrive dans l'horizon de preparation.",
+            "encours dat arrivant a echeance": "Montant bloque des DAT positifs arrivant bientot a echeance.",
+            "produits credit a la date d arrete": "Nombre de produits credit presents dans Loans Account a la date de fin.",
+            "encours des produits credit a la date d arrete": "Montant restant du portefeuille credit a la date de fin.",
+            "montant des nouveaux produits credit sur la periode": "Montant des credits crees pendant la periode analysee.",
+            "taux de conversion dat en credit": "Part des comptes clients avec produit DAT positif qui ont aussi un produit credit actif.",
+        }
+        return definitions.get(normalized, str(fallback or "Definition metier de l'indicateur."))
+
+    def _select_currency(frame: pd.DataFrame, currency: str, *, family: str | None = None) -> pd.DataFrame:
+        if frame.empty:
+            return pd.DataFrame()
+        result = frame.copy()
+        currency_column = (
+            "currency_code"
+            if "currency_code" in result.columns
+            else "devise"
+            if "devise" in result.columns
+            else None
+        )
+        if currency_column:
+            result = result.loc[result[currency_column].astype(str).str.strip().str.upper().eq(currency)].copy()
+        if family is not None and "famille" in result.columns:
+            result = result.loc[result["famille"].astype(str).eq(family)].copy()
+        return result
+
+    comparison = _frame("comparaison_hebdomadaire")
+    if not comparison.empty:
+        excluded_keys = {
+            "volume_transactions",
+            "chiffre_affaires_observe",
+            "operations_turbo",
+            "remboursements_observes",
+            "depots_dat",
+            "depots_epargne_courante",
+        }
+        if "indicator_key" in comparison.columns:
+            comparison = comparison.loc[
+                ~comparison["indicator_key"].astype(str).isin(excluded_keys)
+            ].copy()
+        if "bloc" in comparison.columns:
+            comparison = comparison.loc[~comparison["bloc"].astype(str).eq("Transactions")].copy()
+        if "indicateur" in comparison.columns:
+            normalized = comparison["indicateur"].astype(str).str.lower()
+            comparison = comparison.loc[
+                ~normalized.str.contains("remboursement|depot|dÃ©pÃ´t", na=False)
+            ].copy()
+        comparison = comparison.rename(
+            columns={
+                "currency_code": "devise",
+                "valeur_semaine_courante": "periode_analysee",
+                "valeur_semaine_precedente": "periode_reference",
+            }
+        )
+        if "indicateur" in comparison.columns:
+            comparison["explication"] = comparison["indicateur"].map(_explain_indicator)
+        comparison = comparison[
+            [
+                column
+                for column in [
+                    "bloc",
+                    "indicateur",
+                    "explication",
+                    "devise",
+                    "periode_analysee",
+                    "periode_reference",
+                    "evolution_pct",
+                    "unite",
+                ]
+                if column in comparison.columns
+            ]
+        ]
+
+    clients = _frame("clients_operationnels")
+    if not clients.empty:
+        clients = clients.rename(
+            columns={
+                "indicateur": "indicateur_operationnel",
+                "commentaire": "commentaire",
+            }
+        )
+        clients["explication"] = clients.get(
+            "commentaire",
+            pd.Series("", index=clients.index),
+        )
+        clients = clients[
+            [
+                column
+                for column in ["indicateur_operationnel", "explication", "valeur"]
+                if column in clients.columns
+            ]
+        ]
+
+    portfolio = _frame("epargne_dat_portefeuille")
+    portfolio_period = _frame("epargne_dat_portefeuille_periode")
+    savings_without_credit = _frame("epargne_sans_credit_actif")
+    dat_maturing = _frame("dat_arrivant_echeance")
+    credit = _frame("credit_synthese")
+    credit_period = _frame("credit_synthese_periode")
+    conversion = _frame("dat_conversion_credit")
+    currencies: set[str] = set()
+    for source in [
+        portfolio,
+        portfolio_period,
+        savings_without_credit,
+        dat_maturing,
+        credit,
+        credit_period,
+        conversion,
+    ]:
+        currency_column = (
+            "currency_code"
+            if "currency_code" in source.columns
+            else "devise"
+            if "devise" in source.columns
+            else None
+        )
+        if not source.empty and currency_column:
+            currencies.update(source[currency_column].dropna().map(_currency).tolist())
+
+    savings_rows: list[dict[str, Any]] = []
+    credit_rows: list[dict[str, Any]] = []
+    for currency in sorted(currency for currency in currencies if currency):
+        stock_dat = _select_currency(portfolio, currency, family="DAT")
+        period_dat = _select_currency(portfolio_period, currency, family="DAT")
+        stock_open = _select_currency(portfolio, currency, family="Compte ouvert")
+        period_open = _select_currency(portfolio_period, currency, family="Compte ouvert")
+        without_credit = _select_currency(savings_without_credit, currency)
+        maturing = _select_currency(dat_maturing, currency)
+        savings_rows.extend(
+            [
+                {
+                    "indicateur_operationnel": "Nombre de produits DAT / comptes bloques a la date d'arrete",
+                    "devise": currency,
+                    "valeur": _numeric_sum(stock_dat, "nombre_comptes"),
+                    "nature": "Nombre",
+                    "commentaire": "Position globale issue de Savings Account.",
+                },
+                {
+                    "indicateur_operationnel": "Encours des produits DAT / comptes bloques a la date d'arrete",
+                    "devise": currency,
+                    "valeur": _numeric_sum(stock_dat, "solde_total"),
+                    "nature": "Montant",
+                    "commentaire": "Montant bloque disponible pour le suivi du portefeuille DAT.",
+                },
+                {
+                    "indicateur_operationnel": "Montant des nouveaux produits DAT sur la periode",
+                    "devise": currency,
+                    "valeur": _numeric_sum(period_dat, "solde_total"),
+                    "nature": "Montant",
+                    "commentaire": "Nouveaux comptes bloques observes entre la date de debut et la date de fin.",
+                },
+                {
+                    "indicateur_operationnel": "Nombre de produits d'epargne ouverts a la date d'arrete",
+                    "devise": currency,
+                    "valeur": _numeric_sum(stock_open, "nombre_comptes"),
+                    "nature": "Nombre",
+                    "commentaire": "Position globale issue de Savings Account.",
+                },
+                {
+                    "indicateur_operationnel": "Encours des produits d'epargne ouverts a la date d'arrete",
+                    "devise": currency,
+                    "valeur": _numeric_sum(stock_open, "solde_total"),
+                    "nature": "Montant",
+                    "commentaire": "Solde disponible sur les comptes ouverts.",
+                },
+                {
+                    "indicateur_operationnel": "Nouveaux produits d'epargne ouverts sur la periode",
+                    "devise": currency,
+                    "valeur": _numeric_sum(period_open, "nombre_comptes"),
+                    "nature": "Nombre",
+                    "commentaire": "Comptes ouverts crees ou actives sur la periode.",
+                },
+                {
+                    "indicateur_operationnel": "Comptes clients avec produits epargne/DAT sans produit credit actif",
+                    "devise": currency,
+                    "valeur": _numeric_sum(without_credit, "nombre_clients_epargne_sans_credit_actif"),
+                    "nature": "Nombre",
+                    "commentaire": "Potentiel commercial a analyser prudemment avec les equipes operationnelles.",
+                },
+                {
+                    "indicateur_operationnel": "Encours des produits epargne/DAT sans produit credit actif",
+                    "devise": currency,
+                    "valeur": _numeric_sum(without_credit, "encours_epargne_sans_credit_actif"),
+                    "nature": "Montant",
+                    "commentaire": "Encours detenu par des clients sans credit actif.",
+                },
+                {
+                    "indicateur_operationnel": "Nombre de DAT arrivant a echeance",
+                    "devise": currency,
+                    "valeur": _numeric_sum(maturing, "nombre_dat_arrivant_echeance"),
+                    "nature": "Nombre",
+                    "commentaire": f"DAT dont l'echeance arrive dans les {DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS} prochains jours.",
+                },
+                {
+                    "indicateur_operationnel": "Encours des DAT arrivant a echeance",
+                    "devise": currency,
+                    "valeur": _numeric_sum(maturing, "encours_dat_arrivant_echeance"),
+                    "nature": "Montant",
+                    "commentaire": "Montant a anticiper pour remboursement, renouvellement ou suivi client.",
+                },
+            ]
+        )
+
+        stock_credit = _select_currency(credit, currency)
+        period_credit = _select_currency(credit_period, currency)
+        conversion_row = _select_currency(conversion, currency)
+        credit_rows.extend(
+            [
+                {
+                    "indicateur_operationnel": "Nombre de produits credit a la date d'arrete",
+                    "devise": currency,
+                    "valeur": _numeric_sum(stock_credit, "nombre_credits"),
+                    "nature": "Nombre",
+                    "commentaire": "Position globale issue de Loans Account.",
+                },
+                {
+                    "indicateur_operationnel": "Encours des produits credit a la date d'arrete",
+                    "devise": currency,
+                    "valeur": _numeric_sum(stock_credit, "encours_total"),
+                    "nature": "Montant",
+                    "commentaire": "Encours total observe dans Loans Account.",
+                },
+                {
+                    "indicateur_operationnel": "Montant des nouveaux produits credit sur la periode",
+                    "devise": currency,
+                    "valeur": _numeric_sum(period_credit, "montant_credits"),
+                    "nature": "Montant",
+                    "commentaire": "Credits accordes sur la periode.",
+                },
+                {
+                    "indicateur_operationnel": "Taux de conversion DAT en credit",
+                    "devise": currency,
+                    "valeur": _first_number(conversion_row, "taux_conversion_dat_credit_pct"),
+                    "nature": "Pourcentage",
+                    "commentaire": "Part des comptes clients avec produit DAT positif qui ont aussi un produit credit actif.",
+                },
+            ]
+        )
+
+    savings = pd.DataFrame(savings_rows)
+    if not savings.empty:
+        savings["explication"] = savings.get(
+            "commentaire",
+            pd.Series("", index=savings.index),
+        )
+        savings = savings[
+            [
+                column
+                for column in ["indicateur_operationnel", "explication", "devise", "valeur", "nature"]
+                if column in savings.columns
+            ]
+        ]
+    credits = pd.DataFrame(credit_rows)
+    if not credits.empty:
+        credits["explication"] = credits.get(
+            "commentaire",
+            pd.Series("", index=credits.index),
+        )
+        credits = credits[
+            [
+                column
+                for column in ["indicateur_operationnel", "explication", "devise", "valeur", "nature"]
+                if column in credits.columns
+            ]
+        ]
+
+    return {
+        "stats_comparaison_operationnelle": comparison,
+        "stats_clients_operationnels": clients,
+        "stats_epargne_operationnelle": savings,
+        "stats_credit_operationnel": credits,
+    }
 
 
 @st.cache_data(show_spinner=False, max_entries=3)
@@ -4073,25 +4395,21 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
 
     export_report: dict[str, Any] = {
         "epargne_vue_ensemble": cockpit.get("vue_ensemble", pd.DataFrame()),
-        "epargne_portefeuille_synthese": cockpit.get("portefeuille_synthese", pd.DataFrame()),
-        "epargne_portefeuille_detail": cockpit.get("portefeuille_detail", pd.DataFrame()),
-        "epargne_flux_synthese": cockpit.get("flux_synthese", pd.DataFrame()),
-        "epargne_flux_evolution": cockpit.get("flux_evolution", pd.DataFrame()),
-        "epargne_activite_comptes": cockpit.get("activite_comptes", pd.DataFrame()),
-        "epargne_produits_synthese": cockpit.get("produits_synthese", pd.DataFrame()),
-        "epargne_concentration_synthese": cockpit.get("concentration_synthese", pd.DataFrame()),
+        "epargne_encours_a_date": cockpit.get("portefeuille_detail", pd.DataFrame()),
         "epargne_concentration_clients": cockpit.get("concentration_clients", pd.DataFrame()),
         "epargne_concentration_tranches": cockpit.get("concentration_tranches", pd.DataFrame()),
         "epargne_dat_detail": cockpit.get("dat_detail", pd.DataFrame()),
         "epargne_dat_echeances": cockpit.get("dat_echeances_detail", pd.DataFrame()),
-        "epargne_opportunites": _savings_opportunity_display_frame(
-            cockpit.get("opportunites", pd.DataFrame())
-        ),
         "epargne_qualite_donnees": cockpit.get("qualite_donnees", pd.DataFrame()),
-        "epargne_catalogue_kpi": cockpit.get("catalogue_kpi", pd.DataFrame()),
     }
-    for name, frame in cockpit.get("listes_action", {}).items():
-        export_report[f"epargne_liste_{name}"] = frame
+    for name in [
+        "dat_sans_credit_actif",
+        "forte_epargne_sans_credit",
+        "comptes_qualite_a_revoir",
+    ]:
+        frame = cockpit.get("listes_action", {}).get(name, pd.DataFrame())
+        if isinstance(frame, pd.DataFrame) and not frame.empty:
+            export_report[f"epargne_liste_{name}"] = frame
     _render_excel_export_on_demand(
         export_report=export_report,
         prepare_label="Préparer l'export Excel Épargnes",
@@ -4477,25 +4795,51 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     source_label = "G2"
     source_date_label = "Completion Time"
     analysis_prepared = prepared
-    if prepared.g2_transactions.empty:
-        turbo_proxy = build_turbo_only_g2_transactions(prepared.transactions)
-        if turbo_proxy.empty:
-            st.info(
-                "Chargez Transactions Solution Numérique ou les rapports G2 M-Pesa pour alimenter ce sous-onglet."
-            )
-            return
+    g2_available = not prepared.g2_transactions.empty
+    turbo_proxy = build_turbo_only_g2_transactions(prepared.transactions)
+    if not turbo_proxy.empty:
         source_label = "Turbo"
         source_date_label = "created_at"
+        if g2_available:
+            turbo_proxy = enrich_turbo_proxy_with_g2_history(
+                turbo_proxy,
+                prepared.g2_transactions,
+            )
+            g2_dates = pd.to_datetime(
+                prepared.g2_transactions.get(
+                    "completion_time",
+                    pd.Series(pd.NaT, index=prepared.g2_transactions.index),
+                ),
+                errors="coerce",
+            ).dropna()
+            coverage_text = (
+                f"Couverture G2 chargee : {g2_dates.min():%d/%m/%Y %H:%M:%S} "
+                f"au {g2_dates.max():%d/%m/%Y %H:%M:%S}."
+                if not g2_dates.empty
+                else "Le fichier G2 charge ne contient pas de periode exploitable."
+            )
+            st.info(
+                "Mode Solution Numérique prioritaire : la periode est pilotee par Transactions Solution Numérique. "
+                "G2 enrichit le nom du client et sert de preuve de controle lorsqu'il couvre la date analysee; "
+                "les operations hors couverture G2 sont classees comme necessitant une verification. "
+                f"{coverage_text}"
+            )
+        else:
+            st.info(
+                "Mode Solution Numérique seule : le rapport est construit sans Solution Numérique/G2. "
+                "Les operations sont deduites de `ref_no`, `account_type`, `description`, `dr`, `cr` et `created_at`. "
+                "Les noms, statuts, soldes et delais du rapport G2 ainsi que les controles croises G2/Solution Numérique ne sont pas disponibles."
+            )
         analysis_prepared = replace(
             prepared,
             g2_transactions=turbo_proxy,
             cache_fingerprint=f"{_prepared_data_cache_key(prepared)}|g2:turbo-proxy",
         )
+    elif prepared.g2_transactions.empty:
         st.info(
-            "Mode Solution Numérique seule : le rapport est construit sans Solution Numérique/G2. "
-            "Les operations sont deduites de `ref_no`, `account_type`, `description`, `dr`, `cr` et `created_at`. "
-            "Les noms, statuts, soldes et delais du rapport G2 ainsi que les controles croises G2/Solution Numérique ne sont pas disponibles."
+            "Chargez Transactions Solution Numérique ou les rapports G2 M-Pesa pour alimenter ce sous-onglet."
         )
+        return
 
     completion_source = analysis_prepared.g2_transactions.get(
         "completion_time",
@@ -4844,6 +5188,8 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                 "dat_match_rule",
                 "transaction_status",
                 "statut_rapprochement",
+                "couverture_g2_operation",
+                "source_identite_g2",
                 "methode_rapprochement_turbo",
                 "operation_turbo_confirmee",
                 "controle_telephone",
@@ -4862,6 +5208,10 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             "fichier_source_analyse" if source_label == "Turbo" else "fichier_source_g2",
             "transaction_status",
             "traitement_statut_g2",
+            "couverture_g2_operation",
+            "source_identite_g2",
+            "nom_client_g2_historique",
+            "date_derniere_trace_g2_client",
         ]
         operation_position = detail_columns.index("details_rapport") + 1
         detail_columns[operation_position:operation_position] = [
@@ -4889,6 +5239,10 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                 "currency_code",
                 "transaction_amount_numeric",
                 "opposite_party",
+                "couverture_g2_operation",
+                "source_identite_g2",
+                "nom_client_g2_historique",
+                "date_derniere_trace_g2_client",
                 "nombre_lignes_g2_reference",
                 "devises_g2_reference",
                 "statuts_g2_reference",
@@ -4932,8 +5286,8 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             "Les depots sont regroupes par `ref_no` dans les transactions afin de ne pas compter deux fois les ecritures miroir.",
             "`NORMAL SAVINGS` + `Epargne depot` constitue un depot normal; `FIXED SAVINGS` + `Depot Bloque` constitue un DAT.",
             "Les sorties `Retrait Vers M-Pesa` sont regroupees par `reference_id` et `created_at`.",
-            "Les dates utilisent `created_at`. Les controles independants G2/Solution Numérique, le statut G2 et le nom issu de `Opposite Party` sont non applicables sans fichier G2.",
-            "Si un fichier Transactions M-PESA_G2 est charge, il redevient automatiquement la source principale du rapport.",
+            "Les dates utilisent `created_at`. G2 ne limite pas la periode analysee; lorsqu'il est charge, il enrichit l'identite et signale les operations hors couverture.",
+            "Les operations Solution Numerique dont la date n'est pas couverte par le releve G2 charge sont conservees dans l'analyse et classees a verifier.",
         ]
     else:
         control_rules = [
@@ -6482,64 +6836,34 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
 
     export_report = {
         "credit_vue_ensemble": overview,
-        "credit_portefeuille_synthese": portfolio_summary,
-        "credit_portefeuille_detail": _credit_display_frame(
+        "credit_encours_a_date": _credit_display_frame(
             portfolio_detail,
             credit_name_lookup,
         ),
-        "credit_statuts_portefeuille": status_summary,
-        "credit_production_synthese": production_summary,
-        "credit_production_detail": _credit_display_frame(
-            production_detail,
-            credit_name_lookup,
-        ),
-        "credit_remboursements_synthese": repayment_summary,
-        "credit_remboursements_detail": _credit_display_frame(
-            repayment_detail,
-            credit_name_lookup,
-        ),
         "credit_risque_synthese": risk_summary,
-        "credit_risque_detail": _credit_display_frame(
-            risk_detail,
-            credit_name_lookup,
-        ),
         "credit_echeances_synthese": maturity_summary,
-        "credit_echeances_detail": _credit_display_frame(
-            maturity_detail,
-            credit_name_lookup,
-        ),
-        "credit_concentration_prets": _credit_display_frame(
-            concentration_loans,
-            credit_name_lookup,
-        ),
         "credit_concentration_clients": _credit_display_frame(
             concentration_clients,
             credit_name_lookup,
         ),
         "credit_concentration_clients_tranches": concentration_client_bands,
-        "credit_concentration_synthese": concentration_summary,
-        "credit_concentration_produits": concentration_products,
-        "credit_concentration_tranches": concentration_bands,
         "credit_epargne_clients": _credit_display_frame(
             credit_savings_clients,
             credit_name_lookup,
         ),
-        "credit_epargne_synthese": credit_savings_summary,
-        "credit_epargne_controles": _credit_display_frame(
-            credit_savings_controls,
-            credit_name_lookup,
-        ),
-        "credit_cohortes_a_date": cohorts,
-        "credit_qualite_donnees": data_quality,
-        "credit_catalogue_kpi": kpi_catalog,
-        **{
-            f"credit_liste_{key}": _credit_display_frame(
+    }
+    for key in [
+        "prets_echus_avec_encours",
+        "prets_par_simplifie_30j",
+        "prets_avec_penalites",
+        "prets_defaulted",
+    ]:
+        value = action_lists.get(key, pd.DataFrame())
+        if isinstance(value, pd.DataFrame) and not value.empty:
+            export_report[f"credit_liste_{key}"] = _credit_display_frame(
                 value,
                 credit_name_lookup,
             )
-            for key, value in action_lists.items()
-        },
-    }
     _render_excel_export_on_demand(
         export_report=export_report,
         prepare_label="Préparer l'export Excel Crédits",
@@ -8281,27 +8605,23 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
     )
     export_report = {
         "clients_kpi": kpi,
-        "clients_360": _prioritize_dataframe_columns(
-            client_360,
-            MPESA_CLIENT_PRIORITY_COLUMNS,
-        ),
         "clients_acquisition_activation": acquisition,
-        "clients_nouveaux_comptes_actifs": _prioritize_dataframe_columns(
-            new_clients_accounts,
-            MPESA_CLIENT_PRIORITY_COLUMNS,
-        ),
-        "clients_segments": segments_clients,
-        "clients_segments_produits": segments_produits,
         "clients_tranches_encours": encours_clients_tranches,
         "clients_qualite_donnees": data_quality,
-        **{
-            f"clients_{key}": _prioritize_dataframe_columns(
+    }
+    for key in [
+        "clients_actifs",
+        "nouveaux_clients_actifs",
+        "clients_sans_mouvement",
+        "clients_multi_produits",
+        "clients_dat_sans_credit_actif",
+    ]:
+        value = action_lists.get(key, pd.DataFrame())
+        if isinstance(value, pd.DataFrame) and not value.empty:
+            export_report[f"clients_{key}"] = _prioritize_dataframe_columns(
                 value,
                 MPESA_CLIENT_PRIORITY_COLUMNS,
             )
-            for key, value in action_lists.items()
-        },
-    }
     _render_excel_export_on_demand(
         export_report=export_report,
         prepare_label="Preparer l'Excel Clients",
@@ -8603,7 +8923,8 @@ def _render_statistics_tab(
 
     with st.expander("1. Clients", expanded=True):
         st.caption(
-            "Ce bloc mesure la base client : clients connus, clients actifs et evolution des creations."
+            "Ce bloc mesure les comptes clients : un compte client correspond au numero de telephone, "
+            "puis porte des produits comme epargne ouverte, DAT ou credit."
         )
         _render_weekly_comparison(
             weekly_comparison,
@@ -8637,33 +8958,33 @@ def _render_statistics_tab(
             return _scalar_number(fallback)
 
         loaded_clients = _client_indicator_value(
-            "Clients du fichier Customers charge",
+            "Comptes clients du fichier Customers chargé",
             first_row.get("clients_turbo_charges", 0),
         )
         known_clients = _client_indicator_value(
-            "Clients connus a la date de fin",
+            "Comptes clients connus à la date de fin",
             first_row.get("clients_turbo_connus", 0),
         )
         active_clients = _client_indicator_value(
-            "Clients actifs sur la periode",
+            "Comptes clients actifs sur la période",
             first_row.get("clients_turbo_actifs", 0),
         )
         render_kpi_cards(
             [
                 (
-                    "Clients du fichier Customers",
+                    "Comptes clients du fichier Customers",
                     _format_count(loaded_clients),
-                    "Clients distincts dans Customers avant filtre de date",
+                    "Numeros de telephone distincts dans Customers avant filtre de date",
                     "navy",
                 ),
                 (
-                    "Clients connus a la date de fin",
+                    "Comptes clients connus a la date de fin",
                     _format_count(known_clients),
-                    "Clients crees avant ou a la date de fin du rapport",
+                    "Comptes clients crees avant ou a la date de fin du rapport",
                     "blue",
                 ),
                 (
-                    "Clients actifs",
+                    "Comptes clients actifs",
                     _format_count(active_clients),
                     "Au moins une operation sur la periode",
                     "green",
@@ -8671,7 +8992,7 @@ def _render_statistics_tab(
                 (
                     "Taux d'activite",
                     _safe_rate(active_clients, known_clients),
-                    "Clients actifs / clients connus",
+                    "Comptes clients actifs / comptes clients connus",
                     "red",
                 ),
             ]
@@ -9279,29 +9600,16 @@ def _render_statistics_tab(
         )
     except RuntimeError as exc:
         st.warning(str(exc))
-    statistics_excel_report = {
-        key: value
-        for key, value in report_view.items()
-        if key
-        in {
-            "vue_ensemble",
-            "clients_indicateurs",
-            "clients_croissance",
-            "chiffre_affaires",
-            "activite_evolution",
-            "epargne_dat_portefeuille",
-            "epargne_dat_portefeuille_periode",
-            "credit_synthese",
-            "credit_synthese_periode",
-            "clients_volume_top",
-            "depots_reguliers_synthese",
-            "depots_reguliers_clients",
-            "comparaison_hebdomadaire",
-            "comparaison_annee_precedente",
-            "g2_qualite_rapprochement",
-            "g2_non_rapprochees",
-        }
-    }
+    statistics_excel_report = _build_statistics_operational_excel_report(report_view)
+    for key in [
+        "clients_operationnels",
+        "epargne_sans_credit_actif",
+        "dat_arrivant_echeance",
+        "dat_conversion_credit",
+    ]:
+        value = report_view.get(key)
+        if isinstance(value, pd.DataFrame) and not value.empty:
+            statistics_excel_report[key] = value
     _render_excel_export_on_demand(
         export_report=statistics_excel_report,
         prepare_label="Préparer le détail statistiques Excel",

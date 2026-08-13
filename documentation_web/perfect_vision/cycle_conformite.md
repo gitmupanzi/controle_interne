@@ -131,18 +131,20 @@ Les listes de sanctions servent au contrôle d'identification.
 
 ## Requêtes utiles
 
-| N° | Export | Usage |
-|---:|---|---|
-| 048 | `48_cycle_conformite_lbc_ft_rubriques_lbc_ft_non_couvertes_automatiquement_et_pistes_de_mapping` | Rubriques non couvertes et pistes de mapping. |
-| 149 | `149_cycle_conformite_reporting_lbc_ft` | Requête principale du reporting LBC-FT par période. |
-| 150 | `150_cycle_conformite_alertes_lbc_ft_detaillees` | Alertes détaillées pour traitement Conformité. |
-| 151 | `151_cycle_conformite_declarations_soupcon_centif` | Déclarations de soupçon et CENTIF. |
-| 152 | `152_cycle_conformite_clients_profils_risque` | Clients à risque et surveillance renforcée. |
-| 153 | `153_cycle_conformite_referentiel_listes_sanctions` | Listes de sanctions et qualité d'identification. |
-| 154 | `154_cycle_conformite_comptes_dormants_reactives` | Comptes dormants réactivés. |
-| 155 | `155_cycle_conformite_qualite_donnees_lbc_ft` | Qualité des données du dispositif LBC-FT. |
-| 156 | `156_cycle_conformite_lbc_ft_socle_unique_analyses_38_39_48_57_149_155` | Socle unique pour l'application Streamlit. |
-| 158 | `158_cycle_conformite_detail_credits_reporting_lbc_ft` | Détail des crédits alimentant les lignes 15 à 24 du canevas. |
+Les requêtes ci-dessous sont classées en privilégiant d'abord le reporting réglementaire et les décisions de conformité, puis les contrôles de qualité ou de couverture.
+
+| Priorité | N° | Export | Ce que la requête apporte | Commentaire |
+|---:|---:|---|---|---|
+| 1 | 149 | `149_cycle_conformite_reporting_lbc_ft` | Requête principale du reporting LBC-FT par période. | À utiliser pour alimenter le canevas BCC : volumes, montants, seuils, opérations sensibles et couverture des rubriques. |
+| 2 | 158 | `158_cycle_conformite_detail_credits_reporting_lbc_ft` | Détail des crédits alimentant les lignes 15 à 24 du canevas. | Donne la liste explicative derrière les montants crédit du reporting, utile pour justification et revue. |
+| 3 | 156 | `156_cycle_conformite_lbc_ft_socle_unique_analyses_38_39_48_57_149_155` | Socle unique pour l'application Streamlit. | Source consolidée pour le tableau de bord conformité : elle évite de charger plusieurs fichiers séparés. |
+| 4 | 150 | `150_cycle_conformite_alertes_lbc_ft_detaillees` | Alertes détaillées pour traitement Conformité. | Sert au suivi opérationnel des alertes : qui, quand, montant, motif et statut de traitement. |
+| 5 | 152 | `152_cycle_conformite_clients_profils_risque` | Clients à risque et surveillance renforcée. | Aide à prioriser les revues de clients sensibles selon le profil de risque disponible. |
+| 6 | 151 | `151_cycle_conformite_declarations_soupcon_centif` | Déclarations de soupçon et CENTIF. | À utiliser pour la traçabilité des déclarations et le suivi du dispositif déclaratif. |
+| 7 | 153 | `153_cycle_conformite_referentiel_listes_sanctions` | Listes de sanctions et qualité d'identification. | Vérifie la présence et la qualité des informations nécessaires au filtrage sanctions. |
+| 8 | 154 | `154_cycle_conformite_comptes_dormants_reactives` | Comptes dormants réactivés. | Utile pour surveiller les réactivations de comptes dormants, souvent sensibles en conformité. |
+| 9 | 155 | `155_cycle_conformite_qualite_donnees_lbc_ft` | Qualité des données du dispositif LBC-FT. | Contrôle les données nécessaires au reporting et aux alertes avant partage externe. |
+| 10 | 048 | `48_cycle_conformite_lbc_ft_rubriques_lbc_ft_non_couvertes_automatiquement_et_pistes_de_mapping` | Rubriques non couvertes et pistes de mapping. | Sert à documenter honnêtement ce qui n'est pas encore automatisé et ce qui doit être cartographié. |
 
 ## Circuit du reporting LBC-FT
 

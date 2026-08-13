@@ -56,16 +56,18 @@ Pour rendre le cockpit opérationnel, les feuilles clés écartent les colonnes 
 | Priorité | Feuille | Lecture recommandée |
 |---:|---|---|
 | 1 | `Credit_Vue_Ensemble` | Synthèse générale du portefeuille crédit par devise. |
-| 2 | `Credit_Portefeuille` | Montants accordés, encours, remboursements et position du portefeuille. |
+| 2 | `Credit_Encours_A_Date` | Liste opérationnelle des encours crédits à la date de situation, avec client, numéro, devise, produit, statut, échéance et risque. |
 | 3 | `Credit_Risque_Synthese` | Lecture rapide des risques : retards, PAR simplifié, défauts et signaux de surveillance. |
-| 4 | `Liste_Prets_Echus` | Liste concrète des prêts échus avec encours à suivre. |
-| 5 | `Liste_Prets_PAR30` | Prêts en retard simplifié de 30 jours : utile pour le recouvrement. |
-| 6 | `Liste_Prets_Penalites` | Prêts avec pénalités : dossiers sensibles à prioriser. |
-| 7 | `Credit_Top_Clients` | Concentration des crédits par client. |
-| 8 | `Credit_Tranches_Clients` | Répartition par tranche d'encours client afin de lire l'exposition par niveau de montant. |
-| 9 | `Credit_Epargne_Clients_360` | Mise en regard crédit + épargne + DAT, sans compensation comptable. |
+| 4 | `Credit_Echeances` | Synthèse des prochaines échéances et retards utiles au suivi opérationnel. |
+| 5 | `Liste_Prets_Echus` | Liste concrète des prêts échus avec encours à suivre. |
+| 6 | `Liste_Prets_PAR30` | Prêts en retard simplifié de 30 jours : utile pour le recouvrement. |
+| 7 | `Liste_Prets_Penalites` | Prêts avec pénalités : dossiers sensibles à prioriser. |
+| 8 | `Liste_Prets_Defaulted` | Crédits marqués en défaut dans la source, à vérifier par les opérations. |
+| 9 | `Credit_Top_Clients` | Concentration des crédits par client. |
+| 10 | `Credit_Tranches_Clients` | Répartition par tranche d'encours client afin de lire l'exposition par niveau de montant. |
+| 11 | `Credit_Epargne_Clients_360` | Mise en regard crédit + épargne + DAT, sans compensation comptable. |
 
-Lecture Direction : commencer par `Credit_Vue_Ensemble` et `Credit_Risque_Synthese`. Les feuilles `Liste_Prets_Echus`, `Liste_Prets_PAR30` et `Liste_Prets_Penalites` sont surtout destinées au suivi opérationnel du recouvrement.
+Lecture Direction : commencer par `Credit_Vue_Ensemble`, `Credit_Encours_A_Date` et `Credit_Risque_Synthese`. Les feuilles `Liste_Prets_Echus`, `Liste_Prets_PAR30`, `Liste_Prets_Penalites` et `Liste_Prets_Defaulted` sont surtout destinées au suivi opérationnel du recouvrement. Les grands détails techniques restent réservés au diagnostic et ne sont pas exportés par défaut dans le cockpit partagé.
 
 ## À retenir
 
