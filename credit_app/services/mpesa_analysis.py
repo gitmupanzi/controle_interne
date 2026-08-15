@@ -14615,6 +14615,23 @@ def build_mpesa_credit_cockpit(
     cohort["taux_prets_par_simplifie_30j_pct"] = cohort["prets_par_simplifie_30j"].div(cohort["nombre_prets"].replace(0, pd.NA)).mul(100)
     result["cohortes_a_date"] = cohort.sort_values(["currency_code", "cohorte_creation"]).reset_index(drop=True)
 
+    for stamped_key in [
+        "risque_synthese",
+        "echeances_synthese",
+        "concentration_clients",
+        "concentration_clients_tranches",
+        "credit_epargne_clients",
+    ]:
+        stamped_frame = result.get(stamped_key)
+        if (
+            isinstance(stamped_frame, pd.DataFrame)
+            and not stamped_frame.empty
+            and "date_situation" not in stamped_frame.columns
+        ):
+            stamped_frame = stamped_frame.copy()
+            stamped_frame.insert(0, "date_situation", end_date)
+            result[stamped_key] = stamped_frame
+
     overview_rows: list[dict[str, Any]] = []
     currencies = sorted(
         set(grouped.get("currency_code", pd.Series(dtype=str)).astype(str))
@@ -19134,10 +19151,17 @@ def _html_table(frame: pd.DataFrame, columns: list[str], labels: dict[str, str],
 
 def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
     source_label = str(report.get("analysis_source_label", "G2") or "G2")
+    analysis_mode_label = str(report.get("analysis_mode_label", "") or "")
+    analysis_mode_normalized = normalize_label(analysis_mode_label)
     source_label_normalized = normalize_label(source_label)
     turbo_only = (
         source_label_normalized == "turbo"
         or source_label.casefold().startswith("solution num")
+    )
+    solution_numeric_with_g2 = (
+        turbo_only
+        and "g2" in analysis_mode_normalized
+        and "seule" not in analysis_mode_normalized
     )
     daily_pivot = report.get("rapport_journalier_pivot", pd.DataFrame())
     g2_dat = report.get("g2_dat", pd.DataFrame())
@@ -19328,10 +19352,61 @@ def _g2_executive_context(report: dict[str, Any]) -> dict[str, Any]:
 
     control_text = ""
     if turbo_only:
-        control_text = (
-            "Mode Solution Numérique seule : les controles croises rapport G2/Solution Numérique sont non applicables. "
-            "Les depots sont regroupes par ref_no et les retraits M-PESA par reference_id + created_at."
-        )
+        if solution_numeric_with_g2:
+            control_prefix = (
+                "Mode Solution Numérique + rapport G2 : les montants et la periode restent pilotes par la Solution Numérique. "
+                "G2 enrichit l'identite client et sert de preuve de controle lorsque la couverture temporelle le permet."
+            )
+            if not g2_dat.empty and "statut_rapprochement" in g2_dat.columns:
+                reference_status = g2_dat["statut_rapprochement"].astype("string").fillna("")
+                matched = int(reference_status.str.startswith("Rapproche", na=False).sum())
+                exact = int(reference_status.eq("Rapproche exact").sum())
+                with_gap = int(reference_status.eq("Rapproche avec ecart").sum())
+                unmatched = int(reference_status.eq("Non rapproche").sum())
+                anomalies = int(
+                    g2_dat.get("est_anomalie", pd.Series(False, index=g2_dat.index))
+                    .fillna(False)
+                    .astype(bool)
+                    .sum()
+                )
+                total = int(len(g2_dat))
+                rate = 100 * matched / total if total else 0
+                control_text = (
+                    f"{control_prefix} Rapprochement G2/Solution Numérique : "
+                    f"{matched}/{total} operation(s) rapprochee(s), soit {rate:.1f}%; "
+                    f"{exact} exact(s), {with_gap} avec ecart, "
+                    f"{unmatched} non rapprochee(s), {anomalies} anomalie(s)."
+                )
+            elif not g2_dat.empty:
+                confirmed = clean_text(
+                    g2_dat.get(
+                        "operation_turbo_confirmee",
+                        pd.Series("", index=g2_dat.index),
+                    )
+                ).eq("Oui")
+                anomalies = int(
+                    g2_dat.get("est_anomalie", pd.Series(False, index=g2_dat.index))
+                    .fillna(False)
+                    .astype(bool)
+                    .sum()
+                )
+                total = int(len(g2_dat))
+                matched = int(confirmed.sum())
+                rate = 100 * matched / total if total else 0
+                control_text = (
+                    f"{control_prefix} Rapprochement G2/Solution Numérique : "
+                    f"{matched}/{total} operation(s) confirmee(s), soit {rate:.1f}%; "
+                    f"{total - matched} operation(s) a verifier, {anomalies} anomalie(s)."
+                )
+            else:
+                control_text = (
+                    f"{control_prefix} Aucun mouvement eligible n'a ete trouve dans le perimetre analyse."
+                )
+        else:
+            control_text = (
+                "Mode Solution Numérique seule : les controles croises rapport G2/Solution Numérique sont non applicables. "
+                "Les depots sont regroupes par ref_no et les retraits M-PESA par reference_id + created_at."
+            )
     elif not g2_dat.empty:
         if "statut_rapprochement" in g2_dat.columns:
             reference_status = g2_dat["statut_rapprochement"].astype("string").fillna("")
@@ -19518,7 +19593,7 @@ p {{ margin: 4px 0 7px; }}
       <tr><th>Date du :</th><td>{escape(period_start_text)}</td></tr>
       <tr><th>Au :</th><td>{escape(period_end_text)}</td></tr>
       <tr><th>Sens</th><td>{escape(direction_label)}</td></tr>
-      <tr><th>Source</th><td>{escape(str(report.get("analysis_source_label", "G2") or "Solution Numérique/G2"))}</td></tr>
+      <tr><th>Source</th><td>{escape(str(report.get("analysis_mode_label") or report.get("analysis_source_label", "G2") or "Solution Numérique/G2"))}</td></tr>
       <tr><th>Généré le</th><td>{generated_at:%d/%m/%Y}</td></tr>
     </table>
   </div>
@@ -22585,12 +22660,19 @@ def create_g2_dat_word(
         raise RuntimeError("La dependance python-docx est requise pour generer le rapport Word.") from exc
 
     source_label = str(report.get("analysis_source_label", "G2") or "G2")
+    analysis_mode_label = str(report.get("analysis_mode_label", "") or "")
     source_label_normalized = normalize_label(source_label)
     turbo_only = (
         source_label_normalized == "turbo"
         or source_label.casefold().startswith("solution num")
     )
-    source_display_label = "Solution Bisou Bisou Digital" if turbo_only else "Solution Numérique/G2"
+    source_display_label = (
+        analysis_mode_label
+        if turbo_only and analysis_mode_label
+        else "Solution Bisou Bisou Digital"
+        if turbo_only
+        else "Solution Numérique/G2"
+    )
     flow_display_label = "Solution Numérique" if turbo_only else source_display_label
     report_scope = "Solution Numérique / M-Pesa"
     daily_pivot = report.get("rapport_journalier_pivot", pd.DataFrame())
@@ -22931,6 +23013,602 @@ MPESA_DIRECTION_PRIORITY_SHEETS = {
     "Epargne_Qualite_A_Revoir",
 }
 
+MPESA_SAVINGS_RED_TAB_SHEETS = {
+    "Epargne_Forte_Sans_Credit",
+    "Epargne_Top_Clients",
+    "Epargne_DAT_Sans_Credit",
+}
+
+MPESA_SAVINGS_PRIORITY_SHEETS = {
+    sheet for sheet in MPESA_DIRECTION_PRIORITY_SHEETS if sheet.startswith("Epargne_")
+}
+
+MPESA_CREDIT_RED_TAB_SHEETS = {
+    "Credit_Encours_A_Date",
+    "Credit_Risque_Synthese",
+    "Credit_Epargne_Clients_360",
+    "Liste_Prets_Echus",
+    "Liste_Prets_Penalites",
+    "Liste_Prets_PAR30",
+}
+
+MPESA_CREDIT_PRIORITY_SHEETS = {
+    sheet
+    for sheet in MPESA_DIRECTION_PRIORITY_SHEETS
+    if sheet.startswith("Credit_") or sheet.startswith("Liste_Prets_")
+}
+
+MPESA_DIRECTION_RED_TAB_SHEETS = (
+    MPESA_DIRECTION_PRIORITY_SHEETS
+    - MPESA_SAVINGS_PRIORITY_SHEETS
+    - MPESA_CREDIT_PRIORITY_SHEETS
+) | MPESA_SAVINGS_RED_TAB_SHEETS | MPESA_CREDIT_RED_TAB_SHEETS
+
+MPESA_CLIENT_COCKPIT_SHEETS = {
+    "Clients_KPI",
+    "Clients_360",
+    "Clients_Acquisition",
+    "Clients_Segments",
+    "Clients_Produits",
+    "Clients_Tranches",
+    "Clients_Qualite",
+    "Clients_Actifs",
+    "Nouveaux_Clients",
+    "Nouveaux_Clients_Actifs",
+    "Nouveaux_Non_Actives",
+    "Clients_Sans_Mouvement",
+    "Clients_Inactifs",
+    "Clients_Multi_Produits",
+    "DAT_Sans_Credit",
+}
+
+MPESA_CREDIT_COCKPIT_SHEETS = {
+    "Credit_Vue_Ensemble",
+    "Credit_Encours_A_Date",
+    "Credit_Portefeuille",
+    "Credit_Detail",
+    "Credit_Statuts",
+    "Credit_Production_Synth",
+    "Credit_Production_Detail",
+    "Credit_Remb_Synthese",
+    "Credit_Remb_Detail",
+    "Credit_Risque_Synthese",
+    "Credit_Risque_Detail",
+    "Credit_Echeances",
+    "Credit_Echeances_Detail",
+    "Credit_Top_Prets",
+    "Credit_Top_Clients",
+    "Credit_Tranches_Clients",
+    "Credit_Concentration",
+    "Credit_Produits",
+    "Credit_Tranches",
+    "Credit_Epargne_Clients_360",
+    "Credit_Epargne_Cockpit",
+    "Credit_Epargne_Controles",
+    "Credit_Cohortes",
+    "Credit_Qualite",
+    "Credit_Catalogue_KPI",
+    "Liste_Prets_Echus",
+    "Liste_Prets_Defaulted",
+    "Liste_Prets_Penalites",
+    "Liste_Prets_PAR30",
+    "Liste_Fortes_Expositions",
+    "Liste_Echeance_30j",
+    "Liste_Epargne_Ambigue",
+}
+
+MPESA_SAVINGS_COCKPIT_SHEETS = {
+    "Epargne_Vue_Ensemble",
+    "Epargne_Encours_A_Date",
+    "Epargne_Portefeuille",
+    "Epargne_Detail",
+    "Epargne_Flux",
+    "Epargne_Evolution_Flux",
+    "Epargne_Activite",
+    "Epargne_Produits",
+    "Epargne_Concentration",
+    "Epargne_Top_Clients",
+    "Epargne_Tranches",
+    "Epargne_DAT",
+    "Epargne_Echeances_DAT",
+    "Epargne_Opportunites",
+    "Epargne_Qualite",
+    "Epargne_Catalogue_KPI",
+    "Epargne_Sans_Mouvement",
+    "Epargne_Solde_Nul",
+    "Epargne_Nouveaux_Non_Actives",
+    "Epargne_Gros_Deposants",
+    "Epargne_DAT_Echeance",
+    "Epargne_DAT_Echus",
+    "Epargne_DAT_Sans_Credit",
+    "Epargne_Forte_Sans_Credit",
+    "Epargne_Qualite_A_Revoir",
+}
+
+MPESA_DIRECTION_COCKPIT_SHEETS = (
+    MPESA_CLIENT_COCKPIT_SHEETS
+    | MPESA_CREDIT_COCKPIT_SHEETS
+    | MPESA_SAVINGS_COCKPIT_SHEETS
+)
+
+MPESA_SAVINGS_OPERATIONAL_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
+    "Epargne_Encours_A_Date": [
+        "date_situation",
+        "id_client",
+        "numero_client",
+        "nom_client",
+        "numero_compte",
+        "famille_epargne",
+        "produit_epargne",
+        "type_compte",
+        "description_produit_epargne",
+        "solde",
+        "devise",
+        "statut_compte",
+        "date_creation_compte",
+        "date_mise_a_jour",
+        "date_echeance",
+        "interet_calcule",
+        "date_dernier_calcul_interet",
+        "date_prochain_calcul_interet",
+        "interet_constate",
+        "interet_vodacom",
+        "frais_a_payer",
+        "solde_bloque",
+        "jours_avant_echeance",
+        "duree_contractuelle_jours",
+        "taux_interet_annuel_pct",
+        "interet_estime",
+        "capital_plus_interet_estime",
+        "tranche_echeance",
+    ],
+    "Epargne_Top_Clients": [
+        "date_situation",
+        "id_client",
+        "numero_client",
+        "nom_client",
+        "famille_epargne",
+        "produits",
+        "nombre_comptes",
+        "encours_actuel",
+        "devise",
+        "rang_client",
+        "tranche_encours",
+    ],
+    "Epargne_Tranches": [
+        "date_situation",
+        "famille_epargne",
+        "nombre_clients",
+        "nombre_comptes",
+        "encours_actuel",
+        "devise",
+        "part_encours_pct",
+        "tranche_encours",
+    ],
+    "Epargne_DAT": [
+        "date_situation",
+        "id_client",
+        "numero_client",
+        "nom_client",
+        "numero_compte",
+        "produit_epargne",
+        "type_compte",
+        "famille_epargne",
+        "description_produit_epargne",
+        "solde",
+        "devise",
+        "statut_compte",
+        "date_creation_compte",
+        "date_mise_a_jour",
+        "interet_calcule",
+        "date_dernier_calcul_interet",
+        "date_prochain_calcul_interet",
+        "date_echeance",
+        "interet_constate",
+        "interet_vodacom",
+        "frais_a_payer",
+        "solde_bloque",
+        "jours_avant_echeance",
+        "duree_contractuelle_jours",
+        "taux_interet_annuel_pct",
+        "interet_estime",
+        "capital_plus_interet_estime",
+        "tranche_echeance",
+    ],
+    "Epargne_Echeances_DAT": [
+        "date_situation",
+        "date_analyse",
+        "id_client",
+        "numero_client",
+        "nom_client",
+        "numero_compte",
+        "produit_epargne",
+        "description_produit_epargne",
+        "type_compte",
+        "statut_compte",
+        "solde",
+        "devise",
+        "date_approbation",
+        "date_echeance",
+        "controle_date_dat",
+        "commentaire",
+        "duree_contractuelle_jours",
+        "duree_contractuelle_mois_estimee",
+        "taux_interet_annuel_pct",
+        "interet_estime_echeance",
+        "capital_plus_interet_estime",
+        "montant_estime_a_rembourser",
+        "jours_avant_echeance",
+        "tranche_echeance",
+        "statut_preparation_remboursement",
+        "horizon_preparation_jours",
+    ],
+    "Epargne_DAT_Sans_Credit": [
+        "date_situation",
+        "id_client",
+        "numero_client",
+        "nom_client",
+        "numero_compte",
+        "id_produit_epargne",
+        "famille_epargne",
+        "type_compte",
+        "produit_epargne",
+        "description_produit_epargne",
+        "solde",
+        "devise",
+        "statut_compte",
+        "date_creation_compte",
+        "date_mise_a_jour",
+        "interet_calcule",
+        "date_dernier_calcul_interet",
+        "date_prochain_calcul_interet",
+        "date_echeance",
+        "interet_constate",
+        "interet_vodacom",
+        "frais_a_payer",
+        "solde_bloque",
+        "jours_avant_echeance",
+        "duree_contractuelle_jours",
+        "taux_interet_annuel_pct",
+        "interet_estime",
+        "capital_plus_interet_estime",
+        "tranche_echeance",
+        "opportunite",
+        "lecture",
+    ],
+    "Epargne_Forte_Sans_Credit": [
+        "date_situation",
+        "id_client",
+        "numero_client",
+        "nom_client",
+        "famille_epargne",
+        "produits",
+        "nombre_comptes",
+        "encours_actuel",
+        "devise",
+        "rang_client",
+        "tranche_encours",
+        "seuil_forte_epargne",
+        "opportunite",
+        "lecture",
+    ],
+}
+
+MPESA_SAVINGS_OPERATIONAL_SHEET_DROP_COLUMNS: dict[str, set[str]] = {
+    "Epargne_Encours_A_Date": {
+        "id_produit_epargne",
+        "numero_telephone_msisdn",
+        "mode_rapprochement_nom_client",
+        "numero_telephone",
+        "date_approbation",
+        "solde_positif",
+        "solde_nul",
+        "date_creation",
+        "date_activation",
+    },
+    "Epargne_Top_Clients": {"telephone"},
+    "Epargne_DAT": {
+        "numero_telephone",
+        "id_produit_epargne",
+        "mode_rapprochement_nom_client",
+        "numero_telephone_msisdn",
+        "solde_positif",
+        "solde_nul",
+        "date_creation",
+        "date_approbation",
+        "date_activation",
+    },
+    "Epargne_Echeances_DAT": {"numero_telephone"},
+    "Epargne_DAT_Sans_Credit": {
+        "numero_telephone",
+        "date_approbation",
+        "mode_rapprochement_nom_client",
+        "numero_telephone_msisdn",
+        "solde_positif",
+        "solde_nul",
+        "date_creation",
+        "date_activation",
+    },
+    "Epargne_Forte_Sans_Credit": {"telephone"},
+}
+
+MPESA_CREDIT_ENCOURS_A_DATE_COLUMNS = [
+    "date_situation",
+    "id_client",
+    "numero_client",
+    "nom_client",
+    "numero_pret",
+    "statut_credit",
+    "date_creation",
+    "date_mise_a_jour",
+    "produit_credit",
+    "devise",
+    "montant_credit",
+    "encours_credit",
+    "montant_deja_rembourse",
+    "capital_restant_du",
+    "frais_dossier_restants",
+    "interets_restants",
+    "penalites_restantes",
+    "interet_constate",
+    "pret_en_defaut",
+    "pret_renouvele",
+    "periode_grace",
+    "date_echeance",
+    "jours_retard",
+    "jours_avant_echeance",
+    "tranche_echeance",
+    "tranche_encours",
+    "date_dernier_remboursement",
+    "nombre_echeances",
+    "periode_remboursement",
+    "unite_periode_remboursement",
+    "encours_credit_2",
+    "pret_actif",
+    "par_simplifie_1j",
+    "par_simplifie_7j",
+    "par_simplifie_30j",
+]
+
+MPESA_CREDIT_LOAN_LIST_COLUMNS = [
+    "date_situation",
+    "id_client",
+    "numero_client",
+    "nom_client",
+    "numero_pret",
+    "date_creation",
+    "date_mise_a_jour",
+    "devise",
+    "produit_credit",
+    "montant_credit",
+    "encours_credit",
+    "montant_deja_rembourse",
+    "capital_restant_du",
+    "frais_dossier_restants",
+    "interets_restants",
+    "penalites_restantes",
+    "interet_constate",
+    "statut_credit",
+    "pret_en_defaut",
+    "pret_renouvele",
+    "periode_grace",
+    "date_echeance",
+    "jours_retard",
+    "jours_avant_echeance",
+    "tranche_echeance",
+    "tranche_encours",
+    "date_dernier_remboursement",
+    "nombre_echeances",
+    "periode_remboursement",
+    "unite_periode_remboursement",
+    "encours_credit_2",
+    "pret_actif",
+    "par_simplifie_1j",
+    "par_simplifie_7j",
+    "par_simplifie_30j",
+]
+
+MPESA_CREDIT_OPERATIONAL_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
+    "Credit_Encours_A_Date": MPESA_CREDIT_ENCOURS_A_DATE_COLUMNS,
+    "Credit_Risque_Synthese": [
+        "date_situation",
+        "devise",
+        "tranche_risque",
+        "statut_risque",
+        "nombre_credits",
+        "nombre_clients",
+        "encours_credit",
+        "part_encours_pct",
+        "par_simplifie_1j",
+        "par_simplifie_7j",
+        "par_simplifie_30j",
+    ],
+    "Credit_Echeances": [
+        "date_situation",
+        "devise",
+        "tranche_echeance",
+        "nombre_credits",
+        "nombre_clients",
+        "encours_credit",
+        "montant_credit",
+        "jours_avant_echeance_min",
+        "jours_avant_echeance_max",
+    ],
+    "Credit_Top_Clients": [
+        "date_situation",
+        "id_client",
+        "numero_client",
+        "nom_client",
+        "nombre_credits",
+        "devise",
+        "encours_total",
+        "encours_retard_1j",
+        "rang_encours",
+        "tranche_encours",
+    ],
+    "Credit_Tranches_Clients": [
+        "date_situation",
+        "devise",
+        "tranche_encours",
+        "nombre_clients",
+        "nombre_credits",
+        "encours_total",
+        "part_encours_pct",
+    ],
+    "Credit_Epargne_Clients_360": [
+        "date_situation",
+        "id_client",
+        "numero_telephone_credit",
+        "nom_client",
+        "devise",
+        "nombre_credits",
+        "ids_credits",
+        "statuts_credit",
+        "montant_credits",
+        "montant_rembourse",
+        "encours_credit",
+        "principal_restant",
+        "frais_mise_en_place_restants",
+        "interets_restants",
+        "penalites_restantes",
+        "statut_rapprochement",
+        "motifs_controle",
+        "nombre_comptes_ouverts_candidats",
+        "numero_compte_epargne_correspondant",
+        "solde_compte_ouvert",
+        "nb_dat_positifs",
+        "solde_dat_positif",
+        "epargne_totale_observee",
+        "interpretation_position",
+    ],
+    "Liste_Prets_Echus": MPESA_CREDIT_LOAN_LIST_COLUMNS,
+    "Liste_Prets_Defaulted": MPESA_CREDIT_LOAN_LIST_COLUMNS,
+    "Liste_Prets_Penalites": MPESA_CREDIT_LOAN_LIST_COLUMNS,
+    "Liste_Prets_PAR30": MPESA_CREDIT_LOAN_LIST_COLUMNS,
+}
+
+MPESA_CREDIT_OPERATIONAL_SHEET_DROP_COLUMNS: dict[str, set[str]] = {
+    "Credit_Encours_A_Date": {"numero_telephone"},
+    "Credit_Epargne_Clients_360": {"numero_client", "numero_telephone_epargne"},
+    "Liste_Prets_Echus": {"numero_telephone"},
+    "Liste_Prets_Defaulted": {"numero_telephone"},
+    "Liste_Prets_Penalites": {"numero_telephone"},
+    "Liste_Prets_PAR30": {"numero_telephone"},
+}
+
+MPESA_OPERATIONAL_SHEET_COLUMN_ORDERS = {
+    **MPESA_SAVINGS_OPERATIONAL_SHEET_COLUMN_ORDERS,
+    **MPESA_CREDIT_OPERATIONAL_SHEET_COLUMN_ORDERS,
+}
+
+MPESA_OPERATIONAL_SHEET_DROP_COLUMNS = {
+    **MPESA_SAVINGS_OPERATIONAL_SHEET_DROP_COLUMNS,
+    **MPESA_CREDIT_OPERATIONAL_SHEET_DROP_COLUMNS,
+}
+
+MPESA_OPERATIONAL_DATE_SITUATION_EXPORT_SHEETS = {
+    sheet_name
+    for sheet_name, ordered_columns in MPESA_OPERATIONAL_SHEET_COLUMN_ORDERS.items()
+    if ordered_columns and ordered_columns[0] == "date_situation"
+}
+
+MPESA_OPERATIONAL_COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
+    "id_client": ("id_client", "customer_id"),
+    "numero_client": (
+        "numero_client",
+        "numero_telephone",
+        "telephone",
+        "telephone_client",
+        "telephone_epargne",
+        "msisdn",
+        "msisdn1",
+        "phone_prefixe",
+    ),
+    "nom_client": ("nom_client", "nom_complet", "customer", "client", "nom"),
+    "numero_compte": ("numero_compte", "savings_id", "id_compte", "id"),
+    "id_produit_epargne": ("id_produit_epargne", "product_id"),
+    "produit_epargne": ("produit_epargne", "product_name"),
+    "description_produit_epargne": (
+        "description_produit_epargne",
+        "product_description",
+    ),
+    "devise": ("devise", "currency_code", "code_devise"),
+    "solde": ("solde", "balance"),
+    "statut_compte": ("statut_compte", "status"),
+    "date_approbation": ("date_approbation", "date_approved"),
+    "date_activation": ("date_activation", "date_activated"),
+    "date_creation": ("date_creation", "created_at"),
+    "date_mise_a_jour": ("date_mise_a_jour", "updated_at"),
+    "date_echeance": ("date_echeance", "maturity_date", "due_date"),
+    "interet_calcule": ("interet_calcule", "is_interest_calculated"),
+    "date_dernier_calcul_interet": (
+        "date_dernier_calcul_interet",
+        "last_interest_calculation_date",
+    ),
+    "date_prochain_calcul_interet": (
+        "date_prochain_calcul_interet",
+        "next_interest_calculation_date",
+    ),
+    "interet_constate": ("interet_constate", "interest_earned"),
+    "interet_vodacom": ("interet_vodacom", "voda_interest"),
+    "frais_a_payer": ("frais_a_payer", "fees_due"),
+    "solde_bloque": ("solde_bloque", "locked_balance"),
+    "encours_actuel": ("encours_actuel", "encours", "balance"),
+    "numero_pret": ("numero_pret", "loan_id", "id_pret"),
+    "statut_credit": ("statut_credit", "status_name", "statut_pret"),
+    "produit_credit": ("produit_credit", "loan_product_id", "produit_pret"),
+    "montant_credit": ("montant_credit", "loan_amount"),
+    "encours_credit": ("encours_credit", "loan_balance"),
+    "montant_deja_rembourse": ("montant_deja_rembourse", "amount_paid"),
+    "capital_restant_du": (
+        "capital_restant_du",
+        "outstanding_principle",
+        "outstanding_principal",
+    ),
+    "frais_dossier_restants": (
+        "frais_dossier_restants",
+        "outstanding_setup_fees",
+    ),
+    "interets_restants": ("interets_restants", "outstanding_interest"),
+    "penalites_restantes": (
+        "penalites_restantes",
+        "outstanding_penalty_fees",
+    ),
+    "pret_en_defaut": ("pret_en_defaut", "defaut", "defaulted"),
+    "pret_renouvele": ("pret_renouvele", "rollover", "is_rollover"),
+    "periode_grace": ("periode_grace", "is_grace_period"),
+    "date_dernier_remboursement": (
+        "date_dernier_remboursement",
+        "last_repayment_date",
+    ),
+    "nombre_echeances": ("nombre_echeances", "repayment_installments"),
+    "periode_remboursement": ("periode_remboursement", "repayment_period"),
+    "unite_periode_remboursement": (
+        "unite_periode_remboursement",
+        "repayment_period_unit",
+    ),
+    "principal_restant": (
+        "principal_restant",
+        "outstanding_principle",
+        "outstanding_principal",
+    ),
+    "frais_mise_en_place_restants": (
+        "frais_mise_en_place_restants",
+        "outstanding_setup_fees",
+    ),
+    "numero_telephone_credit": (
+        "numero_telephone_credit",
+        "telephone_credit",
+        "numero_client",
+        "msisdn1",
+        "msisdn",
+    ),
+    "ids_credits": ("ids_credits", "loan_ids"),
+    "statuts_credit": ("statuts_credit", "status_names"),
+    "montant_credits": ("montant_credits", "loan_amount"),
+    "montant_rembourse": ("montant_rembourse", "amount_paid"),
+}
+
 
 MPESA_OPERATIONAL_TECHNICAL_COLUMN_EXACT_KEYS = {
     "",
@@ -22999,6 +23677,30 @@ def _normalize_export_column_key(column: Any) -> str:
     text = normalize_label(column)
     text = re.sub(r"[^a-z0-9]+", "_", text)
     return re.sub(r"_+", "_", text).strip("_")
+
+
+def _sanitize_excel_sheet_name(name: Any, fallback: str = "Feuille") -> str:
+    """Retourne un nom de feuille Excel valide et compact."""
+    text = str(name or "").strip() or fallback
+    text = re.sub(r"[\[\]\:\*\?\/\\]", "_", text)
+    text = re.sub(r"\s+", " ", text).strip("' ").strip()
+    return (text or fallback)[:31]
+
+
+def _make_unique_excel_sheet_name(
+    requested_name: Any,
+    used_names: set[str],
+    fallback: str = "Feuille",
+) -> str:
+    base_name = _sanitize_excel_sheet_name(requested_name, fallback=fallback)
+    candidate = base_name
+    counter = 2
+    while candidate in used_names:
+        suffix = f"_{counter}"
+        candidate = f"{base_name[: 31 - len(suffix)]}{suffix}"
+        counter += 1
+    used_names.add(candidate)
+    return candidate
 
 
 def _is_operational_technical_column(column: Any) -> bool:
@@ -23086,6 +23788,132 @@ def _ensure_operational_client_number_column(frame: pd.DataFrame) -> pd.DataFram
     return result[priority_columns + remaining_columns]
 
 
+def _find_operational_column(
+    columns_by_key: dict[str, Any],
+    canonical_column: str,
+) -> Any | None:
+    aliases = MPESA_OPERATIONAL_COLUMN_ALIASES.get(canonical_column, ())
+    for alias in (canonical_column, *aliases):
+        alias_key = _normalize_export_column_key(alias)
+        if alias_key in columns_by_key:
+            return columns_by_key[alias_key]
+    return None
+
+
+def _standardize_operational_sheet_columns(
+    frame: pd.DataFrame,
+    sheet_name: str,
+) -> pd.DataFrame:
+    """Renomme quelques colonnes sources vers les noms metier attendus dans les cockpits."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame
+    result = frame.copy()
+    columns_by_key = {_normalize_export_column_key(column): column for column in result.columns}
+    rename_map: dict[Any, str] = {}
+    used_target_names = {str(column) for column in result.columns}
+    ordered_columns = MPESA_OPERATIONAL_SHEET_COLUMN_ORDERS.get(sheet_name, [])
+    for canonical_column in {
+        column
+        for column in ordered_columns
+    }:
+        source_column = _find_operational_column(columns_by_key, canonical_column)
+        if (
+            source_column is not None
+            and str(source_column) != canonical_column
+            and canonical_column not in used_target_names
+            and source_column not in rename_map
+        ):
+            rename_map[source_column] = canonical_column
+            used_target_names.add(canonical_column)
+    if rename_map:
+        result = result.rename(columns=rename_map)
+    return result
+
+
+def _apply_operational_sheet_contract(frame: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+    """Applique le contrat de colonnes operationnelles d'une feuille Excel."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame
+    result = _standardize_operational_sheet_columns(frame, sheet_name)
+    drop_keys = {
+        _normalize_export_column_key(column)
+        for column in MPESA_OPERATIONAL_SHEET_DROP_COLUMNS.get(sheet_name, set())
+    }
+    if drop_keys:
+        result = result.drop(
+            columns=[
+                column
+                for column in result.columns
+                if _normalize_export_column_key(column) in drop_keys
+            ],
+            errors="ignore",
+        )
+    if (
+        sheet_name in MPESA_OPERATIONAL_DATE_SITUATION_EXPORT_SHEETS
+        and "date_situation" not in result.columns
+    ):
+        result.insert(0, "date_situation", pd.NaT)
+
+    ordered_columns = MPESA_OPERATIONAL_SHEET_COLUMN_ORDERS.get(sheet_name)
+    if ordered_columns:
+        columns_by_key = {_normalize_export_column_key(column): column for column in result.columns}
+        selected_columns: list[Any] = []
+        for expected_column in ordered_columns:
+            actual_column = columns_by_key.get(_normalize_export_column_key(expected_column))
+            if actual_column is not None and actual_column not in selected_columns:
+                selected_columns.append(actual_column)
+        remaining_columns = [
+            column
+            for column in result.columns
+            if column not in selected_columns
+            and not _is_operational_technical_column(column)
+            and _normalize_export_column_key(column) not in drop_keys
+        ]
+        result = result[selected_columns + remaining_columns]
+    elif "date_situation" in result.columns:
+        result = result[["date_situation"] + [column for column in result.columns if column != "date_situation"]]
+    return result
+
+
+def _infer_cockpit_date_situation(sheets: dict[str, Any]) -> pd.Timestamp | pd.NaT:
+    """Deduit une date de situation commune aux cockpits Clients/Epargnes/Credits."""
+    for frame in sheets.values():
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        columns_by_key = {_normalize_export_column_key(column): column for column in frame.columns}
+        for date_key in ["date_situation", "date_analyse", "date_fin"]:
+            source_column = columns_by_key.get(date_key)
+            if source_column is None:
+                continue
+            dates = pd.to_datetime(frame[source_column], errors="coerce").dropna()
+            if not dates.empty:
+                return pd.Timestamp(dates.max()).normalize()
+    return pd.NaT
+
+
+def _ensure_cockpit_date_situation_first(
+    frame: pd.DataFrame,
+    *,
+    sheet_name: str,
+    date_situation: pd.Timestamp | pd.NaT,
+) -> pd.DataFrame:
+    """Garantit `date_situation` en premiere colonne dans les cockpits operationnels."""
+    if sheet_name not in MPESA_DIRECTION_COCKPIT_SHEETS or not isinstance(frame, pd.DataFrame):
+        return frame
+    result = frame.copy()
+    if "date_situation" not in result.columns:
+        result.insert(0, "date_situation", date_situation)
+    else:
+        current_dates = pd.to_datetime(result["date_situation"], errors="coerce")
+        if pd.notna(date_situation) and (result.empty or current_dates.isna().all()):
+            result["date_situation"] = date_situation
+        result = result[
+            ["date_situation"]
+            + [column for column in result.columns if column != "date_situation"]
+        ]
+    return result
+
+
 def _prepare_operational_priority_sheet(frame: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     """Allège les feuilles clés destinées à la Direction et aux opérations."""
     if sheet_name not in MPESA_DIRECTION_PRIORITY_SHEETS:
@@ -23093,6 +23921,7 @@ def _prepare_operational_priority_sheet(frame: pd.DataFrame, sheet_name: str) ->
     operational = _ensure_operational_client_number_column(
         frame.dropna(axis=1, how="all").copy()
     )
+    operational = _apply_operational_sheet_contract(operational, sheet_name)
     columns_to_drop = [
         column
         for column in operational.columns
@@ -23108,6 +23937,7 @@ def create_excel_export(
     *,
     print_orientation: str | None = None,
     rename_user_columns: bool = False,
+    sheet_name_overrides: dict[str, str] | None = None,
 ) -> bytes:
     sheet_contract = [
         ("synthese", "Synthese"),
@@ -23308,7 +24138,9 @@ def create_excel_export(
     }
     if not sheets:
         sheets = {"Information": pd.DataFrame({"message": ["Aucune donnee a exporter."]})}
+    cockpit_date_situation = _infer_cockpit_date_situation(sheets)
     buffer = BytesIO()
+    used_sheet_names: set[str] = set()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         for sheet_name, frame in sheets.items():
             safe_frame = frame if isinstance(frame, pd.DataFrame) else pd.DataFrame()
@@ -23316,10 +24148,29 @@ def create_excel_export(
                 safe_frame = safe_frame.rename(columns={"jours_avant_echeance": "Jours restants"})
             safe_frame = prepare_dataframe_for_display(safe_frame, enabled=rename_user_columns)
             safe_frame = _prepare_operational_priority_sheet(safe_frame, sheet_name)
-            excel_sheet_name = sheet_name[:31]
+            if isinstance(safe_frame, pd.DataFrame) and "date_situation" in safe_frame.columns:
+                safe_frame = safe_frame[
+                    ["date_situation"]
+                    + [column for column in safe_frame.columns if column != "date_situation"]
+                ]
+            safe_frame = _ensure_cockpit_date_situation_first(
+                safe_frame,
+                sheet_name=sheet_name,
+                date_situation=cockpit_date_situation,
+            )
+            requested_sheet_name = (
+                sheet_name_overrides.get(sheet_name, sheet_name)
+                if isinstance(sheet_name_overrides, dict)
+                else sheet_name
+            )
+            excel_sheet_name = _make_unique_excel_sheet_name(
+                requested_sheet_name,
+                used_sheet_names,
+                fallback=sheet_name,
+            )
             safe_frame.to_excel(writer, sheet_name=excel_sheet_name, index=False)
             worksheet = writer.sheets[excel_sheet_name]
-            if sheet_name in MPESA_DIRECTION_PRIORITY_SHEETS:
+            if sheet_name in MPESA_DIRECTION_RED_TAB_SHEETS:
                 worksheet.sheet_properties.tabColor = "FF0000"
             worksheet.freeze_panes = "A2"
             worksheet.auto_filter.ref = worksheet.dimensions

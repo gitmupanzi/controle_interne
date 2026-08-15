@@ -129,13 +129,15 @@ Les mouvements comptables alimentent les seuils réglementaires.
 Les listes de sanctions servent au contrôle d'identification.
 ```
 
+Pour la partie `2. PORTEFEUILLE CLIENT` du canevas réglementaire, la lecture attendue est différente d'un flux d'opérations : il s'agit du stock global des clients actifs à la date de fin du reporting. Le nombre de clients doit donc partir de `ADHERENTS` via `extra_clients_view` et ne doit pas être limité aux seuls clients ayant un compte avec solde ou un mouvement sur la période. Les soldes de comptes servent uniquement à renseigner le volume financier disponible, lorsque la donnée existe.
+
 ## Requêtes utiles
 
 Les requêtes ci-dessous sont classées en privilégiant d'abord le reporting réglementaire et les décisions de conformité, puis les contrôles de qualité ou de couverture.
 
 | Priorité | N° | Export | Ce que la requête apporte | Commentaire |
 |---:|---:|---|---|---|
-| 1 | 149 | `149_cycle_conformite_reporting_lbc_ft` | Requête principale du reporting LBC-FT par période. | À utiliser pour alimenter le canevas BCC : volumes, montants, seuils, opérations sensibles et couverture des rubriques. |
+| 1 | 149 | `149_cycle_conformite_reporting_lbc_ft` | Requête principale du reporting LBC-FT par période. | À utiliser pour alimenter le canevas BCC : volumes, montants, seuils, opérations sensibles, couverture des rubriques et stock global du portefeuille client à la date de fin. |
 | 2 | 158 | `158_cycle_conformite_detail_credits_reporting_lbc_ft` | Détail des crédits alimentant les lignes 15 à 24 du canevas. | Donne la liste explicative derrière les montants crédit du reporting, utile pour justification et revue. |
 | 3 | 156 | `156_cycle_conformite_lbc_ft_socle_unique_analyses_38_39_48_57_149_155` | Socle unique pour l'application Streamlit. | Source consolidée pour le tableau de bord conformité : elle évite de charger plusieurs fichiers séparés. |
 | 4 | 150 | `150_cycle_conformite_alertes_lbc_ft_detaillees` | Alertes détaillées pour traitement Conformité. | Sert au suivi opérationnel des alertes : qui, quand, montant, motif et statut de traitement. |
@@ -154,6 +156,7 @@ flowchart LR
     CRD["extra_credits_view<br/>fct_perf_extra_encours"] --> Q149
     LAB["LAB_ALERTES<br/>LAB_DECLARATION_*"] --> Q149
     KYC["extra_clients_view<br/>profils et segments"] --> Q149
+    CLI["ADHERENTS / extra_clients_view<br/>stock clients a date fin"] --> Q149
     Q149 --> EXCEL["Fichier Excel réglementaire"]
     Q149 --> TRACE["Règle, origine, commentaire"]
     Q158["Q158<br/>détail crédit"] --> EXCEL

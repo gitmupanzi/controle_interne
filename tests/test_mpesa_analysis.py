@@ -4,6 +4,7 @@ from datetime import time
 from io import BytesIO
 import unittest
 
+from openpyxl import load_workbook
 import pandas as pd
 
 from credit_app.services.mpesa_analysis import (
@@ -6769,6 +6770,155 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("fichier_source", credit_sheet.columns)
         self.assertNotIn("fichier_source_epargne_turbo", savings_sheet.columns)
 
+    def test_client_savings_credit_cockpit_exports_put_date_situation_first_on_every_sheet(self) -> None:
+        content = create_excel_export(
+            {
+                "clients_kpi": pd.DataFrame(
+                    [{"indicateur": "clients_charges", "valeur": 10}]
+                ),
+                "clients_clients_actifs": pd.DataFrame(
+                    [{"customer_id": "C001", "Nom_client": "CLIENT ACTIF"}]
+                ),
+                "epargne_vue_ensemble": pd.DataFrame(
+                    [{"indicateur": "encours_epargne", "currency_code": "USD", "valeur": 100}]
+                ),
+                "epargne_encours_a_date": pd.DataFrame(
+                    [
+                        {
+                            "date_situation": pd.Timestamp("2026-08-07"),
+                            "customer_id": "C002",
+                            "Nom_client": "CLIENT EPARGNE",
+                            "msisdn1": "243822222222",
+                            "savings_id": "SAV-001",
+                            "currency_code": "CDF",
+                            "balance": 2500,
+                        }
+                    ]
+                ),
+                "credit_vue_ensemble": pd.DataFrame(
+                    [{"indicateur": "encours_credit", "currency_code": "USD", "valeur": 60}]
+                ),
+                "credit_risque_synthese": pd.DataFrame(
+                    [{"currency_code": "USD", "tranche_risque": "PAR 1j", "encours_credit": 60}]
+                ),
+            }
+        )
+        workbook = pd.ExcelFile(BytesIO(content), engine="openpyxl")
+
+        for sheet_name in [
+            "Clients_KPI",
+            "Clients_Actifs",
+            "Epargne_Vue_Ensemble",
+            "Epargne_Encours_A_Date",
+            "Credit_Vue_Ensemble",
+            "Credit_Risque_Synthese",
+        ]:
+            exported = pd.read_excel(workbook, sheet_name=sheet_name)
+            self.assertGreater(len(exported.columns), 0, sheet_name)
+            self.assertEqual(exported.columns[0], "date_situation", sheet_name)
+
+    def test_savings_operational_cockpit_export_uses_direction_columns_and_red_tabs(self) -> None:
+        savings_row = {
+            "date_situation": pd.Timestamp("2026-08-07"),
+            "customer_id": "C002",
+            "Nom_client": "CLIENT EPARGNE",
+            "msisdn1": "243822222222",
+            "savings_id": "SAV-001",
+            "product_id": "PRD-001",
+            "product_name": "Fixed Savings",
+            "product_description": "Depot bloque",
+            "currency_code": "CDF",
+            "balance": 2500,
+            "status": "Active",
+            "created_at": pd.Timestamp("2026-08-01"),
+            "updated_at": pd.Timestamp("2026-08-07"),
+            "date_approved": pd.Timestamp("2026-08-01"),
+            "date_activated": pd.Timestamp("2026-08-01"),
+            "maturity_date": pd.Timestamp("2027-02-01"),
+            "is_interest_calculated": True,
+            "last_interest_calculation_date": pd.Timestamp("2026-08-07"),
+            "next_interest_calculation_date": pd.Timestamp("2026-09-07"),
+            "interest_earned": 12,
+            "voda_interest": 1,
+            "fees_due": 0,
+            "locked_balance": 2500,
+            "famille_epargne": "DAT",
+            "type_compte": "FIXED SAVINGS",
+            "date_creation_compte": pd.Timestamp("2026-08-01"),
+            "jours_avant_echeance": 178,
+            "duree_contractuelle_jours": 184,
+            "taux_interet_annuel_pct": 11,
+            "interet_estime": 138,
+            "capital_plus_interet_estime": 2638,
+            "tranche_echeance": "Plus de 90 jours",
+            "numero_telephone_msisdn": "243822222222",
+            "mode_rapprochement_nom_client": "G2",
+            "solde_positif": True,
+            "solde_nul": False,
+            "fichier_source_epargne_turbo": "savings.xlsx",
+        }
+        top_clients = pd.DataFrame(
+            [
+                {
+                    "date_situation": pd.Timestamp("2026-08-07"),
+                    "customer_id": "C002",
+                    "Nom_client": "CLIENT EPARGNE",
+                    "telephone": "243822222222",
+                    "famille_epargne": "DAT",
+                    "produits": "Fixed Savings",
+                    "nombre_comptes": 1,
+                    "encours_actuel": 2500,
+                    "currency_code": "CDF",
+                    "rang_client": 1,
+                    "tranche_encours": ">= 1 000",
+                }
+            ]
+        )
+        content = create_excel_export(
+            {
+                "epargne_encours_a_date": pd.DataFrame([savings_row]),
+                "epargne_dat_detail": pd.DataFrame([savings_row]),
+                "epargne_concentration_clients": top_clients,
+                "epargne_liste_dat_sans_credit_actif": pd.DataFrame(
+                    [{**savings_row, "opportunite": "DAT sans credit", "lecture": "A analyser"}]
+                ),
+                "epargne_liste_forte_epargne_sans_credit": top_clients.assign(
+                    seuil_forte_epargne=1000,
+                    opportunite="Forte epargne sans credit",
+                    lecture="A analyser",
+                ),
+            },
+            sheet_name_overrides={"Epargne_DAT": "DAT Direction"},
+        )
+        workbook = pd.ExcelFile(BytesIO(content), engine="openpyxl")
+
+        self.assertIn("DAT Direction", workbook.sheet_names)
+        encours_sheet = pd.read_excel(workbook, sheet_name="Epargne_Encours_A_Date")
+        self.assertEqual(
+            list(encours_sheet.columns)[:8],
+            [
+                "date_situation",
+                "id_client",
+                "numero_client",
+                "nom_client",
+                "numero_compte",
+                "famille_epargne",
+                "produit_epargne",
+                "type_compte",
+            ],
+        )
+        self.assertNotIn("numero_telephone_msisdn", encours_sheet.columns)
+        self.assertNotIn("mode_rapprochement_nom_client", encours_sheet.columns)
+        self.assertNotIn("date_approbation", encours_sheet.columns)
+        self.assertNotIn("date_creation", encours_sheet.columns)
+        self.assertNotIn("fichier_source_epargne_turbo", encours_sheet.columns)
+
+        workbook_styles = load_workbook(BytesIO(content))
+        self.assertIsNone(workbook_styles["Epargne_Encours_A_Date"].sheet_properties.tabColor)
+        self.assertIsNotNone(workbook_styles["Epargne_Top_Clients"].sheet_properties.tabColor)
+        self.assertIsNotNone(workbook_styles["Epargne_DAT_Sans_Credit"].sheet_properties.tabColor)
+        self.assertIsNotNone(workbook_styles["Epargne_Forte_Sans_Credit"].sheet_properties.tabColor)
+
     def test_g2_dat_word_is_editable_and_uses_the_short_executive_structure(self) -> None:
         from docx import Document
         from docx.enum.section import WD_ORIENT
@@ -7933,6 +8083,152 @@ class TestLoanSavingsReconciliation(unittest.TestCase):
         self.assertIn("Liste_Prets_Defaulted", workbook.sheet_names)
         exported = pd.read_excel(workbook, sheet_name="Liste_Prets_Defaulted")
         self.assertIn("numero_pret", exported.columns)
+
+    def test_credit_operational_cockpit_export_uses_direction_columns_and_red_tabs(self) -> None:
+        credit_row = {
+            "date_situation": pd.Timestamp("2026-08-07"),
+            "customer_id": "C001",
+            "Nom_client": "CLIENT CREDIT",
+            "msisdn1": "243811111111",
+            "loan_id": "LN-001",
+            "status_name": "Active",
+            "created_at": pd.Timestamp("2026-08-01"),
+            "updated_at": pd.Timestamp("2026-08-07"),
+            "loan_product_id": "CREDIT AGR USD",
+            "currency_code": "USD",
+            "loan_amount": 100,
+            "loan_balance": 60,
+            "amount_paid": 40,
+            "outstanding_principle": 55,
+            "outstanding_setup_fees": 2,
+            "outstanding_interest": 3,
+            "outstanding_penalty_fees": 0,
+            "interest_earned": 7,
+            "defaulted": True,
+            "is_rollover": False,
+            "is_grace_period": False,
+            "due_date": pd.Timestamp("2026-08-05"),
+            "jours_retard": 2,
+            "jours_avant_echeance": -2,
+            "tranche_echeance": "Echu",
+            "tranche_encours": "Moins de 100",
+            "last_repayment_date": pd.Timestamp("2026-08-06"),
+            "repayment_installments": 1,
+            "repayment_period": 1,
+            "repayment_period_unit": "Mois",
+            "encours_credit_2": 60,
+            "pret_actif": True,
+            "par_simplifie_1j": True,
+            "par_simplifie_7j": False,
+            "par_simplifie_30j": False,
+            "numero_telephone": "243811111111",
+            "fichier_source_credit_turbo": "loans.xlsx",
+        }
+        credit_savings_row = {
+            "date_situation": pd.Timestamp("2026-08-07"),
+            "customer_id": "C001",
+            "numero_client": "A_SUPPRIMER",
+            "numero_telephone_credit": "243811111111",
+            "numero_telephone_epargne": "243822222222",
+            "Nom_client": "CLIENT CREDIT",
+            "currency_code": "USD",
+            "nombre_credits": 1,
+            "ids_credits": "LN-001",
+            "statuts_credit": "Active",
+            "montant_credits": 100,
+            "montant_rembourse": 40,
+            "encours_credit": 60,
+            "principal_restant": 55,
+            "frais_mise_en_place_restants": 2,
+            "interets_restants": 3,
+            "penalites_restantes": 0,
+            "statut_rapprochement": "OK",
+            "motifs_controle": "",
+            "nombre_comptes_ouverts_candidats": 1,
+            "numero_compte_epargne_correspondant": "SAV-001",
+            "solde_compte_ouvert": 10,
+            "nb_dat_positifs": 1,
+            "solde_dat_positif": 50,
+            "epargne_totale_observee": 60,
+            "interpretation_position": "Client avec credit et epargne",
+        }
+        report = {
+            "credit_encours_a_date": pd.DataFrame([credit_row]),
+            "credit_risque_synthese": pd.DataFrame(
+                [{"currency_code": "USD", "tranche_risque": "PAR 1j", "encours_credit": 60}]
+            ),
+            "credit_echeances_synthese": pd.DataFrame(
+                [{"currency_code": "USD", "tranche_echeance": "Echu", "nombre_credits": 1}]
+            ),
+            "credit_concentration_clients": pd.DataFrame(
+                [
+                    {
+                        "date_situation": pd.Timestamp("2026-08-07"),
+                        "customer_id": "C001",
+                        "Nom_client": "CLIENT CREDIT",
+                        "msisdn1": "243811111111",
+                        "nombre_credits": 1,
+                        "currency_code": "USD",
+                        "encours_total": 60,
+                        "encours_retard_1j": 60,
+                        "rang_client": 1,
+                        "tranche_encours": "Moins de 100",
+                    }
+                ]
+            ),
+            "credit_concentration_clients_tranches": pd.DataFrame(
+                [{"currency_code": "USD", "tranche_encours": "Moins de 100", "encours_total": 60}]
+            ),
+            "credit_epargne_clients": pd.DataFrame([credit_savings_row]),
+            "credit_liste_prets_echus_avec_encours": pd.DataFrame([credit_row]),
+            "credit_liste_prets_par_simplifie_30j": pd.DataFrame([credit_row]),
+            "credit_liste_prets_avec_penalites": pd.DataFrame([credit_row]),
+            "credit_liste_prets_defaulted": pd.DataFrame([credit_row]),
+        }
+
+        export = create_excel_export(report, rename_user_columns=True)
+        workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
+        encours = pd.read_excel(workbook, sheet_name="Credit_Encours_A_Date")
+        epargne_360 = pd.read_excel(workbook, sheet_name="Credit_Epargne_Clients_360")
+
+        self.assertEqual(list(encours.columns[:8]), [
+            "date_situation",
+            "id_client",
+            "numero_client",
+            "nom_client",
+            "numero_pret",
+            "statut_credit",
+            "date_creation",
+            "date_mise_a_jour",
+        ])
+        self.assertIn("pret_en_defaut", encours.columns)
+        self.assertIn("pret_renouvele", encours.columns)
+        self.assertNotIn("defaut", encours.columns)
+        self.assertNotIn("rollover", encours.columns)
+        self.assertNotIn("numero_telephone", encours.columns)
+        self.assertNotIn("fichier_source_credit_turbo", encours.columns)
+        self.assertEqual(list(epargne_360.columns[:6]), [
+            "date_situation",
+            "id_client",
+            "numero_telephone_credit",
+            "nom_client",
+            "devise",
+            "nombre_credits",
+        ])
+        self.assertNotIn("numero_client", epargne_360.columns)
+        self.assertNotIn("numero_telephone_epargne", epargne_360.columns)
+
+        styled_workbook = load_workbook(BytesIO(export))
+        self.assertEqual(
+            styled_workbook["Credit_Encours_A_Date"].sheet_properties.tabColor.rgb,
+            "00FF0000",
+        )
+        self.assertEqual(
+            styled_workbook["Credit_Risque_Synthese"].sheet_properties.tabColor.rgb,
+            "00FF0000",
+        )
+        self.assertIsNone(styled_workbook["Credit_Top_Clients"].sheet_properties.tabColor)
+        self.assertIsNone(styled_workbook["Liste_Prets_Defaulted"].sheet_properties.tabColor)
 
     def test_savings_cockpit_separates_snapshot_flux_and_currencies(self) -> None:
         savings = pd.DataFrame(

@@ -671,22 +671,26 @@ def _create_excel_export_cached(
     export_report: dict[str, Any],
     print_orientation: str | None = None,
     rename_user_columns: bool = False,
+    sheet_name_overrides: dict[str, str] | None = None,
 ) -> bytes:
     return create_excel_export(
         export_report,
         print_orientation=print_orientation,
         rename_user_columns=rename_user_columns,
+        sheet_name_overrides=sheet_name_overrides,
     )
 
 
 def _create_excel_export_current_sidebar(
     export_report: dict[str, Any],
     print_orientation: str | None = None,
+    sheet_name_overrides: dict[str, str] | None = None,
 ) -> bytes:
     return _create_excel_export_cached(
         export_report,
         print_orientation=print_orientation,
         rename_user_columns=_mpesa_user_column_rename_enabled(),
+        sheet_name_overrides=sheet_name_overrides,
     )
 
 
@@ -701,6 +705,7 @@ def _render_excel_export_on_demand(
     width: Literal["stretch", "content"] = "content",
     help: str | None = None,
     disabled: bool = False,
+    sheet_name_overrides: dict[str, str] | None = None,
 ) -> None:
     """Prépare un export Excel seulement après action explicite de l'utilisateur."""
 
@@ -715,6 +720,7 @@ def _render_excel_export_on_demand(
             export_bytes = _create_excel_export_current_sidebar(
                 export_report,
                 print_orientation=print_orientation,
+                sheet_name_overrides=sheet_name_overrides,
             )
         st.download_button(
             download_label,
@@ -730,6 +736,36 @@ def _render_excel_export_on_demand(
             "Le fichier Excel n'est pas généré automatiquement. "
             "Cliquez sur le bouton de préparation uniquement si vous voulez l'exporter."
         )
+
+
+def _clean_excel_workbook_file_name(file_name: str, fallback: str) -> str:
+    """Nettoie le nom du classeur telecharge sans toucher aux feuilles."""
+    text = str(file_name or "").strip() or fallback
+    text = re.sub(r'[<>:"/\\|?*]+', "_", text)
+    text = re.sub(r"\s+", " ", text).strip(" .")
+    if not text:
+        text = fallback
+    if not text.lower().endswith(".xlsx"):
+        text = f"{text}.xlsx"
+    return text
+
+
+def _render_excel_workbook_file_name_input(
+    *,
+    default_file_name: str,
+    key: str,
+) -> str:
+    """Permet a l'utilisateur de renommer le classeur Excel avant export."""
+    requested_name = st.text_input(
+        "Nom du classeur Excel",
+        value=default_file_name,
+        key=key,
+        help=(
+            "Ce nom concerne le fichier Excel telecharge. "
+            "Les noms des feuilles restent ceux prevus par le cockpit."
+        ),
+    )
+    return _clean_excel_workbook_file_name(requested_name, default_file_name)
 
 
 def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> dict[str, pd.DataFrame]:
@@ -1278,6 +1314,31 @@ def _build_g2_daily_savings_report_cached(
     prepared: MpesaPreparedData,
 ) -> dict[str, pd.DataFrame]:
     return build_g2_daily_savings_report(prepared)
+
+
+@st.cache_data(
+    show_spinner=False,
+    max_entries=4,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _build_turbo_only_g2_transactions_cached(
+    prepared: MpesaPreparedData,
+) -> pd.DataFrame:
+    """Construit une seule fois le proxy G2/DAT issu des transactions Solution Numérique."""
+    return build_turbo_only_g2_transactions(prepared.transactions)
+
+
+@st.cache_data(
+    show_spinner=False,
+    max_entries=4,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _enrich_turbo_proxy_with_g2_history_cached(
+    prepared: MpesaPreparedData,
+) -> pd.DataFrame:
+    """Réutilise l'enrichissement G2 tant que le proxy et le rapport G2 ne changent pas."""
+    turbo_proxy = _build_turbo_only_g2_transactions_cached(prepared)
+    return enrich_turbo_proxy_with_g2_history(turbo_proxy, prepared.g2_transactions)
 
 
 @st.cache_data(
@@ -4414,11 +4475,18 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         frame = cockpit.get("listes_action", {}).get(name, pd.DataFrame())
         if isinstance(frame, pd.DataFrame) and not frame.empty:
             export_report[f"epargne_liste_{name}"] = frame
+    savings_file_name = _render_excel_workbook_file_name_input(
+        default_file_name=(
+            f"cockpit_epargnes_{pd.Timestamp(date_start):%Y%m%d}_"
+            f"{pd.Timestamp(date_end):%Y%m%d}.xlsx"
+        ),
+        key="mpesa_savings_export_file_name",
+    )
     _render_excel_export_on_demand(
         export_report=export_report,
         prepare_label="Préparer l'export Excel Épargnes",
         download_label="Télécharger le cockpit Épargnes",
-        file_name=f"cockpit_epargnes_{pd.Timestamp(date_start):%Y%m%d}_{pd.Timestamp(date_end):%Y%m%d}.xlsx",
+        file_name=savings_file_name,
         key=f"mpesa_savings_cockpit_export_{pd.Timestamp(date_start):%Y%m%d}_{pd.Timestamp(date_end):%Y%m%d}",
         width="stretch",
         help=(
@@ -4445,6 +4513,7 @@ def _render_g2_report_export(
     period_text: str,
     direction_label: str,
     source_label: str = "G2",
+    analysis_mode_label: str | None = None,
 ) -> None:
     render_panel_title(f"7. Export du rapport [{source_label}]")
     turbo_only = source_label == "Turbo"
@@ -4483,6 +4552,7 @@ def _render_g2_report_export(
     word_report["analysis_date_start"] = date_start
     word_report["analysis_date_end"] = date_end
     word_report["analysis_source_label"] = source_label
+    word_report["analysis_mode_label"] = analysis_mode_label or source_label
     period_suffix = f"{date_start:%Y%m%d}_{date_end:%Y%m%d}" if date_start is not None and date_end is not None else "complet"
     file_source = "turbo_dat" if turbo_only else "g2_dat"
     excel_column, word_column = st.columns(2)
@@ -4799,41 +4869,27 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     source_label = "G2"
     source_date_label = "Completion Time"
     analysis_prepared = prepared
+    analysis_mode_label = "Rapport G2 seul"
     g2_available = not prepared.g2_transactions.empty
-    turbo_proxy = build_turbo_only_g2_transactions(prepared.transactions)
+    turbo_proxy = _build_turbo_only_g2_transactions_cached(prepared)
+    mode_key = ""
+    mode_options: list[str] = []
     if not turbo_proxy.empty:
         source_label = "Turbo"
         source_date_label = "created_at"
-        if g2_available:
-            turbo_proxy = enrich_turbo_proxy_with_g2_history(
-                turbo_proxy,
-                prepared.g2_transactions,
-            )
-            g2_dates = pd.to_datetime(
-                prepared.g2_transactions.get(
-                    "completion_time",
-                    pd.Series(pd.NaT, index=prepared.g2_transactions.index),
-                ),
-                errors="coerce",
-            ).dropna()
-            coverage_text = (
-                f"Couverture G2 chargee : {g2_dates.min():%d/%m/%Y %H:%M:%S} "
-                f"au {g2_dates.max():%d/%m/%Y %H:%M:%S}."
-                if not g2_dates.empty
-                else "Le fichier G2 charge ne contient pas de periode exploitable."
-            )
-            st.info(
-                "Mode Solution Numérique prioritaire : la periode est pilotee par Transactions Solution Numérique. "
-                "G2 enrichit le nom du client et sert de preuve de controle lorsqu'il couvre la date analysee; "
-                "les operations hors couverture G2 sont classees comme necessitant une verification. "
-                f"{coverage_text}"
-            )
-        else:
-            st.info(
-                "Mode Solution Numérique seule : le rapport est construit sans Solution Numérique/G2. "
-                "Les operations sont deduites de `ref_no`, `account_type`, `description`, `dr`, `cr` et `created_at`. "
-                "Les noms, statuts, soldes et delais du rapport G2 ainsi que les controles croises G2/Solution Numérique ne sont pas disponibles."
-            )
+        mode_key = f"mpesa_g2_analysis_mode_{_prepared_data_state_token(prepared)}"
+        mode_options = (
+            ["Solution Numérique + rapport G2", "Solution Numérique seule"]
+            if g2_available
+            else ["Solution Numérique seule"]
+        )
+        mode_default = mode_options[0]
+        if st.session_state.get(mode_key) not in mode_options:
+            st.session_state.pop(mode_key, None)
+        analysis_mode_label = st.session_state.get(mode_key, mode_default) or mode_default
+        use_g2_enrichment = g2_available and analysis_mode_label == "Solution Numérique + rapport G2"
+        if use_g2_enrichment:
+            turbo_proxy = _enrich_turbo_proxy_with_g2_history_cached(prepared)
         analysis_prepared = replace(
             prepared,
             g2_transactions=turbo_proxy,
@@ -4857,7 +4913,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     time_end = None
     period_start = None
     period_end = None
-    render_panel_title(f"1. Periode analysee ({source_date_label}) [{source_label}]")
+    render_panel_title("1. Periode d'analyse")
     direction_options = ["Entrées", "Sorties"]
     if not completion_times.empty:
         completion_key = f"{source_label}_{completion_times.min():%Y%m%d}_{completion_times.max():%Y%m%d}_{len(completion_times)}"
@@ -4889,8 +4945,21 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     st.session_state.setdefault(direction_key, [])
 
     with st.form(f"mpesa_g2_filters_{completion_key}_{data_token}", border=True):
+        if mode_options:
+            st.selectbox(
+                "Mode d'analyse",
+                options=mode_options,
+                index=mode_options.index(analysis_mode_label)
+                if analysis_mode_label in mode_options
+                else 0,
+                key=mode_key,
+                disabled=len(mode_options) == 1,
+                help=(
+                    "Solution Numérique + rapport G2 : les montants restent calculés depuis la Solution Numérique, "
+                    "et G2 sert au nom client et au contrôle. Solution Numérique seule : G2 n'est pas utilisé."
+                ),
+            )
         if not completion_times.empty:
-            st.caption(f"Champ temporel analys? : {source_date_label}.")
             date_columns = st.columns(2)
             with date_columns[0]:
                 st.date_input(
@@ -4899,15 +4968,15 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                     max_value=completion_times.max().date(),
                     key=start_key,
                     format="DD/MM/YYYY",
-                    help=f"Premi?re journ?e incluse selon {source_date_label}.",
+                    help="Première journée incluse dans l'analyse.",
                 )
                 st.time_input(
                     "Heure de debut",
                     step=60,
                     key=start_time_key,
                     help=(
-                        "Premi?re heure incluse le jour de d?but. `00:00:00` "
-                        "conserve la journ?e depuis son commencement."
+                        "Première heure incluse le jour de début. `00:00:00` "
+                        "conserve la journée depuis son commencement."
                     ),
                 )
             with date_columns[1]:
@@ -4917,15 +4986,15 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                     max_value=completion_times.max().date(),
                     key=end_key,
                     format="DD/MM/YYYY",
-                    help=f"Derni?re journ?e incluse selon {source_date_label}.",
+                    help="Dernière journée incluse dans l'analyse.",
                 )
                 st.time_input(
                     "Heure de fin",
                     step=60,
                     key=end_time_key,
                     help=(
-                        "Derni?re heure incluse le jour de fin. `23:59:59` conserve "
-                        "la journ?e enti?re."
+                        "Dernière heure incluse le jour de fin. `23:59:59` conserve "
+                        "la journée entière."
                     ),
                 )
             if default_completion_date < completion_times.max().date():
@@ -4948,6 +5017,9 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
 
     if g2_submitted:
         st.session_state[applied_filters_key] = {
+            "analysis_mode_label": st.session_state.get(mode_key, analysis_mode_label)
+            if mode_key
+            else analysis_mode_label,
             "date_start": st.session_state.get(start_key),
             "date_end": st.session_state.get(end_key),
             "time_start": st.session_state.get(start_time_key),
@@ -4960,6 +5032,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     if not applied_filters:
         _render_deferred_analysis_notice("l'onglet Solution Numerique / M-Pesa")
         return
+    analysis_mode_label = str(applied_filters.get("analysis_mode_label") or analysis_mode_label)
     date_start = applied_filters.get("date_start")
     date_end = applied_filters.get("date_end")
     time_start = applied_filters.get("time_start")
@@ -5362,6 +5435,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             period_text=period_text,
             direction_label=direction_label,
             source_label=source_label,
+            analysis_mode_label=analysis_mode_label,
         )
         return
 
@@ -5381,10 +5455,15 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         else 0
     )
     if turbo_only:
+        mode_caption = (
+            "G2 enrichit l'identite et le controle quand il couvre la periode"
+            if analysis_mode_label == "Solution Numérique + rapport G2"
+            else "Controles G2/Solution Numérique non applicables"
+        )
         control_cards = [
             ("Operations Solution Numérique", _format_count(len(g2_dat)), "Entrees analysees", "blue"),
             ("DAT operation", _format_count(dat_operation_count), "Lignes FIXED SAVINGS via ref_no", "green"),
-            ("Mode Solution Numérique seule", _format_count(len(g2_dat)), "Controles G2/Solution Numérique non applicables", "navy"),
+            (analysis_mode_label, _format_count(len(g2_dat)), mode_caption, "navy"),
             ("Anomalies internes", _format_count(anomaly_count), "Coherence des donnees Solution Numérique/DAT", "orange"),
         ]
     else:
@@ -5494,6 +5573,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         period_text=period_text,
         direction_label=direction_label,
         source_label=source_label,
+        analysis_mode_label=analysis_mode_label,
     )
 
 
@@ -6868,11 +6948,18 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 value,
                 credit_name_lookup,
             )
+    credit_file_name = _render_excel_workbook_file_name_input(
+        default_file_name=(
+            f"cockpit_credits_solution_numerique_{pd.Timestamp(date_start):%Y%m%d}_"
+            f"{pd.Timestamp(date_end):%Y%m%d}.xlsx"
+        ),
+        key="mpesa_credit_export_file_name",
+    )
     _render_excel_export_on_demand(
         export_report=export_report,
         prepare_label="Préparer l'export Excel Crédits",
         download_label="Télécharger le cockpit Crédits Excel",
-        file_name=f"cockpit_credits_solution_numerique_{pd.Timestamp(date_start):%Y%m%d}_{pd.Timestamp(date_end):%Y%m%d}.xlsx",
+        file_name=credit_file_name,
         key=f"mpesa_credit_cockpit_export_{pd.Timestamp(date_start):%Y%m%d}_{pd.Timestamp(date_end):%Y%m%d}",
         width="content",
         help="Export Excel des syntheses, details et listes d'action credit du perimetre filtre.",
@@ -8626,14 +8713,18 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                 value,
                 MPESA_CLIENT_PRIORITY_COLUMNS,
             )
+    clients_file_name = _render_excel_workbook_file_name_input(
+        default_file_name=(
+            f"clients_solution_numerique_{pd.Timestamp(date_start):%Y%m%d}_"
+            f"{pd.Timestamp(date_end):%Y%m%d}.xlsx"
+        ),
+        key="mpesa_clients_export_file_name",
+    )
     _render_excel_export_on_demand(
         export_report=export_report,
         prepare_label="Preparer l'Excel Clients",
         download_label="Telecharger les listes Clients Excel",
-        file_name=(
-            f"clients_solution_numerique_{pd.Timestamp(date_start):%Y%m%d}_"
-            f"{pd.Timestamp(date_end):%Y%m%d}.xlsx"
-        ),
+        file_name=clients_file_name,
         key=(
             f"mpesa_clients_excel_{pd.Timestamp(date_start):%Y%m%d}_"
             f"{pd.Timestamp(date_end):%Y%m%d}"
