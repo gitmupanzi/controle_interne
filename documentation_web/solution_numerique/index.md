@@ -54,6 +54,10 @@ Turbo / Solution Numérique constitue la source opérationnelle principale. G2 e
     <span>Crédits</span>
     Portefeuille crédit, remboursements, échéances, risques et concentration.
   </a>
+  <a class="bb-link-card" href="analyse_risques.html">
+    <span>Analyse des risques</span>
+    Lecture transversale crédit, compte ouvert, DAT, liquidité, rentabilité estimée, concentration et alertes.
+  </a>
   <a class="bb-link-card" href="g2_dat_rapprochements.html">
     <span>G2 et DAT</span>
     Rôle de G2, rapprochements, échéances DAT et contrôles.

@@ -61,6 +61,8 @@ Dans le fichier Excel généré, les onglets prioritaires sont colorés en rouge
 
 Pour rendre le cockpit opérationnel, les feuilles clés écartent les colonnes purement techniques : fichiers sources, clés internes, colonnes brutes, ordres d'import, traces de calcul et identifiants intermédiaires. Elles conservent les informations utiles à l'action : client, téléphone, devise, statut, dates, activité, segment, score, solde, encours et commentaire.
 
+Chaque feuille opérationnelle commence par `date_situation`. Cette date correspond à la `Date de fin` choisie dans le cockpit, pas à la date de création du fichier Excel. Les listes nominatives qui portent des montants sont lues au grain `client x devise`, afin d'éviter tout mélange CDF/USD.
+
 | Priorité | Feuille | Lecture recommandée |
 |---:|---|---|
 | 1 | `Clients_KPI` | Porte d'entrée du cockpit : clients chargés, clients connus, clients actifs, nouveaux clients et indicateurs de synthèse. |
@@ -74,6 +76,41 @@ Pour rendre le cockpit opérationnel, les feuilles clés écartent les colonnes 
 | 9 | `Clients_Qualite` | Points de qualité de données utiles au contrôle avant partage ou décision. |
 
 Lecture Direction : commencer par `Clients_KPI`, puis lire `Clients_Acquisition`, `Nouveaux_Clients_Actifs` et `Clients_Sans_Mouvement`. Ces feuilles répondent à la question simple : la base client grandit-elle et devient-elle active ? Le grand détail `Clients_360` reste une vue de diagnostic, mais il n'est pas exporté par défaut dans le cockpit partagé afin d'alléger le fichier.
+
+## Contrat des feuilles décisionnelles
+
+Les feuilles `Clients_Actifs`, `Nouveaux_Clients_Actifs` et `Clients_Multi_Produits` gardent uniquement les colonnes suivantes lorsqu'elles existent :
+
+```text
+date_situation
+id_client
+numero_client
+nom_client
+date_creation_client
+devise
+solde_compte_ouvert
+solde_dat
+encours_credit
+segment_produit
+segment_client
+statut_confiance
+date_premiere_operation_periode
+date_derniere_operation
+jours_depuis_derniere_operation
+nombre_operations
+nombre_periodes_actives
+nombre_total_operations
+nombre_comptes_ouverts_positifs
+nombre_credits_actifs
+nombre_dat_positifs
+nombre_comptes_ouverts
+nombre_credits
+nombre_dat
+```
+
+La feuille `Clients_Sans_Mouvement` garde la même logique, mais sans les colonnes d'activité de période inutiles à la relance. La feuille `Clients_Tranches` reste au grain `client x devise x famille_encours` et sépare `compte_ouvert`, `dat` et `credit`. La feuille `DAT_Sans_Credit` est une liste de potentiel commercial prudent; elle ne doit jamais être lue comme une éligibilité automatique.
+
+Les colonnes techniques comme `presence_credit`, `presence_dat`, `multi_produits`, `nouveau_client`, `actif_periode`, `methode_rapprochement`, `sources_client` ou les fichiers sources peuvent rester dans les traitements internes, mais elles ne doivent pas sortir automatiquement dans les feuilles décisionnelles.
 
 ## À retenir
 

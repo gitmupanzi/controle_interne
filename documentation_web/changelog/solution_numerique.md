@@ -1,5 +1,17 @@
 # Changelog Solution Numérique
 
+## 17 août 2026
+
+### Ajouté
+
+- Ajout de l'onglet `Analyse des risques` : lecture transversale Loans Account + Savings Account par client et devise, avec couverture crédit/épargne, exposition nette, PAR 1/7/30/60/90, risque DAT, liquidité, rentabilité estimée, concentration, alertes et qualité des données.
+- Ajout du taux `encours crédit / encours épargne` dans l'analyse des risques, afin de mesurer explicitement la transformation ou l'utilisation de l'épargne en crédit, sans le confondre avec la couverture `épargne / crédit`.
+- Ajout d'un export Excel préparé uniquement à la demande avec les feuilles `Synthese_risque`, `Risque_clients`, `Risque_credit`, `Risque_DAT`, `Liquidite`, `Rentabilite`, `Concentration`, `Alertes`, `Qualite_donnees`, `Parametres`, `Data_gaps` et `Audit`.
+
+### Amélioré
+
+- Optimisation de l'agrégation des risques sur les gros fichiers Savings Account : les regroupements et le scoring client sont vectorisés pour réduire le temps de calcul.
+
 ## 10 août 2026
 
 ### Amélioré

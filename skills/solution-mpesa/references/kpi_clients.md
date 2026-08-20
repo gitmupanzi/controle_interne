@@ -108,6 +108,41 @@ Cette organisation remplace l'ancien découpage en 8 onglets. Les analyses reste
 
 Les opportunités sont exportées en Excel. Lorsque l'option globale `Renommer automatiquement les colonnes` est active, les colonnes visibles et celles du fichier Excel suivent le même format utilisateur en `snake_case`.
 
+Les feuilles décisionnelles du cockpit Clients doivent utiliser des contrats de colonnes explicites, pas un simple `drop` de colonnes techniques. Chaque feuille commence par `date_situation`, qui correspond à la `Date de fin` du cockpit. Les listes nominatives qui portent des montants restent au grain `client x devise`.
+
+Contrat commun de `Clients_Actifs`, `Nouveaux_Clients_Actifs` et `Clients_Multi_Produits` :
+
+```text
+date_situation
+id_client
+numero_client
+nom_client
+date_creation_client
+devise
+solde_compte_ouvert
+solde_dat
+encours_credit
+segment_produit
+segment_client
+statut_confiance
+date_premiere_operation_periode
+date_derniere_operation
+jours_depuis_derniere_operation
+nombre_operations
+nombre_periodes_actives
+nombre_total_operations
+nombre_comptes_ouverts_positifs
+nombre_credits_actifs
+nombre_dat_positifs
+nombre_comptes_ouverts
+nombre_credits
+nombre_dat
+```
+
+`Clients_Sans_Mouvement` retire les colonnes d'activité de période inutiles à la relance. `Clients_Tranches` garde `date_situation`, `famille_encours`, `nombre_clients`, `nombre_comptes`, `devise`, `encours_total`, `part_encours_pct` et `tranche_encours`. `DAT_Sans_Credit` garde uniquement les colonnes d'identification client, compte DAT, dates, devise, solde, statut, intérêts et frais utiles à une revue commerciale prudente.
+
+Les colonnes `presence_epargne`, `presence_dat`, `presence_credit`, `presence_transaction`, `nouveau_client`, `nouveau_client_actif`, `actif_periode`, `sans_mouvement_periode`, `multi_produits`, `methode_rapprochement`, `sources_client` et les fichiers sources restent internes sauf besoin explicite de diagnostic.
+
 ## Filtres et libellés utilisateur
 
 - Les colonnes visibles dans l'écran et dans l'export doivent rester en français fonctionnel.

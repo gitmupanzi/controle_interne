@@ -30,6 +30,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_management_dashboard,
     build_mpesa_clients_report,
     build_mpesa_credit_cockpit,
+    build_mpesa_digital_risk_analysis,
     build_mpesa_savings_cockpit,
     build_mpesa_comparison_windows,
     build_mpesa_forecast_report,
@@ -406,6 +407,222 @@ def _sample_seven_percent_loan_data() -> MpesaPreparedData:
 
 
 class MpesaAnalysisTests(unittest.TestCase):
+    def test_digital_risk_analysis_keeps_currencies_and_exports_risk_sheets(self) -> None:
+        loans = pd.DataFrame(
+            [
+                {
+                    "loan_id": "L1",
+                    "customer_id": "C1",
+                    "customer": "Alice Risque",
+                    "msisdn1": "243810000001",
+                    "currency_code": "USD",
+                    "loan_amount": 100.0,
+                    "loan_balance": 80.0,
+                    "amount_paid": 20.0,
+                    "outstanding_principle": 80.0,
+                    "outstanding_interest": 0.0,
+                    "outstanding_penalty_fees": 0.0,
+                    "interest_earned": 7.0,
+                    "status_name": "Active",
+                    "due_date": "2026-07-01",
+                    "created_at": "2026-06-01",
+                    "updated_at": "2026-08-01",
+                },
+                {
+                    "loan_id": "L2",
+                    "customer_id": "C3",
+                    "customer": "Client Sans Epargne",
+                    "msisdn1": "243810000003",
+                    "currency_code": "CDF",
+                    "loan_amount": 5000.0,
+                    "loan_balance": 5000.0,
+                    "amount_paid": 0.0,
+                    "outstanding_principle": 5000.0,
+                    "outstanding_interest": 0.0,
+                    "outstanding_penalty_fees": 0.0,
+                    "interest_earned": 350.0,
+                    "status_name": "Active",
+                    "due_date": "2026-09-01",
+                    "created_at": "2026-08-01",
+                    "updated_at": "2026-08-01",
+                },
+            ]
+        )
+        savings = pd.DataFrame(
+            [
+                {
+                    "id": "S1",
+                    "savings_id": "S1",
+                    "customer_id": "C1",
+                    "msisdn1": "243810000001",
+                    "product_id": "P1",
+                    "product_name": "Compte ouvert",
+                    "product_description": "NORMAL SAVINGS",
+                    "account_type": "NORMAL SAVINGS",
+                    "currency_code": "USD",
+                    "balance": 20.0,
+                    "status": "active",
+                    "created_at": "2026-01-01",
+                    "updated_at": "2026-08-01",
+                },
+                {
+                    "id": "D1",
+                    "savings_id": "D1",
+                    "customer_id": "C1",
+                    "msisdn1": "243810000001",
+                    "product_id": "P2",
+                    "product_name": "DAT",
+                    "product_description": "FIXED SAVINGS",
+                    "account_type": "FIXED SAVINGS",
+                    "currency_code": "USD",
+                    "balance": 50.0,
+                    "status": "active",
+                    "date_approved": "2026-06-01",
+                    "maturity_date": "2026-09-01",
+                    "created_at": "2026-06-01",
+                    "updated_at": "2026-08-01",
+                },
+                {
+                    "id": "D2",
+                    "savings_id": "D2",
+                    "customer_id": "C2",
+                    "msisdn1": "243810000002",
+                    "product_id": "P2",
+                    "product_name": "DAT",
+                    "product_description": "FIXED SAVINGS",
+                    "account_type": "FIXED SAVINGS",
+                    "currency_code": "CDF",
+                    "balance": 1000.0,
+                    "status": "active",
+                    "date_approved": "2026-06-01",
+                    "maturity_date": "2026-09-01",
+                    "created_at": "2026-06-01",
+                    "updated_at": "2026-08-01",
+                },
+            ]
+        )
+        savings_accounts = prepare_savings_accounts(savings)
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=savings_accounts.loc[
+                savings_accounts["account_type"].eq("NORMAL SAVINGS")
+            ].copy(),
+            fixed_savings=savings_accounts.loc[
+                savings_accounts["account_type"].eq("FIXED SAVINGS")
+            ].copy(),
+            loans=prepare_loans(loans),
+            load_report=build_load_report({}, {}),
+        )
+
+        report = build_mpesa_digital_risk_analysis(
+            prepared,
+            as_of_date="2026-08-17",
+        )
+
+        synthese = report["synthese_risque"].set_index("devise")
+        self.assertEqual(set(synthese.index), {"CDF", "USD"})
+        self.assertAlmostEqual(float(synthese.loc["USD", "couverture_globale_pct"]), 87.5)
+        self.assertAlmostEqual(float(synthese.loc["USD", "taux_utilisation_epargne_credit_pct"]), 80 / 70 * 100)
+        self.assertAlmostEqual(float(synthese.loc["CDF", "taux_utilisation_epargne_credit_pct"]), 500.0)
+        self.assertAlmostEqual(float(synthese.loc["USD", "produit_credit_imf"]), 5.0)
+        self.assertAlmostEqual(float(synthese.loc["CDF", "encours_credit"]), 5000.0)
+
+        clients = report["risque_clients"]
+        usd_client = clients.loc[clients["id_client"].eq("C1")].iloc[0]
+        self.assertAlmostEqual(float(usd_client["taux_utilisation_epargne_credit_pct"]), 80 / 70 * 100)
+        cdf_client = clients.loc[clients["id_client"].eq("C3")].iloc[0]
+        self.assertEqual(cdf_client["segment_couverture"], "aucune_epargne")
+        self.assertEqual(float(cdf_client["epargne_totale"]), 0.0)
+
+        alert_names = set(report["alertes"]["alerte"].astype(str))
+        self.assertIn("credit_sans_epargne", alert_names)
+        self.assertIn("dat_sans_credit", alert_names)
+
+        export = create_excel_export(
+            {
+                "risque_synthese": report["synthese_risque"],
+                "risque_clients": report["risque_clients"],
+                "risque_credit": report["risque_credit"],
+                "risque_dat": report["risque_dat"],
+                "risque_liquidite": report["liquidite"],
+                "risque_rentabilite": report["rentabilite"],
+                "risque_concentration": report["concentration"],
+                "risque_alertes": report["alertes"],
+                "risque_qualite_donnees": report["qualite_donnees"],
+            },
+            rename_user_columns=True,
+        )
+        workbook = load_workbook(BytesIO(export), read_only=True)
+        self.assertIn("Synthese_risque", workbook.sheetnames)
+        self.assertIn("Risque_clients", workbook.sheetnames)
+        self.assertIn("Alertes", workbook.sheetnames)
+        self.assertEqual(workbook["Synthese_risque"][1][0].value, "date_situation")
+
+    def test_digital_risk_analysis_uses_monthly_credit_rate_when_interest_is_missing(self) -> None:
+        loans = pd.DataFrame(
+            [
+                {
+                    "loan_id": "L-MENSUEL",
+                    "customer_id": "C-M",
+                    "customer": "Client Mensuel",
+                    "msisdn1": "243810000099",
+                    "currency_code": "USD",
+                    "loan_amount": 100.0,
+                    "loan_balance": 100.0,
+                    "amount_paid": 0.0,
+                    "outstanding_principle": 100.0,
+                    "outstanding_interest": 0.0,
+                    "outstanding_penalty_fees": 0.0,
+                    "interest_earned": 0.0,
+                    "repayment_installments": 2,
+                    "repayment_period": 1,
+                    "repayment_period_unit": "MONTH",
+                    "status_name": "Active",
+                    "due_date": "2026-10-01",
+                    "created_at": "2026-08-01",
+                    "updated_at": "2026-08-01",
+                }
+            ]
+        )
+        savings = pd.DataFrame(
+            [
+                {
+                    "id": "S-M",
+                    "savings_id": "S-M",
+                    "customer_id": "C-M",
+                    "msisdn1": "243810000099",
+                    "product_id": "P1",
+                    "product_name": "Compte ouvert",
+                    "product_description": "NORMAL SAVINGS",
+                    "account_type": "NORMAL SAVINGS",
+                    "currency_code": "USD",
+                    "balance": 200.0,
+                    "status": "active",
+                    "created_at": "2026-08-01",
+                    "updated_at": "2026-08-01",
+                }
+            ]
+        )
+        savings_accounts = prepare_savings_accounts(savings)
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=savings_accounts,
+            fixed_savings=pd.DataFrame(),
+            loans=prepare_loans(loans),
+            load_report=build_load_report({}, {}),
+        )
+
+        report = build_mpesa_digital_risk_analysis(prepared, as_of_date="2026-08-31")
+        synthese = report["synthese_risque"].set_index("devise")
+        risque_credit = report["risque_credit"].set_index("devise")
+        clients = report["risque_clients"]
+        client_row = clients.loc[clients["id_client"].eq("C-M")].iloc[0]
+
+        self.assertAlmostEqual(float(risque_credit.loc["USD", "interet_credit_total"]), 14.0)
+        self.assertAlmostEqual(float(synthese.loc["USD", "produit_credit_imf"]), 10.0)
+        self.assertAlmostEqual(float(risque_credit.loc["USD", "part_vodacom_credit"]), 4.0)
+        self.assertAlmostEqual(float(client_row["marge_estimee"]), 10.0)
+
     def test_multi_file_turbo_and_perfect_snapshots_are_deduplicated_by_business_key(self) -> None:
         transaction_rows = pd.DataFrame(
             [
@@ -6722,7 +6939,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(str(exported.loc[0, "numero_client"]), "243811111111")
         self.assertLess(
             list(exported.columns).index("numero_client"),
-            list(exported.columns).index("Nom_client"),
+            list(exported.columns).index("nom_client"),
         )
 
     def test_priority_cockpit_exports_include_encours_a_date_sheets(self) -> None:
@@ -6816,6 +7033,87 @@ class MpesaAnalysisTests(unittest.TestCase):
             exported = pd.read_excel(workbook, sheet_name=sheet_name)
             self.assertGreater(len(exported.columns), 0, sheet_name)
             self.assertEqual(exported.columns[0], "date_situation", sheet_name)
+
+    def test_client_cockpit_export_uses_decision_columns_without_technical_flags(self) -> None:
+        content = create_excel_export(
+            {
+                "clients_clients_actifs": pd.DataFrame(
+                    [
+                        {
+                            "date_situation": pd.Timestamp("2026-08-10"),
+                            "customer_id": "C001",
+                            "numero_telephone": "243811111111",
+                            "Nom_client": "CLIENT ACTIF",
+                            "date_creation_client": pd.Timestamp("2026-08-01"),
+                            "currency_code": "USD",
+                            "solde_compte_ouvert": 25.0,
+                            "solde_dat": 100.0,
+                            "solde_credit": 40.0,
+                            "segment_produit": "epargne_dat_credit",
+                            "segment_client": "multi_produits",
+                            "statut_confiance": "forte",
+                            "date_premiere_operation_periode": pd.Timestamp("2026-08-02"),
+                            "date_derniere_operation_observee": pd.Timestamp("2026-08-09"),
+                            "jours_depuis_derniere_operation": 1,
+                            "nombre_operations": 5,
+                            "nombre_periodes_actives": 3,
+                            "nombre_operations_total": 12,
+                            "comptes_solde_positif_compte_ouvert": 1,
+                            "comptes_solde_positif_credit": 1,
+                            "comptes_solde_positif_dat": 1,
+                            "nombre_comptes_compte_ouvert": 1,
+                            "nombre_comptes_credit": 1,
+                            "nombre_comptes_dat": 1,
+                            "methode_rapprochement": "customer_id + telephone",
+                            "sources_client": "Customers",
+                            "presence_epargne": True,
+                            "presence_dat": True,
+                            "presence_credit": True,
+                            "presence_transaction": True,
+                            "actif_periode": True,
+                            "nouveau_client": False,
+                            "multi_produits": True,
+                            "fichier_source": "clients.xlsx",
+                        }
+                    ]
+                )
+            }
+        )
+        workbook = pd.ExcelFile(BytesIO(content), engine="openpyxl")
+        exported = pd.read_excel(workbook, sheet_name="Clients_Actifs")
+        self.assertEqual(
+            list(exported.columns),
+            [
+                "date_situation",
+                "id_client",
+                "numero_client",
+                "nom_client",
+                "date_creation_client",
+                "devise",
+                "solde_compte_ouvert",
+                "solde_dat",
+                "encours_credit",
+                "segment_produit",
+                "segment_client",
+                "statut_confiance",
+                "date_premiere_operation_periode",
+                "date_derniere_operation",
+                "jours_depuis_derniere_operation",
+                "nombre_operations",
+                "nombre_periodes_actives",
+                "nombre_total_operations",
+                "nombre_comptes_ouverts_positifs",
+                "nombre_credits_actifs",
+                "nombre_dat_positifs",
+                "nombre_comptes_ouverts",
+                "nombre_credits",
+                "nombre_dat",
+            ],
+        )
+        self.assertNotIn("multi_produits", exported.columns)
+        self.assertNotIn("presence_credit", exported.columns)
+        self.assertNotIn("fichier_source", exported.columns)
+        self.assertEqual(str(exported.loc[0, "numero_client"]), "243811111111")
 
     def test_savings_operational_cockpit_export_uses_direction_columns_and_red_tabs(self) -> None:
         savings_row = {
@@ -7020,7 +7318,11 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("Heure la plus fréquente : 10h", text)
         self.assertNotIn("Jour de semaine le plus actif", text)
         self.assertIn("Synthese des flux Solution Numérique/G2 par devise", text)
-        self.assertIn("Point de vigilance", text)
+        self.assertNotIn("Point de vigilance", text)
+        self.assertNotIn(
+            "La fidelisation M+1 et a 90 jours exige un historique couvrant les mois suivants.",
+            text,
+        )
         self.assertIn("CDF : 1 transaction(s) Completed, 1 client(s) distinct(s)", text)
         self.assertIn("USD : 1 transaction(s) Completed, 1 client(s) distinct(s)", text)
         self.assertIn("2 transaction(s) Completed", text)
@@ -7193,6 +7495,64 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("operation(s) comptabilisee(s) dans la Solution Numérique", text)
         self.assertIn("controles croises rapport G2/Solution Numérique sont non applicables", text)
         self.assertNotIn("Rapprochement Receipt No/ref_no", text)
+
+    def test_g2_dat_word_solution_numeric_with_g2_starts_control_with_counts(self) -> None:
+        from docx import Document
+
+        report = {
+            "analysis_source_label": "Solution Numérique",
+            "analysis_mode_label": "Solution Numérique + rapport G2",
+            "rapport_journalier_pivot": pd.DataFrame(),
+            "rapport_journalier_synthese": pd.DataFrame(),
+            "rapport_journalier_detail": pd.DataFrame(),
+            "retention_mensuelle": pd.DataFrame(),
+            "g2_dat": pd.DataFrame(
+                [
+                    {
+                        "statut_rapprochement": "Rapproche exact",
+                        "incluse_synthese": True,
+                        "est_anomalie": False,
+                    },
+                    {
+                        "statut_rapprochement": "Rapproche avec ecart",
+                        "incluse_synthese": True,
+                        "est_anomalie": False,
+                    },
+                    {
+                        "statut_rapprochement": "Non rapproche",
+                        "incluse_synthese": True,
+                        "est_anomalie": True,
+                    },
+                    {
+                        "statut_rapprochement": "Non applicable - operation interne",
+                        "incluse_synthese": True,
+                        "est_anomalie": False,
+                    },
+                    {
+                        "statut_rapprochement": "Non rapproche",
+                        "incluse_synthese": False,
+                        "est_anomalie": True,
+                    },
+                ]
+            ),
+        }
+
+        content = create_g2_dat_word(
+            report,
+            period_text="le 19/08/2026",
+            direction_label="Tous",
+            generated_at=pd.Timestamp("2026-08-19 10:00:00"),
+        )
+        document = Document(BytesIO(content))
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+        self.assertIn(
+            "Controle. 2/3 operation(s) rapprochee(s), soit 66.7%; "
+            "1 exact(s), 1 avec ecart, 1 non rapprochee(s), 1 anomalie(s). "
+            "Mode Solution Numérique + rapport G2",
+            text,
+        )
+        self.assertNotIn("2/5 operation(s)", text)
 
     def test_g2_dat_word_activity_uses_filtered_detail_not_retention_month(self) -> None:
         from docx import Document
@@ -8061,6 +8421,97 @@ class TestLoanSavingsReconciliation(unittest.TestCase):
         self.assertEqual(credit_clients.loc[("USD", "C1"), "tranche_encours"], "Moins de 100")
         client_bands = report["concentration_clients_tranches"].set_index(["currency_code", "tranche_encours"])
         self.assertEqual(float(client_bands.loc[("CDF", "Moins de 500 000"), "encours_total"]), 1000.0)
+
+    def test_credit_cockpit_decision_export_uses_operational_sheets_and_par_thresholds(self) -> None:
+        loans = pd.DataFrame(
+            [
+                {
+                    "loan_id": "LN-1",
+                    "customer_id": "C1",
+                    "msisdn1": "243811111111",
+                    "currency_code": "USD",
+                    "loan_product_id": "CREDIT USD",
+                    "loan_amount": 100,
+                    "loan_balance": 100,
+                    "amount_paid": 0,
+                    "outstanding_principle": 100,
+                    "outstanding_penalty_fees": 5,
+                    "status_name": "ACTIVE",
+                    "defaulted": 1,
+                    "is_rollover": 0,
+                    "is_grace_period": 0,
+                    "due_date": "2026-04-01",
+                    "created_at": "2026-03-01",
+                },
+                {
+                    "loan_id": "LN-2",
+                    "customer_id": "C2",
+                    "msisdn1": "243822222222",
+                    "currency_code": "USD",
+                    "loan_product_id": "CREDIT USD",
+                    "loan_amount": 200,
+                    "loan_balance": 200,
+                    "amount_paid": 0,
+                    "outstanding_principle": 200,
+                    "status_name": "ACTIVE",
+                    "defaulted": 0,
+                    "is_rollover": 1,
+                    "is_grace_period": 0,
+                    "due_date": "2026-01-01",
+                    "created_at": "2025-12-01",
+                },
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=loans,
+            load_report=pd.DataFrame(),
+            customers=pd.DataFrame(),
+        )
+
+        report = build_mpesa_credit_cockpit(prepared, date_start="2026-08-01", date_end="2026-08-07")
+        risk = report["credit_risque_par_decision"].set_index("devise")
+        self.assertEqual(float(risk.loc["USD", "encours_par_90"]), 300.0)
+        self.assertEqual(float(risk.loc["USD", "encours_par_180"]), 200.0)
+
+        portfolio = report["credit_portefeuille_decision"].set_index("numero_pret")
+        self.assertTrue(bool(portfolio.loc["LN-1", "pret_en_defaut"]))
+        self.assertFalse(bool(portfolio.loc["LN-1", "pret_renouvele"]))
+        self.assertFalse(bool(portfolio.loc["LN-2", "pret_en_defaut"]))
+        self.assertTrue(bool(portfolio.loc["LN-2", "pret_renouvele"]))
+
+        export = create_excel_export(
+            {
+                key: value
+                for key, value in report.items()
+                if key.startswith("credit_") and key.endswith("_decision")
+            },
+            rename_user_columns=True,
+        )
+        workbook = pd.ExcelFile(BytesIO(export), engine="openpyxl")
+        expected_sheets = {
+            "Credit_Synthese",
+            "Credit_Flux_Periode",
+            "Credit_Portefeuille",
+            "Credit_Risque_PAR",
+            "Credit_Echeances",
+            "Credit_Concentration",
+            "Credit_Tranches_Clients",
+            "Credit_Cohortes",
+            "Credit_Clients_360",
+            "Credit_Actions",
+            "Credit_Qualite",
+        }
+        self.assertTrue(expected_sheets.issubset(set(workbook.sheet_names)))
+        exported_portfolio = pd.read_excel(workbook, sheet_name="Credit_Portefeuille")
+        self.assertEqual(exported_portfolio.columns[0], "date_situation")
+        self.assertIn("numero_pret", exported_portfolio.columns)
+        self.assertIn("produit_credit", exported_portfolio.columns)
+        self.assertNotIn("encours_credit_2", exported_portfolio.columns)
+        exported_risk = pd.read_excel(workbook, sheet_name="Credit_Risque_PAR")
+        self.assertIn("par_180_pct", exported_risk.columns)
 
     def test_credit_cockpit_excel_export_contains_credit_sheets(self) -> None:
         report = {

@@ -24,7 +24,11 @@ from credit_app.services.mpesa_analysis import (
     CUSTOMER_STATEMENT_COLUMNS,
     CUSTOMERS_REQUIRED_COLUMNS,
     DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+    DEFAULT_DAT_VODACOM_ANNUAL_INTEREST_RATE_PCT,
     DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
+    DEFAULT_LOAN_IMF_INTEREST_RATE_PCT,
+    DEFAULT_LOAN_INTEREST_RATE_PCT,
+    DEFAULT_LOAN_VODACOM_INTEREST_RATE_PCT,
     DEFAULT_MPESA_COMPARISON_PERIOD,
     DEFAULT_MPESA_YEAR_SCOPE_MODE,
     FIXED_SAVINGS_REQUIRED_COLUMNS,
@@ -54,6 +58,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_savings_cockpit,
     build_loan_savings_reconciliation,
     build_mpesa_credit_cockpit,
+    build_mpesa_digital_risk_analysis,
     build_mpesa_management_dashboard,
     build_mpesa_forecast_report,
     build_mpesa_statistics_report,
@@ -127,6 +132,7 @@ MPESA_SOLUTION_TAB_LABELS = (
     "Clients",
     "Épargnes",
     "Crédits",
+    "Analyse des risques",
     "Solution Numérique / M-Pesa",
     "Perfect Client",
     "Statistiques",
@@ -1592,6 +1598,32 @@ def _build_mpesa_credit_cockpit_cached(
 
 @st.cache_data(
     show_spinner=False,
+    max_entries=1,
+    hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
+)
+def _build_mpesa_risk_analysis_cached(
+    prepared: MpesaPreparedData,
+    date_situation: object,
+    dat_client_annual_rate_pct: float,
+    dat_vodacom_annual_rate_pct: float,
+    loan_imf_rate_pct: float,
+    loan_vodacom_rate_pct: float,
+    loan_total_rate_pct: float,
+) -> dict[str, pd.DataFrame]:
+    scoped_prepared = _prepared_data_as_of(prepared, date_situation)
+    return build_mpesa_digital_risk_analysis(
+        scoped_prepared,
+        as_of_date=date_situation,
+        dat_client_annual_rate_pct=dat_client_annual_rate_pct,
+        dat_vodacom_annual_rate_pct=dat_vodacom_annual_rate_pct,
+        loan_imf_rate_pct=loan_imf_rate_pct,
+        loan_vodacom_rate_pct=loan_vodacom_rate_pct,
+        loan_total_rate_pct=loan_total_rate_pct,
+    )
+
+
+@st.cache_data(
+    show_spinner=False,
     max_entries=3,
     hash_funcs={MpesaPreparedData: _prepared_data_cache_key},
 )
@@ -1804,6 +1836,12 @@ MPESA_CREDIT_PRIORITY_COLUMNS: tuple[str, ...] = (
 )
 
 MPESA_CLIENT_PRIORITY_COLUMNS: tuple[str, ...] = (
+    "date_situation",
+    "id_client",
+    "numero_client",
+    "nom_client",
+    "date_creation_client",
+    "devise",
     "client_key",
     "customer_id",
     "numero_telephone",
@@ -1836,6 +1874,80 @@ MPESA_CLIENT_PRIORITY_COLUMNS: tuple[str, ...] = (
     "statut_confiance",
     "methode_rapprochement",
     "sources_client",
+)
+
+MPESA_CLIENT_DECISION_COLUMNS: tuple[str, ...] = (
+    "date_situation",
+    "id_client",
+    "numero_client",
+    "nom_client",
+    "date_creation_client",
+    "devise",
+    "solde_compte_ouvert",
+    "solde_dat",
+    "encours_credit",
+    "segment_produit",
+    "segment_client",
+    "statut_confiance",
+    "date_premiere_operation_periode",
+    "date_derniere_operation",
+    "jours_depuis_derniere_operation",
+    "nombre_operations",
+    "nombre_periodes_actives",
+    "nombre_total_operations",
+    "nombre_comptes_ouverts_positifs",
+    "nombre_credits_actifs",
+    "nombre_dat_positifs",
+    "nombre_comptes_ouverts",
+    "nombre_credits",
+    "nombre_dat",
+)
+
+MPESA_CLIENT_SANS_MOUVEMENT_COLUMNS: tuple[str, ...] = (
+    "date_situation",
+    "id_client",
+    "numero_client",
+    "nom_client",
+    "date_creation_client",
+    "devise",
+    "solde_compte_ouvert",
+    "solde_dat",
+    "encours_credit",
+    "segment_produit",
+    "segment_client",
+    "statut_confiance",
+    "jours_depuis_derniere_operation",
+    "nombre_comptes_ouverts_positifs",
+    "nombre_credits_actifs",
+    "nombre_dat_positifs",
+    "nombre_comptes_ouverts",
+    "nombre_credits",
+    "nombre_dat",
+)
+
+MPESA_CLIENT_DAT_SANS_CREDIT_COLUMNS: tuple[str, ...] = (
+    "date_situation",
+    "id_client",
+    "numero_client",
+    "nom_client",
+    "date_creation",
+    "date_mise_a_jour",
+    "numero_compte",
+    "id_produit_epargne",
+    "produit_epargne",
+    "type_compte",
+    "description_produit_epargne",
+    "devise",
+    "solde",
+    "statut_compte",
+    "interet_calcule",
+    "date_dernier_calcul_interet",
+    "date_prochain_calcul_interet",
+    "date_echeance",
+    "interet_constate",
+    "interet_vodacom",
+    "frais_a_payer",
+    "solde_bloque",
 )
 
 
@@ -3521,7 +3633,15 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         "Le classeur ajoute les DAT en cours, les remboursements observés, le parcours et les contrôles utiles."
     )
     export_summary = filtered_report.get("synthese", pd.DataFrame()).drop(
-        columns=["nombre_credits", "solde_credit_total"],
+        columns=[
+            "nombre_credits",
+            "solde_credit_total",
+            "solde_mpesa_est_reel",
+            "solde_mpesa_client_est_reel",
+            "source_solde_mpesa_client",
+            "source_epargne_courante_finale",
+            "source_dat_final",
+        ],
         errors="ignore",
     )
     customer_export = {
@@ -3543,13 +3663,20 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         ]
     }
     customer_export = {"synthese": export_summary, **customer_export}
+    customer_excel_file_name = _render_excel_workbook_file_name_input(
+        default_file_name=f"extrait_turbo_dat_client_{selected_customer}.xlsx",
+        key=(
+            f"mpesa_customer_full_excel_file_name_{selected_customer}_"
+            f"{start_token}_{end_token}"
+        ),
+    )
     excel_column = st.columns(3)[0]
     with excel_column:
         _render_excel_export_on_demand(
             export_report=customer_export,
             prepare_label="Préparer l'Excel client",
             download_label="Télécharger le rapport complet du client",
-            file_name=f"extrait_turbo_dat_client_{selected_customer}.xlsx",
+            file_name=customer_excel_file_name,
             key=f"mpesa_customer_full_excel_{selected_customer}",
             width="stretch",
             help="Prépare le classeur Excel complet du client uniquement à la demande.",
@@ -6501,6 +6628,17 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
     action_lists = cockpit.get("listes_action", {})
     data_quality = cockpit.get("qualite_donnees", pd.DataFrame())
     kpi_catalog = cockpit.get("catalogue_kpi", pd.DataFrame())
+    decision_synthesis = cockpit.get("credit_synthese_decision", pd.DataFrame())
+    decision_flows = cockpit.get("credit_flux_periode_decision", pd.DataFrame())
+    decision_portfolio = cockpit.get("credit_portefeuille_decision", pd.DataFrame())
+    decision_risk = cockpit.get("credit_risque_par_decision", pd.DataFrame())
+    decision_maturity = cockpit.get("credit_echeances_decision", pd.DataFrame())
+    decision_concentration = cockpit.get("credit_concentration_decision", pd.DataFrame())
+    decision_client_bands = cockpit.get("credit_tranches_clients_decision", pd.DataFrame())
+    decision_cohorts = cockpit.get("credit_cohortes_decision", pd.DataFrame())
+    decision_clients_360 = cockpit.get("credit_clients_360_decision", pd.DataFrame())
+    decision_actions = cockpit.get("credit_actions_decision", pd.DataFrame())
+    decision_quality = cockpit.get("credit_qualite_decision", pd.DataFrame())
 
     tabs_key = "mpesa_credit_cockpit_tabs"
     inject_professional_tabs_css(container_key=tabs_key)
@@ -6919,35 +7057,18 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         _mpesa_dataframe(kpi_catalog, width="stretch", hide_index=True)
 
     export_report = {
-        "credit_vue_ensemble": overview,
-        "credit_encours_a_date": _credit_display_frame(
-            portfolio_detail,
-            credit_name_lookup,
-        ),
-        "credit_risque_synthese": risk_summary,
-        "credit_echeances_synthese": maturity_summary,
-        "credit_concentration_clients": _credit_display_frame(
-            concentration_clients,
-            credit_name_lookup,
-        ),
-        "credit_concentration_clients_tranches": concentration_client_bands,
-        "credit_epargne_clients": _credit_display_frame(
-            credit_savings_clients,
-            credit_name_lookup,
-        ),
+        "credit_synthese_decision": decision_synthesis,
+        "credit_flux_periode_decision": decision_flows,
+        "credit_portefeuille_decision": decision_portfolio,
+        "credit_risque_par_decision": decision_risk,
+        "credit_echeances_decision": decision_maturity,
+        "credit_concentration_decision": decision_concentration,
+        "credit_tranches_clients_decision": decision_client_bands,
+        "credit_cohortes_decision": decision_cohorts,
+        "credit_clients_360_decision": decision_clients_360,
+        "credit_actions_decision": decision_actions,
+        "credit_qualite_decision": decision_quality,
     }
-    for key in [
-        "prets_echus_avec_encours",
-        "prets_par_simplifie_30j",
-        "prets_avec_penalites",
-        "prets_defaulted",
-    ]:
-        value = action_lists.get(key, pd.DataFrame())
-        if isinstance(value, pd.DataFrame) and not value.empty:
-            export_report[f"credit_liste_{key}"] = _credit_display_frame(
-                value,
-                credit_name_lookup,
-            )
     credit_file_name = _render_excel_workbook_file_name_input(
         default_file_name=(
             f"cockpit_credits_solution_numerique_{pd.Timestamp(date_start):%Y%m%d}_"
@@ -6963,6 +7084,333 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         key=f"mpesa_credit_cockpit_export_{pd.Timestamp(date_start):%Y%m%d}_{pd.Timestamp(date_end):%Y%m%d}",
         width="content",
         help="Export Excel des syntheses, details et listes d'action credit du perimetre filtre.",
+    )
+
+
+@st.fragment
+def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
+    if prepared.loans.empty and prepared.current_savings.empty and prepared.fixed_savings.empty:
+        st.info(
+            "Chargez au minimum Loans Account et/ou Savings Account pour analyser les risques."
+        )
+        return
+
+    render_panel_title("Analyse des risques Solution Numerique")
+    render_summary_box(
+        "Principe de lecture",
+        [
+            "Loans Account porte l'encours credit; Savings Account porte les comptes ouverts et les DAT.",
+            "L'analyse travaille par client numerique et par devise, sans additionner USD et CDF.",
+            "G2 peut enrichir l'identite ou le controle dans les autres onglets; il ne calcule aucun montant de risque.",
+            "Les marges sont des estimations : certaines conventions metier restent marquees comme parametre a confirmer.",
+        ],
+    )
+
+    default_date = _latest_complete_turbo_date(prepared)
+    if prepared.year_scope_end is not None:
+        default_date = min(default_date, prepared.year_scope_end)
+    scope_token = re.sub(r"[^0-9A-Za-z]+", "_", prepared.year_scope_label).strip("_") or "all"
+    data_token = _prepared_data_state_token(prepared)
+    date_key = f"mpesa_risk_date_situation_{scope_token}"
+    applied_filters_key = f"mpesa_risk_applied_filters_{scope_token}_{data_token}"
+    applied_at_key = f"mpesa_risk_applied_at_{scope_token}_{data_token}"
+    st.session_state.setdefault(date_key, default_date.date())
+    st.session_state.setdefault(
+        "mpesa_risk_dat_client_rate_pct",
+        float(
+            st.session_state.get(
+                "mpesa_savings_dat_annual_interest_rate_pct",
+                DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
+            )
+        ),
+    )
+    st.session_state.setdefault(
+        "mpesa_risk_dat_vodacom_rate_pct",
+        DEFAULT_DAT_VODACOM_ANNUAL_INTEREST_RATE_PCT,
+    )
+    st.session_state.setdefault("mpesa_risk_credit_imf_rate_pct", DEFAULT_LOAN_IMF_INTEREST_RATE_PCT)
+    st.session_state.setdefault(
+        "mpesa_risk_credit_vodacom_rate_pct",
+        DEFAULT_LOAN_VODACOM_INTEREST_RATE_PCT,
+    )
+    st.session_state.setdefault("mpesa_risk_credit_total_rate_pct", DEFAULT_LOAN_INTEREST_RATE_PCT)
+
+    with st.form(f"mpesa_risk_filters_{scope_token}_{data_token}", border=True):
+        controls = st.columns(4, gap="medium")
+        with controls[0]:
+            st.date_input(
+                "Date de situation",
+                key=date_key,
+                format="DD/MM/YYYY",
+                help="Date d'arrete de l'analyse. Les encours Loans et Savings sont conserves jusqu'a cette date incluse.",
+            )
+        with controls[1]:
+            st.number_input(
+                "DAT - part client annuelle (%)",
+                min_value=0.0,
+                max_value=100.0,
+                step=0.25,
+                key="mpesa_risk_dat_client_rate_pct",
+                help="Part estimee revenant au client sur les DAT; 11 % est la valeur metier par defaut.",
+            )
+        with controls[2]:
+            st.number_input(
+                "DAT - part Vodacom annuelle (%)",
+                min_value=0.0,
+                max_value=100.0,
+                step=0.25,
+                key="mpesa_risk_dat_vodacom_rate_pct",
+                help="Part estimee revenant a Vodacom sur les DAT; 3 % est la valeur utilisee dans l'analyse.",
+            )
+        with controls[3]:
+            st.number_input(
+                "Credit - taux total mensuel (%)",
+                min_value=0.0,
+                max_value=100.0,
+                step=0.25,
+                key="mpesa_risk_credit_total_rate_pct",
+                help="Taux mensuel total du credit numerique : 7 % lorsque le client rembourse.",
+            )
+        credit_rates = st.columns(2, gap="medium")
+        with credit_rates[0]:
+            st.number_input(
+                "Credit - part IMF mensuelle (%)",
+                min_value=0.0,
+                max_value=100.0,
+                step=0.25,
+                key="mpesa_risk_credit_imf_rate_pct",
+                help="Part mensuelle economique estimee pour IMF Bisou Bisou dans le taux credit total : 5 %.",
+            )
+        with credit_rates[1]:
+            st.number_input(
+                "Credit - part Vodacom mensuelle (%)",
+                min_value=0.0,
+                max_value=100.0,
+                step=0.25,
+                key="mpesa_risk_credit_vodacom_rate_pct",
+                help="Part mensuelle economique estimee pour Vodacom dans le taux credit total : 2 %.",
+            )
+        risk_submitted = st.form_submit_button("Actualiser l'analyse des risques", type="primary")
+
+    if risk_submitted:
+        st.session_state[applied_filters_key] = {
+            "date_situation": st.session_state[date_key],
+            "dat_client_annual_rate_pct": st.session_state["mpesa_risk_dat_client_rate_pct"],
+            "dat_vodacom_annual_rate_pct": st.session_state["mpesa_risk_dat_vodacom_rate_pct"],
+            "loan_imf_rate_pct": st.session_state["mpesa_risk_credit_imf_rate_pct"],
+            "loan_vodacom_rate_pct": st.session_state["mpesa_risk_credit_vodacom_rate_pct"],
+            "loan_total_rate_pct": st.session_state["mpesa_risk_credit_total_rate_pct"],
+        }
+        st.session_state[applied_at_key] = pd.Timestamp.now()
+
+    applied_filters = st.session_state.get(applied_filters_key)
+    if not applied_filters:
+        _render_deferred_analysis_notice("l'onglet Analyse des risques")
+        return
+
+    date_situation = applied_filters.get("date_situation", default_date.date())
+    if risk_submitted:
+        st.success(
+            f"Parametres de risques appliques au {pd.Timestamp(date_situation):%d/%m/%Y}.",
+            icon=":material/check_circle:",
+        )
+
+    report = _build_mpesa_risk_analysis_cached(
+        prepared,
+        date_situation,
+        float(applied_filters.get("dat_client_annual_rate_pct", DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT)),
+        float(applied_filters.get("dat_vodacom_annual_rate_pct", DEFAULT_DAT_VODACOM_ANNUAL_INTEREST_RATE_PCT)),
+        float(applied_filters.get("loan_imf_rate_pct", DEFAULT_LOAN_IMF_INTEREST_RATE_PCT)),
+        float(applied_filters.get("loan_vodacom_rate_pct", DEFAULT_LOAN_VODACOM_INTEREST_RATE_PCT)),
+        float(applied_filters.get("loan_total_rate_pct", DEFAULT_LOAN_INTEREST_RATE_PCT)),
+    )
+
+    synthese = report.get("synthese_risque", pd.DataFrame())
+    alertes = report.get("alertes", pd.DataFrame())
+    qualite = report.get("qualite_donnees", pd.DataFrame())
+    if not alertes.empty:
+        _render_alert_banner(f"{len(alertes):,} alerte(s) de risque necessitent une revue.".replace(",", " "))
+    if not qualite.empty:
+        controles = qualite.get("statut", pd.Series(dtype=str)).astype(str).str.lower()
+        if controles.isin(["a_verifier", "a vérifier"]).any():
+            _render_alert_banner("Certains controles qualite doivent etre verifies avant partage.")
+
+    if synthese.empty:
+        st.info("Aucune synthese de risque exploitable sur les sources chargees.")
+    else:
+        for currency in sorted(synthese["devise"].dropna().astype(str).unique()):
+            view = synthese.loc[synthese["devise"].astype(str).eq(currency)]
+            if view.empty:
+                continue
+            row = view.iloc[0]
+            render_panel_title(f"Synthese des risques - {currency}")
+            render_kpi_cards(
+                [
+                    ("Encours credit", _format_amount(row.get("encours_credit")), f"Devise {currency}", "navy"),
+                    ("Epargne totale", _format_amount(row.get("encours_epargne")), "Compte ouvert + DAT", "blue"),
+                    ("Couverture globale", _format_percent(row.get("couverture_globale_pct")), "Epargne / encours credit", "green"),
+                    ("Taux credit / epargne", _format_percent(row.get("taux_utilisation_epargne_credit_pct")), "Encours credit / epargne totale", "slate"),
+                    ("Exposition nette", _format_amount(row.get("exposition_nette")), "Credit non couvert par compte ouvert", "orange"),
+                    ("Marge estimee", _format_amount(row.get("marge_financiere")), "Produit IMF - cout DAT", "purple"),
+                    ("PAR 30", _format_percent(row.get("par_30_pct")), "Encours en retard >= 30 jours", "red"),
+                ]
+            )
+
+    tab_key = "mpesa_risk_analysis_tabs"
+    inject_professional_tabs_css(container_key=tab_key)
+    risk_tabs = st.container(key=tab_key).tabs(
+        format_professional_tab_labels(
+            (
+                "Vue globale",
+                "Clients a risque",
+                "Credit",
+                "DAT",
+                "Liquidite",
+                "Rentabilite",
+                "Concentration",
+                "Alertes",
+                "Qualite",
+            )
+        )
+    )
+
+    with risk_tabs[0]:
+        render_panel_title("Vue globale")
+        _render_block_help(
+            "Ce bloc rassemble les indicateurs de risque par devise : encours credit, epargne, DAT, couverture, taux credit/epargne, exposition nette, marge estimee et PAR."
+        )
+        _mpesa_dataframe(synthese, width="stretch", hide_index=True)
+        with st.expander("Parametres et limites metier", expanded=False):
+            _mpesa_dataframe(report.get("parametres", pd.DataFrame()), width="stretch", hide_index=True)
+            _mpesa_dataframe(report.get("data_gaps", pd.DataFrame()), width="stretch", hide_index=True)
+
+    with risk_tabs[1]:
+        render_panel_title("Clients a risque")
+        _render_block_help(
+            "Ce tableau rapproche pour chaque client et devise le compte ouvert, le DAT et le credit afin d'identifier couverture, exposition nette et retards."
+        )
+        clients_view = _apply_local_multiselect_filters(
+            report.get("risque_clients", pd.DataFrame()),
+            _with_phone_filter_columns("devise", "niveau_risque", "segment_couverture", "id_client", "nom_client"),
+            key_prefix="mpesa_risk_clients_filter",
+        )
+        _mpesa_dataframe(clients_view.head(1500), width="stretch", hide_index=True)
+
+    with risk_tabs[2]:
+        render_panel_title("Risque credit")
+        _render_block_help(
+            "Ce bloc lit Loans Account a la date de situation : encours, PAR 1/7/30/60/90, produit credit estime, couverture par l'epargne et taux credit/epargne."
+        )
+        credit_view = _apply_local_multiselect_filters(
+            report.get("risque_credit", pd.DataFrame()),
+            ["devise"],
+            key_prefix="mpesa_risk_credit_filter",
+        )
+        _mpesa_dataframe(credit_view, width="stretch", hide_index=True)
+        st.markdown("**Couverture credit par l'epargne**")
+        couverture_view = _apply_local_multiselect_filters(
+            report.get("couverture", pd.DataFrame()),
+            ["devise", "segment_couverture"],
+            key_prefix="mpesa_risk_coverage_filter",
+        )
+        _mpesa_dataframe(couverture_view, width="stretch", hide_index=True)
+
+    with risk_tabs[3]:
+        render_panel_title("Risque DAT")
+        _render_block_help(
+            "Ce bloc lit les DAT depuis Savings Account : montant bloque, cout estime client + Vodacom et montants arrivant a echeance sous 7, 30 et 90 jours."
+        )
+        dat_view = _apply_local_multiselect_filters(
+            report.get("risque_dat", pd.DataFrame()),
+            ["devise"],
+            key_prefix="mpesa_risk_dat_filter",
+        )
+        _mpesa_dataframe(dat_view, width="stretch", hide_index=True)
+
+    with risk_tabs[4]:
+        render_panel_title("Liquidite")
+        _render_block_help(
+            "Ce bloc compare les entrees attendues du credit avec les sorties DAT par horizon. Un gap negatif appelle une revue de tresorerie."
+        )
+        liquidity_view = _apply_local_multiselect_filters(
+            report.get("liquidite", pd.DataFrame()),
+            ["devise", "horizon"],
+            key_prefix="mpesa_risk_liquidity_filter",
+        )
+        _mpesa_dataframe(liquidity_view, width="stretch", hide_index=True)
+
+    with risk_tabs[5]:
+        render_panel_title("Rentabilite estimee")
+        _render_block_help(
+            "Ce bloc donne une lecture prudente de marge : part IMF mensuelle estimee sur le credit moins cout DAT estime. La marge definitive depend encore de l'encours moyen et de la methode exacte de calcul des interets."
+        )
+        rentability_view = _apply_local_multiselect_filters(
+            report.get("rentabilite", pd.DataFrame()),
+            ["devise"],
+            key_prefix="mpesa_risk_profitability_filter",
+        )
+        _mpesa_dataframe(rentability_view, width="stretch", hide_index=True)
+
+    with risk_tabs[6]:
+        render_panel_title("Concentration")
+        _render_block_help(
+            "Ce bloc mesure le poids des plus gros clients dans l'encours credit et les DAT. Le HHI donne une indication de concentration par devise."
+        )
+        concentration_view = _apply_local_multiselect_filters(
+            report.get("concentration", pd.DataFrame()),
+            ["devise", "type_concentration", "top_n"],
+            key_prefix="mpesa_risk_concentration_filter",
+        )
+        _mpesa_dataframe(concentration_view, width="stretch", hide_index=True)
+
+    with risk_tabs[7]:
+        render_panel_title("Alertes")
+        _render_block_help(
+            "Ce bloc reprend uniquement les situations qui demandent une revue : credit sans epargne, couverture faible, retard, DAT sans credit, marge negative ou gap liquidite."
+        )
+        alert_view = _apply_local_multiselect_filters(
+            alertes,
+            _with_phone_filter_columns("devise", "alerte", "niveau_risque", "id_client", "nom_client"),
+            key_prefix="mpesa_risk_alert_filter",
+        )
+        _mpesa_dataframe(alert_view.head(2000), width="stretch", hide_index=True)
+
+    with risk_tabs[8]:
+        render_panel_title("Qualite des donnees")
+        _render_block_help(
+            "Ce bloc signale les limites de donnees qui peuvent affaiblir l'analyse : doublons, clients manquants, dates invalides ou parametres metier non confirmes."
+        )
+        _mpesa_dataframe(qualite, width="stretch", hide_index=True)
+        with st.expander("Audit des briques existantes", expanded=False):
+            _mpesa_dataframe(report.get("audit", pd.DataFrame()), width="stretch", hide_index=True)
+
+    export_report = {
+        "risque_synthese": report.get("synthese_risque", pd.DataFrame()),
+        "risque_clients": report.get("risque_clients", pd.DataFrame()),
+        "risque_credit": report.get("risque_credit", pd.DataFrame()),
+        "risque_couverture": report.get("couverture", pd.DataFrame()),
+        "risque_dat": report.get("risque_dat", pd.DataFrame()),
+        "risque_liquidite": report.get("liquidite", pd.DataFrame()),
+        "risque_rentabilite": report.get("rentabilite", pd.DataFrame()),
+        "risque_concentration": report.get("concentration", pd.DataFrame()),
+        "risque_alertes": report.get("alertes", pd.DataFrame()),
+        "risque_qualite_donnees": report.get("qualite_donnees", pd.DataFrame()),
+        "risque_parametres": report.get("parametres", pd.DataFrame()),
+        "risque_data_gaps": report.get("data_gaps", pd.DataFrame()),
+        "risque_audit": report.get("audit", pd.DataFrame()),
+    }
+    risk_file_name = _render_excel_workbook_file_name_input(
+        default_file_name=f"analyse_risques_solution_numerique_{pd.Timestamp(date_situation):%Y%m%d}.xlsx",
+        key="mpesa_risk_export_file_name",
+    )
+    _render_excel_export_on_demand(
+        export_report=export_report,
+        prepare_label="Preparer l'export Excel Risques",
+        download_label="Telecharger l'analyse des risques Excel",
+        file_name=risk_file_name,
+        key=f"mpesa_risk_export_{pd.Timestamp(date_situation):%Y%m%d}",
+        width="stretch",
+        help="Prepare le classeur seulement sur demande pour eviter d'alourdir l'onglet.",
     )
 
 
@@ -8453,21 +8901,11 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
             "Ce bloc mesure si les clients ont effectue des operations sur la periode. "
             "Il aide a distinguer clients actifs, occasionnels et inactifs observes."
         )
-        activity_columns = [
-            "client_key",
-            "customer_id",
-            "numero_telephone",
-            "nom_client",
-            "nombre_operations",
-            "nombre_periodes_actives",
-            "date_derniere_operation_observee",
-            "jours_depuis_derniere_operation",
-            "segment_client",
-        ]
+        activity_columns = list(MPESA_CLIENT_DECISION_COLUMNS)
         if not client_360.empty:
             filtered = _apply_local_multiselect_filters(
                 client_360,
-                ["numero_telephone", "segment_client", "statut_confiance", "methode_rapprochement"],
+                ["numero_client", "devise", "segment_client", "segment_produit", "statut_confiance"],
                 key_prefix="mpesa_clients_activity_filter",
             )
             _mpesa_dataframe(
@@ -8504,12 +8942,12 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
             "Cette analyse repère les numéros clients créés sur la période et les produits épargne ouverte/DAT créés sur la période, puis vérifie s'ils ont eu des transactions. Les soldes restent séparés par devise."
         )
         display_columns = [
-            "client_key",
-            "customer_id",
-            "numero_telephone",
+            "date_situation",
+            "id_client",
+            "numero_client",
             "nom_client",
             "date_creation_client",
-            "currency_code",
+            "devise",
             "nouveau_client",
             "nouveau_compte_ouvert_periode",
             "nouveau_dat_periode",
@@ -8532,8 +8970,8 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
             filtered = _apply_local_multiselect_filters(
                 new_clients_accounts,
                 [
-                    "numero_telephone",
-                    "currency_code",
+                    "numero_client",
+                    "devise",
                     "statut_activation",
                     "nouveau_client",
                     "nouveau_compte_ouvert_periode",
@@ -8560,30 +8998,11 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
             "Ce bloc consolide, par client, les presences epargne, DAT, credit et transactions. "
             "Il donne une lecture 360 sans additionner les devises."
         )
-        display_columns = [
-            "client_key",
-            "customer_id",
-            "numero_telephone",
-            "nom_client",
-            "date_creation_client",
-            "presence_epargne",
-            "presence_dat",
-            "presence_credit",
-            "presence_transaction",
-            "nombre_comptes_compte_ouvert",
-            "solde_compte_ouvert",
-            "comptes_solde_positif_dat",
-            "solde_dat",
-            "comptes_solde_positif_credit",
-            "solde_credit",
-            "segment_produit",
-            "segment_client",
-            "sources_client",
-        ]
+        display_columns = list(MPESA_CLIENT_DECISION_COLUMNS)
         if not client_360.empty:
             filtered = _apply_local_multiselect_filters(
                 client_360,
-                ["numero_telephone", "segment_produit", "segment_client", "statut_confiance"],
+                ["numero_client", "devise", "segment_produit", "segment_client", "statut_confiance"],
                 key_prefix="mpesa_clients_360_filter",
             )
             _mpesa_dataframe(
@@ -8609,11 +9028,13 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
         if not dat_without_credit.empty:
             filtered = _apply_local_multiselect_filters(
                 dat_without_credit,
-                ["numero_telephone", "msisdn1", "msisdn", "currency_code", "product_name", "status"],
+                ["numero_client", "devise", "currency_code", "product_name", "status"],
                 key_prefix="mpesa_clients_dat_without_credit_filter",
             )
             _mpesa_dataframe(
-                _prioritize_dataframe_columns(filtered, MPESA_CLIENT_PRIORITY_COLUMNS),
+                filtered[
+                    [column for column in MPESA_CLIENT_DAT_SANS_CREDIT_COLUMNS if column in filtered.columns]
+                ],
                 width="stretch",
                 hide_index=True,
             )
@@ -8669,18 +9090,33 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                     selected_frame = _apply_local_multiselect_filters(
                         selected_frame,
                         [
-                            "numero_telephone",
-                            "client_key",
-                            "customer_id",
+                            "numero_client",
+                            "devise",
+                            "id_client",
                             "segment_client",
                             "segment_produit",
                             "statut_confiance",
-                            "currency_code",
                         ],
                         key_prefix=f"mpesa_clients_action_filter_{selected_list}",
                     )
+                display_contract: tuple[str, ...] | None = None
+                if selected_list == "clients_sans_mouvement":
+                    display_contract = MPESA_CLIENT_SANS_MOUVEMENT_COLUMNS
+                elif selected_list in {
+                    "clients_actifs",
+                    "nouveaux_clients_actifs",
+                    "clients_multi_produits",
+                }:
+                    display_contract = MPESA_CLIENT_DECISION_COLUMNS
                 _mpesa_dataframe(
-                    _prioritize_dataframe_columns(selected_frame, MPESA_CLIENT_PRIORITY_COLUMNS),
+                    _prioritize_dataframe_columns(
+                        selected_frame[
+                            [column for column in display_contract if column in selected_frame.columns]
+                        ]
+                        if display_contract is not None
+                        else selected_frame,
+                        MPESA_CLIENT_PRIORITY_COLUMNS,
+                    ),
                     width="stretch",
                     hide_index=True,
                 )
@@ -10535,6 +10971,7 @@ def render_solution_mpesa_tab() -> None:
         lambda: _render_clients_tab(analysis_prepared),
         lambda: _render_dat_tab(None, analysis_prepared),
         lambda: _render_loans_tab(None, analysis_prepared),
+        lambda: _render_risk_analysis_tab(analysis_prepared),
         lambda: _render_g2_dat_tab(None, analysis_prepared),
         lambda: _render_perfect_client_tab(analysis_prepared),
         lambda: _render_statistics_tab(analysis_prepared, historical_prepared=prepared),
