@@ -97,13 +97,6 @@ from credit_app.domain import (
 )
 from credit_app.components.preparation import render_preparation_status
 from credit_app.services.data_pipeline import build_preparation_summary, prepare_payload_from_dataframe
-from credit_app.services.mpesa_analysis import (
-    DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT,
-    DEFAULT_MPESA_COMPARISON_PERIOD,
-    DEFAULT_MPESA_YEAR_SCOPE_MODE,
-    MPESA_COMPARISON_PERIOD_OPTIONS,
-    MPESA_YEAR_SCOPE_MODES,
-)
 from credit_app.tabs.audit_control import render_analyste_credit_tab
 from credit_app.tabs.conformite import render_conformite_cycle_tab
 from credit_app.tabs.crm_clients import render_crm_clients_tab
@@ -116,7 +109,6 @@ from credit_app.tabs.portfolio import (
 )
 from credit_app.tabs.quality import render_quality_tab
 from credit_app.tabs.risk import render_risk_tab
-from credit_app.tabs.solution_mpesa import render_solution_mpesa_tab
 from credit_app.tabs.surveillance import render_surveillance_tab
 from credit_app.sql_operations import (
     build_operations_depot_retrait_dataset,
@@ -127,6 +119,28 @@ from credit_app.sql_operations import (
 import credit_app.ui as credit_ui
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT = 11.0
+MPESA_COMPARISON_PERIOD_OPTIONS = [
+    "7 jours glissants",
+    "15 jours glissants",
+    "30 jours glissants",
+    "Période filtrée",
+]
+DEFAULT_MPESA_COMPARISON_PERIOD = MPESA_COMPARISON_PERIOD_OPTIONS[0]
+MPESA_YEAR_SCOPE_MODES = [
+    "Ensemble des années",
+    "Année unique",
+    "Plage d'années",
+]
+DEFAULT_MPESA_YEAR_SCOPE_MODE = MPESA_YEAR_SCOPE_MODES[0]
+
+
+def _render_solution_mpesa_tab_lazy() -> None:
+    """Charge le module Solution Numérique uniquement lorsque l'utilisateur l'ouvre."""
+    from credit_app.tabs.solution_mpesa import render_solution_mpesa_tab
+
+    render_solution_mpesa_tab()
 
 format_context_value = credit_ui.format_context_value
 format_professional_tab_labels = credit_ui.format_professional_tab_labels
@@ -1180,8 +1194,16 @@ def main() -> None:
         )
 
     if not source_ready:
-        start_tabs = st.tabs(["Demarrage Perfect Vision", "Solution Numérique"])
-        with start_tabs[0]:
+        start_choice = st.segmented_control(
+            "Espace de démarrage",
+            ["Demarrage Perfect Vision", "Solution Numérique"],
+            default="Demarrage Perfect Vision",
+            key="credit_start_workspace",
+            label_visibility="collapsed",
+        )
+        if start_choice == "Solution Numérique":
+            _render_solution_mpesa_tab_lazy()
+        else:
             render_context_row(
                 [
                     ("Cycle", selected_cycle["label"]),
@@ -1208,8 +1230,6 @@ def main() -> None:
                 "Aucune base chargée",
                 "Utilisez la barre latérale pour choisir un fichier. Les indicateurs et graphiques apparaîtront après la préparation des données.",
             )
-        with start_tabs[1]:
-            render_solution_mpesa_tab()
         render_footer()
         return
 
@@ -1621,8 +1641,18 @@ def main() -> None:
             mapping_df=payload["mapping_df"],
             cycle_key=selected_cycle_key,
         )
-    with tabs[tab_index + 4]:
-        render_solution_mpesa_tab()
+    solution_tab = tabs[tab_index + 4]
+    with solution_tab:
+        if getattr(solution_tab, "open", None) is True:
+            _render_solution_mpesa_tab_lazy()
+        else:
+            render_summary_box(
+                "Solution Numérique",
+                [
+                    "Ouvrez cet onglet pour charger les analyses Solution Numérique / M-Pesa.",
+                    "Cette protection évite de calculer automatiquement un module lourd pendant les analyses Perfect Vision.",
+                ],
+            )
     with tabs[tab_index + 5]:
         render_export_tab(filtered_df, payload["quality_df"], payload["mapping_df"])
     with tabs[tab_index + 6]:
