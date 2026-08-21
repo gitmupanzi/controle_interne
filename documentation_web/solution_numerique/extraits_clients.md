@@ -2,7 +2,7 @@
 
 ## Objectif métier
 
-Produire un relevé bancaire professionnel centré sur le compte ouvert du client, tout en présentant les éléments utiles sur DAT, remboursements et prochains remboursements.
+Produire un relevé bancaire professionnel centré sur le compte ouvert du client, tout en présentant les éléments utiles sur DAT, crédits en cours, remboursements et prochains remboursements.
 
 ## Règle du détail transactionnel
 
@@ -28,6 +28,17 @@ La synthèse attendue par devise contient :
 | Clôture | Solde de clôture reconstitué ou observé |
 | Compte ouvert | Dernière position du compte ouvert |
 | Compte bloqué | Dernière position DAT / compte bloqué |
+
+## Positions à date
+
+Le format complet ajoute des blocs de situation séparés du détail transactionnel :
+
+| Bloc | Source | Lecture |
+|---|---|---|
+| DAT en cours - situation au ... | `Savings Account` | DAT positifs du client, échéance, jours restants, capital bloqué et capital + intérêt estimé |
+| Crédit en cours - situation au ... | `Loans Account` | Crédits encore en cours, montant accordé, montant payé, encours, montant à rembourser, échéance et situation |
+
+Ces positions ne sont pas des lignes du compte ouvert. Elles permettent au lecteur de comprendre l'exposition du client sans modifier les colonnes `Entrées`, `Sorties` et `Solde` du relevé bancaire.
 
 ## Exports
 

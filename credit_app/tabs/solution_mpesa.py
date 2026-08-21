@@ -93,6 +93,7 @@ from credit_app.services.mpesa_analysis import (
     numeric_column,
     prepare_customers,
     prepare_g2_transactions,
+    prepare_mpesa_risk_analysis_sheet_for_display,
     prepare_loans,
     prepare_perfect_clients,
     prepare_savings_accounts,
@@ -666,6 +667,10 @@ def _mpesa_dataframe(
 ) -> Any:
     """Render a Solution Numérique table with optional user-facing column names."""
 
+    if kwargs.get("height") is None:
+        kwargs.pop("height", None)
+    if kwargs.get("width") is None:
+        kwargs.pop("width", None)
     if isinstance(data, pd.DataFrame) and _mpesa_user_column_rename_enabled():
         data, column_mapping = prepare_dataframe_with_user_columns(data, enabled=True)
         column_config = translate_column_config_for_user_columns(column_config, column_mapping)  # type: ignore[assignment]
@@ -3173,6 +3178,84 @@ def _render_customer_active_dat_positions(analysis_report: dict[str, pd.DataFram
         )
 
 
+def _render_customer_active_credit_positions(analysis_report: dict[str, pd.DataFrame]) -> None:
+    active_credits = analysis_report.get("credit_en_cours_client", pd.DataFrame())
+    if not isinstance(active_credits, pd.DataFrame) or active_credits.empty:
+        st.info("Aucun crédit en cours n'est disponible pour ce client dans Loans Account.")
+        return
+
+    situation_dates = pd.to_datetime(active_credits.get("date_situation"), errors="coerce").dropna()
+    situation_label = (
+        f"Situation au {situation_dates.max():%d/%m/%Y}. "
+        if not situation_dates.empty
+        else "Situation à la date disponible. "
+    )
+    st.caption(
+        situation_label
+        + "Cette position vient de Loans Account. Elle est présentée séparément du détail des transactions du compte ouvert."
+    )
+    for currency, currency_entries in active_credits.groupby(
+        "currency_code", sort=True, dropna=False
+    ):
+        currency_text = str(currency or "SANS DEVISE")
+        encours = pd.to_numeric(currency_entries["loan_balance"], errors="coerce").sum()
+        montant_a_rembourser = pd.to_numeric(
+            currency_entries["montant_a_rembourser"], errors="coerce"
+        ).sum()
+        retard_count = int(
+            pd.to_numeric(currency_entries["jours_retard"], errors="coerce")
+            .fillna(0)
+            .gt(0)
+            .sum()
+        )
+        render_kpi_cards(
+            [
+                ("Crédits en cours", _format_count(len(currency_entries)), currency_text, "blue"),
+                ("Encours crédit", _format_amount(encours), currency_text, "navy"),
+                ("Montant à rembourser", _format_amount(montant_a_rembourser), currency_text, "orange"),
+                ("Crédits en retard", _format_count(retard_count), currency_text, "red"),
+            ]
+        )
+        display_columns = [
+            "loan_id",
+            "created_at",
+            "due_date",
+            "jours_retard",
+            "currency_code",
+            "loan_amount",
+            "amount_paid",
+            "loan_balance",
+            "montant_a_rembourser",
+            "situation_credit_client",
+            "status_name",
+        ]
+        display_columns = [
+            column for column in display_columns if column in currency_entries.columns
+        ]
+        number_format = "%.0f" if currency_text == "CDF" else "%.2f"
+        _mpesa_dataframe(
+            currency_entries[display_columns],
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "loan_id": st.column_config.TextColumn("Crédit", pinned=True),
+                "created_at": st.column_config.DatetimeColumn("Octroi", format="DD/MM/YYYY HH:mm"),
+                "due_date": st.column_config.DatetimeColumn("Échéance", format="DD/MM/YYYY"),
+                "jours_retard": st.column_config.NumberColumn("Jours de retard", format="%d"),
+                "currency_code": st.column_config.TextColumn("Devise"),
+                "loan_amount": st.column_config.NumberColumn("Montant accordé", format=number_format),
+                "amount_paid": st.column_config.NumberColumn("Montant payé", format=number_format),
+                "loan_balance": st.column_config.NumberColumn("Encours", format=number_format),
+                "montant_a_rembourser": st.column_config.NumberColumn(
+                    "Montant à rembourser",
+                    format=number_format,
+                ),
+                "situation_credit_client": st.column_config.TextColumn("Situation"),
+                "status_name": st.column_config.TextColumn("Statut"),
+            },
+        )
+
+
 @st.fragment
 def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | None:
     if prepared.transactions.empty:
@@ -3379,8 +3462,9 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         analysis_report=filtered_report,
     )
 
-    render_panel_title("6. DAT en cours et échéances à venir")
+    render_panel_title("6. DAT et crédits en cours")
     _render_customer_active_dat_positions(filtered_analysis)
+    _render_customer_active_credit_positions(filtered_analysis)
 
     render_panel_title("7. Parcours financier du client")
     _render_customer_journey_analysis(filtered_analysis)
@@ -3501,7 +3585,8 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
         "la devise, les types d'opération et les références filtrés. "
         "Les boutons CDF et USD produisent un document par devise; ALL les reunit dans un seul document "
         "avec des totaux et cumuls toujours separes par devise. Les DAT en cours reprennent la dernière situation "
-        "disponible dans Savings Account, indépendamment de la période transactionnelle. Les remboursements "
+        "disponible dans Savings Account; les crédits en cours reprennent la dernière situation disponible dans Loans Account, "
+        "indépendamment de la période transactionnelle. Les remboursements "
         "reprennent uniquement les écritures correspondant aux filtres actifs."
     )
     if previews:
@@ -3630,7 +3715,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
 
     st.caption(
         "La feuille `Extrait` reprend les filtres appliques a l'etape 4. "
-        "Le classeur ajoute les DAT en cours, les remboursements observés, le parcours et les contrôles utiles."
+        "Le classeur ajoute les DAT en cours, les crédits en cours, les remboursements observés, le parcours et les contrôles utiles."
     )
     export_summary = filtered_report.get("synthese", pd.DataFrame()).drop(
         columns=[
@@ -3650,6 +3735,7 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
             "extrait",
             "parcours_turbo",
             "dat_en_cours_client",
+            "credit_en_cours_client",
             "remboursements_turbo_detail_client",
             "prochains_remboursements_client",
             "elements_extrait_client_turbo",
@@ -7087,6 +7173,24 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
     )
 
 
+def _mpesa_risk_display_frame(frame: pd.DataFrame, sheet_name: str, *, max_rows: int | None = None) -> pd.DataFrame:
+    """Retourne une vue Risques orientee decision, sans colonnes techniques redondantes."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame
+    display = prepare_mpesa_risk_analysis_sheet_for_display(frame, sheet_name)
+    if max_rows is not None:
+        display = display.head(max_rows)
+    return display
+
+
+def _mpesa_risk_dataframe(frame: pd.DataFrame, sheet_name: str, *, max_rows: int | None = None, height: int | None = None) -> None:
+    display = _mpesa_risk_display_frame(frame, sheet_name, max_rows=max_rows)
+    dataframe_kwargs: dict[str, Any] = {"width": "stretch", "hide_index": True}
+    if height is not None:
+        dataframe_kwargs["height"] = height
+    _mpesa_dataframe(display, **dataframe_kwargs)
+
+
 @st.fragment
 def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
     if prepared.loans.empty and prepared.current_savings.empty and prepared.fixed_savings.empty:
@@ -7101,6 +7205,7 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
         [
             "Loans Account porte l'encours credit; Savings Account porte les comptes ouverts et les DAT.",
             "L'analyse travaille par client numerique et par devise, sans additionner USD et CDF.",
+            "Cette lecture observe les signaux disponibles; elle ne valide ni n'invalide automatiquement un credit.",
             "G2 peut enrichir l'identite ou le controle dans les autres onglets; il ne calcule aucun montant de risque.",
             "Les marges sont des estimations : certaines conventions metier restent marquees comme parametre a confirmer.",
         ],
@@ -7248,9 +7353,13 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
                 [
                     ("Encours credit", _format_amount(row.get("encours_credit")), f"Devise {currency}", "navy"),
                     ("Epargne totale", _format_amount(row.get("encours_epargne")), "Compte ouvert + DAT", "blue"),
+                    ("Encours DAT", _format_amount(row.get("encours_dat")), "Compte bloque uniquement", "blue"),
                     ("Couverture globale", _format_percent(row.get("couverture_globale_pct")), "Epargne / encours credit", "green"),
+                    ("Couverture DAT", _format_percent(row.get("couverture_dat_credit_pct")), "DAT / encours credit", "green"),
                     ("Taux credit / epargne", _format_percent(row.get("taux_utilisation_epargne_credit_pct")), "Encours credit / epargne totale", "slate"),
+                    ("Taux credit / DAT", _format_percent(row.get("taux_credit_dat_pct")), "Encours credit / DAT", "slate"),
                     ("Exposition nette", _format_amount(row.get("exposition_nette")), "Credit non couvert par compte ouvert", "orange"),
+                    ("Exposition nette DAT", _format_amount(row.get("exposition_nette_dat")), "Credit non couvert par DAT", "orange"),
                     ("Marge estimee", _format_amount(row.get("marge_financiere")), "Produit IMF - cout DAT", "purple"),
                     ("PAR 30", _format_percent(row.get("par_30_pct")), "Encours en retard >= 30 jours", "red"),
                 ]
@@ -7262,7 +7371,7 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
         format_professional_tab_labels(
             (
                 "Vue globale",
-                "Clients a risque",
+                "Lecture clients",
                 "Credit",
                 "DAT",
                 "Liquidite",
@@ -7277,43 +7386,52 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
     with risk_tabs[0]:
         render_panel_title("Vue globale")
         _render_block_help(
-            "Ce bloc rassemble les indicateurs de risque par devise : encours credit, epargne, DAT, couverture, taux credit/epargne, exposition nette, marge estimee et PAR."
+            "Ce bloc rassemble les indicateurs de risque par devise : encours credit, epargne totale, DAT seul, couverture globale, couverture DAT, taux credit/epargne, taux credit/DAT, exposition nette, marge estimee et PAR."
         )
-        _mpesa_dataframe(synthese, width="stretch", hide_index=True)
+        _mpesa_risk_dataframe(synthese, "Synthese_risque")
         with st.expander("Parametres et limites metier", expanded=False):
-            _mpesa_dataframe(report.get("parametres", pd.DataFrame()), width="stretch", hide_index=True)
-            _mpesa_dataframe(report.get("data_gaps", pd.DataFrame()), width="stretch", hide_index=True)
+            _mpesa_risk_dataframe(report.get("parametres", pd.DataFrame()), "Parametres")
+            _mpesa_risk_dataframe(report.get("data_gaps", pd.DataFrame()), "Data_gaps")
 
     with risk_tabs[1]:
-        render_panel_title("Clients a risque")
+        render_panel_title("Lecture observee par client")
         _render_block_help(
-            "Ce tableau rapproche pour chaque client et devise le compte ouvert, le DAT et le credit afin d'identifier couverture, exposition nette et retards."
+            "Ce tableau ne valide ni n'invalide un credit. Il consolide les signaux observes a la date de situation : compte ouvert, DAT, credit, couverture, retard, exposition nette et motif d'attention."
         )
         clients_view = _apply_local_multiselect_filters(
             report.get("risque_clients", pd.DataFrame()),
-            _with_phone_filter_columns("devise", "niveau_risque", "segment_couverture", "id_client", "nom_client"),
+            _with_phone_filter_columns(
+                "devise",
+                "segment_observe",
+                "niveau_observation",
+                "niveau_risque",
+                "segment_couverture",
+                "id_client",
+                "numero_client",
+                "nom_client",
+            ),
             key_prefix="mpesa_risk_clients_filter",
         )
-        _mpesa_dataframe(clients_view.head(1500), width="stretch", hide_index=True)
+        _mpesa_risk_dataframe(clients_view, "Risque_clients", max_rows=1500)
 
     with risk_tabs[2]:
         render_panel_title("Risque credit")
         _render_block_help(
-            "Ce bloc lit Loans Account a la date de situation : encours, PAR 1/7/30/60/90, produit credit estime, couverture par l'epargne et taux credit/epargne."
+            "Ce bloc lit Loans Account a la date de situation : encours, PAR 1/7/30/60/90, produit credit estime, couverture par l'epargne totale, couverture par DAT seul et taux credit/DAT."
         )
         credit_view = _apply_local_multiselect_filters(
             report.get("risque_credit", pd.DataFrame()),
             ["devise"],
             key_prefix="mpesa_risk_credit_filter",
         )
-        _mpesa_dataframe(credit_view, width="stretch", hide_index=True)
+        _mpesa_risk_dataframe(credit_view, "Risque_credit")
         st.markdown("**Couverture credit par l'epargne**")
         couverture_view = _apply_local_multiselect_filters(
             report.get("couverture", pd.DataFrame()),
             ["devise", "segment_couverture"],
             key_prefix="mpesa_risk_coverage_filter",
         )
-        _mpesa_dataframe(couverture_view, width="stretch", hide_index=True)
+        _mpesa_risk_dataframe(couverture_view, "Couverture")
 
     with risk_tabs[3]:
         render_panel_title("Risque DAT")
@@ -7325,7 +7443,7 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
             ["devise"],
             key_prefix="mpesa_risk_dat_filter",
         )
-        _mpesa_dataframe(dat_view, width="stretch", hide_index=True)
+        _mpesa_risk_dataframe(dat_view, "Risque_DAT")
 
     with risk_tabs[4]:
         render_panel_title("Liquidite")
@@ -7337,7 +7455,7 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
             ["devise", "horizon"],
             key_prefix="mpesa_risk_liquidity_filter",
         )
-        _mpesa_dataframe(liquidity_view, width="stretch", hide_index=True)
+        _mpesa_risk_dataframe(liquidity_view, "Liquidite")
 
     with risk_tabs[5]:
         render_panel_title("Rentabilite estimee")
@@ -7349,7 +7467,7 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
             ["devise"],
             key_prefix="mpesa_risk_profitability_filter",
         )
-        _mpesa_dataframe(rentability_view, width="stretch", hide_index=True)
+        _mpesa_risk_dataframe(rentability_view, "Rentabilite")
 
     with risk_tabs[6]:
         render_panel_title("Concentration")
@@ -7361,7 +7479,7 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
             ["devise", "type_concentration", "top_n"],
             key_prefix="mpesa_risk_concentration_filter",
         )
-        _mpesa_dataframe(concentration_view, width="stretch", hide_index=True)
+        _mpesa_risk_dataframe(concentration_view, "Concentration")
 
     with risk_tabs[7]:
         render_panel_title("Alertes")
@@ -7370,19 +7488,28 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
         )
         alert_view = _apply_local_multiselect_filters(
             alertes,
-            _with_phone_filter_columns("devise", "alerte", "niveau_risque", "id_client", "nom_client"),
+            _with_phone_filter_columns(
+                "devise",
+                "alerte",
+                "niveau_observation",
+                "niveau_risque",
+                "segment_observe",
+                "id_client",
+                "numero_client",
+                "nom_client",
+            ),
             key_prefix="mpesa_risk_alert_filter",
         )
-        _mpesa_dataframe(alert_view.head(2000), width="stretch", hide_index=True)
+        _mpesa_risk_dataframe(alert_view, "Alertes", max_rows=2000)
 
     with risk_tabs[8]:
         render_panel_title("Qualite des donnees")
         _render_block_help(
             "Ce bloc signale les limites de donnees qui peuvent affaiblir l'analyse : doublons, clients manquants, dates invalides ou parametres metier non confirmes."
         )
-        _mpesa_dataframe(qualite, width="stretch", hide_index=True)
+        _mpesa_risk_dataframe(qualite, "Qualite_donnees")
         with st.expander("Audit des briques existantes", expanded=False):
-            _mpesa_dataframe(report.get("audit", pd.DataFrame()), width="stretch", hide_index=True)
+            _mpesa_risk_dataframe(report.get("audit", pd.DataFrame()), "Audit")
 
     export_report = {
         "risque_synthese": report.get("synthese_risque", pd.DataFrame()),

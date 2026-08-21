@@ -4,6 +4,8 @@ L'onglet `Analyse des risques` donne une lecture transversale du portefeuille nu
 
 Cette analyse ne remplace pas les cockpits `Épargnes` et `Crédits`. Elle les relie pour aider la Direction et les opérations à répondre à une question simple : **quels clients, produits ou devises demandent une attention particulière ?**
 
+Point important : cet onglet reste un outil de **constat**. Il ne valide pas un crédit, n'invalide pas un client et ne remplace pas la revue humaine. Il aide seulement à lire les signaux disponibles dans les fichiers chargés.
+
 ## Sources utilisées
 
 | Source | Rôle dans l'analyse |
@@ -49,8 +51,12 @@ L'analyse affiche deux lectures complémentaires :
 |---|---|---|
 | Couverture crédit par l'épargne | `épargne totale / encours crédit * 100` | Dans quelle mesure l'épargne observée peut-elle couvrir le crédit ? |
 | Taux crédit / épargne | `encours crédit / épargne totale * 100` | Quelle part de l'épargne observée est transformée ou utilisée en encours crédit ? |
+| Couverture DAT / crédit | `DAT bloqué / encours crédit * 100` | Le compte bloqué couvre-t-il le crédit observé ? |
+| Taux crédit / DAT | `encours crédit / DAT bloqué * 100` | Le crédit dépasse-t-il le DAT disponible ? |
 
 Exemple : si une devise présente 100 millions d'encours crédit et 200 millions d'épargne totale, le taux crédit / épargne est de 50 %. Si le taux dépasse 100 %, l'encours crédit dépasse l'épargne observée dans la même devise.
+
+Pour la logique opérationnelle d'octroi numérique, la lecture `DAT / crédit` est plus stricte que la lecture par épargne totale. Un compte ouvert peut améliorer la position financière globale, mais le DAT doit être isolé lorsque la règle métier demande qu'un crédit soit couvert à hauteur du compte bloqué.
 
 ## Lecture par client
 
@@ -67,16 +73,44 @@ Dans la pratique, le client numérique est rapproché par `customer_id` (identif
 - épargne totale ;
 - encours crédit ;
 - couverture crédit par l'épargne ;
+- couverture crédit par le DAT seul ;
 - exposition nette ;
+- exposition nette DAT ;
 - score de risque ;
 - motifs de risque.
+
+Pour faciliter la lecture opérationnelle, le tableau ajoute aussi des colonnes de synthèse :
+
+| Colonne | Lecture |
+|---|---|
+| `numero_client` | Numéro client lisible sur le terrain, alimenté par le téléphone lorsque disponible, avec repli sur l'identifiant client. |
+| `segment_observe` | Profil principal observé : crédit avec DAT, crédit sans épargne, DAT sans crédit actif, retard, etc. |
+| `niveau_observation` | Priorité de revue : observation standard, opportunité commerciale prudente, revue recommandée ou suivi prioritaire. |
+| `lecture_observee` | Commentaire court expliquant pourquoi la ligne mérite ou non une attention particulière. |
+| `signaux_positifs` | Codes des éléments favorables observés : compte ouvert positif, DAT positif, crédit actif, remboursement observé, couverture confortable. |
+| `signaux_attention` | Codes des points à surveiller : retard, crédit sans épargne, crédit supérieur à l'épargne, DAT proche de l'échéance, marge estimée négative. |
+
+## Colonnes affichées et exportées
+
+Les tableaux de l'onglet et le cockpit Excel `Analyse des risques` sont préparés pour une lecture opérationnelle. Les colonnes techniques ou redondantes ne doivent pas alourdir la lecture : par exemple `id_client` est masqué lorsque `numero_client` suffit, `telephone` est masqué lorsque le numéro client est déjà affiché, et les colonnes de contrôle technique comme `type_controle`, fichiers sources ou traces de debug restent internes.
+
+Les noms de colonnes sont explicites, en français `snake_case`, sans accents. Les notions ambiguës sont clarifiées :
+
+| Colonne technique interne | Nom opérationnel |
+|---|---|
+| `epargne_disponible` ou `epargne_courante` | `compte_ouvert` |
+| `dat_bloque` | `encours_dat` |
+| `couverture_credit_pct` ou `couverture_globale_pct` | `couverture_epargne_totale_credit_pct` |
+| `taux_utilisation_epargne_credit_pct` | `taux_credit_epargne_totale_pct` |
+| `exposition_nette` | `credit_non_couvert_compte_ouvert` |
+| `exposition_nette_dat` | `credit_non_couvert_dat` |
 
 ## Indicateurs calculés
 
 | Bloc | Indicateurs principaux | Utilité |
 |---|---|---|
 | Vue globale | Encours crédit, épargne totale, DAT, couverture globale, taux crédit / épargne, exposition nette, PAR 30, marge estimée | Donner une lecture rapide par devise. |
-| Clients à risque | Couverture client, taux crédit / épargne, exposition nette, score et motif | Prioriser les dossiers à revoir. |
+| Lecture clients | Couverture client, couverture DAT, taux crédit / épargne, taux crédit / DAT, exposition nette, segment observé, niveau d'observation, signaux positifs et signaux d'attention | Prioriser la revue humaine sans automatiser la décision. |
 | Crédit | PAR 1/7/30/60/90, encours en retard, produit crédit estimé | Suivre la qualité du portefeuille crédit. |
 | DAT | Encours DAT, coût client, part Vodacom, échéances à 7/30/90 jours | Préparer les sorties de trésorerie liées aux DAT. |
 | Liquidité | Entrées attendues crédit, sorties DAT, gap de liquidité par horizon | Anticiper les tensions de trésorerie. |

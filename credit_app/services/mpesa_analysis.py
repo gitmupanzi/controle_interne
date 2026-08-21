@@ -130,6 +130,31 @@ CUSTOMER_ACTIVE_DAT_COLUMNS = [
     "status",
 ]
 
+CUSTOMER_ACTIVE_CREDIT_COLUMNS = [
+    "date_situation",
+    "loan_id",
+    "customer_id",
+    "msisdn1",
+    "currency_code",
+    "loan_product_id",
+    "loan_amount",
+    "amount_paid",
+    "loan_balance",
+    "outstanding_principle",
+    "outstanding_setup_fees",
+    "outstanding_interest",
+    "outstanding_penalty_fees",
+    "montant_a_rembourser",
+    "due_date",
+    "jours_avant_echeance",
+    "jours_retard",
+    "situation_credit_client",
+    "status_name",
+    "last_repayment_date",
+    "created_at",
+    "updated_at",
+]
+
 CUSTOMER_STATEMENT_ELEMENT_LABELS = (
     "Depot normal",
     "Dépôt à terme (DAT)",
@@ -15729,6 +15754,19 @@ def _mpesa_risk_coverage_segment(
     return "couverture_inf_25_pct"
 
 
+def _mpesa_risk_dat_coverage_segment(
+    encours_credit: Any,
+    dat_bloque: Any,
+    couverture_dat_credit_pct: Any,
+) -> str:
+    segment = _mpesa_risk_coverage_segment(
+        encours_credit,
+        dat_bloque,
+        couverture_dat_credit_pct,
+    )
+    return "aucun_dat" if segment == "aucune_epargne" else segment
+
+
 def _mpesa_risk_hhi(values: pd.Series) -> float:
     amounts = pd.to_numeric(values, errors="coerce").fillna(0.0)
     total = float(amounts.sum())
@@ -16116,6 +16154,10 @@ def build_mpesa_digital_risk_analysis(
         clean_text(clients["telephone_credit"]).ne(""),
         clean_text(clients["telephone_epargne"]),
     )
+    clients["numero_client"] = clean_text(clients["telephone"]).where(
+        clean_text(clients["telephone"]).ne(""),
+        clients["id_client"],
+    )
     clients["devise"] = clean_text(clients.get("currency_code", pd.Series("", index=clients.index))).str.upper()
     clients["epargne_disponible"] = pd.to_numeric(clients["epargne_courante"], errors="coerce").fillna(0.0)
     clients["dat_bloque"] = pd.to_numeric(clients["dat"], errors="coerce").fillna(0.0)
@@ -16126,9 +16168,19 @@ def build_mpesa_digital_risk_analysis(
         clients["epargne_totale"].div(clients["encours_credit"]).mul(100),
         np.nan,
     )
+    clients["couverture_dat_credit_pct"] = np.where(
+        clients["encours_credit"].gt(0),
+        clients["dat_bloque"].div(clients["encours_credit"]).mul(100),
+        np.nan,
+    )
     clients["taux_utilisation_epargne_credit_pct"] = np.where(
         clients["epargne_totale"].gt(0),
         clients["encours_credit"].div(clients["epargne_totale"]).mul(100),
+        np.nan,
+    )
+    clients["taux_credit_dat_pct"] = np.where(
+        clients["dat_bloque"].gt(0),
+        clients["encours_credit"].div(clients["dat_bloque"]).mul(100),
         np.nan,
     )
     clients["segment_couverture"] = [
@@ -16139,7 +16191,16 @@ def build_mpesa_digital_risk_analysis(
             clients["couverture_credit_pct"],
         )
     ]
+    clients["segment_couverture_dat"] = [
+        _mpesa_risk_dat_coverage_segment(encours, dat, couverture)
+        for encours, dat, couverture in zip(
+            clients["encours_credit"],
+            clients["dat_bloque"],
+            clients["couverture_dat_credit_pct"],
+        )
+    ]
     clients["exposition_nette"] = (clients["encours_credit"] - clients["epargne_disponible"]).clip(lower=0)
+    clients["exposition_nette_dat"] = (clients["encours_credit"] - clients["dat_bloque"]).clip(lower=0)
     clients["marge_estimee"] = clients["produit_credit_imf"] - clients["cout_dat"]
     clients["marge_financiere_pct"] = clients["marge_estimee"].div(
         clients["encours_credit"].replace(0, pd.NA)
@@ -16175,6 +16236,11 @@ def build_mpesa_digital_risk_analysis(
     _add_risk_signal(
         credit_positive & clients["encours_credit"].gt(clients["epargne_totale"]),
         "credit_superieur_epargne",
+        2,
+    )
+    _add_risk_signal(
+        credit_positive & clients["encours_credit"].gt(clients["dat_bloque"]),
+        "credit_superieur_dat",
         2,
     )
     _add_risk_signal(
@@ -16230,13 +16296,133 @@ def build_mpesa_digital_risk_analysis(
         motif_risque.fillna("").ne(""),
         "aucun_signal_majeur",
     )
+    has_credit = clients["encours_credit"].gt(0)
+    has_dat = clients["dat_bloque"].gt(0)
+    has_open_savings = clients["epargne_disponible"].gt(0)
+    has_any_savings = clients["epargne_totale"].gt(0)
+    par_60 = pd.to_numeric(clients.get("par_simplifie_60j", 0), errors="coerce").fillna(0).gt(0)
+    par_90 = pd.to_numeric(clients.get("par_simplifie_90j", 0), errors="coerce").fillna(0).gt(0)
+
+    clients["segment_observe"] = np.select(
+        [
+            has_credit & par_90,
+            has_credit & par_60,
+            has_credit & par_30,
+            has_credit & has_dat,
+            has_credit & has_any_savings,
+            has_credit,
+            has_dat & ~has_credit,
+            has_open_savings & ~has_credit,
+            pd.to_numeric(clients["nombre_comptes_epargne"], errors="coerce").fillna(0).gt(0),
+        ],
+        [
+            "credit_retard_90j_plus",
+            "credit_retard_60j_plus",
+            "credit_retard_30j_plus",
+            "credit_avec_dat",
+            "credit_avec_epargne",
+            "credit_sans_epargne_observee",
+            "dat_sans_credit_actif",
+            "compte_ouvert_sans_credit",
+            "produit_epargne_sans_credit",
+        ],
+        default="profil_incomplet_observe",
+    )
+
+    signaux_positifs = pd.Series("", index=clients.index, dtype="string")
+    signaux_attention = pd.Series("", index=clients.index, dtype="string")
+
+    def _append_observation_signal(base: pd.Series, mask: pd.Series, code: str) -> pd.Series:
+        clean_mask = pd.Series(mask, index=clients.index).fillna(False).astype(bool)
+        if not clean_mask.any():
+            return base
+        current = base.loc[clean_mask].fillna("")
+        base.loc[clean_mask] = current.where(current.eq(""), current + " | ") + code
+        return base
+
+    signaux_positifs = _append_observation_signal(signaux_positifs, has_open_savings, "EP02_compte_ouvert_positif")
+    signaux_positifs = _append_observation_signal(signaux_positifs, has_dat, "EP01_dat_positif")
+    signaux_positifs = _append_observation_signal(signaux_positifs, has_credit, "CR01_credit_actif_observe")
+    signaux_positifs = _append_observation_signal(
+        signaux_positifs,
+        has_credit & pd.to_numeric(clients["montant_deja_rembourse"], errors="coerce").fillna(0).gt(0),
+        "CR02_remboursement_observe",
+    )
+    signaux_positifs = _append_observation_signal(
+        signaux_positifs,
+        has_credit & pd.to_numeric(clients["couverture_credit_pct"], errors="coerce").fillna(0).ge(100),
+        "COUV01_couverture_100_pct_plus",
+    )
+    signaux_positifs = _append_observation_signal(
+        signaux_positifs,
+        has_credit & pd.to_numeric(clients["couverture_dat_credit_pct"], errors="coerce").fillna(0).ge(100),
+        "COUV02_couverture_dat_100_pct_plus",
+    )
+
+    signaux_attention = _append_observation_signal(signaux_attention, par_90, "CR07_retard_90j_plus")
+    signaux_attention = _append_observation_signal(signaux_attention, ~par_90 & par_60, "CR06_retard_60j_plus")
+    signaux_attention = _append_observation_signal(signaux_attention, ~par_90 & ~par_60 & par_30, "CR03_retard_30j_plus")
+    signaux_attention = _append_observation_signal(signaux_attention, ~par_90 & ~par_60 & ~par_30 & par_7, "CR04_retard_7j_plus")
+    signaux_attention = _append_observation_signal(signaux_attention, has_credit & clients["epargne_totale"].le(0), "CR05_credit_sans_epargne")
+    signaux_attention = _append_observation_signal(signaux_attention, has_credit & clients["encours_credit"].gt(clients["epargne_totale"]), "CR06_credit_superieur_epargne")
+    signaux_attention = _append_observation_signal(signaux_attention, has_credit & clients["dat_bloque"].le(0), "CR08_credit_sans_dat")
+    signaux_attention = _append_observation_signal(signaux_attention, has_credit & clients["encours_credit"].gt(clients["dat_bloque"]), "CR09_credit_superieur_dat")
+    signaux_attention = _append_observation_signal(
+        signaux_attention,
+        dat_days.between(0, MPESA_RISK_SCORING_THRESHOLDS["dat_echeance_proche_jours"], inclusive="both"),
+        "EP03_dat_echeance_proche",
+    )
+    signaux_attention = _append_observation_signal(signaux_attention, clients["marge_estimee"].lt(0), "FIN01_marge_negative_estimee")
+
+    clients["signaux_positifs"] = signaux_positifs.where(signaux_positifs.fillna("").ne(""), "aucun_signal_positif_code")
+    clients["signaux_attention"] = signaux_attention.where(signaux_attention.fillna("").ne(""), "aucun_signal_attention")
+    clients["niveau_observation"] = np.select(
+        [
+            clients["niveau_risque"].eq("risque_critique") | par_90 | par_60,
+            clients["niveau_risque"].eq("risque_eleve")
+            | par_30
+            | (has_credit & clients["encours_credit"].gt(clients["epargne_totale"])),
+            has_dat & ~has_credit,
+        ],
+        [
+            "suivi_prioritaire",
+            "revue_recommandee",
+            "opportunite_commerciale_prudente",
+        ],
+        default="observation_standard",
+    )
+    clients["lecture_observee"] = np.select(
+        [
+            par_90 | par_60,
+            par_30,
+            has_credit & clients["epargne_totale"].le(0),
+            has_credit & clients["encours_credit"].gt(clients["epargne_totale"]),
+            has_credit & pd.to_numeric(clients["couverture_credit_pct"], errors="coerce").fillna(0).ge(100),
+            has_dat & ~has_credit,
+            has_any_savings & ~has_credit,
+        ],
+        [
+            "Retard significatif observe : suivi credit prioritaire.",
+            "Retard credit observe : revue recommandee.",
+            "Credit sans epargne observee : couverture a examiner.",
+            "Encours credit superieur a l'epargne observee : exposition nette a suivre.",
+            "Couverture confortable observee par l'epargne chargee.",
+            "DAT positif sans credit actif observe : opportunite commerciale prudente.",
+            "Epargne observee sans credit actif : profil a suivre.",
+        ],
+        default="Aucun signal majeur observe sur les sources chargees.",
+    )
 
     ordered_client_columns = [
-        "date_situation", "id_client", "nom_client", "telephone", "devise",
+        "date_situation", "id_client", "numero_client", "nom_client", "telephone", "devise",
+        "segment_observe", "niveau_observation", "lecture_observee",
+        "signaux_positifs", "signaux_attention",
         "epargne_courante", "dat_bloque", "epargne_totale", "encours_credit",
         "nombre_credits", "nombre_dat", "couverture_credit_pct",
-        "taux_utilisation_epargne_credit_pct",
-        "segment_couverture", "exposition_nette", "echeance_credit",
+        "couverture_dat_credit_pct", "taux_utilisation_epargne_credit_pct",
+        "taux_credit_dat_pct",
+        "segment_couverture", "segment_couverture_dat",
+        "exposition_nette", "exposition_nette_dat", "echeance_credit",
         "echeance_dat", "cout_dat", "produit_credit_imf", "marge_estimee",
         "marge_financiere_pct", "score_risque", "niveau_risque", "motif_risque",
     ]
@@ -16251,7 +16437,9 @@ def build_mpesa_digital_risk_analysis(
             nombre_clients=("id_client", lambda values: clean_identifier(values).replace("", pd.NA).nunique()),
             encours_credit=("encours_credit", "sum"),
             epargne_totale=("epargne_totale", "sum"),
+            dat_bloque=("dat_bloque", "sum"),
             exposition_nette=("exposition_nette", "sum"),
+            exposition_nette_dat=("exposition_nette_dat", "sum"),
         )
         .sort_values(["devise", "segment_couverture"])
         .reset_index(drop=True)
@@ -16259,6 +16447,16 @@ def build_mpesa_digital_risk_analysis(
     coverage["taux_utilisation_epargne_credit_pct"] = np.where(
         coverage["epargne_totale"].gt(0),
         coverage["encours_credit"].div(coverage["epargne_totale"]).mul(100),
+        np.nan,
+    )
+    coverage["couverture_dat_credit_pct"] = np.where(
+        coverage["encours_credit"].gt(0),
+        coverage["dat_bloque"].div(coverage["encours_credit"]).mul(100),
+        np.nan,
+    )
+    coverage["taux_credit_dat_pct"] = np.where(
+        coverage["dat_bloque"].gt(0),
+        coverage["encours_credit"].div(coverage["dat_bloque"]).mul(100),
         np.nan,
     )
     report["couverture"] = coverage
@@ -16410,7 +16608,9 @@ def build_mpesa_digital_risk_analysis(
     alert_definitions = {
         "credit_sans_epargne": clients["encours_credit"].gt(0) & clients["epargne_totale"].le(0),
         "credit_superieur_epargne": clients["encours_credit"].gt(clients["epargne_totale"]) & clients["encours_credit"].gt(0),
+        "credit_superieur_dat": clients["encours_credit"].gt(clients["dat_bloque"]) & clients["encours_credit"].gt(0),
         "couverture_insuffisante": clients["segment_couverture"].isin(["aucune_epargne", "couverture_inf_25_pct", "couverture_25_50_pct"]),
+        "couverture_dat_insuffisante": clients["segment_couverture_dat"].isin(["aucun_dat", "couverture_inf_25_pct", "couverture_25_50_pct"]),
         "client_fortement_expose": clients["encours_credit"].ge(high_exposure_cutoff) & clients["encours_credit"].gt(0),
         "dat_echeance_proche": pd.to_numeric(clients.get("jours_avant_echeance_dat_min", pd.Series(np.nan, index=clients.index)), errors="coerce").between(0, 30, inclusive="both"),
         "marge_negative": clients["marge_estimee"].lt(0),
@@ -16427,9 +16627,14 @@ def build_mpesa_digital_risk_analysis(
             selected[
                 [
                     "date_situation", "alerte", "type_controle", "id_client",
-                    "nom_client", "telephone", "devise", "encours_credit",
+                    "numero_client", "nom_client", "telephone", "devise",
+                    "segment_observe", "niveau_observation", "lecture_observee",
+                    "encours_credit",
                     "epargne_totale", "dat_bloque", "couverture_credit_pct",
-                    "exposition_nette", "niveau_risque", "motif_risque",
+                    "couverture_dat_credit_pct", "taux_credit_dat_pct",
+                    "exposition_nette", "exposition_nette_dat",
+                    "niveau_risque", "motif_risque",
+                    "signaux_positifs", "signaux_attention",
                 ]
             ]
         )
@@ -16439,22 +16644,36 @@ def build_mpesa_digital_risk_analysis(
             gap_alerts["alerte"] = "gap_liquidite_negatif"
             gap_alerts["type_controle"] = "risque_metier"
             gap_alerts["id_client"] = ""
+            gap_alerts["numero_client"] = ""
             gap_alerts["nom_client"] = "Analyse globale"
             gap_alerts["telephone"] = ""
+            gap_alerts["segment_observe"] = "analyse_globale_liquidite"
+            gap_alerts["niveau_observation"] = "revue_recommandee"
+            gap_alerts["lecture_observee"] = "Gap de liquidite negatif observe sur un horizon global."
             gap_alerts["encours_credit"] = gap_alerts["entrees_prevues_credit"]
             gap_alerts["epargne_totale"] = gap_alerts["sorties_prevues_dat"]
             gap_alerts["dat_bloque"] = gap_alerts["capital_dat_a_rembourser"]
             gap_alerts["couverture_credit_pct"] = np.nan
+            gap_alerts["couverture_dat_credit_pct"] = np.nan
+            gap_alerts["taux_credit_dat_pct"] = np.nan
             gap_alerts["exposition_nette"] = gap_alerts["gap_liquidite"].abs()
+            gap_alerts["exposition_nette_dat"] = gap_alerts["gap_liquidite"].abs()
             gap_alerts["niveau_risque"] = "risque_eleve"
             gap_alerts["motif_risque"] = "gap_liquidite_negatif"
+            gap_alerts["signaux_positifs"] = "aucun_signal_positif_code"
+            gap_alerts["signaux_attention"] = "LIQ01_gap_liquidite_negatif"
             alert_frames.append(
                 gap_alerts[
                     [
                         "date_situation", "alerte", "type_controle", "id_client",
-                        "nom_client", "telephone", "devise", "encours_credit",
+                        "numero_client", "nom_client", "telephone", "devise",
+                        "segment_observe", "niveau_observation", "lecture_observee",
+                        "encours_credit",
                         "epargne_totale", "dat_bloque", "couverture_credit_pct",
-                        "exposition_nette", "niveau_risque", "motif_risque",
+                        "couverture_dat_credit_pct", "taux_credit_dat_pct",
+                        "exposition_nette", "exposition_nette_dat",
+                        "niveau_risque", "motif_risque",
+                        "signaux_positifs", "signaux_attention",
                     ]
                 ]
             )
@@ -16478,8 +16697,11 @@ def build_mpesa_digital_risk_analysis(
                 "epargne_disponible": epargne_disponible,
                 "encours_dat": dat_total,
                 "exposition_nette": float(scoped["exposition_nette"].sum()),
+                "exposition_nette_dat": float(scoped["exposition_nette_dat"].sum()),
                 "couverture_globale_pct": epargne_totale / encours_credit_total * 100 if encours_credit_total else np.nan,
+                "couverture_dat_credit_pct": dat_total / encours_credit_total * 100 if encours_credit_total else np.nan,
                 "taux_utilisation_epargne_credit_pct": encours_credit_total / epargne_totale * 100 if epargne_totale else np.nan,
+                "taux_credit_dat_pct": encours_credit_total / dat_total * 100 if dat_total else np.nan,
                 "cout_dat": cout_dat,
                 "produit_credit_imf": produit_imf,
                 "marge_financiere": produit_imf - cout_dat,
@@ -18510,6 +18732,111 @@ def build_customer_upcoming_repayments(
     )
 
 
+def build_customer_active_credit_positions(
+    loans: pd.DataFrame | None,
+    customer_id: object,
+    *,
+    currency: object | None = None,
+) -> pd.DataFrame:
+    """Construit la position courante des credits en cours depuis Loans Account.
+
+    Ce bloc est une situation a date : il ne vient pas du detail des
+    transactions et ne modifie pas le solde du compte ouvert dans l'extrait.
+    """
+    result = pd.DataFrame(columns=CUSTOMER_ACTIVE_CREDIT_COLUMNS)
+    if not isinstance(loans, pd.DataFrame) or loans.empty or "customer_id" not in loans.columns:
+        return result
+
+    customer_key = clean_identifier(pd.Series([customer_id])).iloc[0]
+    frame = loans.loc[clean_identifier(loans["customer_id"]).eq(customer_key)].copy()
+    if frame.empty:
+        return result
+
+    for column in CUSTOMER_ACTIVE_CREDIT_COLUMNS:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+    frame["customer_id"] = clean_identifier(frame["customer_id"])
+    frame["loan_id"] = clean_identifier(frame["loan_id"])
+    frame["msisdn1"] = normalize_phone(frame["msisdn1"])
+    frame["currency_code"] = clean_text(frame["currency_code"]).str.upper()
+    frame["loan_product_id"] = clean_identifier(frame["loan_product_id"])
+    frame["status_name"] = clean_text(frame["status_name"])
+
+    currency_text = str(currency).strip().upper() if currency is not None else ""
+    if currency_text and currency_text not in {"TOUTES", "TOUS", "ALL", "CDF + USD"}:
+        frame = frame.loc[frame["currency_code"].eq(currency_text)].copy()
+    if frame.empty:
+        return result
+
+    for column in [
+        "loan_amount",
+        "amount_paid",
+        "loan_balance",
+        "outstanding_principle",
+        "outstanding_setup_fees",
+        "outstanding_interest",
+        "outstanding_penalty_fees",
+    ]:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+    frame["montant_a_rembourser"] = frame[
+        [
+            "outstanding_principle",
+            "outstanding_setup_fees",
+            "outstanding_interest",
+            "outstanding_penalty_fees",
+        ]
+    ].sum(axis=1)
+    frame["montant_a_rembourser"] = frame["montant_a_rembourser"].where(
+        frame["montant_a_rembourser"].gt(0),
+        frame["loan_balance"],
+    )
+    active_amount = frame[["loan_balance", "montant_a_rembourser"]].max(axis=1)
+    frame = frame.loc[active_amount.gt(0)].copy()
+    if frame.empty:
+        return result
+
+    for column in ["due_date", "last_repayment_date", "created_at", "updated_at"]:
+        frame[column] = pd.to_datetime(frame[column], errors="coerce")
+    situation_candidates: list[pd.Series] = []
+    for column in ["updated_at", "last_repayment_date", "created_at", "due_date"]:
+        values = frame[column].dropna()
+        if not values.empty:
+            situation_candidates.append(values)
+            break
+    situation_date = (
+        pd.Timestamp(pd.concat(situation_candidates, ignore_index=True).max()).normalize()
+        if situation_candidates
+        else pd.Timestamp.now().normalize()
+    )
+    frame["date_situation"] = situation_date
+
+    due_dates = pd.to_datetime(frame["due_date"], errors="coerce")
+    due_day = due_dates.dt.normalize()
+    delta_days = (due_day - situation_date).dt.days
+    frame["jours_avant_echeance"] = delta_days.where(delta_days.ge(0))
+    frame["jours_retard"] = (-delta_days).where(delta_days.lt(0), 0)
+    frame["situation_credit_client"] = np.select(
+        [
+            due_dates.isna(),
+            frame["jours_retard"].gt(0),
+            delta_days.eq(0),
+            delta_days.between(1, DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS),
+        ],
+        [
+            "Date d'echeance a completer",
+            "En retard",
+            "Echeance aujourd'hui",
+            "Echeance proche",
+        ],
+        default="En cours",
+    )
+    return (
+        frame[CUSTOMER_ACTIVE_CREDIT_COLUMNS]
+        .sort_values(["currency_code", "due_date", "loan_id"], na_position="last")
+        .reset_index(drop=True)
+    )
+
+
 def build_customer_transaction_analysis(
     prepared: MpesaPreparedData,
     customer_id: object,
@@ -18554,6 +18881,11 @@ def build_customer_transaction_analysis(
         "comportement_turbo": pd.DataFrame(),
         "mouvements_internes_turbo": pd.DataFrame(),
         "prochains_remboursements_client": upcoming_repayments,
+        "credit_en_cours_client": build_customer_active_credit_positions(
+            prepared.loans,
+            customer_id,
+            currency=currency,
+        ),
         "controles_client_turbo": pd.DataFrame(),
         "elements_extrait_client_turbo": statement_elements["detail"],
         "elements_extrait_client_synthese": statement_elements["synthese"],
@@ -18758,6 +19090,7 @@ def build_customer_transaction_analysis(
         "comportement_turbo": behavior,
         "mouvements_internes_turbo": internal[internal_columns].sort_values("created_at").reset_index(drop=True),
         "prochains_remboursements_client": upcoming_repayments,
+        "credit_en_cours_client": empty["credit_en_cours_client"],
         "controles_client_turbo": scoped[control_columns].sort_values("created_at").reset_index(drop=True),
         "elements_extrait_client_turbo": statement_elements["detail"],
         "elements_extrait_client_synthese": statement_elements["synthese"],
@@ -21826,8 +22159,9 @@ def create_customer_statement_word(
                 elif any(
                     token in column
                     for token in [
-                        "montant", "solde", "balance", "ecart", "interet", "principal",
-                        "penalite", "dette", "revenu", "intervalle", "inactivite",
+                        "montant", "amount", "solde", "balance", "encours", "ecart",
+                        "interet", "principal", "penalite", "dette", "revenu",
+                        "intervalle", "inactivite",
                     ]
                 ):
                     text = _pdf_number(value, decimals=row_decimals)
@@ -21841,7 +22175,10 @@ def create_customer_statement_word(
                     paragraph.paragraph_format.space_after = Pt(0)
                     if any(
                         token in column
-                        for token in ["montant", "solde", "balance", "ecart", "interet", "principal", "penalite", "dette", "revenu"]
+                        for token in [
+                            "montant", "amount", "solde", "balance", "encours",
+                            "ecart", "interet", "principal", "penalite", "dette", "revenu"
+                        ]
                     ):
                         paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
                     for run in paragraph.runs:
@@ -21899,6 +22236,40 @@ def create_customer_statement_word(
                 "capital_plus_interet_estime": "Capital + intérêt estimé",
             },
             [2.2, 2.1, 2.1, 1.4, 1.3, 2.3, 3.0, 3.2],
+        )
+
+    active_credits = analysis_frame("credit_en_cours_client")
+    if not minimal and not active_credits.empty:
+        situation_dates = pd.to_datetime(active_credits.get("date_situation"), errors="coerce").dropna()
+        credit_title = "Crédit en cours"
+        if not situation_dates.empty:
+            credit_title += f" - situation au {situation_dates.max():%d/%m/%Y}"
+        add_analysis_title(credit_title)
+        add_analysis_table(
+            active_credits,
+            [
+                "loan_id",
+                "created_at",
+                "due_date",
+                "currency_code",
+                "loan_amount",
+                "amount_paid",
+                "loan_balance",
+                "montant_a_rembourser",
+                "situation_credit_client",
+            ],
+            {
+                "loan_id": "Crédit",
+                "created_at": "Octroi",
+                "due_date": "Échéance",
+                "currency_code": "Devise",
+                "loan_amount": "Montant accordé",
+                "amount_paid": "Montant payé",
+                "loan_balance": "Encours",
+                "montant_a_rembourser": "Montant à rembourser",
+                "situation_credit_client": "Situation",
+            },
+            [2.2, 2.0, 2.0, 1.1, 2.1, 2.0, 2.0, 2.4, 3.0],
         )
 
     repayments = analysis_frame("remboursements_turbo_detail_client")
@@ -22354,8 +22725,10 @@ def create_customer_statement_pdf(
                     token in column
                     for token in [
                         "montant",
+                        "amount",
                         "solde",
                         "balance",
+                        "encours",
                         "interet",
                         "principal",
                         "penalite",
@@ -22472,6 +22845,40 @@ def create_customer_statement_pdf(
             ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
         ]))
         story.append(dat_table)
+
+    active_credits = analysis_frame("credit_en_cours_client")
+    if not minimal and not active_credits.empty:
+        situation_dates = pd.to_datetime(active_credits.get("date_situation"), errors="coerce").dropna()
+        credit_title = "Crédit en cours"
+        if not situation_dates.empty:
+            credit_title += f" - situation au {situation_dates.max():%d/%m/%Y}"
+        append_analysis_table(
+            credit_title,
+            active_credits,
+            [
+                "loan_id",
+                "created_at",
+                "due_date",
+                "currency_code",
+                "loan_amount",
+                "amount_paid",
+                "loan_balance",
+                "montant_a_rembourser",
+                "situation_credit_client",
+            ],
+            {
+                "loan_id": "Crédit",
+                "created_at": "Octroi",
+                "due_date": "Échéance",
+                "currency_code": "Devise",
+                "loan_amount": "Montant accordé",
+                "amount_paid": "Montant payé",
+                "loan_balance": "Encours",
+                "montant_a_rembourser": "Montant à rembourser",
+                "situation_credit_client": "Situation",
+            },
+            [2.0, 1.8, 1.8, 1.0, 2.0, 1.8, 1.8, 2.2, 2.6],
+        )
 
     repayments = analysis_frame("remboursements_turbo_detail_client")
     if not minimal and not repayments.empty:
@@ -24969,6 +25376,8 @@ MPESA_RISK_ANALYSIS_SHEETS = {
     "Audit",
 }
 
+MPESA_OPERATIONAL_PRIORITY_SHEETS = MPESA_DIRECTION_PRIORITY_SHEETS | MPESA_RISK_ANALYSIS_SHEETS
+
 MPESA_DIRECTION_COCKPIT_SHEETS = (
     MPESA_CLIENT_COCKPIT_SHEETS
     | MPESA_CREDIT_COCKPIT_SHEETS
@@ -24980,6 +25389,7 @@ MPESA_CUSTOMER_EXTRACT_OPERATIONAL_SHEETS = {
     "Extrait_Turbo",
     "Parcours_Turbo",
     "DAT_En_Cours",
+    "Credit_En_Cours",
     "Remboursements_Turbo",
     "Elements_Extrait_Turbo",
     "Interets_DAT_Credites",
@@ -25061,6 +25471,30 @@ MPESA_CUSTOMER_EXTRACT_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
         "capital_plus_interet_estime",
         "situation_dat_client",
         "status",
+    ],
+    "Credit_En_Cours": [
+        "date_situation",
+        "loan_id",
+        "customer_id",
+        "msisdn1",
+        "currency_code",
+        "loan_product_id",
+        "loan_amount",
+        "amount_paid",
+        "loan_balance",
+        "outstanding_principle",
+        "outstanding_setup_fees",
+        "outstanding_interest",
+        "outstanding_penalty_fees",
+        "montant_a_rembourser",
+        "due_date",
+        "jours_avant_echeance",
+        "jours_retard",
+        "situation_credit_client",
+        "status_name",
+        "last_repayment_date",
+        "created_at",
+        "updated_at",
     ],
     "Remboursements_Turbo": [
         "customer_id",
@@ -25903,10 +26337,221 @@ MPESA_CREDIT_OPERATIONAL_SHEET_DROP_COLUMNS: dict[str, set[str]] = {
     "Liste_Prets_PAR30": {"numero_telephone"},
 }
 
+MPESA_RISK_OPERATIONAL_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
+    "Synthese_risque": [
+        "date_situation",
+        "devise",
+        "encours_credit",
+        "encours_dat",
+        "encours_epargne",
+        "epargne_disponible",
+        "couverture_dat_credit_pct",
+        "taux_credit_dat_pct",
+        "couverture_globale_pct",
+        "taux_utilisation_epargne_credit_pct",
+        "exposition_nette_dat",
+        "exposition_nette",
+        "cout_dat",
+        "produit_credit_imf",
+        "marge_financiere",
+        "clients_a_risque",
+        "clients_risque_critique",
+        "par_30_pct",
+    ],
+    "Risque_clients": [
+        "date_situation",
+        "numero_client",
+        "nom_client",
+        "devise",
+        "segment_observe",
+        "niveau_observation",
+        "niveau_risque",
+        "lecture_observee",
+        "epargne_courante",
+        "dat_bloque",
+        "epargne_totale",
+        "encours_credit",
+        "nombre_credits",
+        "nombre_dat",
+        "couverture_dat_credit_pct",
+        "taux_credit_dat_pct",
+        "couverture_credit_pct",
+        "taux_utilisation_epargne_credit_pct",
+        "segment_couverture_dat",
+        "segment_couverture",
+        "exposition_nette_dat",
+        "exposition_nette",
+        "echeance_credit",
+        "echeance_dat",
+        "cout_dat",
+        "produit_credit_imf",
+        "marge_estimee",
+        "marge_financiere_pct",
+        "score_risque",
+        "signaux_attention",
+        "signaux_positifs",
+    ],
+    "Risque_credit": [
+        "devise",
+        "nombre_clients_credit",
+        "nombre_credits",
+        "montant_credit_total",
+        "encours_credit_total",
+        "encours_moyen_par_client",
+        "encours_max_client",
+        "montant_en_retard_1j",
+        "par_1_pct",
+        "montant_en_retard_7j",
+        "par_7_pct",
+        "montant_en_retard_30j",
+        "par_30_pct",
+        "montant_en_retard_60j",
+        "par_60_pct",
+        "montant_en_retard_90j",
+        "par_90_pct",
+        "produit_credit_imf",
+        "part_vodacom_credit",
+        "interet_credit_total",
+    ],
+    "Couverture": [
+        "devise",
+        "segment_couverture",
+        "nombre_clients",
+        "encours_credit",
+        "dat_bloque",
+        "epargne_totale",
+        "couverture_dat_credit_pct",
+        "taux_credit_dat_pct",
+        "taux_utilisation_epargne_credit_pct",
+        "exposition_nette_dat",
+        "exposition_nette",
+    ],
+    "Risque_DAT": [
+        "devise",
+        "nombre_clients_dat",
+        "nombre_dat",
+        "montant_dat",
+        "dat_moyen",
+        "dat_max",
+        "dat_echeance_7j",
+        "dat_echeance_30j",
+        "dat_echeance_90j",
+        "interets_clients_dat",
+        "commission_vodacom_dat",
+        "cout_total_dat",
+    ],
+    "Liquidite": [
+        "date_situation",
+        "devise",
+        "horizon",
+        "entrees_prevues_credit",
+        "capital_dat_a_rembourser",
+        "cout_dat_a_payer",
+        "sorties_prevues_dat",
+        "gap_liquidite",
+        "gap_cumule",
+    ],
+    "Rentabilite": [
+        "devise",
+        "encours_credit",
+        "dat_bloque",
+        "epargne_totale",
+        "taux_utilisation_epargne_credit_pct",
+        "produit_credit_imf",
+        "part_vodacom_credit",
+        "interet_credit_total",
+        "interets_clients_dat",
+        "commission_vodacom_dat",
+        "cout_dat",
+        "marge_financiere",
+        "marge_financiere_pct",
+        "comparabilite_marge",
+    ],
+    "Concentration": [
+        "date_situation",
+        "devise",
+        "type_concentration",
+        "top_n",
+        "montant_top",
+        "encours_total",
+        "poids_top_pct",
+        "hhi",
+    ],
+    "Alertes": [
+        "date_situation",
+        "alerte",
+        "numero_client",
+        "nom_client",
+        "devise",
+        "niveau_observation",
+        "niveau_risque",
+        "segment_observe",
+        "lecture_observee",
+        "encours_credit",
+        "dat_bloque",
+        "epargne_totale",
+        "couverture_dat_credit_pct",
+        "taux_credit_dat_pct",
+        "couverture_credit_pct",
+        "exposition_nette_dat",
+        "exposition_nette",
+        "signaux_attention",
+        "signaux_positifs",
+    ],
+    "Qualite_donnees": [
+        "controle",
+        "valeur",
+        "statut",
+        "detail",
+    ],
+    "Parametres": [
+        "parametre",
+        "valeur",
+        "unite",
+        "lecture",
+    ],
+    "Data_gaps": [
+        "indicateur",
+        "statut",
+        "detail",
+    ],
+    "Audit": [
+        "existant",
+        "role_reutilise",
+        "limite",
+    ],
+}
+
+MPESA_RISK_OPERATIONAL_SHEET_DROP_COLUMNS: dict[str, set[str]] = {
+    "Risque_clients": {"id_client", "telephone", "motif_risque"},
+    "Alertes": {"id_client", "telephone", "type_controle", "motif_risque"},
+    "Qualite_donnees": {"type_controle"},
+}
+
+MPESA_RISK_OPERATIONAL_COLUMN_RENAMES: dict[str, str] = {
+    "epargne_disponible": "compte_ouvert",
+    "epargne_courante": "compte_ouvert",
+    "dat_bloque": "encours_dat",
+    "montant_dat": "encours_dat",
+    "couverture_globale_pct": "couverture_epargne_totale_credit_pct",
+    "couverture_credit_pct": "couverture_epargne_totale_credit_pct",
+    "taux_utilisation_epargne_credit_pct": "taux_credit_epargne_totale_pct",
+    "exposition_nette": "credit_non_couvert_compte_ouvert",
+    "exposition_nette_dat": "credit_non_couvert_dat",
+    "cout_dat": "cout_dat_estime",
+    "produit_credit_imf": "produit_credit_imf_estime",
+    "marge_financiere": "marge_imf_estimee",
+    "marge_estimee": "marge_imf_estimee",
+    "marge_financiere_pct": "marge_imf_estimee_pct",
+    "encours_credit_total": "encours_credit",
+    "montant_credit_total": "montant_credit",
+}
+
 MPESA_OPERATIONAL_SHEET_COLUMN_ORDERS = {
     **MPESA_CLIENT_OPERATIONAL_SHEET_COLUMN_ORDERS,
     **MPESA_SAVINGS_OPERATIONAL_SHEET_COLUMN_ORDERS,
     **MPESA_CREDIT_OPERATIONAL_SHEET_COLUMN_ORDERS,
+    **MPESA_RISK_OPERATIONAL_SHEET_COLUMN_ORDERS,
     **MPESA_CUSTOMER_EXTRACT_SHEET_COLUMN_ORDERS,
 }
 
@@ -25914,6 +26559,7 @@ MPESA_OPERATIONAL_SHEET_DROP_COLUMNS = {
     **MPESA_CLIENT_OPERATIONAL_SHEET_DROP_COLUMNS,
     **MPESA_SAVINGS_OPERATIONAL_SHEET_DROP_COLUMNS,
     **MPESA_CREDIT_OPERATIONAL_SHEET_DROP_COLUMNS,
+    **MPESA_RISK_OPERATIONAL_SHEET_DROP_COLUMNS,
 }
 
 MPESA_OPERATIONAL_DATE_SITUATION_EXPORT_SHEETS = {
@@ -26323,6 +26969,47 @@ def _apply_operational_sheet_contract(frame: pd.DataFrame, sheet_name: str) -> p
     return result
 
 
+def _deduplicate_columns_after_rename(frame: pd.DataFrame) -> pd.DataFrame:
+    """Conserve une seule colonne lorsque deux libelles visibles portent la meme information."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame
+    duplicated = pd.Index([str(column) for column in frame.columns]).duplicated()
+    if not duplicated.any():
+        return frame
+    return frame.loc[:, ~duplicated]
+
+
+def _rename_risk_analysis_operational_columns(frame: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+    """Donne des libelles explicites aux feuilles de l'analyse des risques."""
+    if sheet_name not in MPESA_RISK_ANALYSIS_SHEETS or not isinstance(frame, pd.DataFrame):
+        return frame
+    rename_map = {
+        column: MPESA_RISK_OPERATIONAL_COLUMN_RENAMES[_normalize_export_column_key(column)]
+        for column in frame.columns
+        if _normalize_export_column_key(column) in MPESA_RISK_OPERATIONAL_COLUMN_RENAMES
+    }
+    result = frame.rename(columns=rename_map) if rename_map else frame.copy()
+    return _deduplicate_columns_after_rename(result)
+
+
+def prepare_mpesa_risk_analysis_sheet_for_display(
+    frame: pd.DataFrame,
+    sheet_name: str,
+) -> pd.DataFrame:
+    """Prepare une feuille Risques pour l'ecran ou l'export decisionnel."""
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame
+    result = _apply_operational_sheet_contract(frame, sheet_name)
+    columns_to_drop = [
+        column
+        for column in result.columns
+        if _is_operational_technical_column(column)
+    ]
+    if columns_to_drop:
+        result = result.drop(columns=columns_to_drop, errors="ignore")
+    return _rename_risk_analysis_operational_columns(result, sheet_name)
+
+
 def _infer_cockpit_date_situation(sheets: dict[str, Any]) -> pd.Timestamp | pd.NaT:
     """Deduit une date de situation commune aux cockpits Clients/Epargnes/Credits."""
     for frame in sheets.values():
@@ -26365,13 +27052,13 @@ def _ensure_cockpit_date_situation_first(
 def _prepare_operational_priority_sheet(frame: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     """Allège les feuilles clés destinées à la Direction et aux opérations."""
     if (
-        sheet_name not in MPESA_DIRECTION_PRIORITY_SHEETS
+        sheet_name not in MPESA_OPERATIONAL_PRIORITY_SHEETS
         and sheet_name not in MPESA_CUSTOMER_EXTRACT_OPERATIONAL_SHEETS
     ):
         return frame
     source_frame = (
         frame.dropna(axis=1, how="all").copy()
-        if sheet_name in MPESA_DIRECTION_PRIORITY_SHEETS
+        if sheet_name in MPESA_OPERATIONAL_PRIORITY_SHEETS
         else frame.copy()
     )
     operational = _ensure_operational_client_number_column(source_frame)
@@ -26383,6 +27070,7 @@ def _prepare_operational_priority_sheet(frame: pd.DataFrame, sheet_name: str) ->
     ]
     if columns_to_drop:
         operational = operational.drop(columns=columns_to_drop, errors="ignore")
+    operational = _rename_risk_analysis_operational_columns(operational, sheet_name)
     return operational
 
 
@@ -26398,6 +27086,7 @@ def create_excel_export(
         ("extrait", "Extrait_Turbo"),
         ("parcours_turbo", "Parcours_Turbo"),
         ("dat_en_cours_client", "DAT_En_Cours"),
+        ("credit_en_cours_client", "Credit_En_Cours"),
         ("remboursements_turbo_detail_client", "Remboursements_Turbo"),
         ("elements_extrait_client_turbo", "Elements_Extrait_Turbo"),
         ("interets_dat_credites_client", "Interets_DAT_Credites"),
