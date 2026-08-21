@@ -580,7 +580,7 @@ def _prepared_data_as_of(
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=6)
+@st.cache_data(show_spinner=False, max_entries=16)
 def _read_excel_bytes(file_bytes: bytes, file_name: str) -> pd.DataFrame:
     if not file_bytes:
         return pd.DataFrame()

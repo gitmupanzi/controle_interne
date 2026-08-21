@@ -8570,17 +8570,32 @@ def build_mpesa_clients_report(
         client_360["nombre_credits_actifs"] = client_360["comptes_solde_positif_credit"]
         client_360["nombre_dat_positifs"] = client_360["comptes_solde_positif_dat"]
 
-        def product_segment(row: pd.Series) -> str:
-            parts = []
-            if bool(row.get("presence_epargne", False)):
-                parts.append("epargne")
-            if bool(row.get("presence_dat", False)):
-                parts.append("dat")
-            if bool(row.get("presence_credit", False)):
-                parts.append("credit")
-            return "_".join(parts) if parts else "sans_produit_observe"
-
-        client_360["segment_produit"] = client_360.apply(product_segment, axis=1)
+        product_segment = pd.Series(
+            "sans_produit_observe",
+            index=client_360.index,
+            dtype="object",
+        )
+        product_segment = product_segment.mask(
+            client_360["presence_epargne"],
+            "epargne",
+        )
+        product_segment = product_segment.mask(
+            client_360["presence_dat"],
+            np.where(
+                product_segment.eq("sans_produit_observe"),
+                "dat",
+                product_segment + "_dat",
+            ),
+        )
+        product_segment = product_segment.mask(
+            client_360["presence_credit"],
+            np.where(
+                product_segment.eq("sans_produit_observe"),
+                "credit",
+                product_segment + "_credit",
+            ),
+        )
+        client_360["segment_produit"] = product_segment
         client_360["segment_client"] = np.select(
             [
                 client_360["nouveau_client_actif"],
@@ -8957,7 +8972,6 @@ def build_mpesa_clients_report(
         "qualite_donnees": data_quality,
         "operations_turbo": period_events.reset_index(drop=True),
         "listes_action": action_lists,
-        **{f"liste_{key}": value for key, value in action_lists.items()},
     }
 
 
