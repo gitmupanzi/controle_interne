@@ -16047,14 +16047,14 @@ def build_mpesa_digital_risk_analysis(
                 cout_dat=("cout_total_dat", "sum"),
                 interets_clients_dat=("interets_clients_dat", "sum"),
                 commission_vodacom_dat=("commission_vodacom_dat", "sum"),
-                duree_maximale_dat_observee_jours=("duree_dat_observee_jours", "max"),
+                duree_contractuelle_max_dat_client_jours=("duree_dat_observee_jours", "max"),
                 date_debut_epargne_risque=("date_debut_epargne_risque", "min"),
                 date_fin_epargne_risque=("date_fin_epargne_risque", "max"),
             )
         )
         savings_clients["epargne_totale"] = savings_clients["epargne_courante"] + savings_clients["dat"]
-        savings_clients["duree_maximale_dat_observee_mois_estimee"] = (
-            pd.to_numeric(savings_clients["duree_maximale_dat_observee_jours"], errors="coerce")
+        savings_clients["duree_contractuelle_max_dat_client_mois_estimee"] = (
+            pd.to_numeric(savings_clients["duree_contractuelle_max_dat_client_jours"], errors="coerce")
             .div(30.4375)
         )
 
@@ -16102,8 +16102,8 @@ def build_mpesa_digital_risk_analysis(
         ("cout_dat", 0.0),
         ("interets_clients_dat", 0.0),
         ("commission_vodacom_dat", 0.0),
-        ("duree_maximale_dat_observee_jours", np.nan),
-        ("duree_maximale_dat_observee_mois_estimee", np.nan),
+        ("duree_contractuelle_max_dat_client_jours", np.nan),
+        ("duree_contractuelle_max_dat_client_mois_estimee", np.nan),
         ("date_debut_credit_risque", pd.NaT),
         ("date_fin_credit_risque", pd.NaT),
         ("date_debut_epargne_risque", pd.NaT),
@@ -16134,8 +16134,8 @@ def build_mpesa_digital_risk_analysis(
         "cout_dat",
         "interets_clients_dat",
         "commission_vodacom_dat",
-        "duree_maximale_dat_observee_jours",
-        "duree_maximale_dat_observee_mois_estimee",
+        "duree_contractuelle_max_dat_client_jours",
+        "duree_contractuelle_max_dat_client_mois_estimee",
     ]:
         if column in clients.columns:
             fill_value = np.nan if column.startswith("duree_maximale_dat") else 0
@@ -16446,8 +16446,8 @@ def build_mpesa_digital_risk_analysis(
         "signaux_positifs", "signaux_attention",
         "epargne_courante", "dat_bloque", "epargne_totale", "encours_credit",
         "nombre_credits", "nombre_dat",
-        "duree_maximale_dat_observee_jours",
-        "duree_maximale_dat_observee_mois_estimee",
+        "duree_contractuelle_max_dat_client_jours",
+        "duree_contractuelle_max_dat_client_mois_estimee",
         "couverture_credit_pct",
         "couverture_dat_credit_pct", "taux_utilisation_epargne_credit_pct",
         "taux_credit_dat_pct",
@@ -16533,16 +16533,16 @@ def build_mpesa_digital_risk_analysis(
                     interets_clients_dat=("interets_clients_dat", "sum"),
                     commission_vodacom_dat=("commission_vodacom_dat", "sum"),
                     cout_total_dat=("cout_total_dat", "sum"),
-                    duree_maximale_dat_observee_jours=("duree_dat_observee_jours", "max"),
-                    duree_moyenne_dat_observee_jours=("duree_dat_observee_jours", "mean"),
+                    duree_contractuelle_max_dat_portefeuille_jours=("duree_dat_observee_jours", "max"),
+                    duree_contractuelle_moyenne_dat_portefeuille_jours=("duree_dat_observee_jours", "mean"),
                     dat_echeance_7j=("balance", lambda values: float(values.loc[dat_only.loc[values.index, "jours_avant_echeance"].between(0, 7, inclusive="both")].sum())),
                     dat_echeance_30j=("balance", lambda values: float(values.loc[dat_only.loc[values.index, "jours_avant_echeance"].between(0, 30, inclusive="both")].sum())),
                     dat_echeance_90j=("balance", lambda values: float(values.loc[dat_only.loc[values.index, "jours_avant_echeance"].between(0, 90, inclusive="both")].sum())),
                 )
                 .rename(columns={"currency_code": "devise"})
             )
-            dat_summary["duree_maximale_dat_observee_mois_estimee"] = (
-                pd.to_numeric(dat_summary["duree_maximale_dat_observee_jours"], errors="coerce")
+            dat_summary["duree_contractuelle_max_dat_portefeuille_mois_estimee"] = (
+                pd.to_numeric(dat_summary["duree_contractuelle_max_dat_portefeuille_jours"], errors="coerce")
                 .div(30.4375)
             )
             report["risque_dat"] = dat_summary
@@ -16667,8 +16667,8 @@ def build_mpesa_digital_risk_analysis(
                     "segment_observe", "niveau_observation", "lecture_observee",
                     "encours_credit",
                     "epargne_totale", "dat_bloque",
-                    "duree_maximale_dat_observee_jours",
-                    "duree_maximale_dat_observee_mois_estimee",
+                    "duree_contractuelle_max_dat_client_jours",
+                    "duree_contractuelle_max_dat_client_mois_estimee",
                     "couverture_credit_pct",
                     "couverture_dat_credit_pct", "taux_credit_dat_pct",
                     "exposition_nette", "exposition_nette_dat",
@@ -16694,8 +16694,8 @@ def build_mpesa_digital_risk_analysis(
             gap_alerts["encours_credit"] = gap_alerts["entrees_prevues_credit"]
             gap_alerts["epargne_totale"] = gap_alerts["sorties_prevues_dat"]
             gap_alerts["dat_bloque"] = gap_alerts["capital_dat_a_rembourser"]
-            gap_alerts["duree_maximale_dat_observee_jours"] = np.nan
-            gap_alerts["duree_maximale_dat_observee_mois_estimee"] = np.nan
+            gap_alerts["duree_contractuelle_max_dat_client_jours"] = np.nan
+            gap_alerts["duree_contractuelle_max_dat_client_mois_estimee"] = np.nan
             gap_alerts["couverture_credit_pct"] = np.nan
             gap_alerts["couverture_dat_credit_pct"] = np.nan
             gap_alerts["taux_credit_dat_pct"] = np.nan
@@ -16713,8 +16713,8 @@ def build_mpesa_digital_risk_analysis(
                         "segment_observe", "niveau_observation", "lecture_observee",
                         "encours_credit",
                         "epargne_totale", "dat_bloque",
-                        "duree_maximale_dat_observee_jours",
-                        "duree_maximale_dat_observee_mois_estimee",
+                        "duree_contractuelle_max_dat_client_jours",
+                        "duree_contractuelle_max_dat_client_mois_estimee",
                         "couverture_credit_pct",
                         "couverture_dat_credit_pct", "taux_credit_dat_pct",
                         "exposition_nette", "exposition_nette_dat",
@@ -26416,8 +26416,8 @@ MPESA_RISK_OPERATIONAL_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
         "encours_credit",
         "nombre_credits",
         "nombre_dat",
-        "duree_maximale_dat_observee_jours",
-        "duree_maximale_dat_observee_mois_estimee",
+        "duree_contractuelle_max_dat_client_jours",
+        "duree_contractuelle_max_dat_client_mois_estimee",
         "couverture_dat_credit_pct",
         "taux_credit_dat_pct",
         "couverture_credit_pct",
@@ -26478,9 +26478,9 @@ MPESA_RISK_OPERATIONAL_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
         "montant_dat",
         "dat_moyen",
         "dat_max",
-        "duree_maximale_dat_observee_jours",
-        "duree_maximale_dat_observee_mois_estimee",
-        "duree_moyenne_dat_observee_jours",
+        "duree_contractuelle_max_dat_portefeuille_jours",
+        "duree_contractuelle_max_dat_portefeuille_mois_estimee",
+        "duree_contractuelle_moyenne_dat_portefeuille_jours",
         "dat_echeance_7j",
         "dat_echeance_30j",
         "dat_echeance_90j",
@@ -26540,8 +26540,8 @@ MPESA_RISK_OPERATIONAL_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
         "encours_credit",
         "dat_bloque",
         "epargne_totale",
-        "duree_maximale_dat_observee_jours",
-        "duree_maximale_dat_observee_mois_estimee",
+        "duree_contractuelle_max_dat_client_jours",
+        "duree_contractuelle_max_dat_client_mois_estimee",
         "couverture_dat_credit_pct",
         "taux_credit_dat_pct",
         "couverture_credit_pct",
