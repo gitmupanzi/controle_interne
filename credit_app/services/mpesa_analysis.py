@@ -2245,6 +2245,9 @@ def build_dat_final(fixed_savings: pd.DataFrame, customer_id: str) -> dict[str, 
     if frame.empty:
         return {}
     frame["balance"] = numeric_column(frame, "balance")
+    frame = frame.loc[frame["balance"].gt(0)].copy()
+    if frame.empty:
+        return {}
     return frame.groupby("currency_code", dropna=False)["balance"].sum().to_dict()
 
 
@@ -15862,6 +15865,20 @@ def build_mpesa_digital_risk_analysis(
         credit_detail["horizon_credit"] = credit_detail["jours_avant_echeance"].map(_mpesa_risk_horizon_bucket)
         credit_detail["par_simplifie_60j"] = credit_detail["pret_actif"] & credit_detail["jours_retard"].ge(60)
         credit_detail["par_simplifie_90j"] = credit_detail["pret_actif"] & credit_detail["jours_retard"].ge(90)
+        credit_detail["date_debut_credit_risque"] = pd.to_datetime(
+            credit_detail.get("created_at", pd.Series(pd.NaT, index=credit_detail.index)),
+            errors="coerce",
+        )
+        credit_detail["date_fin_credit_risque"] = pd.concat(
+            [
+                pd.to_datetime(
+                    credit_detail.get(column, pd.Series(pd.NaT, index=credit_detail.index)),
+                    errors="coerce",
+                )
+                for column in ["last_repayment_date", "updated_at", "created_at"]
+            ],
+            axis=1,
+        ).max(axis=1)
 
     savings_detail = savings.copy()
     if not savings_detail.empty:
@@ -15907,6 +15924,53 @@ def build_mpesa_digital_risk_analysis(
             savings_detail.get("savings_id", pd.Series("", index=savings_detail.index))
         ).where(savings_family.eq("DAT"), "")
         savings_detail["nombre_dat_risque"] = savings_family.eq("DAT").astype(int)
+        savings_detail["date_debut_epargne_risque"] = pd.concat(
+            [
+                pd.to_datetime(
+                    savings_detail.get(column, pd.Series(pd.NaT, index=savings_detail.index)),
+                    errors="coerce",
+                )
+                for column in ["date_activated", "date_approved", "created_at"]
+            ],
+            axis=1,
+        ).min(axis=1)
+        savings_detail["date_fin_epargne_risque"] = pd.concat(
+            [
+                pd.to_datetime(
+                    savings_detail.get(column, pd.Series(pd.NaT, index=savings_detail.index)),
+                    errors="coerce",
+                )
+                for column in ["date_closed", "updated_at", "created_at", "date_approved"]
+            ],
+            axis=1,
+        ).max(axis=1)
+
+    transaction_activity = pd.DataFrame()
+    if isinstance(prepared.transactions, pd.DataFrame) and not prepared.transactions.empty:
+        tx_activity = prepared.transactions.copy()
+        tx_activity["customer_id"] = clean_identifier(
+            tx_activity.get("customer_id", pd.Series("", index=tx_activity.index))
+        )
+        tx_activity["currency_code"] = clean_text(
+            tx_activity.get("currency_code", pd.Series("", index=tx_activity.index))
+        ).str.upper()
+        tx_activity["date_activite_risque"] = pd.to_datetime(
+            tx_activity.get("created_at", pd.Series(pd.NaT, index=tx_activity.index)),
+            errors="coerce",
+        )
+        tx_activity = tx_activity.loc[
+            tx_activity["customer_id"].ne("")
+            & tx_activity["currency_code"].ne("")
+            & tx_activity["date_activite_risque"].notna()
+        ]
+        if not tx_activity.empty:
+            transaction_activity = (
+                tx_activity.groupby(["customer_id", "currency_code"], as_index=False, dropna=False)
+                .agg(
+                    date_debut_transactions_risque=("date_activite_risque", "min"),
+                    date_fin_transactions_risque=("date_activite_risque", "max"),
+                )
+            )
 
     credit_clients = pd.DataFrame()
     if not credit_detail.empty:
@@ -15932,6 +15996,8 @@ def build_mpesa_digital_risk_analysis(
                 par_simplifie_30j=("par_simplifie_30j", "sum"),
                 par_simplifie_60j=("par_simplifie_60j", "sum"),
                 par_simplifie_90j=("par_simplifie_90j", "sum"),
+                date_debut_credit_risque=("date_debut_credit_risque", "min"),
+                date_fin_credit_risque=("date_fin_credit_risque", "max"),
             )
         )
 
@@ -15951,6 +16017,8 @@ def build_mpesa_digital_risk_analysis(
                 cout_dat=("cout_total_dat", "sum"),
                 interets_clients_dat=("interets_clients_dat", "sum"),
                 commission_vodacom_dat=("commission_vodacom_dat", "sum"),
+                date_debut_epargne_risque=("date_debut_epargne_risque", "min"),
+                date_fin_epargne_risque=("date_fin_epargne_risque", "max"),
             )
         )
         savings_clients["epargne_totale"] = savings_clients["epargne_courante"] + savings_clients["dat"]
@@ -15967,6 +16035,12 @@ def build_mpesa_digital_risk_analysis(
         clients = savings_clients.copy()
     if clients.empty:
         clients = pd.DataFrame(columns=["customer_id", "currency_code"])
+    if not transaction_activity.empty:
+        clients = clients.merge(
+            transaction_activity,
+            on=["customer_id", "currency_code"],
+            how="left",
+        )
 
     for column, default in [
         ("nom_client_credit", ""),
@@ -15993,6 +16067,12 @@ def build_mpesa_digital_risk_analysis(
         ("cout_dat", 0.0),
         ("interets_clients_dat", 0.0),
         ("commission_vodacom_dat", 0.0),
+        ("date_debut_credit_risque", pd.NaT),
+        ("date_fin_credit_risque", pd.NaT),
+        ("date_debut_epargne_risque", pd.NaT),
+        ("date_fin_epargne_risque", pd.NaT),
+        ("date_debut_transactions_risque", pd.NaT),
+        ("date_fin_transactions_risque", pd.NaT),
     ]:
         if column not in clients.columns:
             clients[column] = default
@@ -16024,6 +16104,34 @@ def build_mpesa_digital_risk_analysis(
         if column in clients.columns:
             clients[column] = clean_text(clients[column])
     clients["date_situation"] = analysis_date
+    fallback_date_du = pd.concat(
+        [
+            pd.to_datetime(clients.get(column, pd.Series(pd.NaT, index=clients.index)), errors="coerce")
+            for column in ["date_debut_credit_risque", "date_debut_epargne_risque"]
+        ],
+        axis=1,
+    ).min(axis=1)
+    fallback_date_au = pd.concat(
+        [
+            pd.to_datetime(clients.get(column, pd.Series(pd.NaT, index=clients.index)), errors="coerce")
+            for column in ["date_fin_credit_risque", "date_fin_epargne_risque"]
+        ],
+        axis=1,
+    ).max(axis=1)
+    transaction_date_du = pd.to_datetime(
+        clients.get("date_debut_transactions_risque", pd.Series(pd.NaT, index=clients.index)),
+        errors="coerce",
+    )
+    transaction_date_au = pd.to_datetime(
+        clients.get("date_fin_transactions_risque", pd.Series(pd.NaT, index=clients.index)),
+        errors="coerce",
+    )
+    clients["date_du"] = transaction_date_du.where(transaction_date_du.notna(), fallback_date_du)
+    clients["au"] = transaction_date_au.where(transaction_date_au.notna(), fallback_date_au)
+    analysis_timestamp = pd.Timestamp(analysis_date)
+    future_au = pd.to_datetime(clients["au"], errors="coerce").gt(analysis_timestamp)
+    if future_au.any():
+        clients.loc[future_au, "au"] = analysis_timestamp
     clients["id_client"] = clean_identifier(clients.get("customer_id", pd.Series("", index=clients.index)))
     clients["nom_client"] = clean_text(clients["nom_client_credit"]).where(
         clean_text(clients["nom_client_credit"]).ne(""),
@@ -16293,7 +16401,7 @@ def build_mpesa_digital_risk_analysis(
     )
 
     ordered_client_columns = [
-        "date_situation", "id_client", "numero_client", "nom_client", "telephone", "devise",
+        "date_situation", "date_du", "au", "id_client", "numero_client", "nom_client", "telephone", "devise",
         "segment_observe", "niveau_observation", "lecture_observee",
         "signaux_positifs", "signaux_attention",
         "epargne_courante", "dat_bloque", "epargne_totale", "encours_credit",
@@ -16506,7 +16614,7 @@ def build_mpesa_digital_risk_analysis(
             selected[
                 [
                     "date_situation", "alerte", "type_controle", "id_client",
-                    "numero_client", "nom_client", "telephone", "devise",
+                    "date_du", "au", "numero_client", "nom_client", "telephone", "devise",
                     "segment_observe", "niveau_observation", "lecture_observee",
                     "encours_credit",
                     "epargne_totale", "dat_bloque", "couverture_credit_pct",
@@ -16525,6 +16633,8 @@ def build_mpesa_digital_risk_analysis(
             gap_alerts["id_client"] = ""
             gap_alerts["numero_client"] = ""
             gap_alerts["nom_client"] = "Analyse globale"
+            gap_alerts["date_du"] = analysis_date
+            gap_alerts["au"] = analysis_date
             gap_alerts["telephone"] = ""
             gap_alerts["segment_observe"] = "analyse_globale_liquidite"
             gap_alerts["niveau_observation"] = "revue_recommandee"
@@ -16545,7 +16655,7 @@ def build_mpesa_digital_risk_analysis(
                 gap_alerts[
                     [
                         "date_situation", "alerte", "type_controle", "id_client",
-                        "numero_client", "nom_client", "telephone", "devise",
+                        "date_du", "au", "numero_client", "nom_client", "telephone", "devise",
                         "segment_observe", "niveau_observation", "lecture_observee",
                         "encours_credit",
                         "epargne_totale", "dat_bloque", "couverture_credit_pct",
@@ -18997,11 +19107,14 @@ def build_mpesa_statement(
 
     if not dat_client.empty:
         situation_date = pd.to_datetime(transactions["created_at"], errors="coerce").max()
+        dat_maturity = pd.to_datetime(
+            dat_client.get("maturity_date", pd.Series(pd.NaT, index=dat_client.index)),
+            errors="coerce",
+        )
         dat_client["statut_dat"] = np.select(
             [
                 numeric_column(dat_client, "balance").le(0),
-                dat_client.get("maturity_date", pd.Series(pd.NaT, index=dat_client.index)).notna()
-                & dat_client.get("maturity_date", pd.Series(pd.NaT, index=dat_client.index)).lt(situation_date),
+                dat_maturity.notna() & dat_maturity.lt(situation_date),
             ],
             ["Solde nul", "Echu"],
             default="Actif",
@@ -19399,19 +19512,9 @@ def build_customer_summary(
         )
         observed_dat, observed_dat_accounts = observed_position("DAT")
         current_balance = float(group["epargne_courante_finale"].iloc[-1])
-        current_source = "Savings Account"
-        if not current_snapshot and pd.notna(observed_current):
-            current_balance = observed_current
-            current_source = "Transactions - dernière position observée"
-        elif not current_snapshot:
-            current_source = "Position non disponible"
+        current_source = "Savings Account" if current_snapshot else "Position non disponible"
         dat_balance = float(group["dat_final_client"].iloc[-1])
-        dat_source = "Savings Account"
-        if not dat_snapshot and pd.notna(observed_dat):
-            dat_balance = observed_dat
-            dat_source = "Transactions - dernière position observée"
-        elif not dat_snapshot:
-            dat_source = "Position non disponible"
+        dat_source = "Savings Account" if dat_snapshot else "Position non disponible"
         loan_balance = 0.0
         loan_count = 0
         if not loans_client.empty and "currency_code" in loans_client.columns:
@@ -19419,6 +19522,17 @@ def build_customer_summary(
             loan_count = int(loans_currency["loan_id"].nunique()) if "loan_id" in loans_currency.columns else len(loans_currency)
             if "loan_balance" in loans_currency.columns:
                 loan_balance = float(pd.to_numeric(loans_currency["loan_balance"], errors="coerce").fillna(0).sum())
+        dat_active_count = 0
+        if dat_snapshot:
+            dat_currency_mask = (
+                clean_text(dat_client["currency_code"])
+                .str.upper()
+                .eq(str(currency).upper())
+                .fillna(False)
+                .astype(bool)
+            )
+            dat_positive_mask = numeric_column(dat_client, "balance").gt(0).fillna(False).astype(bool)
+            dat_active_count = int((dat_currency_mask & dat_positive_mask).sum())
         rows.append(
             {
                 "customer_id": customer_id,
@@ -19448,16 +19562,7 @@ def build_customer_summary(
                 "source_epargne_courante_finale": current_source,
                 "dat_final": dat_balance,
                 "source_dat_final": dat_source,
-                "nombre_dat": (
-                    int(
-                        clean_text(dat_client["currency_code"])
-                        .str.upper()
-                        .eq(str(currency).upper())
-                        .sum()
-                    )
-                    if dat_snapshot
-                    else observed_dat_accounts
-                ),
+                "nombre_dat": dat_active_count,
                 "nombre_comptes_epargne_observes": observed_current_accounts,
                 "nombre_credits": loan_count,
                 "solde_credit_total": loan_balance,
@@ -26239,6 +26344,8 @@ MPESA_RISK_OPERATIONAL_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
     ],
     "Risque_clients": [
         "date_situation",
+        "date_du",
+        "au",
         "numero_client",
         "nom_client",
         "devise",
@@ -26359,6 +26466,8 @@ MPESA_RISK_OPERATIONAL_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
     "Alertes": [
         "date_situation",
         "alerte",
+        "date_du",
+        "au",
         "numero_client",
         "nom_client",
         "devise",
@@ -26858,6 +26967,25 @@ def _deduplicate_columns_after_rename(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.loc[:, ~duplicated]
 
 
+def _is_excel_datetime_export_column(series: pd.Series, column: Any) -> bool:
+    """Detecte les colonnes a afficher en date francaise dans les exports Excel."""
+    column_key = _normalize_export_column_key(column)
+    if column_key in {"date_du", "au"}:
+        return True
+    if column_key.startswith("jours_") or column_key.startswith("nombre_"):
+        return False
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return True
+    if column_key.startswith("date_") or column_key.endswith("_date"):
+        return True
+    if any(token in column_key for token in ["created_at", "updated_at", "echeance"]):
+        return True
+    sample = series.dropna().head(30)
+    if sample.empty:
+        return False
+    return sample.map(lambda value: isinstance(value, (pd.Timestamp, np.datetime64))).any()
+
+
 def _rename_risk_analysis_operational_columns(frame: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     """Donne des libelles explicites aux feuilles de l'analyse des risques."""
     if sheet_name not in MPESA_RISK_ANALYSIS_SHEETS or not isinstance(frame, pd.DataFrame):
@@ -27233,7 +27361,7 @@ def create_excel_export(
                 width = min(max(len(value) for value in values) + 2, 45)
                 worksheet.column_dimensions[worksheet.cell(row=1, column=index).column_letter].width = width
                 name = str(column).lower()
-                if "date" in name or "created_at" in name:
+                if _is_excel_datetime_export_column(safe_frame[column], column):
                     number_format = "dd/mm/yyyy hh:mm:ss"
                 elif any(token in name for token in ["solde", "montant", "entree", "sortie", "mouvement", "balance", "variation", "amount", "loan"]):
                     number_format = '#,##0.00'

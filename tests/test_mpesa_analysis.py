@@ -503,8 +503,42 @@ class MpesaAnalysisTests(unittest.TestCase):
             ]
         )
         savings_accounts = prepare_savings_accounts(savings)
+        transactions = pd.DataFrame(
+            [
+                {
+                    "id": 1,
+                    "customer_id": "C1",
+                    "msisdn1": "243810000001",
+                    "account_type": "NORMAL SAVINGS",
+                    "reference_id": "REF-OLD",
+                    "currency_code": "USD",
+                    "dr": 0.0,
+                    "cr": 10.0,
+                    "bal_before": 0.0,
+                    "bal_after": 10.0,
+                    "ref_no": "RISKTX001",
+                    "description": "Depot test",
+                    "created_at": "2026-04-27 15:33:29",
+                },
+                {
+                    "id": 2,
+                    "customer_id": "C1",
+                    "msisdn1": "243810000001",
+                    "account_type": "NORMAL SAVINGS",
+                    "reference_id": "REF-LAST",
+                    "currency_code": "USD",
+                    "dr": 5.0,
+                    "cr": 0.0,
+                    "bal_before": 10.0,
+                    "bal_after": 5.0,
+                    "ref_no": "RISKTX002",
+                    "description": "Retrait test",
+                    "created_at": "2026-07-15 13:13:08",
+                },
+            ]
+        )
         prepared = MpesaPreparedData(
-            transactions=pd.DataFrame(),
+            transactions=prepare_transactions(transactions),
             current_savings=savings_accounts.loc[
                 savings_accounts["account_type"].eq("NORMAL SAVINGS")
             ].copy(),
@@ -551,6 +585,8 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(float(usd_client["taux_utilisation_epargne_credit_pct"]), 80 / 70 * 100)
         self.assertAlmostEqual(float(usd_client["couverture_dat_credit_pct"]), 62.5)
         self.assertAlmostEqual(float(usd_client["taux_credit_dat_pct"]), 160.0)
+        self.assertEqual(pd.Timestamp(usd_client["date_du"]), pd.Timestamp("2026-04-27 15:33:29"))
+        self.assertEqual(pd.Timestamp(usd_client["au"]), pd.Timestamp("2026-07-15 13:13:08"))
         self.assertEqual(usd_client["segment_couverture_dat"], "couverture_50_75_pct")
         self.assertEqual(usd_client["segment_observe"], "credit_retard_30j_plus")
         self.assertEqual(usd_client["niveau_observation"], "suivi_prioritaire")
@@ -599,6 +635,20 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(synthese_headers), len(set(synthese_headers)))
 
         client_headers = [cell.value for cell in workbook["Risque_clients"][1]]
+        self.assertEqual(client_headers[:4], ["date_situation", "date_du", "au", "numero_client"])
+        self.assertEqual(
+            workbook["Risque_clients"].cell(row=2, column=client_headers.index("date_du") + 1).number_format,
+            "dd/mm/yyyy hh:mm:ss",
+        )
+        self.assertEqual(
+            workbook["Risque_clients"].cell(row=2, column=client_headers.index("au") + 1).number_format,
+            "dd/mm/yyyy hh:mm:ss",
+        )
+        if "echeance_credit" in client_headers:
+            self.assertEqual(
+                workbook["Risque_clients"].cell(row=2, column=client_headers.index("echeance_credit") + 1).number_format,
+                "dd/mm/yyyy hh:mm:ss",
+            )
         self.assertIn("numero_client", client_headers)
         self.assertIn("nom_client", client_headers)
         self.assertIn("encours_dat", client_headers)
@@ -609,6 +659,8 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(client_headers), len(set(client_headers)))
 
         alert_headers = [cell.value for cell in workbook["Alertes"][1]]
+        self.assertLess(alert_headers.index("date_du"), alert_headers.index("numero_client"))
+        self.assertLess(alert_headers.index("au"), alert_headers.index("numero_client"))
         self.assertIn("numero_client", alert_headers)
         self.assertIn("credit_non_couvert_dat", alert_headers)
         self.assertNotIn("id_client", alert_headers)
@@ -1765,6 +1817,35 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(summary["total_sorties_mpesa"]), 2000.0)
         self.assertEqual(float(summary["mouvement_net"]), -1000.0)
         self.assertEqual(float(summary["solde_mpesa_final"]), 9000.0)
+
+    def test_customer_statement_does_not_show_withdrawn_dat_as_active_balance(self) -> None:
+        prepared = _sample_prepared_data()
+        fixed = prepared.fixed_savings.copy()
+        fixed["balance"] = 0.0
+        fixed["status"] = "Withdrawal"
+        fixed["maturity_date"] = "2026-07-15"
+        prepared = MpesaPreparedData(
+            transactions=prepared.transactions,
+            current_savings=prepared.current_savings,
+            fixed_savings=fixed,
+            loans=pd.DataFrame(),
+            load_report=prepared.load_report,
+        )
+
+        report = build_mpesa_statement(prepared, "1001", {"CDF": None})
+        analysis = build_customer_transaction_analysis(prepared, "1001")
+        summary = report["synthese"].iloc[0]
+
+        self.assertEqual(float(report["extrait"]["dat_final_client"].iloc[0]), 0.0)
+        self.assertEqual(float(summary["dat_final"]), 0.0)
+        self.assertEqual(int(summary["nombre_dat"]), 0)
+        self.assertTrue(analysis["dat_en_cours_client"].empty)
+        self.assertTrue(
+            analysis["elements_extrait_client_turbo"]["type_element_extrait"]
+            .astype(str)
+            .str.contains("DAT", na=False)
+            .any()
+        )
 
     def test_customer_summary_uses_bisou_perspective_for_every_currency(self) -> None:
         rows: list[dict[str, object]] = []
@@ -3516,7 +3597,6 @@ class MpesaAnalysisTests(unittest.TestCase):
                 "comportement_turbo",
                 "mouvements_internes_turbo",
                 "controles_client_turbo",
-                "dat_final",
                 "mouvements_dat",
                 "mouvements_epargne",
                 "g2_dat",
@@ -3542,7 +3622,6 @@ class MpesaAnalysisTests(unittest.TestCase):
             "Comportement_Turbo",
             "Mouvements_Internes",
             "Controles_Client_Turbo",
-            "DAT_Final",
             "Mouvements_DAT",
             "Mouvements_Epargne",
             "G2_DAT",
@@ -3550,6 +3629,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         }
 
         self.assertTrue(required_sheets.issubset(workbook.sheet_names))
+        self.assertNotIn("DAT_Final", workbook.sheet_names)
         self.assertNotIn("Credit_Client_Turbo", workbook.sheet_names)
         self.assertNotIn("Positions_Turbo", workbook.sheet_names)
         self.assertNotIn("Interets_DAT_Echus", workbook.sheet_names)
@@ -3591,9 +3671,10 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(report["extrait"]), 2)
         self.assertTrue(report["dat_final"].empty)
         self.assertTrue(report["credits"].empty)
-        self.assertEqual(float(report["synthese"].iloc[0]["dat_final"]), 5000.0)
+        self.assertEqual(float(report["synthese"].iloc[0]["dat_final"]), 0.0)
+        self.assertEqual(int(report["synthese"].iloc[0]["nombre_dat"]), 0)
         self.assertIn(
-            "Transactions",
+            "Position non disponible",
             report["synthese"].iloc[0]["source_dat_final"],
         )
 

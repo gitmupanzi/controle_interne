@@ -3673,7 +3673,6 @@ def _render_customer_extract(prepared: MpesaPreparedData) -> dict[str, Any] | No
             "comportement_turbo",
             "mouvements_internes_turbo",
             "controles_client_turbo",
-            "dat_final",
             "g2_dat",
             "diagnostics",
         ]
