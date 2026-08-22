@@ -5715,7 +5715,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("Annexe 3. Definitions", word_text)
         self.assertIn("Solution Numérique uniquement", word_text)
         self.assertNotIn("Comparaison avec la même période de l'année précédente", word_text)
-        self.assertIn("comparaison_annee_precedente", report)
+        self.assertNotIn("comparaison_annee_precedente", report)
         self.assertNotIn("Graphiques de synthese", word_text)
         self.assertNotIn("Remboursements observés", word_text)
         compact_analysis_tables = [
@@ -6601,11 +6601,11 @@ class MpesaAnalysisTests(unittest.TestCase):
             word_text,
         )
         self.assertIn(
-            "Encours des produits crédit à la date d'arrêté | Encours total observé dans Loans Account. | CDF | 60.00",
+            "Encours des produits crédit à la date d'arrêté | Encours total du portefeuille crédit à la date d'arrêté. | CDF | 60.00",
             word_text,
         )
         self.assertIn(
-            "Encours des produits crédit à la date d'arrêté | Encours total observé dans Loans Account. | USD | 8.00",
+            "Encours des produits crédit à la date d'arrêté | Encours total du portefeuille crédit à la date d'arrêté. | USD | 8.00",
             word_text,
         )
         self.assertNotIn("Volume transactionnel observe", word_text)

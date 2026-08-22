@@ -350,146 +350,6 @@ def _render_weekly_comparison(
                     )
 
 
-def _render_year_over_year_charts(
-    comparison: pd.DataFrame,
-    *,
-    block: str,
-    selected_currencies: list[str] | None = None,
-) -> None:
-    """Affiche des histogrammes N/N-1 sans mélanger unités ni devises."""
-    if not isinstance(comparison, pd.DataFrame) or comparison.empty:
-        return
-    view = comparison.loc[
-        comparison["bloc"].astype(str).eq(block)
-    ].copy()
-    if selected_currencies:
-        currencies = view.get(
-            "currency_code",
-            pd.Series("", index=view.index),
-        ).astype("string").fillna("")
-        view = view.loc[
-            currencies.eq("") | currencies.isin(selected_currencies)
-        ].copy()
-    if view.empty:
-        return
-
-    current_start = pd.to_datetime(
-        view.iloc[0].get("date_debut_semaine_courante"),
-        errors="coerce",
-    )
-    current_end = pd.to_datetime(
-        view.iloc[0].get("date_fin_semaine_courante"),
-        errors="coerce",
-    )
-    previous_start = pd.to_datetime(
-        view.iloc[0].get("date_debut_semaine_precedente"),
-        errors="coerce",
-    )
-    previous_end = pd.to_datetime(
-        view.iloc[0].get("date_fin_semaine_precedente"),
-        errors="coerce",
-    )
-    current_label = (
-        f"{current_start:%d/%m/%Y} - {current_end:%d/%m/%Y}"
-        if pd.notna(current_start) and pd.notna(current_end)
-        else "Période analysée"
-    )
-    previous_label = (
-        f"{previous_start:%d/%m/%Y} - {previous_end:%d/%m/%Y}"
-        if pd.notna(previous_start) and pd.notna(previous_end)
-        else "Même période N-1"
-    )
-
-    complete = view.loc[
-        view.get("couverture", pd.Series("", index=view.index))
-        .astype(str)
-        .eq("Complete")
-    ].copy()
-    if complete.empty:
-        st.info(
-            "L'historique de l'année précédente est absent ou incomplet pour "
-            "construire un graphique annuel comparable."
-        )
-        return
-    if len(complete) < len(view):
-        st.caption(
-            "Le graphique conserve uniquement les indicateurs dont les deux "
-            "périodes sont entièrement couvertes."
-        )
-
-    def _draw(frame: pd.DataFrame, *, unit: str, currency: str = "") -> None:
-        if frame.empty:
-            return
-        chart_rows: list[dict[str, Any]] = []
-        for _, row in frame.iterrows():
-            for period_label, value_column in [
-                (current_label, "valeur_semaine_courante"),
-                (previous_label, "valeur_semaine_precedente"),
-            ]:
-                value = pd.to_numeric(row.get(value_column), errors="coerce")
-                if pd.isna(value):
-                    continue
-                chart_rows.append(
-                    {
-                        "Indicateur": str(row.get("indicateur", "")),
-                        "Période": period_label,
-                        "Valeur": float(value),
-                    }
-                )
-        chart_data = pd.DataFrame(chart_rows)
-        if chart_data.empty:
-            return
-        figure = px.bar(
-            chart_data,
-            x="Indicateur",
-            y="Valeur",
-            color="Période",
-            barmode="group",
-            labels={"Valeur": "Nombre" if unit == "nombre" else "Montant"},
-        )
-        style_standard_vertical_bar(figure, height=390, tickangle=-18)
-        suffix = f" [{currency}]" if currency else ""
-        chart_title = f"Comparaison annuelle des {block.lower()}{suffix}"
-        st.markdown(f"**{chart_title}**")
-        st.caption(
-            "Période analysée et mêmes dates de l'année précédente."
-        )
-        st_plot(
-            figure,
-            key=(
-                f"mpesa_statistics_yoy_{re.sub(r'[^0-9A-Za-z]+', '_', block).strip('_').lower()}_"
-                f"{unit}_{currency or 'global'}"
-            ),
-            height=390,
-            source_note=(
-                "Source : Solution Numérique uniquement. Les montants sont présentés "
-                "séparément par devise."
-            ),
-        )
-
-    count_rows = complete.loc[complete["unite"].astype(str).eq("nombre")]
-    _draw(count_rows, unit="nombre")
-
-    amount_rows = complete.loc[complete["unite"].astype(str).eq("montant")]
-    for currency in sorted(
-        amount_rows.get(
-            "currency_code",
-            pd.Series(dtype="string"),
-        )
-        .dropna()
-        .astype(str)
-        .loc[lambda series: series.str.strip().ne("")]
-        .unique()
-    ):
-        _draw(
-            amount_rows.loc[
-                amount_rows["currency_code"].astype(str).eq(currency)
-            ],
-            unit="montant",
-            currency=currency,
-        )
-
-
 def _latest_complete_turbo_date(prepared: MpesaPreparedData) -> pd.Timestamp:
     """Propose la derniere journee complete pour une comparaison hebdomadaire."""
     candidates: list[pd.Series] = []
@@ -659,6 +519,41 @@ def _mpesa_user_column_rename_enabled() -> bool:
     return bool(st.session_state.get("credit_standardize_columns", True))
 
 
+def _make_mpesa_dataframe_arrow_safe(data: pd.DataFrame) -> pd.DataFrame:
+    """Return a display-only DataFrame that Streamlit can serialize to Arrow.
+
+    Some operational tables intentionally mix values in the same column, for
+    example a parameter table with ``valeur = 7`` on one row and
+    ``valeur = "mensuel"`` on another. Pandas stores that as ``object`` and
+    PyArrow may infer a numeric type before failing on the text value. The
+    business frame must keep its raw values, but the browser display can safely
+    render such mixed columns as text.
+    """
+
+    if not isinstance(data, pd.DataFrame) or data.empty:
+        return data
+    safe = data.copy()
+    for column in safe.columns:
+        series = safe[column]
+        if not pd.api.types.is_object_dtype(series.dtype):
+            continue
+        non_null = series.dropna()
+        if non_null.empty:
+            continue
+        type_names = {
+            type(value).__name__
+            for value in non_null
+            if value is not pd.NA
+        }
+        has_nested = any(
+            isinstance(value, (dict, list, tuple, set))
+            for value in non_null.head(100)
+        )
+        if len(type_names) > 1 or has_nested:
+            safe[column] = series.astype("string").fillna("")
+    return safe
+
+
 def _mpesa_dataframe(
     data: Any,
     *args: Any,
@@ -674,6 +569,8 @@ def _mpesa_dataframe(
     if isinstance(data, pd.DataFrame) and _mpesa_user_column_rename_enabled():
         data, column_mapping = prepare_dataframe_with_user_columns(data, enabled=True)
         column_config = translate_column_config_for_user_columns(column_config, column_mapping)  # type: ignore[assignment]
+    if isinstance(data, pd.DataFrame):
+        data = _make_mpesa_dataframe_arrow_safe(data)
     return st.dataframe(data, *args, column_config=column_config, **kwargs)
 
 
@@ -816,10 +713,10 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
             "nouveaux numeros clients": "Nouveaux numeros de telephone apparus dans Customers dans la periode comparee.",
             "comptes clients avec produit dat positif et produit credit actif": "Comptes clients portant un produit DAT strictement superieur a zero et un produit credit actif.",
             "comptes clients avec produit dat positif": "Comptes clients portant au moins un produit DAT dont le solde est strictement superieur a zero.",
-            "produits dat comptes bloques a la date d arrete": "Nombre de produits DAT ou comptes bloques observes dans Savings Account a la date de fin.",
+            "produits dat comptes bloques a la date d arrete": "Nombre de produits DAT ou comptes bloques presents dans la position a date de fin.",
             "encours des produits dat comptes bloques a la date d arrete": "Montant bloque dans les produits DAT a la date de fin, par devise.",
             "montant des nouveaux produits dat sur la periode": "Montant des produits DAT crees ou actives pendant la periode analysee.",
-            "produits d epargne ouverts a la date d arrete": "Nombre de produits d'epargne ouverts observes dans Savings Account a la date de fin.",
+            "produits d epargne ouverts a la date d arrete": "Nombre de produits d'epargne ouverts presents dans la position a date de fin.",
             "encours des produits d epargne ouverts a la date d arrete": "Solde des produits d'epargne ouverts a la date de fin, par devise.",
             "nouveaux produits d epargne ouverte sur la periode": "Produits d'epargne ouverte crees ou actives pendant la periode analysee.",
             "nouveaux produits d epargne ouverte": "Produits d'epargne ouverte crees ou actives pendant la periode comparee.",
@@ -830,10 +727,13 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
             "encours des produits epargne dat sans produit credit actif": "Montant d'epargne ou de DAT positif detenu par les comptes clients sans credit actif.",
             "dat arrivant a echeance": "DAT positifs dont l'echeance arrive dans l'horizon de preparation.",
             "encours dat arrivant a echeance": "Montant bloque des DAT positifs arrivant bientot a echeance.",
-            "produits credit a la date d arrete": "Nombre de produits credit presents dans Loans Account a la date de fin.",
+            "produits credit a la date d arrete": "Nombre de produits credit presents dans la position credit a date de fin.",
             "encours des produits credit a la date d arrete": "Montant restant du portefeuille credit a la date de fin.",
             "montant des nouveaux produits credit sur la periode": "Montant des credits crees pendant la periode analysee.",
             "taux de conversion dat en credit": "Part des comptes clients avec produit DAT positif qui ont aussi un produit credit actif.",
+            "produits credit en retard a la date d arrete": "Nombre de produits credit ayant au moins un jour de retard a la date de fin.",
+            "encours credit en retard par a la date d arrete": "Encours des produits credit en retard d'au moins un jour a la date de fin.",
+            "taux de portefeuille a risque par 30": "Part de l'encours credit en retard de 30 jours ou plus dans l'encours total de la devise.",
         }
         return definitions.get(normalized, str(fallback or "Definition metier de l'indicateur."))
 
@@ -855,6 +755,13 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
         return result
 
     comparison = _frame("comparaison_hebdomadaire")
+    dat_maturity_horizon_days = int(
+        report_view.get(
+            "horizon_echeances_dat_jours",
+            DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
+        )
+        or DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS
+    )
     if not comparison.empty:
         excluded_keys = {
             "volume_transactions",
@@ -964,7 +871,7 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
                     "devise": currency,
                     "valeur": _numeric_sum(stock_dat, "nombre_comptes"),
                     "nature": "Nombre",
-                    "commentaire": "Position globale issue de Savings Account.",
+                    "commentaire": "Position globale des produits DAT et comptes bloques a la date d'arrete.",
                 },
                 {
                     "indicateur_operationnel": "Encours des produits DAT / comptes bloques a la date d'arrete",
@@ -985,7 +892,7 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
                     "devise": currency,
                     "valeur": _numeric_sum(stock_open, "nombre_comptes"),
                     "nature": "Nombre",
-                    "commentaire": "Position globale issue de Savings Account.",
+                    "commentaire": "Position globale des produits d'epargne ouverte a la date d'arrete.",
                 },
                 {
                     "indicateur_operationnel": "Encours des produits d'epargne ouverts a la date d'arrete",
@@ -1020,7 +927,7 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
                     "devise": currency,
                     "valeur": _numeric_sum(maturing, "nombre_dat_arrivant_echeance"),
                     "nature": "Nombre",
-                    "commentaire": f"DAT dont l'echeance arrive dans les {DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS} prochains jours.",
+                    "commentaire": f"DAT dont l'echeance arrive dans les {dat_maturity_horizon_days} prochains jours.",
                 },
                 {
                     "indicateur_operationnel": "Encours des DAT arrivant a echeance",
@@ -1042,14 +949,14 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
                     "devise": currency,
                     "valeur": _numeric_sum(stock_credit, "nombre_credits"),
                     "nature": "Nombre",
-                    "commentaire": "Position globale issue de Loans Account.",
+                    "commentaire": "Position globale du portefeuille credit a la date d'arrete.",
                 },
                 {
                     "indicateur_operationnel": "Encours des produits credit a la date d'arrete",
                     "devise": currency,
                     "valeur": _numeric_sum(stock_credit, "encours_total"),
                     "nature": "Montant",
-                    "commentaire": "Encours total observe dans Loans Account.",
+                    "commentaire": "Encours total du portefeuille credit a la date d'arrete.",
                 },
                 {
                     "indicateur_operationnel": "Montant des nouveaux produits credit sur la periode",
@@ -1057,6 +964,27 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
                     "valeur": _numeric_sum(period_credit, "montant_credits"),
                     "nature": "Montant",
                     "commentaire": "Credits accordes sur la periode.",
+                },
+                {
+                    "indicateur_operationnel": "Produits credit en retard a la date d'arrete",
+                    "devise": currency,
+                    "valeur": _numeric_sum(stock_credit, "credits_retard_1j"),
+                    "nature": "Nombre",
+                    "commentaire": "Credits ayant au moins un jour de retard a la date de fin.",
+                },
+                {
+                    "indicateur_operationnel": "Encours credit en retard (PAR) a la date d'arrete",
+                    "devise": currency,
+                    "valeur": _numeric_sum(stock_credit, "encours_retard_1j"),
+                    "nature": "Montant",
+                    "commentaire": "Encours des credits en retard d'au moins un jour a la date de fin.",
+                },
+                {
+                    "indicateur_operationnel": "Taux de portefeuille a risque PAR 30",
+                    "devise": currency,
+                    "valeur": _first_number(stock_credit, "par_30j_pct"),
+                    "nature": "Pourcentage",
+                    "commentaire": "Encours en retard de 30 jours ou plus rapporte a l'encours total de la devise.",
                 },
                 {
                     "indicateur_operationnel": "Taux de conversion DAT en credit",
@@ -1431,6 +1359,7 @@ def _build_mpesa_statistics_report_cached(
     date_end: object,
     frequency: str,
     comparison_period: str,
+    dat_maturity_horizon_days: int,
 ) -> dict[str, Any]:
     operation_journal = _build_turbo_operation_events_cached(prepared)
     historical_operation_journal = _build_turbo_operation_events_cached(
@@ -1448,6 +1377,7 @@ def _build_mpesa_statistics_report_cached(
         date_end=date_end,
         frequency=frequency,
         comparison_period=comparison_period,
+        dat_maturity_horizon_days=dat_maturity_horizon_days,
         turbo_events=operation_journal["events"],
         turbo_transaction_lines=operation_journal["lines"],
         historical_prepared=scoped_historical_prepared,
@@ -6064,10 +5994,7 @@ def _filter_pilotage_currencies(report: dict[str, Any], currencies: list[str]) -
         if isinstance(value, pd.DataFrame) and "currency_code" in value.columns:
             currency = value["currency_code"].astype("string").fillna("")
             currency_mask = currency.isin(currencies)
-            if key in {
-                "comparaison_hebdomadaire",
-                "comparaison_annee_precedente",
-            }:
+            if key == "comparaison_hebdomadaire":
                 currency_mask |= currency.eq("")
             filtered[key] = value.loc[currency_mask].reset_index(drop=True)
         else:
@@ -6567,7 +6494,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         else pd.Series(dtype="datetime64[ns]")
     )
     if combined_dates.empty:
-        st.info("Chargez Transactions ou Loans Account avec des dates exploitables pour construire le cockpit Credits.")
+        st.info("Chargez les transactions ou la position credit avec des dates exploitables pour construire le cockpit Credits.")
         return
 
     minimum_date = combined_dates.min().date()
@@ -6584,7 +6511,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
     render_summary_box(
         "Cockpit Credits - Solution Numerique",
         [
-            "Loans Account est lu comme un instantane actuel du portefeuille credit.",
+            "La position credit chargee est lue comme l'instantane actuel du portefeuille.",
             "Transactions fournit les flux observes de production et de remboursement sur la periode.",
             "Le PAR affiche est simplifie depuis due_date; il ne remplace pas un PAR reglementaire issu d'un plan d'amortissement detaille.",
             "L'epargne est juxtaposee au credit pour analyse; elle n'est jamais compensee ni appelee garantie sans preuve contractuelle.",
@@ -6613,7 +6540,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 max_value=maximum_date,
                 key=credit_start_key,
                 format="DD/MM/YYYY",
-                help="Premiere date incluse pour les flux de production et de remboursement. Les positions Loans Account restent des instantanes.",
+                help="Premiere date incluse pour les flux de production et de remboursement. Les positions credit restent des instantanes.",
             )
         with filter_cols[1]:
             st.date_input(
@@ -6629,7 +6556,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 "Frequence",
                 options=["Jour", "Semaine", "Mois"],
                 key="mpesa_credit_frequency",
-                help="Regroupe uniquement les tendances de flux. Ce choix ne modifie ni les totaux ni l'instantane Loans Account.",
+                help="Regroupe uniquement les tendances de flux. Ce choix ne modifie ni les totaux ni la position credit a date.",
             )
         with filter_cols[3]:
             st.number_input(
@@ -6776,12 +6703,14 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 render_panel_title(f"Devise {currency}")
                 render_kpi_cards(
                     [
-                        ("Prets actifs", _format_count(val("prets_actifs")), "Encours positif dans Loans Account", "blue"),
+                        ("Prets actifs", _format_count(val("prets_actifs")), "Encours positif a la date d'analyse", "blue"),
                         ("Emprunteurs actifs", _format_count(val("emprunteurs_actifs")), "Clients avec encours positif", "slate"),
-                        ("Encours actuel", f"{_format_amount(val('encours_credit'))} {currency}", "Instantane Loans Account", "navy"),
+                        ("Encours actuel", f"{_format_amount(val('encours_credit'))} {currency}", "Position credit a date", "navy"),
                         ("Montant decaisse", f"{_format_amount(val('montant_decaisse'))} {currency}", "Flux observe sur la periode", "green"),
                         ("Montant rembourse", f"{_format_amount(val('montant_rembourse_observe'))} {currency}", "Remboursements observes", "orange"),
-                        ("PAR simplifie 30j", _format_percent(val("par_simplifie_30j_pct")), "Depuis due_date", "red"),
+                        ("Credits en retard", _format_count(val("credits_en_retard")), "Au moins un jour de retard a la date d'analyse", "red"),
+                        ("Encours en retard", f"{_format_amount(val('encours_credit_en_retard'))} {currency}", "Encours en PAR a la date d'analyse", "orange"),
+                        ("PAR simplifie 30j", _format_percent(val("par_simplifie_30j_pct")), "Encours en retard 30j / encours total", "red"),
                     ]
                 )
             _mpesa_dataframe(overview, width="stretch", hide_index=True)
@@ -6790,7 +6719,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         render_panel_title("Production de credit sur la periode")
         _render_block_help(
             "Ce bloc isole les nouveaux credits observes dans Transactions sur la periode. "
-            "Il complete Loans Account, qui reste la position actuelle du portefeuille."
+            "Il complete la position actuelle du portefeuille credit."
         )
         if production_summary.empty and production_detail.empty:
             st.info("Aucun decaissement de credit observe sur la periode filtree.")
@@ -6817,13 +6746,13 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
                 )
 
     with portfolio_maturity_tab:
-        render_panel_title("Portefeuille actuel depuis Loans Account")
+        render_panel_title("Portefeuille credit actuel")
         _render_block_help(
-            "Ce bloc restitue l'instantane Loans Account : montant accorde, encours, "
+            "Ce bloc restitue la position credit a date : montant accorde, encours, "
             "montant paye, statut, retard et produit de credit."
         )
         if portfolio_summary.empty:
-            st.info("Chargez Loans Account pour obtenir la position actuelle du portefeuille.")
+            st.info("Chargez la position credit pour obtenir la position actuelle du portefeuille.")
         else:
             _mpesa_dataframe(_currency_filter(portfolio_summary, key_prefix="mpesa_credit_portfolio_summary"), width="stretch", hide_index=True)
             detail_view = _apply_local_multiselect_filters(
@@ -6892,10 +6821,10 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             "Il oriente la revue du risque mais ne remplace pas le plan d'amortissement Perfect Vision."
         )
         st.info(
-            "Indicateur simplifie construit depuis la date d'echeance disponible dans Loans Account. Il ne remplace pas un PAR issu d'un plan d'amortissement detaille."
+            "Indicateur simplifie construit depuis la date d'echeance disponible dans la position credit. Il ne remplace pas un PAR issu d'un plan d'amortissement detaille."
         )
         if risk_summary.empty:
-            st.info("Aucun risque credit calculable sans Loans Account exploitable.")
+            st.info("Aucun risque credit calculable sans position credit exploitable.")
         else:
             _mpesa_dataframe(_currency_filter(risk_summary, key_prefix="mpesa_credit_risk_summary"), width="stretch", hide_index=True)
             risk_view = _apply_local_multiselect_filters(
@@ -6925,7 +6854,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         )
         st.caption("Vue construite depuis due_date. Elle indique la maturite du pret, pas un echeancier detaille de mensualites.")
         if maturity_summary.empty:
-            st.info("Aucune due_date exploitable dans Loans Account.")
+            st.info("Aucune date d'echeance exploitable dans la position credit.")
         else:
             maturity_view = _apply_local_multiselect_filters(
                 maturity_summary,
@@ -7012,7 +6941,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             "Cette vue juxtapose encours credit, compte ouvert et DAT au grain client x devise. Elle ne compense pas comptablement credit et epargne."
         )
         if credit_savings_summary.empty and credit_savings_clients.empty:
-            st.info("Chargez Savings Account avec Loans Account pour obtenir le rapprochement credit/epargne.")
+            st.info("Chargez les positions d'epargne et de credit pour obtenir le rapprochement credit/epargne.")
         else:
             _mpesa_dataframe(_currency_filter(credit_savings_summary, key_prefix="mpesa_credit_savings_summary"), width="stretch", hide_index=True)
             savings_view = _apply_local_multiselect_filters(
@@ -7061,7 +6990,7 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
         )
         st.caption("Analyse par mois de creation du pret. Ce n'est pas une courbe vintage historique complete.")
         if cohorts.empty:
-            st.info("Aucune cohorte calculable sans created_at dans Loans Account.")
+            st.info("Aucune cohorte calculable sans date de creation dans la position credit.")
         else:
             cohort_view = _apply_local_multiselect_filters(
                 cohorts,
@@ -7195,7 +7124,7 @@ def _mpesa_risk_dataframe(frame: pd.DataFrame, sheet_name: str, *, max_rows: int
 def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
     if prepared.loans.empty and prepared.current_savings.empty and prepared.fixed_savings.empty:
         st.info(
-            "Chargez au minimum Loans Account et/ou Savings Account pour analyser les risques."
+            "Chargez au minimum la position credit et/ou la position epargne pour analyser les risques."
         )
         return
 
@@ -7203,7 +7132,7 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
     render_summary_box(
         "Principe de lecture",
         [
-            "Loans Account porte l'encours credit; Savings Account porte les comptes ouverts et les DAT.",
+            "La position credit porte l'encours credit; la position epargne porte les comptes ouverts et les DAT.",
             "L'analyse travaille par client numerique et par devise, sans additionner USD et CDF.",
             "Cette lecture observe les signaux disponibles; elle ne valide ni n'invalide automatiquement un credit.",
             "G2 peut enrichir l'identite ou le controle dans les autres onglets; il ne calcule aucun montant de risque.",
@@ -7247,7 +7176,7 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
                 "Date de situation",
                 key=date_key,
                 format="DD/MM/YYYY",
-                help="Date d'arrete de l'analyse. Les encours Loans et Savings sont conserves jusqu'a cette date incluse.",
+                help="Date d'arrete de l'analyse. Les positions credit et epargne sont conservees jusqu'a cette date incluse.",
             )
         with controls[1]:
             st.number_input(
@@ -7417,7 +7346,7 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
     with risk_tabs[2]:
         render_panel_title("Risque credit")
         _render_block_help(
-            "Ce bloc lit Loans Account a la date de situation : encours, PAR 1/7/30/60/90, produit credit estime, couverture par l'epargne totale, couverture par DAT seul et taux credit/DAT."
+            "Ce bloc lit la position credit a la date de situation : encours, PAR 1/7/30/60/90, produit credit estime, couverture par l'epargne totale, couverture par DAT seul et taux credit/DAT."
         )
         credit_view = _apply_local_multiselect_filters(
             report.get("risque_credit", pd.DataFrame()),
@@ -7436,7 +7365,7 @@ def _render_risk_analysis_tab(prepared: MpesaPreparedData) -> None:
     with risk_tabs[3]:
         render_panel_title("Risque DAT")
         _render_block_help(
-            "Ce bloc lit les DAT depuis Savings Account : montant bloque, cout estime client + Vodacom et montants arrivant a echeance sous 7, 30 et 90 jours."
+            "Ce bloc lit les DAT depuis la position epargne : montant bloque, cout estime client + Vodacom et montants arrivant a echeance sous 7, 30 et 90 jours."
         )
         dat_view = _apply_local_multiselect_filters(
             report.get("risque_dat", pd.DataFrame()),
@@ -7809,7 +7738,7 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
                     (f"Sorties [{currency}]", _format_amount(exits), "Retraits et decaissements", "orange"),
                     (f"Remboursements [{currency}]", _format_amount(repayments), "Observes dans Transactions", "blue"),
                     (f"Nouveaux credits [{currency}]", _format_amount(new_credit), "Decaissements observes", "navy"),
-                    (f"Encours / PAR30 [{currency}]", f"{_format_amount(outstanding)} / {_format_percent(par_30)}", "Position Loans Account", "red"),
+                    (f"Encours / PAR30 [{currency}]", f"{_format_amount(outstanding)} / {_format_percent(par_30)}", "Position credit a date", "red"),
                 ]
             )
 
@@ -7925,15 +7854,15 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         else:
             _mpesa_dataframe(new_credit_summary, width="stretch", hide_index=True)
             st.caption(
-                "L'ecart rapproche les decaissements observes dans Transactions et les comptes crees dans Loans Account. "
+                "L'ecart rapproche les decaissements observes dans Transactions et les produits credit crees dans la position credit. "
                 "Il s'agit d'un controle global par devise, pas d'une preuve d'affectation ligne a ligne."
             )
 
-        render_panel_title("Encours, retards et PAR [Loans Account]")
+        render_panel_title("Encours, retards et PAR")
         credit_summary = report_view.get("credit_synthese", pd.DataFrame())
         credit_detail = report_view.get("credit_detail", pd.DataFrame())
         if credit_summary.empty:
-            st.info("Chargez Loans Account pour calculer l'encours et le PAR.")
+            st.info("Chargez la position credit pour calculer l'encours et le PAR.")
         else:
             _mpesa_dataframe(credit_summary, width="stretch", hide_index=True)
             if not credit_detail.empty:
@@ -9309,7 +9238,6 @@ def _render_statistics_tab(
             "Les statistiques financieres et commerciales sont calculees depuis les sources Solution Numérique.",
             "Les rapports G2 M-Pesa et Clients_Perfect restent facultatifs : ils enrichissent ou controlent, sans modifier les montants.",
             "Le chiffre d'affaires affiche est observe et non certifie : il reprend les produits financiers detectables, separes par devise.",
-            "La tendance annuelle compare automatiquement la periode filtree aux memes dates de l'annee precedente lorsqu'elles sont disponibles; elle n'attribue pas seule une variation a un evenement externe.",
         ],
     )
 
@@ -9353,7 +9281,7 @@ def _render_statistics_tab(
     end_widget_key = f"mpesa_statistics_end_widget_{filter_scope_key}"
     applied_filters_key = f"mpesa_statistics_applied_filters_{filter_scope_key}"
     applied_at_key = f"mpesa_statistics_applied_at_{filter_scope_key}"
-    applied_filters_version = 2
+    applied_filters_version = 3
     if start_widget_key not in st.session_state:
         st.session_state[start_widget_key] = default_start
     if end_widget_key not in st.session_state:
@@ -9364,10 +9292,16 @@ def _render_statistics_tab(
         st.session_state[end_widget_key] = default_end
     st.session_state.setdefault("mpesa_statistics_frequency", "Mois")
     st.session_state.setdefault("mpesa_statistics_top_n_clients", 50)
+    st.session_state.setdefault(
+        "mpesa_statistics_dat_maturity_horizon_days",
+        DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
+    )
     pending_comparison_period = _selected_mpesa_comparison_period()
 
     with st.form("mpesa_statistics_filters"):
-        start_col, end_col, frequency_col, top_col = st.columns([1.0, 1.0, 1.0, 1.0])
+        start_col, end_col, frequency_col, top_col, horizon_col = st.columns(
+            [1.0, 1.0, 1.0, 1.0, 1.0]
+        )
         with start_col:
             st.date_input(
                 "Date de debut",
@@ -9415,6 +9349,19 @@ def _render_statistics_tab(
                     "classement; il ne réduit pas les KPI globaux."
                 ),
             )
+        with horizon_col:
+            st.slider(
+                "Horizon echeances DAT",
+                min_value=1,
+                max_value=90,
+                step=1,
+                key="mpesa_statistics_dat_maturity_horizon_days",
+                help=(
+                    "Nombre de jours regardes apres la date de fin pour compter les DAT "
+                    "positifs qui arrivent bientot a echeance. Cette option influence "
+                    "les tableaux et le rapport Word Statistiques."
+                ),
+            )
         statistics_submitted = st.form_submit_button("Actualiser les statistiques", type="primary")
 
     if statistics_submitted:
@@ -9424,6 +9371,9 @@ def _render_statistics_tab(
             "date_fin": st.session_state[end_widget_key],
             "frequence": st.session_state["mpesa_statistics_frequency"],
             "top_n_clients": st.session_state["mpesa_statistics_top_n_clients"],
+            "dat_maturity_horizon_days": st.session_state[
+                "mpesa_statistics_dat_maturity_horizon_days"
+            ],
             "comparison_period": pending_comparison_period,
         }
         st.session_state[applied_at_key] = pd.Timestamp.now()
@@ -9448,6 +9398,13 @@ def _render_statistics_tab(
     selected_end_date = applied_filters.get("date_fin", default_end)
     frequency = applied_filters.get("frequence", "Mois")
     top_n_clients = int(applied_filters.get("top_n_clients", 50) or 50)
+    dat_maturity_horizon_days = int(
+        applied_filters.get(
+            "dat_maturity_horizon_days",
+            DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
+        )
+        or DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS
+    )
     comparison_period = str(
         applied_filters.get("comparison_period", DEFAULT_MPESA_COMPARISON_PERIOD)
         or DEFAULT_MPESA_COMPARISON_PERIOD
@@ -9465,6 +9422,7 @@ def _render_statistics_tab(
                 "Statistiques actualisees pour la periode "
                 f"{pd.Timestamp(selected_start_date):%d/%m/%Y} - {pd.Timestamp(selected_end_date):%d/%m/%Y}, "
                 f"frequence {frequency}, top {top_n_clients} clients, "
+                f"horizon DAT {dat_maturity_horizon_days} jours, "
                 f"comparaison {comparison_period}."
             ),
             icon=":material/check_circle:",
@@ -9474,7 +9432,8 @@ def _render_statistics_tab(
             (
                 f"Dernier perimetre applique : {pd.Timestamp(selected_start_date):%d/%m/%Y} - "
                 f"{pd.Timestamp(selected_end_date):%d/%m/%Y}, frequence {frequency}, "
-                f"top {top_n_clients} clients, comparaison {comparison_period}."
+                f"top {top_n_clients} clients, horizon DAT {dat_maturity_horizon_days} jours, "
+                f"comparaison {comparison_period}."
             )
         )
     else:
@@ -9482,17 +9441,15 @@ def _render_statistics_tab(
             (
                 f"Perimetre applique par defaut : {pd.Timestamp(selected_start_date):%d/%m/%Y} - "
                 f"{pd.Timestamp(selected_end_date):%d/%m/%Y}, frequence {frequency}, "
-                f"top {top_n_clients} clients, comparaison {comparison_period}."
+                f"top {top_n_clients} clients, horizon DAT {dat_maturity_horizon_days} jours, "
+                f"comparaison {comparison_period}."
             )
         )
     st.caption(
-        "La période principale pilote tous les KPI et tableaux. Les cartes de "
-        "comparaison utilisent l'horizon choisi dans la barre latérale; "
-        "`Période filtrée` compare exactement Date de début - Date de fin à la "
-        "période immédiatement précédente de même durée. Une seconde lecture "
-        "compare automatiquement ces dates à la même période de l'année "
-        "précédente. Une seule année de référence indique une tendance; elle "
-        "ne suffit pas à définir une norme saisonnière ni une causalité."
+        "La p?riode principale pilote tous les KPI et tableaux. Les cartes de "
+        "comparaison utilisent l'horizon choisi dans la barre lat?rale; "
+        "`P?riode filtr?e` compare exactement Date de d?but - Date de fin ? la "
+        "p?riode imm?diatement pr?c?dente de m?me dur?e."
     )
 
     with st.spinner("Construction des statistiques..."):
@@ -9503,6 +9460,7 @@ def _render_statistics_tab(
             selected_end_date,
             frequency,
             comparison_period,
+            dat_maturity_horizon_days,
         )
 
     currency_options: set[str] = set()
@@ -9537,10 +9495,6 @@ def _render_statistics_tab(
     regular_deposits_clients = report_view.get("depots_reguliers_clients", pd.DataFrame())
     source_priority = report_view.get("priorite_sources", pd.DataFrame())
     weekly_comparison = report_view.get("comparaison_hebdomadaire", pd.DataFrame())
-    annual_comparison = report_view.get(
-        "comparaison_annee_precedente",
-        pd.DataFrame(),
-    )
     g2_coverage = report_view.get("g2_couverture", pd.DataFrame())
     g2_quality = report_view.get("g2_qualite_rapprochement", pd.DataFrame())
     g2_statuses = report_view.get("g2_statuts", pd.DataFrame())
@@ -9589,17 +9543,6 @@ def _render_statistics_tab(
             blocks=["Clients"],
             selected_currencies=selected_currencies,
             title="Comparaison des clients",
-        )
-        _render_weekly_comparison(
-            annual_comparison,
-            blocks=["Clients"],
-            selected_currencies=selected_currencies,
-            title="Tendance annuelle des clients",
-        )
-        _render_year_over_year_charts(
-            annual_comparison,
-            block="Clients",
-            selected_currencies=selected_currencies,
         )
         first_row = overview.iloc[0] if not overview.empty else pd.Series(dtype=object)
         def _client_indicator_value(label: str, fallback: Any) -> float:
@@ -9707,19 +9650,8 @@ def _render_statistics_tab(
             selected_currencies=selected_currencies,
             title="Comparaison des comptes",
         )
-        _render_weekly_comparison(
-            annual_comparison,
-            blocks=["Comptes"],
-            selected_currencies=selected_currencies,
-            title="Tendance annuelle des comptes",
-        )
-        _render_year_over_year_charts(
-            annual_comparison,
-            block="Comptes",
-            selected_currencies=selected_currencies,
-        )
         if portfolio.empty:
-            st.info("Savings Account est requis pour analyser les comptes ouverts et bloques.")
+            st.info("La position d'epargne est requise pour analyser les comptes ouverts et bloques.")
         else:
             family = portfolio.get("famille", pd.Series("", index=portfolio.index)).astype(str)
             open_accounts = portfolio.loc[family.eq("Compte ouvert")]
@@ -9728,13 +9660,13 @@ def _render_statistics_tab(
                 (
                     "Comptes ouverts",
                     _format_count(_sum_column(open_accounts, "nombre_comptes")),
-                    "Nombre global de comptes NORMAL SAVINGS",
+                    "Nombre global de produits d'epargne ouverte",
                     "blue",
                 ),
                 (
                     "Comptes bloques / DAT",
                     _format_count(_sum_column(fixed_accounts, "nombre_comptes")),
-                    "Nombre global de comptes FIXED SAVINGS",
+                    "Nombre global de produits DAT / comptes bloques",
                     "navy",
                 ),
             ]
@@ -9749,13 +9681,13 @@ def _render_statistics_tab(
                             (
                                 f"Solde comptes ouverts [{currency}]",
                                 _format_amount(_sum_column(currency_open, "solde_total")),
-                                "NORMAL SAVINGS, sans total multidevise",
+                                "Epargne ouverte, sans total multidevise",
                                 "green",
                             ),
                             (
                                 f"Solde comptes bloques [{currency}]",
                                 _format_amount(_sum_column(currency_fixed, "solde_total")),
-                                "FIXED SAVINGS / DAT, sans total multidevise",
+                                "DAT / comptes bloques, sans total multidevise",
                                 "orange",
                             ),
                         ]
@@ -9801,19 +9733,8 @@ def _render_statistics_tab(
             selected_currencies=selected_currencies,
             title="Comparaison des crédits",
         )
-        _render_weekly_comparison(
-            annual_comparison,
-            blocks=["Credits"],
-            selected_currencies=selected_currencies,
-            title="Tendance annuelle des crédits",
-        )
-        _render_year_over_year_charts(
-            annual_comparison,
-            block="Credits",
-            selected_currencies=selected_currencies,
-        )
         if credit_summary.empty:
-            st.info("Loans Account est requis pour analyser les credits.")
+            st.info("La position credit est requise pour analyser les credits.")
         else:
             credit_cards: list[tuple[str, str, str, str]] = [
                 (
@@ -9839,7 +9760,7 @@ def _render_statistics_tab(
                             (
                                 f"Encours credit [{currency}]",
                                 _format_amount(encours_total),
-                                "Position Loans Account",
+                                "Position credit a date",
                                 "orange",
                             ),
                             (
@@ -9883,17 +9804,6 @@ def _render_statistics_tab(
             blocks=["Transactions"],
             selected_currencies=selected_currencies,
             title="Comparaison des transactions",
-        )
-        _render_weekly_comparison(
-            annual_comparison,
-            blocks=["Transactions"],
-            selected_currencies=selected_currencies,
-            title="Tendance annuelle des transactions",
-        )
-        _render_year_over_year_charts(
-            annual_comparison,
-            block="Transactions",
-            selected_currencies=selected_currencies,
         )
         total_operations = _sum_column(overview, "operations")
         transaction_cards: list[tuple[str, str, str, str]] = [

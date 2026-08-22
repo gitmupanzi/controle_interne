@@ -39,16 +39,38 @@ Les filtres principaux sont :
 - fréquence ;
 - période de comparaison ;
 - périmètre annuel ;
+- horizon échéances DAT ;
 - devise.
+
+`Horizon échéances DAT` indique le nombre de jours à regarder après la date de fin pour repérer les DAT positifs qui arrivent bientôt à échéance. Par exemple, avec une date de fin au 21/08/2026 et un horizon de 30 jours, le rapport compte les DAT dont l'échéance tombe entre le 21/08/2026 et le 20/09/2026.
+
+## Rapport opérationnel
+
+Le rapport Word `Statistiques` est conçu pour la Direction. Il est présenté en paysage afin de réduire les coupures de tableaux et il privilégie trois blocs :
+
+1. Clients ;
+2. Épargnes et DAT ;
+3. Crédits.
+
+Les libellés du rapport doivent rester métier. On parle donc de `position d'épargne`, `position DAT`, `position crédit`, `produits crédit`, `encours crédit`, `crédits en retard` et `portefeuille à risque`, plutôt que d'afficher les noms techniques des fichiers d'import dans les tableaux de décision.
+
+Les indicateurs de stock sont lus à la date de fin, qui est la date d'arrêté :
+
+- les produits DAT et les produits d'épargne ouverte sont mesurés à la date de fin ;
+- le taux de conversion DAT en crédit mesure les comptes clients ayant un DAT positif et un crédit actif, rapportés aux comptes clients ayant un DAT positif ;
+- les crédits en retard comptent les produits crédit ayant au moins un jour de retard à la date de fin ;
+- l'encours crédit en retard correspond à l'encours de ces crédits en retard ;
+- le taux de portefeuille à risque PAR 30 correspond à l'encours en retard de 30 jours ou plus rapporté à l'encours total de la devise.
+
+Ces indicateurs restent toujours séparés par devise pour les montants. Les nombres de comptes clients ou de produits peuvent être consolidés, mais les USD et les CDF ne doivent pas être additionnés dans un même montant.
 
 ## Comparaisons
 
 Les indicateurs peuvent être comparés :
 
-- à une période précédente variable : 7 jours, 15 jours, un mois ou autre période définie ;
-- à la même période de l'année précédente lorsque les données existent.
+- à une période précédente variable : 7 jours, 15 jours, un mois ou autre période définie.
 
-Cette lecture aide à distinguer une tendance normale d'un effet lié à un événement social, économique, scolaire, politique ou environnemental.
+Les comparaisons annuelles N-1 ne sont plus affichées dans l'onglet `Statistiques`. L'objectif est de garder un écran plus opérationnel, centré sur la période analysée, la période précédente et les indicateurs de portefeuille à date.
 
 ## Projections
 

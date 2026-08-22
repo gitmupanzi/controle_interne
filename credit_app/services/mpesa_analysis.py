@@ -11028,6 +11028,7 @@ def build_mpesa_statistics_report(
     date_end: Any | None = None,
     frequency: str = "Mois",
     comparison_period: str = DEFAULT_MPESA_COMPARISON_PERIOD,
+    dat_maturity_horizon_days: int = DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
     turbo_events: pd.DataFrame | None = None,
     turbo_transaction_lines: pd.DataFrame | None = None,
     historical_prepared: MpesaPreparedData | None = None,
@@ -11268,7 +11269,15 @@ def build_mpesa_statistics_report(
         savings_stock_detail,
         active_loans_detail,
     )
-    dat_maturing = _mpesa_statistics_dat_maturing_summary(savings_stock_detail)
+    try:
+        dat_maturity_horizon_days = int(dat_maturity_horizon_days)
+    except (TypeError, ValueError):
+        dat_maturity_horizon_days = DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS
+    dat_maturity_horizon_days = max(1, min(365, dat_maturity_horizon_days))
+    dat_maturing = _mpesa_statistics_dat_maturing_summary(
+        savings_stock_detail,
+        horizon_days=dat_maturity_horizon_days,
+    )
     dat_credit_conversion = _mpesa_statistics_dat_credit_conversion_summary(
         savings_stock_detail,
         active_loans_detail,
@@ -11362,30 +11371,6 @@ def build_mpesa_statistics_report(
         turbo_events=turbo_events,
         turbo_transaction_lines=turbo_transaction_lines,
     )
-    annual_comparison_source = (
-        historical_prepared
-        if isinstance(historical_prepared, MpesaPreparedData)
-        else prepared
-    )
-    annual_comparison = build_mpesa_year_over_year_comparison(
-        annual_comparison_source,
-        date_start=start_date,
-        date_end=end_date,
-        turbo_events=(
-            historical_turbo_events
-            if isinstance(historical_turbo_events, pd.DataFrame)
-            else turbo_events
-            if historical_prepared is None
-            else None
-        ),
-        turbo_transaction_lines=(
-            historical_turbo_transaction_lines
-            if isinstance(historical_turbo_transaction_lines, pd.DataFrame)
-            else turbo_transaction_lines
-            if historical_prepared is None
-            else None
-        ),
-    )
     g2_quality = build_mpesa_g2_statistics_quality(
         prepared,
         date_start=start_date,
@@ -11403,6 +11388,7 @@ def build_mpesa_statistics_report(
         "date_fin": end_date,
         "frequence": frequency,
         "periode_comparaison": comparison_period,
+        "horizon_echeances_dat_jours": dat_maturity_horizon_days,
         "perimetre_annuel": prepared.year_scope_label,
         "date_debut_perimetre_annuel": prepared.year_scope_start,
         "date_fin_perimetre_annuel": prepared.year_scope_end,
@@ -11426,7 +11412,6 @@ def build_mpesa_statistics_report(
         "depots_reguliers_clients": regular_deposits["clients"],
         "operations_turbo": events,
         "comparaison_hebdomadaire": weekly_comparison,
-        "comparaison_annee_precedente": annual_comparison,
         "g2_couverture": g2_quality["couverture"],
         "g2_qualite_rapprochement": g2_quality["qualite_rapprochement"],
         "g2_statuts": g2_quality["statuts"],
@@ -11480,22 +11465,13 @@ def build_mpesa_statistics_report(
                     "source": "Sources Solution Numérique uniquement",
                 },
                 {
-                    "indicateur": "Comparaison annuelle",
-                    "definition": (
-                        "Même période calendaire de l'année précédente. Cette lecture "
-                        "mesure une tendance saisonnière indicative; elle ne démontre "
-                        "ni une normalité statistique ni la causalité d'un événement externe."
-                    ),
-                    "source": "Sources Solution Numérique uniquement",
-                },
-                {
                     "indicateur": "Encours a la date de fin",
                     "definition": (
                         "Position arretee au dernier jour du rapport : comptes epargne/DAT "
                         "et credits crees avant ou a la date de fin, en excluant les comptes "
                         "clotures avant cette date lorsque la date de cloture est disponible."
                     ),
-                    "source": "Savings Account et Loans Account [Solution Numerique]",
+                    "source": "Positions epargne et credit [Solution Numerique]",
                 },
                 {
                     "indicateur": "Encours de periode",
@@ -11504,7 +11480,7 @@ def build_mpesa_statistics_report(
                         "ou actives pendant la periode filtree. Ce n'est pas un historique "
                         "complet de l'encours moyen de la periode."
                     ),
-                    "source": "Savings Account et Loans Account [Solution Numerique]",
+                    "source": "Positions epargne et credit [Solution Numerique]",
                 },
                 {
                     "indicateur": "Taux de rapprochement G2",
@@ -11522,7 +11498,7 @@ def build_mpesa_statistics_report(
                         "7 % lorsqu'il est observé et montant net versé dans G2. Ces lignes ne "
                         "sont pas comptées comme sorties B2C non rapprochées."
                     ),
-                    "source": "Loans Account [Solution Numérique] + Transactions [Solution Numérique] + Transactions [G2]",
+                    "source": "Position credit + transactions [Solution Numérique] + transactions [G2]",
                 },
             ]
         ),
@@ -11537,6 +11513,7 @@ def create_mpesa_statistics_word(
     """Genere le rapport Word statistique."""
     try:
         from docx import Document
+        from docx.enum.section import WD_ORIENT
         from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
         from docx.enum.text import WD_ALIGN_PARAGRAPH
         from docx.oxml import OxmlElement
@@ -11568,9 +11545,18 @@ def create_mpesa_statistics_word(
         )
         or DEFAULT_MPESA_YEAR_SCOPE_MODE
     )
+    dat_maturity_horizon_days = int(
+        statistics_report.get(
+            "horizon_echeances_dat_jours",
+            DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS,
+        )
+        or DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS
+    )
 
     document = Document()
     section = document.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width, section.page_height = section.page_height, section.page_width
     section.top_margin = Cm(1.0)
     section.bottom_margin = Cm(1.0)
     section.left_margin = Cm(2.0)
@@ -11613,13 +11599,14 @@ def create_mpesa_statistics_word(
     for run in criteria_title.paragraphs[0].runs:
         run.bold = True
         run.font.color.rgb = RGBColor(255, 255, 255)
-    criteria = header.cell(1, 1).add_table(rows=4, cols=2)
+    criteria = header.cell(1, 1).add_table(rows=5, cols=2)
     for row_index, (label, value) in enumerate(
         [
             ("Periode :", period_text),
             ("Frequence :", frequency_text),
             ("Comparaison :", comparison_period_text),
-            ("Source des encours :", "Savings Account et Loans Account"),
+            ("Horizon DAT :", f"{dat_maturity_horizon_days} jours"),
+            ("Source des encours :", "Positions operationnelles a date"),
         ]
     ):
         criteria.cell(row_index, 0).text = label
@@ -11803,10 +11790,10 @@ def create_mpesa_statistics_word(
             "nouveaux numeros clients": "Nouveaux numeros de telephone apparus dans Customers dans la periode comparee.",
             "comptes clients avec produit dat positif et produit credit actif": "Comptes clients portant un produit DAT strictement superieur a zero et un produit credit actif.",
             "comptes clients avec produit dat positif": "Comptes clients portant au moins un produit DAT dont le solde est strictement superieur a zero.",
-            "produits dat comptes bloques a la date darrete": "Nombre de produits DAT ou comptes bloques observes dans Savings Account a la date de fin.",
+            "produits dat comptes bloques a la date darrete": "Nombre de produits DAT ou comptes bloques presents dans la position a date de fin.",
             "encours des produits dat comptes bloques a la date darrete": "Montant bloque dans les produits DAT a la date de fin, par devise.",
             "montant des nouveaux produits dat sur la periode": "Montant des produits DAT crees ou actives pendant la periode analysee.",
-            "produits depargne ouverts a la date darrete": "Nombre de produits d'epargne ouverts observes dans Savings Account a la date de fin.",
+            "produits depargne ouverts a la date darrete": "Nombre de produits d'epargne ouverts presents dans la position a date de fin.",
             "encours des produits depargne ouverts a la date darrete": "Solde des produits d'epargne ouverts a la date de fin, par devise.",
             "nouveaux produits depargne ouverte sur la periode": "Produits d'epargne ouverte crees ou actives pendant la periode analysee.",
             "nouveaux produits depargne ouverte": "Produits d'epargne ouverte crees ou actives pendant la periode comparee.",
@@ -11817,10 +11804,13 @@ def create_mpesa_statistics_word(
             "encours des produits epargne dat sans produit credit actif": "Montant d'epargne ou de DAT positif detenu par les comptes clients sans credit actif.",
             "dat arrivant a echeance": "DAT positifs dont l'echeance arrive dans l'horizon de preparation.",
             "encours dat arrivant a echeance": "Montant bloque des DAT positifs arrivant bientot a echeance.",
-            "produits credit a la date darrete": "Nombre de produits credit presents dans Loans Account a la date de fin.",
+            "produits credit a la date darrete": "Nombre de produits credit presents dans la position credit a date de fin.",
             "encours des produits credit a la date darrete": "Montant restant du portefeuille credit a la date de fin.",
             "montant des nouveaux produits credit sur la periode": "Montant des credits crees pendant la periode analysee.",
             "taux de conversion dat en credit": "Part des comptes clients avec produit DAT positif qui ont aussi un produit credit actif.",
+            "produits credit en retard a la date darrete": "Nombre de produits credit ayant au moins un jour de retard a la date de fin.",
+            "encours credit en retard par a la date darrete": "Encours des produits credit en retard d'au moins un jour a la date de fin.",
+            "taux de portefeuille a risque par 30": "Part de l'encours credit en retard de 30 jours ou plus dans l'encours total de la devise.",
         }
         return definitions.get(normalized, str(fallback or "Definition metier de l'indicateur."))
 
@@ -11861,7 +11851,7 @@ def create_mpesa_statistics_word(
         "Ce rapport privilégie les indicateurs utiles au pilotage du portefeuille. "
         "Dans la Solution Numérique, un compte client correspond au numéro de téléphone; "
         "ce compte peut porter plusieurs produits financiers : épargne ouverte, DAT et crédit. "
-        "Les encours sont lus à la date d'arrêté depuis `Savings Account` et `Loans Account`; "
+        "Les encours sont lus à la date d'arrêté depuis les positions d'épargne et de crédit; "
         "les créations de comptes ou de crédits sont lues sur la période analysée. "
         "Les montants restent toujours séparés par devise."
     )
@@ -11979,7 +11969,7 @@ def create_mpesa_statistics_word(
                     "devise": currency,
                     "valeur": _number_value(stock_dat, "nombre_comptes"),
                     "type_valeur": "Nombre",
-                    "commentaire": "Position issue de Savings Account.",
+                    "commentaire": "Position des produits DAT et comptes bloqués à la date d'arrêté.",
                 },
                 {
                     "indicateur": "Encours des produits DAT / comptes bloqués à la date d'arrêté",
@@ -12000,7 +11990,7 @@ def create_mpesa_statistics_word(
                     "devise": currency,
                     "valeur": _number_value(stock_open, "nombre_comptes"),
                     "type_valeur": "Nombre",
-                    "commentaire": "Position issue de Savings Account.",
+                    "commentaire": "Position des produits d'épargne ouverte à la date d'arrêté.",
                 },
                 {
                     "indicateur": "Encours des produits d'épargne ouverts à la date d'arrêté",
@@ -12035,7 +12025,7 @@ def create_mpesa_statistics_word(
                     "devise": currency,
                     "valeur": _number_value(maturing, "nombre_dat_arrivant_echeance"),
                     "type_valeur": "Nombre",
-                    "commentaire": f"DAT dont l'échéance arrive dans les {DEFAULT_DAT_REPAYMENT_PREPARATION_HORIZON_DAYS} prochains jours.",
+                    "commentaire": f"DAT dont l'échéance arrive dans les {dat_maturity_horizon_days} prochains jours.",
                 },
                 {
                     "indicateur": "Encours DAT arrivant à échéance",
@@ -12081,21 +12071,42 @@ def create_mpesa_statistics_word(
                     "devise": currency,
                     "valeur": _number_value(stock_credit, "nombre_credits"),
                     "type_valeur": "Nombre",
-                    "commentaire": "Position issue de Loans Account.",
+                    "commentaire": "Position du portefeuille crédit à la date d'arrêté.",
                 },
                 {
                     "indicateur": "Encours des produits crédit à la date d'arrêté",
                     "devise": currency,
                     "valeur": _number_value(stock_credit, "encours_total"),
                     "type_valeur": "Montant",
-                    "commentaire": "Encours total observé dans Loans Account.",
+                    "commentaire": "Encours total du portefeuille crédit à la date d'arrêté.",
                 },
                 {
                     "indicateur": "Montant des nouveaux produits crédit sur la période",
                     "devise": currency,
                     "valeur": _number_value(period_credit, "montant_credits"),
                     "type_valeur": "Montant",
-                    "commentaire": "Crédits créés sur la période, lus depuis Loans Account.",
+                    "commentaire": "Crédits créés sur la période analysée.",
+                },
+                {
+                    "indicateur": "Produits crédit en retard à la date d'arrêté",
+                    "devise": currency,
+                    "valeur": _number_value(stock_credit, "credits_retard_1j"),
+                    "type_valeur": "Nombre",
+                    "commentaire": "Crédits ayant au moins un jour de retard à la date de fin.",
+                },
+                {
+                    "indicateur": "Encours crédit en retard (PAR) à la date d'arrêté",
+                    "devise": currency,
+                    "valeur": _number_value(stock_credit, "encours_retard_1j"),
+                    "type_valeur": "Montant",
+                    "commentaire": "Encours des crédits en retard d'au moins un jour à la date de fin.",
+                },
+                {
+                    "indicateur": "Taux de portefeuille à risque PAR 30",
+                    "devise": currency,
+                    "valeur": _first_number(stock_credit, "par_30j_pct"),
+                    "type_valeur": "Pourcentage",
+                    "commentaire": "Encours en retard de 30 jours ou plus rapporté à l'encours total de la devise.",
                 },
                 {
                     "indicateur": "Taux de conversion DAT en crédit",
@@ -12212,10 +12223,6 @@ def create_mpesa_statistics_word(
     g2_unmatched_frame = statistics_report.get("g2_non_rapprochees", pd.DataFrame())
     g2_weekly_frame = statistics_report.get(
         "g2_comparaison_hebdomadaire",
-        pd.DataFrame(),
-    )
-    annual_comparison_frame = statistics_report.get(
-        "comparaison_annee_precedente",
         pd.DataFrame(),
     )
     add_text(
@@ -12394,148 +12401,6 @@ def create_mpesa_statistics_word(
             },
             max_rows=40,
         )
-
-    def _comparison_value(value: Any, unit: str, coverage: str) -> str:
-        parsed = pd.to_numeric(value, errors="coerce")
-        if coverage == "Non calculable" or pd.isna(parsed):
-            return "-"
-        return _pdf_number(parsed, decimals=0 if unit == "nombre" else 2)
-
-    def _annual_evolution_text(row: pd.Series) -> str:
-        coverage = str(row.get("couverture", "") or "")
-        current_value = pd.to_numeric(
-            row.get("valeur_semaine_courante"),
-            errors="coerce",
-        )
-        previous_value = pd.to_numeric(
-            row.get("valeur_semaine_precedente"),
-            errors="coerce",
-        )
-        evolution = pd.to_numeric(row.get("evolution_pct"), errors="coerce")
-        if coverage == "Non calculable" or pd.isna(previous_value):
-            return "Référence N-1 indisponible"
-        if coverage != "Complete":
-            return "Couverture N-1 partielle"
-        if float(previous_value) == 0:
-            if pd.notna(current_value) and float(current_value) > 0:
-                return "Nouvelle activité"
-            return "Stable"
-        if pd.isna(evolution):
-            return "Non calculable"
-        return f"{float(evolution):+.1f} %"
-
-    if (
-        isinstance(annual_comparison_frame, pd.DataFrame)
-        and not annual_comparison_frame.empty
-    ):
-        annual_current_start = pd.to_datetime(
-            annual_comparison_frame.iloc[0].get("date_debut_semaine_courante"),
-            errors="coerce",
-        )
-        annual_current_end = pd.to_datetime(
-            annual_comparison_frame.iloc[0].get("date_fin_semaine_courante"),
-            errors="coerce",
-        )
-        annual_previous_start = pd.to_datetime(
-            annual_comparison_frame.iloc[0].get("date_debut_semaine_precedente"),
-            errors="coerce",
-        )
-        annual_previous_end = pd.to_datetime(
-            annual_comparison_frame.iloc[0].get("date_fin_semaine_precedente"),
-            errors="coerce",
-        )
-        add_title("Comparaison avec la même période de l'année précédente")
-        if all(
-            pd.notna(value)
-            for value in [
-                annual_current_start,
-                annual_current_end,
-                annual_previous_start,
-                annual_previous_end,
-            ]
-        ):
-            add_text(
-                f"Période analysée : {annual_current_start:%d/%m/%Y} au "
-                f"{annual_current_end:%d/%m/%Y}. Même période N-1 : "
-                f"{annual_previous_start:%d/%m/%Y} au "
-                f"{annual_previous_end:%d/%m/%Y}."
-            )
-        add_text(
-            "Cette comparaison mesure une tendance saisonnière indicative. "
-            "Une seule année de référence ne suffit pas à définir une norme; "
-            "un événement social, politique ou environnemental reste une "
-            "hypothèse de contexte tant que son effet n'est pas validé."
-        )
-        annual_rows: list[dict[str, Any]] = []
-        for _, row in annual_comparison_frame.iterrows():
-            unit = str(row.get("unite", "") or "")
-            coverage = str(row.get("couverture", "") or "")
-            currency = (
-                _currency_label(row.get("currency_code", ""))
-                if str(row.get("currency_code", "") or "").strip()
-                else "-"
-            )
-            annual_rows.append(
-                {
-                    "bloc": row.get("bloc", ""),
-                    "indicateur": row.get("indicateur", ""),
-                    "devise": currency,
-                    "periode_courante": _comparison_value(
-                        row.get("valeur_semaine_courante"),
-                        unit,
-                        coverage,
-                    ),
-                    "periode_n_1": _comparison_value(
-                        row.get("valeur_semaine_precedente"),
-                        unit,
-                        coverage,
-                    ),
-                    "evolution": _annual_evolution_text(row),
-                }
-            )
-        add_table(
-            pd.DataFrame(annual_rows),
-            {
-                "bloc": "Bloc",
-                "indicateur": "Indicateur",
-                "devise": "Devise",
-                "periode_courante": "Période analysée",
-                "periode_n_1": "Même période N-1",
-                "evolution": "Tendance",
-            },
-            max_rows=40,
-        )
-
-    def add_annual_block_analysis(block: str) -> None:
-        if (
-            not isinstance(annual_comparison_frame, pd.DataFrame)
-            or annual_comparison_frame.empty
-        ):
-            return
-        block_rows = annual_comparison_frame.loc[
-            annual_comparison_frame["bloc"].astype(str).eq(block)
-        ]
-        for _, row in block_rows.iterrows():
-            coverage = str(row.get("couverture", "") or "")
-            unit = str(row.get("unite", "") or "")
-            currency = str(row.get("currency_code", "") or "").strip()
-            indicator = str(row.get("indicateur", "") or "")
-            label = f"{indicator} [{currency}]" if currency else indicator
-            current_text = _comparison_value(
-                row.get("valeur_semaine_courante"),
-                unit,
-                coverage,
-            )
-            previous_text = _comparison_value(
-                row.get("valeur_semaine_precedente"),
-                unit,
-                coverage,
-            )
-            add_bullet(
-                f"Tendance annuelle — {label} : {current_text} sur la période "
-                f"analysée contre {previous_text} aux mêmes dates N-1; "
-                f"{_annual_evolution_text(row)}."
-            )
 
     add_title("1. Clients")
     def _client_metric_value(label: str, fallback_column: str) -> float:
@@ -15596,6 +15461,20 @@ def build_mpesa_credit_cockpit(
                     "indicateur": "montant_rembourse_observe",
                     "currency_code": currency,
                     "valeur": float(repayment_row.iloc[0].get("montant_rembourse", repayment_row.iloc[0].get("remboursement_mpesa", 0))) if not repayment_row.empty else 0.0,
+                    "unite": "montant",
+                },
+                {
+                    "bloc": "Risque simplifie",
+                    "indicateur": "credits_en_retard",
+                    "currency_code": currency,
+                    "valeur": float(risk_row.iloc[0].get("credits_retard_1j", 0)) if not risk_row.empty else 0.0,
+                    "unite": "nombre",
+                },
+                {
+                    "bloc": "Risque simplifie",
+                    "indicateur": "encours_credit_en_retard",
+                    "currency_code": currency,
+                    "valeur": float(risk_row.iloc[0].get("encours_retard_1j", 0)) if not risk_row.empty else 0.0,
                     "unite": "montant",
                 },
                 {
@@ -27293,7 +27172,6 @@ def create_excel_export(
         ("depots_reguliers_synthese", "Stats_Depots_Reguliers"),
         ("depots_reguliers_clients", "Stats_Depots_Clients"),
         ("comparaison_hebdomadaire", "Stats_Comparaison"),
-        ("comparaison_annee_precedente", "Stats_Comparaison_N1"),
         ("g2_qualite_rapprochement", "Stats_Qualite_G2"),
         ("g2_non_rapprochees", "Stats_G2_A_Rapprocher"),
         ("diagnostics", "Diagnostics"),

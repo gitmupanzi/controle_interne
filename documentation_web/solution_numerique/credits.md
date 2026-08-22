@@ -28,6 +28,9 @@ Le cockpit Crédits mesure :
 - les nouveaux crédits et remboursements observés sur la période ;
 - les échéances et crédits échus ;
 - le PAR simplifié `1/7/30/90/180` à partir de `due_date` ;
+- les crédits en retard à la date d'analyse ;
+- l'encours crédit en retard, c'est-à-dire l'encours des crédits ayant au moins un jour de retard ;
+- le taux de portefeuille à risque PAR 30, calculé comme l'encours en retard de 30 jours ou plus divisé par l'encours crédit total de la devise ;
 - le niveau de risque exclusif par prêt : `Sain`, `PAR1`, `PAR7`, `PAR30`, `PAR90`, `PAR180`, `Echeance_non_renseignee` ;
 - les crédits avec pénalités, défaut observé ou renouvellement ;
 - la concentration par client et par tranche d'encours ;
@@ -39,7 +42,7 @@ Le cockpit Crédits mesure :
 |---|---|
 | `Vue d'ensemble` | KPI du portefeuille crédit par devise. |
 | `Production et remboursements` | Décaissements et remboursements observés sur la période. |
-| `Portefeuille et échéances` | Position Loans Account, échéances, maturité et cohortes à date. |
+| `Portefeuille et échéances` | Position crédit, échéances, maturité et cohortes à date. |
 | `Risques et concentration` | PAR simplifié, prêts à surveiller, top expositions et concentration. |
 | `Crédit et épargne` | Rapprochement analytique crédit, compte ouvert et DAT. |
 | `Opportunités et qualité` | Opportunités crédit, contrôles qualité, KPI non calculables et limites. |
