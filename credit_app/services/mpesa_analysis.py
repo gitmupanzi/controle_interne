@@ -7419,9 +7419,14 @@ def _mpesa_statistics_first_date(frame: pd.DataFrame, *columns: str) -> pd.Serie
     """Retourne la premiere date exploitable parmi plusieurs colonnes."""
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return pd.Series(dtype="datetime64[ns]")
-    dates = pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
+    available_columns = [column for column in columns if column in frame.columns]
+    if not available_columns:
+        return pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
+    dates = pd.to_datetime(frame[available_columns[0]], errors="coerce")
+    if not isinstance(dates, pd.Series):
+        dates = pd.Series(dates, index=frame.index)
     for column in columns:
-        if column in frame.columns:
+        if column in frame.columns and column != available_columns[0]:
             dates = dates.combine_first(pd.to_datetime(frame[column], errors="coerce"))
     return dates
 
@@ -15809,6 +15814,27 @@ def build_mpesa_digital_risk_analysis(
         as_of_date=analysis_date,
         annual_interest_rate_pct=client_rate,
     )
+    if not credit.empty:
+        credit_snapshot_mask = _mpesa_statistics_snapshot_mask(
+            credit,
+            as_of_date=pd.Timestamp(analysis_date),
+            creation_columns=("created_at", "date_situation"),
+        )
+        credit = credit.loc[credit_snapshot_mask].copy().reset_index(drop=True)
+    if not savings.empty:
+        savings_snapshot_mask = _mpesa_statistics_snapshot_mask(
+            savings,
+            as_of_date=pd.Timestamp(analysis_date),
+            creation_columns=(
+                "date_creation_compte",
+                "created_at",
+                "date_approved",
+                "date_activated",
+            ),
+            closed_column="date_closed",
+            status_column="status",
+        )
+        savings = savings.loc[savings_snapshot_mask].copy().reset_index(drop=True)
     if credit.empty and savings.empty:
         report["qualite_donnees"] = pd.DataFrame(
             [
@@ -15912,6 +15938,10 @@ def build_mpesa_digital_risk_analysis(
         savings_family = clean_text(
             savings_detail.get("famille_epargne", pd.Series("", index=savings_detail.index))
         )
+        savings_detail["duree_dat_observee_jours"] = pd.to_numeric(
+            savings_detail.get("duree_contractuelle_jours", pd.Series(np.nan, index=savings_detail.index)),
+            errors="coerce",
+        ).where(savings_family.eq("DAT"))
         savings_detail["balance_compte_ouvert_risque"] = savings_detail["balance"].where(
             savings_family.eq("Compte ouvert"),
             0.0,
@@ -16017,11 +16047,16 @@ def build_mpesa_digital_risk_analysis(
                 cout_dat=("cout_total_dat", "sum"),
                 interets_clients_dat=("interets_clients_dat", "sum"),
                 commission_vodacom_dat=("commission_vodacom_dat", "sum"),
+                duree_maximale_dat_observee_jours=("duree_dat_observee_jours", "max"),
                 date_debut_epargne_risque=("date_debut_epargne_risque", "min"),
                 date_fin_epargne_risque=("date_fin_epargne_risque", "max"),
             )
         )
         savings_clients["epargne_totale"] = savings_clients["epargne_courante"] + savings_clients["dat"]
+        savings_clients["duree_maximale_dat_observee_mois_estimee"] = (
+            pd.to_numeric(savings_clients["duree_maximale_dat_observee_jours"], errors="coerce")
+            .div(30.4375)
+        )
 
     if not credit_clients.empty and not savings_clients.empty:
         clients = credit_clients.merge(
@@ -16067,6 +16102,8 @@ def build_mpesa_digital_risk_analysis(
         ("cout_dat", 0.0),
         ("interets_clients_dat", 0.0),
         ("commission_vodacom_dat", 0.0),
+        ("duree_maximale_dat_observee_jours", np.nan),
+        ("duree_maximale_dat_observee_mois_estimee", np.nan),
         ("date_debut_credit_risque", pd.NaT),
         ("date_fin_credit_risque", pd.NaT),
         ("date_debut_epargne_risque", pd.NaT),
@@ -16097,9 +16134,12 @@ def build_mpesa_digital_risk_analysis(
         "cout_dat",
         "interets_clients_dat",
         "commission_vodacom_dat",
+        "duree_maximale_dat_observee_jours",
+        "duree_maximale_dat_observee_mois_estimee",
     ]:
         if column in clients.columns:
-            clients[column] = pd.to_numeric(clients[column], errors="coerce").fillna(0)
+            fill_value = np.nan if column.startswith("duree_maximale_dat") else 0
+            clients[column] = pd.to_numeric(clients[column], errors="coerce").fillna(fill_value)
     for column in ["nom_client_credit", "nom_client_epargne", "telephone_credit", "telephone_epargne"]:
         if column in clients.columns:
             clients[column] = clean_text(clients[column])
@@ -16405,7 +16445,10 @@ def build_mpesa_digital_risk_analysis(
         "segment_observe", "niveau_observation", "lecture_observee",
         "signaux_positifs", "signaux_attention",
         "epargne_courante", "dat_bloque", "epargne_totale", "encours_credit",
-        "nombre_credits", "nombre_dat", "couverture_credit_pct",
+        "nombre_credits", "nombre_dat",
+        "duree_maximale_dat_observee_jours",
+        "duree_maximale_dat_observee_mois_estimee",
+        "couverture_credit_pct",
         "couverture_dat_credit_pct", "taux_utilisation_epargne_credit_pct",
         "taux_credit_dat_pct",
         "segment_couverture", "segment_couverture_dat",
@@ -16490,11 +16533,17 @@ def build_mpesa_digital_risk_analysis(
                     interets_clients_dat=("interets_clients_dat", "sum"),
                     commission_vodacom_dat=("commission_vodacom_dat", "sum"),
                     cout_total_dat=("cout_total_dat", "sum"),
+                    duree_maximale_dat_observee_jours=("duree_dat_observee_jours", "max"),
+                    duree_moyenne_dat_observee_jours=("duree_dat_observee_jours", "mean"),
                     dat_echeance_7j=("balance", lambda values: float(values.loc[dat_only.loc[values.index, "jours_avant_echeance"].between(0, 7, inclusive="both")].sum())),
                     dat_echeance_30j=("balance", lambda values: float(values.loc[dat_only.loc[values.index, "jours_avant_echeance"].between(0, 30, inclusive="both")].sum())),
                     dat_echeance_90j=("balance", lambda values: float(values.loc[dat_only.loc[values.index, "jours_avant_echeance"].between(0, 90, inclusive="both")].sum())),
                 )
                 .rename(columns={"currency_code": "devise"})
+            )
+            dat_summary["duree_maximale_dat_observee_mois_estimee"] = (
+                pd.to_numeric(dat_summary["duree_maximale_dat_observee_jours"], errors="coerce")
+                .div(30.4375)
             )
             report["risque_dat"] = dat_summary
 
@@ -16617,7 +16666,10 @@ def build_mpesa_digital_risk_analysis(
                     "date_du", "au", "numero_client", "nom_client", "telephone", "devise",
                     "segment_observe", "niveau_observation", "lecture_observee",
                     "encours_credit",
-                    "epargne_totale", "dat_bloque", "couverture_credit_pct",
+                    "epargne_totale", "dat_bloque",
+                    "duree_maximale_dat_observee_jours",
+                    "duree_maximale_dat_observee_mois_estimee",
+                    "couverture_credit_pct",
                     "couverture_dat_credit_pct", "taux_credit_dat_pct",
                     "exposition_nette", "exposition_nette_dat",
                     "niveau_risque", "motif_risque",
@@ -16642,6 +16694,8 @@ def build_mpesa_digital_risk_analysis(
             gap_alerts["encours_credit"] = gap_alerts["entrees_prevues_credit"]
             gap_alerts["epargne_totale"] = gap_alerts["sorties_prevues_dat"]
             gap_alerts["dat_bloque"] = gap_alerts["capital_dat_a_rembourser"]
+            gap_alerts["duree_maximale_dat_observee_jours"] = np.nan
+            gap_alerts["duree_maximale_dat_observee_mois_estimee"] = np.nan
             gap_alerts["couverture_credit_pct"] = np.nan
             gap_alerts["couverture_dat_credit_pct"] = np.nan
             gap_alerts["taux_credit_dat_pct"] = np.nan
@@ -16658,7 +16712,10 @@ def build_mpesa_digital_risk_analysis(
                         "date_du", "au", "numero_client", "nom_client", "telephone", "devise",
                         "segment_observe", "niveau_observation", "lecture_observee",
                         "encours_credit",
-                        "epargne_totale", "dat_bloque", "couverture_credit_pct",
+                        "epargne_totale", "dat_bloque",
+                        "duree_maximale_dat_observee_jours",
+                        "duree_maximale_dat_observee_mois_estimee",
+                        "couverture_credit_pct",
                         "couverture_dat_credit_pct", "taux_credit_dat_pct",
                         "exposition_nette", "exposition_nette_dat",
                         "niveau_risque", "motif_risque",
@@ -26359,6 +26416,8 @@ MPESA_RISK_OPERATIONAL_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
         "encours_credit",
         "nombre_credits",
         "nombre_dat",
+        "duree_maximale_dat_observee_jours",
+        "duree_maximale_dat_observee_mois_estimee",
         "couverture_dat_credit_pct",
         "taux_credit_dat_pct",
         "couverture_credit_pct",
@@ -26419,6 +26478,9 @@ MPESA_RISK_OPERATIONAL_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
         "montant_dat",
         "dat_moyen",
         "dat_max",
+        "duree_maximale_dat_observee_jours",
+        "duree_maximale_dat_observee_mois_estimee",
+        "duree_moyenne_dat_observee_jours",
         "dat_echeance_7j",
         "dat_echeance_30j",
         "dat_echeance_90j",
@@ -26478,6 +26540,8 @@ MPESA_RISK_OPERATIONAL_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
         "encours_credit",
         "dat_bloque",
         "epargne_totale",
+        "duree_maximale_dat_observee_jours",
+        "duree_maximale_dat_observee_mois_estimee",
         "couverture_dat_credit_pct",
         "taux_credit_dat_pct",
         "couverture_credit_pct",

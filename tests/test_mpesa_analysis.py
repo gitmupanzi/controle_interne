@@ -447,6 +447,24 @@ class MpesaAnalysisTests(unittest.TestCase):
                     "created_at": "2026-08-01",
                     "updated_at": "2026-08-01",
                 },
+                {
+                    "loan_id": "L-FUTURE",
+                    "customer_id": "C4",
+                    "customer": "Credit Futur",
+                    "msisdn1": "243810000004",
+                    "currency_code": "USD",
+                    "loan_amount": 9999.0,
+                    "loan_balance": 9999.0,
+                    "amount_paid": 0.0,
+                    "outstanding_principle": 9999.0,
+                    "outstanding_interest": 0.0,
+                    "outstanding_penalty_fees": 0.0,
+                    "interest_earned": 0.0,
+                    "status_name": "Active",
+                    "due_date": "2026-09-01",
+                    "created_at": "2026-08-18",
+                    "updated_at": "2026-08-18",
+                },
             ]
         )
         savings = pd.DataFrame(
@@ -499,6 +517,38 @@ class MpesaAnalysisTests(unittest.TestCase):
                     "maturity_date": "2026-09-01",
                     "created_at": "2026-06-01",
                     "updated_at": "2026-08-01",
+                },
+                {
+                    "id": "S-FUTURE",
+                    "savings_id": "S-FUTURE",
+                    "customer_id": "C4",
+                    "msisdn1": "243810000004",
+                    "product_id": "P1",
+                    "product_name": "Compte ouvert futur",
+                    "product_description": "NORMAL SAVINGS",
+                    "account_type": "NORMAL SAVINGS",
+                    "currency_code": "USD",
+                    "balance": 8888.0,
+                    "status": "active",
+                    "created_at": "2026-08-18",
+                    "updated_at": "2026-08-18",
+                },
+                {
+                    "id": "D-FUTURE",
+                    "savings_id": "D-FUTURE",
+                    "customer_id": "C4",
+                    "msisdn1": "243810000004",
+                    "product_id": "P2",
+                    "product_name": "DAT futur",
+                    "product_description": "FIXED SAVINGS",
+                    "account_type": "FIXED SAVINGS",
+                    "currency_code": "USD",
+                    "balance": 7777.0,
+                    "status": "active",
+                    "date_approved": "2026-08-18",
+                    "maturity_date": "2026-10-18",
+                    "created_at": "2026-08-18",
+                    "updated_at": "2026-08-18",
                 },
             ]
         )
@@ -565,8 +615,13 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(float(synthese.loc["CDF", "taux_credit_dat_pct"]), 500.0)
         self.assertAlmostEqual(float(synthese.loc["USD", "produit_credit_imf"]), 5.0)
         self.assertAlmostEqual(float(synthese.loc["CDF", "encours_credit"]), 5000.0)
+        self.assertAlmostEqual(float(synthese.loc["USD", "encours_credit"]), 80.0)
+        self.assertAlmostEqual(float(synthese.loc["USD", "epargne_disponible"]), 20.0)
+        self.assertAlmostEqual(float(synthese.loc["USD", "encours_dat"]), 50.0)
+        self.assertAlmostEqual(float(synthese.loc["USD", "encours_epargne"]), 70.0)
 
         clients = report["risque_clients"]
+        self.assertNotIn("C4", set(clients["id_client"].astype(str)))
         for expected_column in [
             "numero_client",
             "segment_observe",
@@ -585,6 +640,11 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(float(usd_client["taux_utilisation_epargne_credit_pct"]), 80 / 70 * 100)
         self.assertAlmostEqual(float(usd_client["couverture_dat_credit_pct"]), 62.5)
         self.assertAlmostEqual(float(usd_client["taux_credit_dat_pct"]), 160.0)
+        self.assertAlmostEqual(float(usd_client["duree_maximale_dat_observee_jours"]), 92.0)
+        self.assertAlmostEqual(
+            float(usd_client["duree_maximale_dat_observee_mois_estimee"]),
+            92.0 / 30.4375,
+        )
         self.assertEqual(pd.Timestamp(usd_client["date_du"]), pd.Timestamp("2026-04-27 15:33:29"))
         self.assertEqual(pd.Timestamp(usd_client["au"]), pd.Timestamp("2026-07-15 13:13:08"))
         self.assertEqual(usd_client["segment_couverture_dat"], "couverture_50_75_pct")
@@ -651,7 +711,12 @@ class MpesaAnalysisTests(unittest.TestCase):
             )
         self.assertIn("numero_client", client_headers)
         self.assertIn("nom_client", client_headers)
+        self.assertIn("compte_ouvert", client_headers)
         self.assertIn("encours_dat", client_headers)
+        self.assertIn("epargne_totale", client_headers)
+        self.assertIn("encours_credit", client_headers)
+        self.assertIn("duree_maximale_dat_observee_jours", client_headers)
+        self.assertIn("duree_maximale_dat_observee_mois_estimee", client_headers)
         self.assertIn("credit_non_couvert_dat", client_headers)
         self.assertNotIn("id_client", client_headers)
         self.assertNotIn("telephone", client_headers)
@@ -663,9 +728,14 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertLess(alert_headers.index("au"), alert_headers.index("numero_client"))
         self.assertIn("numero_client", alert_headers)
         self.assertIn("credit_non_couvert_dat", alert_headers)
+        self.assertIn("duree_maximale_dat_observee_jours", alert_headers)
         self.assertNotIn("id_client", alert_headers)
         self.assertNotIn("telephone", alert_headers)
         self.assertNotIn("type_controle", alert_headers)
+
+        dat_headers = [cell.value for cell in workbook["Risque_DAT"][1]]
+        self.assertIn("duree_maximale_dat_observee_jours", dat_headers)
+        self.assertIn("duree_maximale_dat_observee_mois_estimee", dat_headers)
 
     def test_digital_risk_analysis_uses_monthly_credit_rate_when_interest_is_missing(self) -> None:
         loans = pd.DataFrame(
