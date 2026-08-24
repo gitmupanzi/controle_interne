@@ -533,8 +533,16 @@ def _make_mpesa_dataframe_arrow_safe(data: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(data, pd.DataFrame) or data.empty:
         return data
     safe = data.copy()
+    if safe.columns.has_duplicates:
+        safe = safe.loc[:, ~safe.columns.duplicated()].copy()
     for column in safe.columns:
         series = safe[column]
+        if isinstance(series, pd.DataFrame):
+            # Defensive fallback for duplicate labels that may appear after
+            # user-facing renaming. The display should stay usable even when a
+            # caller accidentally provides repeated column names.
+            series = series.iloc[:, 0]
+            safe[column] = series
         if not pd.api.types.is_object_dtype(series.dtype):
             continue
         non_null = series.dropna()
@@ -714,6 +722,7 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
             "comptes clients avec produit dat positif et produit credit actif": "Comptes clients portant un produit DAT strictement superieur a zero et un produit credit actif.",
             "comptes clients avec produit dat positif": "Comptes clients portant au moins un produit DAT dont le solde est strictement superieur a zero.",
             "produits dat comptes bloques a la date d arrete": "Nombre de produits DAT ou comptes bloques presents dans la position a date de fin.",
+            "nombre de produits dat comptes bloques avec solde positif a la date d arrete": "Nombre de produits DAT ou comptes bloques dont le solde est strictement superieur a zero a la date de fin.",
             "encours des produits dat comptes bloques a la date d arrete": "Montant bloque dans les produits DAT a la date de fin, par devise.",
             "montant des nouveaux produits dat sur la periode": "Montant des produits DAT crees ou actives pendant la periode analysee.",
             "produits d epargne ouverts a la date d arrete": "Nombre de produits d'epargne ouverts presents dans la position a date de fin.",
@@ -780,7 +789,7 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
         if "indicateur" in comparison.columns:
             normalized = comparison["indicateur"].astype(str).str.lower()
             comparison = comparison.loc[
-                ~normalized.str.contains("remboursement|depot|dÃ©pÃ´t", na=False)
+                ~normalized.str.contains("remboursement|depot|dépôt", na=False)
             ].copy()
         comparison = comparison.rename(
             columns={
@@ -872,6 +881,13 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
                     "valeur": _numeric_sum(stock_dat, "nombre_comptes"),
                     "nature": "Nombre",
                     "commentaire": "Position globale des produits DAT et comptes bloques a la date d'arrete.",
+                },
+                {
+                    "indicateur_operationnel": "Nombre de produits DAT / comptes bloques avec solde positif a la date d'arrete",
+                    "devise": currency,
+                    "valeur": _numeric_sum(stock_dat, "comptes_solde_positif"),
+                    "nature": "Nombre",
+                    "commentaire": "Produits DAT dont le solde est strictement superieur a zero a la date d'arrete.",
                 },
                 {
                     "indicateur_operationnel": "Encours des produits DAT / comptes bloques a la date d'arrete",
@@ -1627,6 +1643,15 @@ def _build_prepared_data(
             "Clients_Perfect": perfect_clients,
         },
         missing,
+        raw_files={
+            "Transactions M-PESA_Turbo": _transactions_raw,
+            "Epargne courante_Turbo": current,
+            "DAT_Turbo": fixed,
+            "Credits_Turbo": _loans_raw,
+            "Transactions M-PESA_G2": _g2_raw,
+            "Clients_Turbo": _customers_raw,
+            "Clients_Perfect": _perfect_raw,
+        },
     )
     return MpesaPreparedData(
         transactions=transactions,
@@ -1858,6 +1883,65 @@ MPESA_CLIENT_SANS_MOUVEMENT_COLUMNS: tuple[str, ...] = (
     "nombre_comptes_ouverts",
     "nombre_credits",
     "nombre_dat",
+)
+
+MPESA_CLIENT_INACTIFS_COLUMNS: tuple[str, ...] = (
+    "date_situation",
+    "id_client",
+    "numero_client",
+    "nom_client",
+    "date_creation_compte",
+    "date_premiere_operation_periode",
+    "devise",
+    "statut_inactivite",
+    "lecture_inactivite",
+    "seuil_inactivite_jours",
+    "jours_observes_periode",
+    "jours_historique_charge",
+    "date_derniere_operation",
+    "jours_depuis_derniere_operation",
+    "nombre_operations",
+    "nombre_periodes_actives",
+    "solde_compte_ouvert",
+    "solde_dat",
+    "encours_credit",
+    "segment_produit",
+    "segment_client",
+    "statut_confiance",
+    "nombre_comptes_ouverts_positifs",
+    "nombre_credits_actifs",
+    "nombre_dat_positifs",
+    "nombre_comptes_ouverts",
+    "nombre_credits",
+    "nombre_dat",
+)
+
+MPESA_CLIENT_SANS_PRODUIT_COLUMNS: tuple[str, ...] = (
+    "date_situation",
+    "id_client",
+    "numero_client",
+    "nom_client",
+    "date_creation_compte",
+    "date_premiere_operation_periode",
+    "devise",
+    "statut_usage",
+    "lecture_usage",
+    "date_derniere_operation",
+    "jours_depuis_derniere_operation",
+    "nombre_operations",
+    "nombre_periodes_actives",
+    "nombre_total_operations",
+    "solde_compte_ouvert",
+    "solde_dat",
+    "encours_credit",
+    "nombre_comptes_ouverts",
+    "nombre_dat",
+    "nombre_credits",
+    "nombre_comptes_ouverts_positifs",
+    "nombre_dat_positifs",
+    "nombre_credits_actifs",
+    "presence_transaction",
+    "statut_confiance",
 )
 
 MPESA_CLIENT_DAT_SANS_CREDIT_COLUMNS: tuple[str, ...] = (
@@ -5153,7 +5237,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             options=direction_options,
             key=direction_key,
             placeholder="Tous",
-            help="Aucune s?lection = tous les sens. Le filtre s'applique ? la synth?se, au d?tail et ? l'export.",
+            help="Aucune sélection = tous les sens. Le filtre s'applique à la synthèse, au détail et à l'export.",
         )
         g2_submitted = st.form_submit_button("Actualiser G2 / DAT", type="primary")
 
@@ -5185,7 +5269,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         period_end = pd.Timestamp.combine(date_end, time_end)
         if period_start > period_end:
             st.error(
-                "La date et l'heure de d?but doivent ?tre ant?rieures ou ?gales ? la date et l'heure de fin.",
+                "La date et l'heure de début doivent être antérieures ou égales à la date et l'heure de fin.",
                 icon=":material/error:",
             )
             return
@@ -8806,7 +8890,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                 max_value=maximum_date,
                 key=clients_start_key,
                 format="DD/MM/YYYY",
-                help="Borne incluse pour l'activit? client, les nouveaux clients et les listes d'action.",
+                help="Borne incluse pour l'activité client, les nouveaux clients et les listes d'action.",
             )
         with filter_cols[1]:
             st.date_input(
@@ -8815,23 +8899,23 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                 max_value=maximum_date,
                 key=clients_end_key,
                 format="DD/MM/YYYY",
-                help="Borne incluse. Les positions de comptes et de cr?dits restent des instantan?s disponibles ? cette date.",
+                help="Borne incluse. Les positions de comptes et de crédits restent des instantanés disponibles à cette date.",
             )
         with filter_cols[2]:
             st.selectbox(
                 "Fréquence",
                 options=["Jour", "Semaine", "Mois"],
                 key="mpesa_clients_frequency",
-                help="Regroupe l'acquisition et l'activit? par jour, semaine ou mois sans modifier les sources.",
+                help="Regroupe l'acquisition et l'activité par jour, semaine ou mois sans modifier les sources.",
             )
         with filter_cols[3]:
             st.number_input(
-                "Seuil inactivit?",
+                "Seuil inactivité",
                 min_value=7,
                 max_value=365,
                 step=7,
                 key="mpesa_clients_inactivity_threshold",
-                help="Nombre de jours sans op?ration pour classer un client comme inactif observ?. Ce n'est pas un statut r?glementaire.",
+                help="Nombre de jours sans opération pour classer un client comme inactif observé. Ce n'est pas un statut réglementaire.",
             )
         with filter_cols[4]:
             st.number_input(
@@ -8840,7 +8924,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                 max_value=20,
                 step=1,
                 key="mpesa_clients_occasional_threshold",
-                help="Nombre maximal d'op?rations sur la p?riode pour classer un client actif comme occasionnel.",
+                help="Nombre maximal d'opérations sur la période pour classer un client actif comme occasionnel.",
             )
         clients_submitted = st.form_submit_button("Actualiser les clients", type="primary")
 
@@ -8909,7 +8993,18 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
         ("Taux actifs", _format_percent(kpi_value("taux_clients_actifs")), "Dénominateur explicite dans la table KPI", "orange"),
         ("Nouveaux numéros clients", _format_count(kpi_value("nouveaux_clients")), "Customers.created_at dans la période", "blue"),
         ("Activation nouveaux", _format_percent(kpi_value("taux_activation_nouveaux_clients")), "Nouveaux numéros clients actifs / nouveaux numéros clients", "green"),
-        ("Sans mouvement", _format_count(kpi_value("clients_sans_mouvement")), "Population de référence sans événement", "red"),
+        (
+            "Clients inactifs",
+            _format_count(kpi_value("clients_inactifs_observes")),
+            f"Seuil observe : {int(inactivity_threshold)} jours",
+            "red",
+        ),
+        (
+            "Clients sans produit",
+            _format_count(kpi_value("clients_sans_produit_observe")),
+            "Dans Customers, sans epargne/DAT/credit observe",
+            "orange",
+        ),
     ]
     render_kpi_cards(cards)
 
@@ -9127,12 +9222,23 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
         if not isinstance(action_lists, dict) or not action_lists:
             st.info("Aucune opportunité client disponible.")
         else:
+            action_labels = {
+                "clients_actifs": "Clients actifs",
+                "nouveaux_clients": "Nouveaux numéros clients",
+                "nouveaux_clients_actifs": "Nouveaux numéros clients actifs",
+                "nouveaux_clients_non_actives": "Nouveaux numéros non activés",
+                "clients_sans_mouvement": "Clients sans mouvement sur la période",
+                "clients_inactifs_observes": "Clients inactifs observés",
+                "clients_sans_produit_observe": "Clients sans produit observé",
+                "clients_multi_produits": "Clients multi-produits",
+                "clients_dat_sans_credit_actif": "Clients DAT sans crédit actif",
+            }
             list_names = list(action_lists.keys())
             selected_lists = st.multiselect(
                 "Opportunités à afficher",
                 options=list_names,
-                default=list_names[:1],
-                format_func=lambda value: str(value).replace("_", " ").title(),
+                default=["clients_inactifs_observes"] if "clients_inactifs_observes" in list_names else list_names[:1],
+                format_func=lambda value: action_labels.get(str(value), str(value).replace("_", " ").title()),
                 key="mpesa_clients_action_lists",
                 help="Les opportunités sont produites depuis Client 360. Les montants restent séparés par devise lorsqu'ils existent.",
             )
@@ -9140,7 +9246,9 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                 st.info("Sélectionnez au moins une opportunité.")
             for selected_list in selected_lists:
                 selected_frame = action_lists.get(selected_list, pd.DataFrame())
-                st.markdown(f"**{str(selected_list).replace('_', ' ').title()}**")
+                st.markdown(
+                    f"**{action_labels.get(str(selected_list), str(selected_list).replace('_', ' ').title())}**"
+                )
                 if isinstance(selected_frame, pd.DataFrame) and not selected_frame.empty:
                     selected_frame = _apply_local_multiselect_filters(
                         selected_frame,
@@ -9150,12 +9258,17 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
                             "id_client",
                             "segment_client",
                             "segment_produit",
+                            "statut_usage",
                             "statut_confiance",
                         ],
                         key_prefix=f"mpesa_clients_action_filter_{selected_list}",
                     )
                 display_contract: tuple[str, ...] | None = None
-                if selected_list == "clients_sans_mouvement":
+                if selected_list == "clients_inactifs_observes":
+                    display_contract = MPESA_CLIENT_INACTIFS_COLUMNS
+                elif selected_list == "clients_sans_produit_observe":
+                    display_contract = MPESA_CLIENT_SANS_PRODUIT_COLUMNS
+                elif selected_list == "clients_sans_mouvement":
                     display_contract = MPESA_CLIENT_SANS_MOUVEMENT_COLUMNS
                 elif selected_list in {
                     "clients_actifs",
@@ -9194,7 +9307,8 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
     for key in [
         "clients_actifs",
         "nouveaux_clients_actifs",
-        "clients_sans_mouvement",
+        "clients_inactifs_observes",
+        "clients_sans_produit_observe",
         "clients_multi_produits",
         "clients_dat_sans_credit_actif",
     ]:
@@ -9445,10 +9559,10 @@ def _render_statistics_tab(
             )
         )
     st.caption(
-        "La p?riode principale pilote tous les KPI et tableaux. Les cartes de "
-        "comparaison utilisent l'horizon choisi dans la barre lat?rale; "
-        "`P?riode filtr?e` compare exactement Date de d?but - Date de fin ? la "
-        "p?riode imm?diatement pr?c?dente de m?me dur?e."
+        "La période principale pilote tous les KPI et tableaux. Les cartes de "
+        "comparaison utilisent l'horizon choisi dans la barre latérale; "
+        "`Période filtrée` compare exactement Date de début - Date de fin à la "
+        "période immédiatement précédente de même durée."
     )
 
     with st.spinner("Construction des statistiques..."):

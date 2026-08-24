@@ -8,6 +8,7 @@ from credit_app.tabs.solution_mpesa import (
     MPESA_FINANCE_TURBO_TAB_LABELS,
     MPESA_SOLUTION_TAB_LABELS,
     _build_prepared_data,
+    _make_mpesa_dataframe_arrow_safe,
     _render_alert_banner,
     _uploaded_dataframes,
 )
@@ -32,6 +33,7 @@ def test_solution_mpesa_main_tabs_follow_business_refactoring_order() -> None:
         "Clients",
         "Épargnes",
         "Crédits",
+        "Analyse des risques",
         "Solution Numérique / M-Pesa",
         "Perfect Client",
         "Statistiques",
@@ -61,6 +63,21 @@ def test_alert_banner_uses_the_red_streamlit_callout(monkeypatch) -> None:
         "message": "6 operations necessitent une verification.",
         "icon": ":material/error:",
     }
+
+
+def test_mpesa_dataframe_arrow_safe_handles_duplicate_display_columns() -> None:
+    frame = pd.DataFrame(
+        [
+            ["243810000001", "243810000001", {"source": "test"}],
+        ],
+        columns=["numero_client", "numero_client", "valeur_mixte"],
+    )
+
+    result = _make_mpesa_dataframe_arrow_safe(frame)
+
+    assert result.columns.tolist() == ["numero_client", "valeur_mixte"]
+    assert result.loc[0, "numero_client"] == "243810000001"
+    assert result.loc[0, "valeur_mixte"] == "{'source': 'test'}"
 
 
 def test_uploaded_dataframes_unifies_files_and_preserves_provenance() -> None:

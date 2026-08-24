@@ -1,9 +1,11 @@
 import pandas as pd
+from dataclasses import replace
 
 from credit_app.display_columns import prepare_dataframe_for_display
 from credit_app.services.mpesa_analysis import (
     MpesaPreparedData,
     build_mpesa_clients_report,
+    prepare_current_savings,
 )
 
 
@@ -94,6 +96,202 @@ def test_clients_report_counts_reference_active_and_activation():
     assert _kpi_value(report, "nouveaux_clients") == 2
     assert _kpi_value(report, "nouveaux_clients_actifs") == 1
     assert _kpi_value(report, "clients_sans_mouvement") == 1
+    assert _kpi_value(report, "clients_inactifs_observes") == 0
+    assert _kpi_value(report, "clients_sans_produit_observe") == 0
+
+
+def test_clients_report_identifies_customers_without_savings_or_loans():
+    prepared = replace(
+        _sample_prepared(),
+        customers=pd.concat(
+            [
+                _sample_prepared().customers,
+                pd.DataFrame(
+                    {
+                        "msisdn1": ["243844444444"],
+                        "created_at": [pd.Timestamp("2026-06-15")],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        ),
+        g2_transactions=pd.DataFrame(
+            {
+                "phone_prefixe": ["243844444444"],
+                "Nom_client": ["CLIENT SANS PRODUIT"],
+                "completion_time": [pd.Timestamp("2026-07-20")],
+            }
+        ),
+    )
+
+    report = build_mpesa_clients_report(
+        prepared,
+        date_start="2026-07-01",
+        date_end="2026-07-31",
+    )
+
+    assert _kpi_value(report, "clients_sans_produit_observe") == 1
+    no_product = report["listes_action"]["clients_sans_produit_observe"]
+    assert len(no_product) == 1
+    assert no_product.iloc[0]["numero_client"] == "243844444444"
+    assert no_product.iloc[0]["nom_client"] == "CLIENT SANS PRODUIT"
+    assert no_product.iloc[0]["statut_usage"] == "sans_produit_sans_mouvement"
+    assert no_product.columns.get_loc("nom_client") == no_product.columns.get_loc("numero_client") + 1
+
+
+def test_clients_report_links_savings_account_by_msisdn1_when_msisdn_column_is_empty():
+    current_savings = prepare_current_savings(
+        pd.DataFrame(
+            {
+                "customer_id": ["900"],
+                "msisdn": [pd.NA],
+                "msisdn1": ["2438555555550"],
+                "product_name": ["Open Savings"],
+                "account_type": ["NORMAL SAVINGS"],
+                "balance": [15.0],
+                "currency_code": ["USD"],
+                "created_at": [pd.Timestamp("2026-06-01")],
+            }
+        )
+    )
+    prepared = MpesaPreparedData(
+        transactions=pd.DataFrame(),
+        current_savings=current_savings,
+        fixed_savings=pd.DataFrame(),
+        loans=pd.DataFrame(),
+        load_report=pd.DataFrame(),
+        customers=pd.DataFrame(
+            {
+                "msisdn1": ["243855555555"],
+                "created_at": [pd.Timestamp("2026-06-01")],
+            }
+        ),
+    )
+
+    report = build_mpesa_clients_report(
+        prepared,
+        date_start="2026-07-01",
+        date_end="2026-07-31",
+    )
+
+    assert _kpi_value(report, "clients_referentiel") == 1
+    assert _kpi_value(report, "clients_sans_produit_observe") == 0
+    assert report["listes_action"]["clients_sans_produit_observe"].empty
+
+
+def test_clients_report_separates_inactive_from_simple_no_movement():
+    prepared = _sample_prepared()
+    prepared = replace(
+        prepared,
+        transactions=pd.concat(
+            [
+                prepared.transactions,
+                pd.DataFrame(
+                    {
+                        "id": [99],
+                        "customer_id": ["999"],
+                        "msisdn1": ["243899999999"],
+                        "account_type": ["NORMAL SAVINGS"],
+                        "reference_id": ["R-OLD"],
+                        "currency_code": ["USD"],
+                        "dr": [0],
+                        "cr": [1],
+                        "bal_before": [0],
+                        "bal_after": [1],
+                        "ref_no": ["REF-OLD"],
+                        "description": ["Epargne depot"],
+                        "created_at": [pd.Timestamp("2026-03-01")],
+                    }
+                ),
+            ],
+            ignore_index=True,
+        ),
+        customers=pd.concat(
+            [
+                prepared.customers,
+                pd.DataFrame(
+                {
+                    "msisdn1": ["243833333333"],
+                    "created_at": [pd.Timestamp("2026-05-01")],
+                }
+                ),
+            ],
+            ignore_index=True,
+        ),
+    )
+
+    report = build_mpesa_clients_report(
+        prepared,
+        date_start="2026-07-01",
+        date_end="2026-07-31",
+        inactivity_threshold_days=30,
+    )
+
+    assert _kpi_value(report, "clients_sans_mouvement") == 2
+    assert _kpi_value(report, "clients_inactifs_observes") == 1
+
+    inactive = report["listes_action"]["clients_inactifs_observes"]
+    assert len(inactive) == 1
+    assert inactive.iloc[0]["numero_client"] == "243833333333"
+    assert inactive.iloc[0]["statut_inactivite"] == "inactif_observe"
+    assert "aucune operation observee" in inactive.iloc[0]["lecture_inactivite"]
+
+
+def test_clients_inactifs_uses_g2_name_after_client_number():
+    prepared = replace(
+        _sample_prepared(),
+        transactions=pd.DataFrame(
+            {
+                "id": [99],
+                "customer_id": ["999"],
+                "msisdn1": ["243899999999"],
+                "account_type": ["NORMAL SAVINGS"],
+                "reference_id": ["R-OLD"],
+                "currency_code": ["USD"],
+                "dr": [0],
+                "cr": [1],
+                "bal_before": [0],
+                "bal_after": [1],
+                "ref_no": ["REF-OLD"],
+                "description": ["Epargne depot"],
+                "created_at": [pd.Timestamp("2026-03-01")],
+            }
+        ),
+        current_savings=pd.DataFrame(),
+        fixed_savings=pd.DataFrame(),
+        loans=pd.DataFrame(),
+        customers=pd.DataFrame(
+            {
+                "msisdn1": ["243833333333"],
+                "created_at": [pd.Timestamp("2026-05-01")],
+            }
+        ),
+        g2_transactions=pd.DataFrame(
+            {
+                "phone_prefixe": ["243833333333", "243833333333"],
+                "Nom_client": ["CLIENT NOM G2", "ANCIEN NOM G2"],
+                "completion_time": [pd.Timestamp("2026-07-15"), pd.Timestamp("2026-07-10")],
+            }
+        ),
+    )
+
+    report = build_mpesa_clients_report(
+        prepared,
+        date_start="2026-07-01",
+        date_end="2026-07-31",
+        inactivity_threshold_days=30,
+    )
+
+    inactive = report["listes_action"]["clients_inactifs_observes"]
+    assert inactive.iloc[0]["numero_client"] == "243833333333"
+    assert inactive.iloc[0]["nom_client"] == "CLIENT NOM G2"
+    assert inactive.columns.get_loc("nom_client") == inactive.columns.get_loc("numero_client") + 1
+    assert inactive.columns.get_loc("date_creation_compte") == inactive.columns.get_loc("nom_client") + 1
+    assert inactive.columns.get_loc("date_premiere_operation_periode") > inactive.columns.get_loc("date_creation_compte")
+    assert "date_creation_compte" in inactive.columns
+    assert "date_premiere_operation_periode" in inactive.columns
+    assert "date_derniere_operation" in inactive.columns
+    assert inactive.iloc[0]["date_creation_compte"] == pd.Timestamp("2026-05-01")
 
 
 def test_clients_report_uses_customers_date_for_new_clients():

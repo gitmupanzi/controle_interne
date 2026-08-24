@@ -5991,6 +5991,150 @@ class MpesaAnalysisTests(unittest.TestCase):
             int(stats_flow["nombre_clients"]),
         )
 
+    def test_mpesa_clients_report_ignores_unknown_currency_when_client_has_known_currency(self) -> None:
+        phone = "243817066094"
+        events = pd.DataFrame(
+            [
+                {
+                    "event_key": "EVT-USD",
+                    "customer_id": "2",
+                    "msisdn1": phone,
+                    "currency_code": "USD",
+                    "created_at": "2025-01-21 15:15:59",
+                },
+                {
+                    "event_key": "EVT-CDF",
+                    "customer_id": "2",
+                    "msisdn1": phone,
+                    "currency_code": "CDF",
+                    "created_at": "2025-01-22 08:00:00",
+                },
+                {
+                    "event_key": "EVT-TECH",
+                    "customer_id": "2",
+                    "msisdn1": phone,
+                    "currency_code": "",
+                    "created_at": "2025-01-23 09:00:00",
+                },
+            ]
+        )
+        customers = pd.DataFrame(
+            [
+                {
+                    "customer_id": "2",
+                    "msisdn1": phone,
+                    "created_at": "2024-12-31 09:39:09",
+                }
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=events.copy(),
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            customers=prepare_customers(customers),
+            load_report=build_load_report({}, {}),
+        )
+
+        report = build_mpesa_clients_report(
+            prepared,
+            date_start="2025-01-01",
+            date_end="2025-01-31",
+            frequency="Mois",
+            turbo_events=events,
+            turbo_transaction_lines=pd.DataFrame(),
+        )
+        client_360 = report["client_360"]
+        target = client_360.loc[client_360["numero_client"].astype(str).eq(phone)]
+
+        self.assertGreaterEqual(len(target), 2)
+        self.assertEqual({"CDF", "USD"}, set(target["devise"].dropna().astype(str)))
+        self.assertNotIn("NON RENSEIGNEE", set(target["devise"].dropna().astype(str)))
+
+    def test_mpesa_statistics_counts_savings_summary_rows_without_savings_id(self) -> None:
+        savings = prepare_savings_accounts(
+            pd.DataFrame(
+                [
+                    {
+                        "customer_id": "C1",
+                        "msisdn1": "243810000001",
+                        "product_name": "Fixed Account",
+                        "currency_code": "CDF",
+                        "balance": 100,
+                        "account_type": "FIXED SAVINGS",
+                        "created_at": "2026-08-01",
+                        "date_approved": "2026-08-01",
+                        "date_activated": "2026-08-01",
+                        "maturity_date": "2026-08-25",
+                    },
+                    {
+                        "customer_id": "C2",
+                        "msisdn1": "243810000002",
+                        "product_name": "Fixed Account",
+                        "currency_code": "CDF",
+                        "balance": 200,
+                        "account_type": "FIXED SAVINGS",
+                        "created_at": "2026-08-02",
+                        "date_approved": "2026-08-02",
+                        "date_activated": "2026-08-02",
+                        "maturity_date": "2026-08-28",
+                    },
+                    {
+                        "customer_id": "C3",
+                        "msisdn1": "243810000003",
+                        "product_name": "Current Savings",
+                        "currency_code": "CDF",
+                        "balance": 50,
+                        "account_type": "NORMAL SAVINGS",
+                        "created_at": "2026-08-03",
+                        "date_approved": "2026-08-03",
+                        "date_activated": "2026-08-03",
+                    },
+                    {
+                        "customer_id": "C4",
+                        "msisdn1": "243810000004",
+                        "product_name": "Current Savings",
+                        "currency_code": "CDF",
+                        "balance": 0,
+                        "account_type": "NORMAL SAVINGS",
+                        "created_at": "2026-08-04",
+                        "date_approved": "2026-08-04",
+                        "date_activated": "2026-08-04",
+                    },
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=savings.loc[savings["account_type"].eq("NORMAL SAVINGS")].copy(),
+            fixed_savings=savings.loc[savings["account_type"].eq("FIXED SAVINGS")].copy(),
+            loans=pd.DataFrame(),
+            load_report={},
+            g2_transactions=pd.DataFrame(),
+            customers=pd.DataFrame(),
+            perfect_clients=pd.DataFrame(),
+        )
+
+        report = build_mpesa_statistics_report(
+            prepared,
+            date_start="2026-08-01",
+            date_end="2026-08-21",
+            dat_maturity_horizon_days=30,
+        )
+        portfolio = report["epargne_dat_portefeuille"].set_index(
+            ["currency_code", "famille"]
+        )
+
+        self.assertEqual(int(portfolio.loc[("CDF", "DAT"), "nombre_comptes"]), 2)
+        self.assertEqual(
+            int(portfolio.loc[("CDF", "Compte ouvert"), "nombre_comptes"]),
+            2,
+        )
+        self.assertEqual(
+            int(report["dat_arrivant_echeance"].iloc[0]["nombre_dat_arrivant_echeance"]),
+            2,
+        )
+
     def test_turbo_only_g2_dat_uses_consolidated_loan_repayment_amount(self) -> None:
         transactions = prepare_transactions(
             pd.DataFrame(
@@ -7378,7 +7522,144 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("multi_produits", exported.columns)
         self.assertNotIn("presence_credit", exported.columns)
         self.assertNotIn("fichier_source", exported.columns)
-        self.assertEqual(str(exported.loc[0, "numero_client"]), "243811111111")
+
+    def test_client_cockpit_export_keeps_client_name_column_even_when_empty(self) -> None:
+        content = create_excel_export(
+            {
+                "clients_clients_actifs": pd.DataFrame(
+                    [
+                        {
+                            "date_situation": pd.Timestamp("2026-08-24"),
+                            "customer_id": "C001",
+                            "numero_telephone": "243811111111",
+                            "currency_code": "USD",
+                            "solde_compte_ouvert": 25.0,
+                        }
+                    ]
+                ),
+                "clients_clients_dat_sans_credit_actif": pd.DataFrame(
+                    [
+                        {
+                            "date_situation": pd.Timestamp("2026-08-24"),
+                            "customer_id": "C002",
+                            "msisdn1": "243822222222",
+                            "savings_id": "SAV-001",
+                            "product_name": "Fixed Savings",
+                            "currency_code": "CDF",
+                            "balance": 1000,
+                        }
+                    ]
+                ),
+                "clients_clients_sans_produit_observe": pd.DataFrame(
+                    [
+                        {
+                            "date_situation": pd.Timestamp("2026-08-24"),
+                            "customer_id": "C003",
+                            "numero_telephone": "243833333333",
+                            "statut_usage": "sans_produit_sans_mouvement",
+                        }
+                    ]
+                ),
+            }
+        )
+        workbook = pd.ExcelFile(BytesIO(content), engine="openpyxl")
+
+        active_sheet = pd.read_excel(workbook, sheet_name="Clients_Actifs")
+        dat_without_credit_sheet = pd.read_excel(workbook, sheet_name="DAT_Sans_Credit")
+        no_product_sheet = pd.read_excel(workbook, sheet_name="Clients_Sans_Produit")
+
+        for exported in [active_sheet, dat_without_credit_sheet, no_product_sheet]:
+            self.assertIn("numero_client", exported.columns)
+            self.assertIn("nom_client", exported.columns)
+            self.assertEqual(
+                list(exported.columns).index("nom_client"),
+                list(exported.columns).index("numero_client") + 1,
+            )
+
+    def test_client_cockpit_export_uses_clients_inactifs_operational_sheet(self) -> None:
+        content = create_excel_export(
+            {
+                "clients_clients_inactifs_observes": pd.DataFrame(
+                    [
+                        {
+                            "date_situation": pd.Timestamp("2026-08-10"),
+                            "customer_id": "C002",
+                            "numero_telephone": "243822222222",
+                            "Nom_client": "CLIENT INACTIF",
+                            "date_creation_compte": pd.Timestamp("2026-05-01"),
+                            "date_creation_client": pd.Timestamp("2026-05-01"),
+                            "currency_code": "CDF",
+                            "statut_inactivite": "inactif_observe",
+                            "lecture_inactivite": "Derniere operation plus ancienne que le seuil.",
+                            "seuil_inactivite_jours": 30,
+                            "jours_observes_periode": 31,
+                            "jours_historique_charge": 101,
+                            "date_premiere_operation_periode": pd.NaT,
+                            "date_derniere_operation_observee": pd.Timestamp("2026-06-01"),
+                            "jours_depuis_derniere_operation": 70,
+                            "nombre_operations_total": 2,
+                            "nombre_operations": 0,
+                            "nombre_periodes_actives": 0,
+                            "solde_compte_ouvert": 0,
+                            "solde_dat": 500,
+                            "solde_credit": 0,
+                            "segment_produit": "dat",
+                            "segment_client": "inactif_observe",
+                            "statut_confiance": "forte",
+                            "comptes_solde_positif_compte_ouvert": 0,
+                            "comptes_solde_positif_credit": 0,
+                            "comptes_solde_positif_dat": 1,
+                            "nombre_comptes_compte_ouvert": 0,
+                            "nombre_comptes_credit": 0,
+                            "nombre_comptes_dat": 1,
+                            "methode_rapprochement": "telephone",
+                            "sources_client": "Customers",
+                            "inactif_observe": True,
+                            "fichier_source": "clients.xlsx",
+                        }
+                    ]
+                )
+            }
+        )
+        workbook = pd.ExcelFile(BytesIO(content), engine="openpyxl")
+        exported = pd.read_excel(workbook, sheet_name="Clients_Inactifs")
+        self.assertEqual(
+            list(exported.columns),
+            [
+                "date_situation",
+                "id_client",
+                "numero_client",
+                "nom_client",
+                "date_creation_compte",
+                "date_premiere_operation_periode",
+                "devise",
+                "statut_inactivite",
+                "lecture_inactivite",
+                "seuil_inactivite_jours",
+                "jours_observes_periode",
+                "jours_historique_charge",
+                "date_derniere_operation",
+                "jours_depuis_derniere_operation",
+                "nombre_operations",
+                "nombre_periodes_actives",
+                "solde_compte_ouvert",
+                "solde_dat",
+                "encours_credit",
+                "segment_produit",
+                "segment_client",
+                "statut_confiance",
+                "nombre_comptes_ouverts_positifs",
+                "nombre_credits_actifs",
+                "nombre_dat_positifs",
+                "nombre_comptes_ouverts",
+                "nombre_credits",
+                "nombre_dat",
+            ],
+        )
+        self.assertNotIn("methode_rapprochement", exported.columns)
+        self.assertNotIn("sources_client", exported.columns)
+        self.assertNotIn("fichier_source", exported.columns)
+        self.assertEqual(str(exported.loc[0, "numero_client"]), "243822222222")
 
     def test_savings_operational_cockpit_export_uses_direction_columns_and_red_tabs(self) -> None:
         savings_row = {

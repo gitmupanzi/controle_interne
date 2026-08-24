@@ -571,7 +571,8 @@ def clean_identifier(series: pd.Series) -> pd.Series:
 
 
 def normalize_phone(series: pd.Series) -> pd.Series:
-    digits = series.astype("string").fillna("").str.replace(r"\D+", "", regex=True)
+    values = series.astype("string").fillna("").str.strip().str.replace(r"\.0$", "", regex=True)
+    digits = values.str.replace(r"\D+", "", regex=True)
     digits = digits.str.replace(r"^2430", "243", regex=True)
     digits = digits.str.replace(r"^0", "243", regex=True)
     needs_prefix = digits.ne("") & ~digits.str.startswith("243", na=False)
@@ -581,6 +582,62 @@ def normalize_phone(series: pd.Series) -> pd.Series:
 
 def clean_text(series: pd.Series) -> pd.Series:
     return series.astype("string").fillna("").str.strip()
+
+
+UNKNOWN_MPESA_CURRENCY_LABEL = "NON RENSEIGNEE"
+
+
+def _mpesa_normalize_currency(series: pd.Series) -> pd.Series:
+    """Normalise une devise sans confondre une valeur vide avec CDF/USD."""
+
+    return (
+        clean_text(series)
+        .str.upper()
+        .replace(
+            {
+                "": UNKNOWN_MPESA_CURRENCY_LABEL,
+                "NAN": UNKNOWN_MPESA_CURRENCY_LABEL,
+                "<NA>": UNKNOWN_MPESA_CURRENCY_LABEL,
+                "NONE": UNKNOWN_MPESA_CURRENCY_LABEL,
+                "NULL": UNKNOWN_MPESA_CURRENCY_LABEL,
+            }
+        )
+    )
+
+
+def _mpesa_drop_unknown_currency_rows_when_known(
+    frame: pd.DataFrame,
+    *,
+    client_column: str = "client_key",
+    currency_column: str = "currency_code",
+) -> pd.DataFrame:
+    """Supprime la fausse devise inconnue quand une vraie devise existe.
+
+    Certains exports Transactions contiennent quelques lignes techniques sans
+    ``currency_code`` pour un client qui a pourtant des lignes CDF/USD. Dans les
+    cockpits, ``NON RENSEIGNEE`` doit rester une alerte uniquement lorsque la
+    devise est vraiment inconnue pour ce client, pas une troisieme devise.
+    """
+
+    if (
+        not isinstance(frame, pd.DataFrame)
+        or frame.empty
+        or client_column not in frame.columns
+        or currency_column not in frame.columns
+    ):
+        return frame
+
+    cleaned = frame.copy()
+    cleaned[currency_column] = _mpesa_normalize_currency(cleaned[currency_column])
+    client_key = clean_text(cleaned[client_column])
+    known_currency = cleaned[currency_column].ne(UNKNOWN_MPESA_CURRENCY_LABEL)
+    has_known_currency = known_currency.groupby(client_key).transform("any").fillna(False)
+    drop_unknown = (
+        client_key.ne("")
+        & cleaned[currency_column].eq(UNKNOWN_MPESA_CURRENCY_LABEL)
+        & has_known_currency
+    )
+    return cleaned.loc[~drop_unknown].copy()
 
 
 def _normalize_column_name(column: object) -> str:
@@ -800,6 +857,10 @@ def prepare_savings_accounts(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     frame = _normalize_common_columns(dataframe if dataframe is not None else pd.DataFrame())
     if "msisdn" not in frame.columns and "msisdn1" in frame.columns:
         frame["msisdn"] = normalize_phone(frame["msisdn1"])
+    elif "msisdn" in frame.columns and "msisdn1" in frame.columns:
+        msisdn = normalize_phone(frame["msisdn"])
+        msisdn1 = normalize_phone(frame["msisdn1"])
+        frame["msisdn"] = msisdn.where(msisdn.astype("string").fillna("").str.strip().ne(""), msisdn1)
 
     # ``savings_id`` appartient à la source maître. Les deux exports résumés
     # historiques n'en disposent pas. Si les deux familles sont téléversées
@@ -817,8 +878,6 @@ def prepare_savings_accounts(dataframe: pd.DataFrame | None) -> pd.DataFrame:
     else:
         master_rows = savings_id_available
     source_complete_available = bool(master_rows.any())
-    if source_complete_available:
-        frame = frame.loc[master_rows].copy()
     frame["source_savings_account_complete"] = source_complete_available
 
     account_type = clean_text(
@@ -870,6 +929,77 @@ def prepare_savings_accounts(dataframe: pd.DataFrame | None) -> pd.DataFrame:
         ]
     if "balance" in frame.columns:
         frame["balance"] = pd.to_numeric(frame["balance"], errors="coerce").fillna(0.0)
+
+    if source_complete_available:
+        # Savings Account reste la source maitre. Toutefois certains exports
+        # peuvent etre plafonnes (ex. 100 000 lignes). Dans ce cas, les vues
+        # Current/Fixed Savings Account ne doivent pas doubler les soldes deja
+        # presents, mais elles peuvent completer les clients-produits absents
+        # du fichier maitre.
+        master = frame.loc[master_rows].copy()
+        complements = frame.loc[~master_rows].copy()
+        if not complements.empty:
+            phone_source = (
+                master["msisdn"]
+                if "msisdn" in master.columns
+                else master["msisdn1"]
+                if "msisdn1" in master.columns
+                else pd.Series("", index=master.index)
+            )
+            complement_phone_source = (
+                complements["msisdn"]
+                if "msisdn" in complements.columns
+                else complements["msisdn1"]
+                if "msisdn1" in complements.columns
+                else pd.Series("", index=complements.index)
+            )
+            master_keys = pd.DataFrame(
+                {
+                    "client": _mpesa_client_phone_key(phone_source).where(
+                        _mpesa_client_phone_key(phone_source)
+                        .astype("string")
+                        .fillna("")
+                        .str.strip()
+                        .ne(""),
+                        clean_identifier(master.get("customer_id", pd.Series("", index=master.index))),
+                    ),
+                    "devise": clean_text(
+                        master.get("currency_code", pd.Series("", index=master.index))
+                    )
+                    .str.upper()
+                    .replace("", "NON RENSEIGNEE"),
+                    "type_compte": clean_text(
+                        master.get("account_type", pd.Series("", index=master.index))
+                    ).str.upper(),
+                }
+            ).astype("string").fillna("")
+            complement_keys = pd.DataFrame(
+                {
+                    "client": _mpesa_client_phone_key(complement_phone_source).where(
+                        _mpesa_client_phone_key(complement_phone_source)
+                        .astype("string")
+                        .fillna("")
+                        .str.strip()
+                        .ne(""),
+                        clean_identifier(
+                            complements.get("customer_id", pd.Series("", index=complements.index))
+                        ),
+                    ),
+                    "devise": clean_text(
+                        complements.get("currency_code", pd.Series("", index=complements.index))
+                    )
+                    .str.upper()
+                    .replace("", "NON RENSEIGNEE"),
+                    "type_compte": clean_text(
+                        complements.get("account_type", pd.Series("", index=complements.index))
+                    ).str.upper(),
+                }
+            ).astype("string").fillna("")
+            existing_keys = set(master_keys.agg("|".join, axis=1))
+            keep_complements = ~complement_keys.agg("|".join, axis=1).isin(existing_keys)
+            frame = concat_frames_stable([master, complements.loc[keep_complements]]).reset_index(drop=True)
+        else:
+            frame = master.reset_index(drop=True)
 
     account_types = frame.get("account_type", pd.Series("", index=frame.index))
     current = frame.loc[account_types.eq("NORMAL SAVINGS")].copy()
@@ -2040,7 +2170,12 @@ def enrich_transactions_with_g2_customer_names(
     )
 
 
-def build_load_report(files: dict[str, pd.DataFrame], missing: dict[str, list[str]]) -> pd.DataFrame:
+def build_load_report(
+    files: dict[str, pd.DataFrame],
+    missing: dict[str, list[str]],
+    *,
+    raw_files: dict[str, pd.DataFrame] | None = None,
+) -> pd.DataFrame:
     display_labels = {
         "Transactions M-PESA_Turbo": "Transactions [Solution Numérique]",
         "Epargne courante_Turbo": "Épargne courante [Solution Numérique]",
@@ -2050,6 +2185,10 @@ def build_load_report(files: dict[str, pd.DataFrame], missing: dict[str, list[st
     }
     rows: list[dict[str, object]] = []
     for label, frame in files.items():
+        raw_frame = raw_files.get(label, pd.DataFrame()) if isinstance(raw_files, dict) else pd.DataFrame()
+        raw_rows = int(len(raw_frame)) if isinstance(raw_frame, pd.DataFrame) else 0
+        prepared_rows = int(len(frame)) if isinstance(frame, pd.DataFrame) else 0
+        removed_rows = max(raw_rows - prepared_rows, 0) if raw_rows else 0
         source_names: list[str] = []
         if isinstance(frame, pd.DataFrame) and not frame.empty:
             source_columns = [
@@ -2068,7 +2207,9 @@ def build_load_report(files: dict[str, pd.DataFrame], missing: dict[str, list[st
                 "fichier": display_labels.get(label, label),
                 "nombre_fichiers": len(source_names),
                 "fichiers_sources": " | ".join(source_names),
-                "lignes": int(len(frame)) if isinstance(frame, pd.DataFrame) else 0,
+                "lignes_chargees_avant_preparation": raw_rows or prepared_rows,
+                "lignes": prepared_rows,
+                "lignes_ecartees_doublons": removed_rows,
                 "colonnes": int(frame.shape[1]) if isinstance(frame, pd.DataFrame) else 0,
                 "colonnes_manquantes": ", ".join(missing.get(label, [])),
                 "statut": "OK" if not missing.get(label) else "Colonnes manquantes",
@@ -7259,20 +7400,39 @@ def _mpesa_statistics_client_key(frame: pd.DataFrame, *, prefer_phone: bool = Tr
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return pd.Series(dtype="string")
     if prefer_phone and "msisdn1" in frame.columns:
-        phone = normalize_phone(frame["msisdn1"])
+        phone = _mpesa_client_phone_key(frame["msisdn1"])
         if phone.replace("", pd.NA).notna().any():
             return phone
     if prefer_phone and "msisdn" in frame.columns:
-        phone = normalize_phone(frame["msisdn"])
+        phone = _mpesa_client_phone_key(frame["msisdn"])
         if phone.replace("", pd.NA).notna().any():
             return phone
     if "customer_id" in frame.columns:
         return clean_identifier(frame["customer_id"])
     if "msisdn1" in frame.columns:
-        return normalize_phone(frame["msisdn1"])
+        return _mpesa_client_phone_key(frame["msisdn1"])
     if "msisdn" in frame.columns:
-        return normalize_phone(frame["msisdn"])
+        return _mpesa_client_phone_key(frame["msisdn"])
     return pd.Series("", index=frame.index, dtype="string")
+
+
+def _mpesa_client_phone_key(values: Any) -> pd.Series:
+    """Normalise les telephones client pour rapprocher Customers et produits.
+
+    Dans certains exports Savings Account, ``msisdn1`` porte le numero client
+    suivi d'un suffixe technique ``0``. Exemple observe : ``2438626689860``
+    pour le compte client ``243862668986``. La normalisation est limitee a la
+    cle de rapprochement afin de ne pas modifier les donnees sources affichees.
+    """
+
+    phone = normalize_phone(values)
+    phone_text = phone.astype("string").fillna("").str.strip()
+    product_suffix_mask = (
+        phone_text.str.len().eq(13)
+        & phone_text.str.startswith("243", na=False)
+        & phone_text.str.endswith("0", na=False)
+    )
+    return phone_text.where(~product_suffix_mask, phone_text.str.slice(0, -1))
 
 
 def _mpesa_statistics_source_rows(prepared: MpesaPreparedData) -> pd.DataFrame:
@@ -7508,7 +7668,7 @@ def _mpesa_statistics_savings_portfolios(
         grouped = (
             frame.groupby(["currency_code", "famille_epargne"], as_index=False, dropna=False)
             .agg(
-                nombre_comptes=("savings_id", "nunique"),
+                nombre_comptes=("savings_account_key", "nunique"),
                 comptes_solde_positif=(
                     "balance",
                     lambda values: int(
@@ -7768,7 +7928,7 @@ def _mpesa_statistics_dat_maturing_summary(
     return (
         dat.groupby("currency_code", as_index=False, dropna=False)
         .agg(
-            nombre_dat_arrivant_echeance=("savings_id", "nunique"),
+            nombre_dat_arrivant_echeance=("savings_account_key", "nunique"),
             encours_dat_arrivant_echeance=("balance", "sum"),
         )
         .rename(columns={"currency_code": "devise"})
@@ -7828,12 +7988,80 @@ def _mpesa_statistics_dat_credit_conversion_summary(
     return pd.DataFrame(rows).sort_values("devise").reset_index(drop=True)
 
 
+def _mpesa_clients_g2_identity_history(
+    g2_transactions: pd.DataFrame | None,
+) -> pd.DataFrame:
+    """Construit le dernier nom client connu dans G2 par telephone."""
+
+    columns = [
+        "source_identite",
+        "customer_id",
+        "numero_telephone",
+        "nom_client",
+        "date_creation_observee",
+    ]
+    if not isinstance(g2_transactions, pd.DataFrame) or g2_transactions.empty:
+        return pd.DataFrame(columns=columns)
+
+    g2 = g2_transactions.copy()
+    if "phone_prefixe" not in g2.columns:
+        if "opposite_party" in g2.columns:
+            g2["phone_prefixe"] = normalize_phone(
+                _extract_phone_from_opposite_party(g2["opposite_party"])
+            )
+        elif "phone" in g2.columns:
+            g2["phone_prefixe"] = normalize_phone(g2["phone"])
+        else:
+            g2["phone_prefixe"] = pd.NA
+    if "Nom_client" not in g2.columns and "opposite_party" in g2.columns:
+        g2["Nom_client"] = _extract_customer_name_from_opposite_party(g2["opposite_party"])
+    elif "Nom_client" not in g2.columns:
+        g2["Nom_client"] = pd.NA
+
+    g2["__phone"] = _mpesa_client_phone_key(
+        g2.get("phone_prefixe", g2.get("phone", pd.Series("", index=g2.index)))
+    )
+    g2["__name"] = clean_text(g2.get("Nom_client", pd.Series("", index=g2.index))).replace("", pd.NA)
+    g2["__completion_time"] = pd.to_datetime(
+        g2.get("completion_time", pd.Series(pd.NaT, index=g2.index)),
+        errors="coerce",
+    )
+    g2 = g2.loc[g2["__phone"].astype("string").fillna("").str.strip().ne("")].copy()
+    if g2.empty:
+        return pd.DataFrame(columns=columns)
+
+    g2 = g2.sort_values("__completion_time", na_position="first").reset_index(drop=True)
+    trace_dates = (
+        g2.groupby("__phone", as_index=False, dropna=False)
+        .agg(date_creation_observee=("__completion_time", "min"))
+    )
+    name_rows = g2.dropna(subset=["__name"]).copy()
+    if name_rows.empty:
+        latest_names = pd.DataFrame(columns=["__phone", "nom_client"])
+    else:
+        latest_names = (
+            name_rows.groupby("__phone", as_index=False, dropna=False)
+            .tail(1)[["__phone", "__name"]]
+            .rename(columns={"__name": "nom_client"})
+        )
+
+    output = trace_dates.merge(latest_names, on="__phone", how="left")
+    output["source_identite"] = "Transactions G2 [M-Pesa]"
+    output["customer_id"] = ""
+    output["numero_telephone"] = output["__phone"]
+    output["nom_client"] = clean_text(output.get("nom_client", pd.Series("", index=output.index)))
+    return output[columns].reset_index(drop=True)
+
+
 def _mpesa_clients_identity_candidates(
     prepared: MpesaPreparedData,
 ) -> pd.DataFrame:
     """Construit les candidats d'identite client depuis les sources Solution Numerique."""
 
     rows: list[pd.DataFrame] = []
+    g2_identity = _mpesa_clients_g2_identity_history(prepared.g2_transactions)
+    if not g2_identity.empty:
+        rows.append(g2_identity)
     source_specs = [
         ("Customers [Solution Numérique]", prepared.customers, "msisdn1", "", "created_at"),
         ("Transactions [Solution Numérique]", prepared.transactions, "msisdn1", "customer_id", "created_at"),
@@ -7852,7 +8080,7 @@ def _mpesa_clients_identity_candidates(
             else pd.Series("", index=frame.index, dtype="string")
         )
         tmp["numero_telephone"] = (
-            normalize_phone(frame[phone_column])
+            _mpesa_client_phone_key(frame[phone_column])
             if phone_column and phone_column in frame.columns
             else pd.Series(pd.NA, index=frame.index, dtype="string")
         )
@@ -7991,7 +8219,7 @@ def _mpesa_client_key_from_frame(frame: pd.DataFrame) -> pd.Series:
     )
     phone_column = "msisdn1" if "msisdn1" in frame.columns else "msisdn" if "msisdn" in frame.columns else ""
     phone = (
-        normalize_phone(frame[phone_column])
+        _mpesa_client_phone_key(frame[phone_column])
         if phone_column
         else pd.Series(pd.NA, index=frame.index, dtype="string")
     )
@@ -8065,6 +8293,21 @@ def _mpesa_clients_product_positions(
     if not positions.empty:
         positions = _add_turbo_amount_band_column(positions, amount_column="solde")
     return positions
+
+
+def _mpesa_clients_product_phone_keys(prepared: MpesaPreparedData) -> set[str]:
+    """Retourne les telephones ayant au moins un produit epargne/DAT/credit observe."""
+
+    keys: set[str] = set()
+    for frame in [prepared.current_savings, prepared.fixed_savings, prepared.loans]:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            continue
+        phone_column = "msisdn1" if "msisdn1" in frame.columns else "msisdn" if "msisdn" in frame.columns else ""
+        if not phone_column:
+            continue
+        phones = _mpesa_client_phone_key(frame[phone_column]).astype("string").fillna("").str.strip()
+        keys.update(str(value) for value in phones.loc[phones.ne("")].unique())
+    return keys
 
 
 def _mpesa_clients_accounts_currency_summary(
@@ -8439,6 +8682,16 @@ def build_mpesa_clients_report(
     else:
         events_until_end = pd.DataFrame()
         period_events = pd.DataFrame()
+    if not events_until_end.empty and "created_at" in events_until_end.columns:
+        history_start_date = pd.to_datetime(events_until_end["created_at"], errors="coerce").dropna()
+        observed_history_days = (
+            int((end_date - pd.Timestamp(history_start_date.min()).normalize()).days + 1)
+            if not history_start_date.empty
+            else int((end_date - start_date).days + 1)
+        )
+    else:
+        observed_history_days = int((end_date - start_date).days + 1)
+    observed_history_days = max(observed_history_days, 0)
 
     identities = _mpesa_clients_identity_frame(prepared)
     product_positions = _mpesa_clients_product_positions(prepared)
@@ -8474,9 +8727,10 @@ def build_mpesa_clients_report(
 
     client_activity = pd.DataFrame()
     if not events_until_end.empty:
-        events_until_end["currency_code"] = clean_text(
+        events_until_end["currency_code"] = _mpesa_normalize_currency(
             events_until_end.get("currency_code", pd.Series("", index=events_until_end.index))
-        ).str.upper().replace("", "NON RENSEIGNEE")
+        )
+        events_until_end = _mpesa_drop_unknown_currency_rows_when_known(events_until_end)
         client_activity = (
             events_until_end.groupby(["client_key", "currency_code"], as_index=False, dropna=False)
             .agg(
@@ -8486,9 +8740,10 @@ def build_mpesa_clients_report(
         )
     period_activity = pd.DataFrame()
     if not period_events.empty:
-        period_events["currency_code"] = clean_text(
+        period_events["currency_code"] = _mpesa_normalize_currency(
             period_events.get("currency_code", pd.Series("", index=period_events.index))
-        ).str.upper().replace("", "NON RENSEIGNEE")
+        )
+        period_events = _mpesa_drop_unknown_currency_rows_when_known(period_events)
         period_activity = (
             period_events.groupby(["client_key", "currency_code"], as_index=False, dropna=False)
             .agg(
@@ -8532,6 +8787,35 @@ def build_mpesa_clients_report(
         client_360 = merge_client_table(client_360, pivot)
 
     if not client_360.empty:
+        if "currency_code" in client_360.columns and "client_key" in client_360.columns:
+            client_360 = _mpesa_drop_unknown_currency_rows_when_known(client_360)
+        if not identities.empty and "client_key" in identities.columns and "client_key" in client_360.columns:
+            identity_lookup = identities.drop_duplicates("client_key").set_index("client_key")
+            for identity_column in [
+                "customer_id",
+                "numero_telephone",
+                "nom_client",
+                "date_creation_client",
+                "sources_client",
+                "methode_rapprochement",
+                "statut_confiance",
+                "present_customers",
+            ]:
+                if identity_column not in identity_lookup.columns:
+                    continue
+                mapped_identity = client_360["client_key"].map(identity_lookup[identity_column])
+                if identity_column not in client_360.columns:
+                    client_360[identity_column] = mapped_identity
+                    continue
+                if pd.api.types.is_datetime64_any_dtype(mapped_identity):
+                    current_dates = pd.to_datetime(client_360[identity_column], errors="coerce")
+                    client_360[identity_column] = current_dates.where(current_dates.notna(), mapped_identity)
+                else:
+                    current_label = clean_text(client_360[identity_column])
+                    client_360[identity_column] = client_360[identity_column].where(
+                        current_label.ne(""),
+                        mapped_identity,
+                    )
         for column in [
             "nombre_operations",
             "nombre_periodes_actives",
@@ -8554,6 +8838,14 @@ def build_mpesa_clients_report(
             client_360.get("date_creation_client", pd.Series(pd.NaT, index=client_360.index)),
             errors="coerce",
         )
+        client_360["date_premiere_operation_periode"] = pd.to_datetime(
+            client_360.get("date_premiere_operation_periode", pd.Series(pd.NaT, index=client_360.index)),
+            errors="coerce",
+        )
+        client_360["date_derniere_operation_periode"] = pd.to_datetime(
+            client_360.get("date_derniere_operation_periode", pd.Series(pd.NaT, index=client_360.index)),
+            errors="coerce",
+        )
         client_360["date_derniere_operation_observee"] = pd.to_datetime(
             client_360.get("date_derniere_operation_observee", pd.Series(pd.NaT, index=client_360.index)),
             errors="coerce",
@@ -8565,17 +8857,96 @@ def build_mpesa_clients_report(
         client_360["nouveau_client"] = client_360["date_creation_client"].ge(start_date) & client_360["date_creation_client"].lt(period_end_exclusive)
         client_360["nouveau_client_actif"] = client_360["nouveau_client"] & client_360["actif_periode"]
         client_360["sans_mouvement_periode"] = client_360["client_key"].astype(str).isin(denominator_set - active_set)
-        client_360["historique_insuffisant"] = (
-            (end_date - start_date).days + 1
-        ) < int(inactivity_threshold_days)
+        client_360["historique_insuffisant"] = observed_history_days < int(inactivity_threshold_days)
+        client_360["jours_observes_periode"] = int((end_date - start_date).days + 1)
+        client_360["jours_historique_charge"] = int(observed_history_days)
+        client_360["seuil_inactivite_jours"] = int(inactivity_threshold_days)
+        no_operation_observed = (
+            client_360["date_derniere_operation_observee"].isna()
+            & ~client_360["nouveau_client"]
+        )
         client_360["inactif_observe"] = (
-            client_360["jours_depuis_derniere_operation"].ge(int(inactivity_threshold_days))
+            (
+                client_360["jours_depuis_derniere_operation"].ge(int(inactivity_threshold_days))
+                | no_operation_observed
+            )
             & ~client_360["historique_insuffisant"]
+            & client_360["client_key"].astype(str).isin(denominator_set)
+        )
+        client_360["statut_inactivite"] = np.select(
+            [
+                client_360["actif_periode"],
+                client_360["inactif_observe"],
+                client_360["sans_mouvement_periode"] & client_360["historique_insuffisant"],
+                client_360["sans_mouvement_periode"],
+            ],
+            [
+                "actif_sur_periode",
+                "inactif_observe",
+                "historique_insuffisant",
+                "sans_mouvement_sur_periode",
+            ],
+            default="non_classe",
+        )
+        client_360["lecture_inactivite"] = np.select(
+            [
+                client_360["actif_periode"],
+                client_360["inactif_observe"] & client_360["date_derniere_operation_observee"].notna(),
+                client_360["inactif_observe"] & client_360["date_derniere_operation_observee"].isna(),
+                client_360["historique_insuffisant"],
+                client_360["sans_mouvement_periode"],
+            ],
+            [
+                "Client avec au moins une operation observee sur la periode.",
+                "Client numerique a recontacter : derniere operation plus ancienne que le seuil d'inactivite.",
+                "Client numerique a rechercher : aucune operation observee dans l'historique charge; a confirmer selon l'exhaustivite des fichiers.",
+                "Historique trop court pour conclure a une inactivite.",
+                "Aucune operation sur la periode analysee, sans conclusion automatique d'inactivite.",
+            ],
+            default="Lecture non disponible.",
         )
         client_360["presence_epargne"] = client_360["nombre_comptes_compte_ouvert"].gt(0)
         client_360["presence_dat"] = client_360["comptes_solde_positif_dat"].gt(0)
         client_360["presence_credit"] = client_360["comptes_solde_positif_credit"].gt(0)
         client_360["presence_transaction"] = client_360["nombre_operations_total"].gt(0)
+        product_phone_keys = _mpesa_clients_product_phone_keys(prepared)
+        client_phone_for_product_check = clean_text(
+            client_360.get("numero_telephone", pd.Series("", index=client_360.index))
+        )
+        client_phone_for_product_check = client_phone_for_product_check.where(
+            client_phone_for_product_check.astype("string").fillna("").str.strip().ne(""),
+            clean_text(client_360.get("client_key", pd.Series("", index=client_360.index))),
+        )
+        has_product_by_phone = _mpesa_client_phone_key(client_phone_for_product_check).astype(str).isin(product_phone_keys)
+        client_360["sans_produit_observe"] = (
+            client_360["nombre_comptes_compte_ouvert"].eq(0)
+            & client_360["nombre_comptes_dat"].eq(0)
+            & client_360["nombre_comptes_credit"].eq(0)
+            & ~has_product_by_phone
+            & client_360.get("present_customers", pd.Series(False, index=client_360.index)).astype(bool)
+        )
+        client_360["statut_usage"] = np.select(
+            [
+                client_360["sans_produit_observe"] & client_360["presence_transaction"],
+                client_360["sans_produit_observe"],
+            ],
+            [
+                "sans_produit_avec_mouvement",
+                "sans_produit_sans_mouvement",
+            ],
+            default="produit_observe",
+        )
+        client_360["lecture_usage"] = np.select(
+            [
+                client_360["sans_produit_observe"] & client_360["presence_transaction"],
+                client_360["sans_produit_observe"],
+            ],
+            [
+                "Compte client present dans Customers, sans produit epargne/DAT/credit observe, mais avec mouvement transactionnel a verifier.",
+                "Compte client present dans Customers, sans produit epargne/DAT/credit observe dans les fichiers charges.",
+            ],
+            default="Au moins un produit epargne, DAT ou credit est observe.",
+        )
         product_flag_count = client_360[["presence_epargne", "presence_dat", "presence_credit"]].sum(axis=1)
         client_360["multi_produits"] = product_flag_count.ge(2)
         client_360["date_situation"] = end_date
@@ -8590,10 +8961,11 @@ def build_mpesa_clients_report(
         )
         client_360["id_client"] = raw_customer_id.where(raw_customer_id.ne(""), raw_client_key)
         client_360["numero_client"] = raw_phone.where(raw_phone.ne(""), raw_client_key)
-        client_360["devise"] = clean_text(
+        client_360["devise"] = _mpesa_normalize_currency(
             client_360.get("currency_code", pd.Series("", index=client_360.index))
-        ).str.upper().replace("", "NON RENSEIGNEE")
+        )
         client_360["encours_credit"] = client_360["solde_credit"]
+        client_360["date_creation_compte"] = client_360["date_creation_client"]
         client_360["date_derniere_operation"] = client_360["date_derniere_operation_observee"]
         client_360["nombre_total_operations"] = client_360["nombre_operations_total"]
         client_360["nombre_comptes_ouverts"] = client_360["nombre_comptes_compte_ouvert"]
@@ -8724,6 +9096,18 @@ def build_mpesa_clients_report(
                 "valeur": len(denominator_set - active_set),
                 "denominateur": "population_reference",
                 "definition": "Clients de la population de reference sans evenement valide sur la periode.",
+            },
+            {
+                "indicateur": "clients_inactifs_observes",
+                "valeur": int(client_360["inactif_observe"].sum()) if not client_360.empty and "inactif_observe" in client_360.columns else 0,
+                "denominateur": "population_reference",
+                "definition": "Clients numeriques a rechercher ou recontacter : absence d'activite observee depuis le seuil retenu, sous reserve de l'historique charge.",
+            },
+            {
+                "indicateur": "clients_sans_produit_observe",
+                "valeur": int(client_360["sans_produit_observe"].sum()) if not client_360.empty and "sans_produit_observe" in client_360.columns else 0,
+                "denominateur": "clients_referentiel",
+                "definition": "Clients presents dans Customers sans compte epargne ouvert, sans DAT et sans credit observes dans les fichiers charges.",
             },
         ]
     )
@@ -8970,18 +9354,37 @@ def build_mpesa_clients_report(
             return pd.DataFrame()
         return client_360.loc[client_360[mask_column].astype(bool)].copy()
 
+    def prioritize_client_identity_columns(frame: pd.DataFrame) -> pd.DataFrame:
+        if not isinstance(frame, pd.DataFrame) or frame.empty:
+            return frame
+        priority = [
+            "date_situation",
+            "id_client",
+            "numero_client",
+            "nom_client",
+            "date_creation_compte",
+            "date_creation_client",
+            "date_premiere_operation_periode",
+            "devise",
+            "date_derniere_operation",
+        ]
+        ordered = [column for column in priority if column in frame.columns]
+        remaining = [column for column in frame.columns if column not in ordered]
+        return frame.loc[:, ordered + remaining].copy()
+
     action_lists = {
-        "clients_actifs": select_list("actif_periode"),
-        "nouveaux_clients": select_list("nouveau_client"),
-        "nouveaux_clients_actifs": select_list("nouveau_client_actif"),
-        "nouveaux_clients_non_actives": (
+        "clients_actifs": prioritize_client_identity_columns(select_list("actif_periode")),
+        "nouveaux_clients": prioritize_client_identity_columns(select_list("nouveau_client")),
+        "nouveaux_clients_actifs": prioritize_client_identity_columns(select_list("nouveau_client_actif")),
+        "nouveaux_clients_non_actives": prioritize_client_identity_columns(
             client_360.loc[client_360["nouveau_client"] & ~client_360["actif_periode"]].copy()
             if not client_360.empty and {"nouveau_client", "actif_periode"}.issubset(client_360.columns)
             else pd.DataFrame()
         ),
-        "clients_sans_mouvement": select_list("sans_mouvement_periode"),
-        "clients_inactifs_observes": select_list("inactif_observe"),
-        "clients_multi_produits": select_list("multi_produits"),
+        "clients_sans_mouvement": prioritize_client_identity_columns(select_list("sans_mouvement_periode")),
+        "clients_inactifs_observes": prioritize_client_identity_columns(select_list("inactif_observe")),
+        "clients_sans_produit_observe": prioritize_client_identity_columns(select_list("sans_produit_observe")),
+        "clients_multi_produits": prioritize_client_identity_columns(select_list("multi_produits")),
         "clients_dat_sans_credit_actif": dat_without_credit,
     }
 
@@ -11786,11 +12189,13 @@ def create_mpesa_statistics_word(
         return _pdf_number(value, decimals=2 if value_type == "montant" else 0)
 
     def _indicator_explanation(label: Any, fallback: str = "") -> str:
-        normalized = normalize_label(label)
+        normalized = unicodedata.normalize("NFKD", str(label or "").strip().lower())
+        normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+        normalized = re.sub(r"[^a-z0-9]+", " ", normalized).strip()
         definitions = {
             "comptes clients recenses dans customers": "Nombre de comptes clients distincts presents dans le fichier Customers charge; le numero de telephone est la cle metier prioritaire.",
             "comptes clients du fichier customers charge": "Nombre de comptes clients distincts presents dans le fichier Customers charge; le numero de telephone est la cle metier prioritaire.",
-            "comptes clients connus a la date darrete": "Comptes clients crees avant ou a la date de fin du rapport.",
+            "comptes clients connus a la date d arrete": "Comptes clients crees avant ou a la date de fin du rapport.",
             "comptes clients connus a la date de fin": "Comptes clients crees avant ou a la date de fin du rapport.",
             "comptes clients actifs sur la periode": "Comptes clients ayant au moins une operation metier consolidee pendant la periode.",
             "comptes clients actifs": "Comptes clients ayant au moins une operation metier consolidee pendant la periode.",
@@ -11798,26 +12203,27 @@ def create_mpesa_statistics_word(
             "nouveaux numeros clients": "Nouveaux numeros de telephone apparus dans Customers dans la periode comparee.",
             "comptes clients avec produit dat positif et produit credit actif": "Comptes clients portant un produit DAT strictement superieur a zero et un produit credit actif.",
             "comptes clients avec produit dat positif": "Comptes clients portant au moins un produit DAT dont le solde est strictement superieur a zero.",
-            "produits dat comptes bloques a la date darrete": "Nombre de produits DAT ou comptes bloques presents dans la position a date de fin.",
-            "encours des produits dat comptes bloques a la date darrete": "Montant bloque dans les produits DAT a la date de fin, par devise.",
+            "produits dat comptes bloques a la date d arrete": "Nombre total de produits DAT ou comptes bloques presents dans la position a date de fin, y compris les soldes nuls.",
+            "produits dat comptes bloques avec solde positif a la date d arrete": "Nombre de produits DAT ou comptes bloques dont le solde est strictement superieur a zero a la date de fin.",
+            "encours des produits dat comptes bloques a la date d arrete": "Montant bloque dans les produits DAT a la date de fin, par devise.",
             "montant des nouveaux produits dat sur la periode": "Montant des produits DAT crees ou actives pendant la periode analysee.",
-            "produits depargne ouverts a la date darrete": "Nombre de produits d'epargne ouverts presents dans la position a date de fin.",
-            "encours des produits depargne ouverts a la date darrete": "Solde des produits d'epargne ouverts a la date de fin, par devise.",
-            "nouveaux produits depargne ouverte sur la periode": "Produits d'epargne ouverte crees ou actives pendant la periode analysee.",
-            "nouveaux produits depargne ouverte": "Produits d'epargne ouverte crees ou actives pendant la periode comparee.",
-            "encours des produits depargne ouverte crees actives": "Solde instantane des produits d'epargne ouverte crees ou actives dans la periode comparee.",
+            "produits d epargne ouverts a la date d arrete": "Nombre de produits d'epargne ouverts presents dans la position a date de fin.",
+            "encours des produits d epargne ouverts a la date d arrete": "Solde des produits d'epargne ouverts a la date de fin, par devise.",
+            "nouveaux produits d epargne ouverte sur la periode": "Produits d'epargne ouverte crees ou actives pendant la periode analysee.",
+            "nouveaux produits d epargne ouverte": "Produits d'epargne ouverte crees ou actives pendant la periode comparee.",
+            "encours des produits d epargne ouverte crees actives": "Solde instantane des produits d'epargne ouverte crees ou actives dans la periode comparee.",
             "nouveaux produits dat comptes bloques": "Produits DAT ou comptes bloques crees ou actives pendant la periode comparee.",
             "encours des produits dat comptes bloques crees actives": "Montant bloque des produits DAT crees ou actives dans la periode comparee.",
             "comptes clients avec produits depargne dat sans produit credit actif": "Comptes clients ayant un produit d'epargne ou DAT positif sans produit credit actif dans la meme devise.",
             "encours des produits epargne dat sans produit credit actif": "Montant d'epargne ou de DAT positif detenu par les comptes clients sans credit actif.",
             "dat arrivant a echeance": "DAT positifs dont l'echeance arrive dans l'horizon de preparation.",
             "encours dat arrivant a echeance": "Montant bloque des DAT positifs arrivant bientot a echeance.",
-            "produits credit a la date darrete": "Nombre de produits credit presents dans la position credit a date de fin.",
-            "encours des produits credit a la date darrete": "Montant restant du portefeuille credit a la date de fin.",
+            "produits credit a la date d arrete": "Nombre de produits credit presents dans la position credit a date de fin.",
+            "encours des produits credit a la date d arrete": "Montant restant du portefeuille credit a la date de fin.",
             "montant des nouveaux produits credit sur la periode": "Montant des credits crees pendant la periode analysee.",
             "taux de conversion dat en credit": "Part des comptes clients avec produit DAT positif qui ont aussi un produit credit actif.",
-            "produits credit en retard a la date darrete": "Nombre de produits credit ayant au moins un jour de retard a la date de fin.",
-            "encours credit en retard par a la date darrete": "Encours des produits credit en retard d'au moins un jour a la date de fin.",
+            "produits credit en retard a la date d arrete": "Nombre de produits credit ayant au moins un jour de retard a la date de fin.",
+            "encours credit en retard par a la date d arrete": "Encours des produits credit en retard d'au moins un jour a la date de fin.",
             "taux de portefeuille a risque par 30": "Part de l'encours credit en retard de 30 jours ou plus dans l'encours total de la devise.",
         }
         return definitions.get(normalized, str(fallback or "Definition metier de l'indicateur."))
@@ -12044,8 +12450,52 @@ def create_mpesa_statistics_word(
                 },
             ]
         )
-    savings_display = pd.DataFrame(savings_rows)
+    dat_positive_rows: list[dict[str, Any]] = []
+    for currency in currencies:
+        stock_dat = _row_lookup(portfolio_frame, currency=currency, family="DAT")
+        dat_positive_rows.append(
+            {
+                "indicateur": "Produits DAT / comptes bloques avec solde positif a la date d'arrete",
+                "devise": currency,
+                "valeur": _number_value(stock_dat, "comptes_solde_positif"),
+                "type_valeur": "Nombre",
+                "commentaire": "Nombre de produits DAT dont le solde est strictement superieur a zero a la date d'arrete.",
+            }
+        )
+    savings_display = pd.DataFrame(savings_rows + dat_positive_rows)
     if not savings_display.empty:
+        def _savings_report_order(label: Any) -> int:
+            text = str(label or "").lower()
+            if "dat" in text and "solde positif" in text:
+                return 1
+            if "produits dat" in text and "encours" not in text and "nouveaux" not in text:
+                return 0
+            if "encours des produits dat" in text:
+                return 2
+            if "nouveaux produits dat" in text:
+                return 3
+            if "produits d" in text and "pargne ouverts" in text:
+                return 4
+            if "encours des produits d" in text and "pargne ouverts" in text:
+                return 5
+            if "nouveaux produits d" in text and "pargne ouverte" in text:
+                return 6
+            if "sans produit cr" in text and "encours" not in text:
+                return 7
+            if "sans produit cr" in text and "encours" in text:
+                return 8
+            if "dat arrivant" in text and "encours" not in text:
+                return 9
+            if "encours dat arrivant" in text:
+                return 10
+            return 50
+
+        savings_display["_ordre_rapport"] = savings_display["indicateur"].map(_savings_report_order)
+        savings_display = (
+            savings_display.sort_values(["devise", "_ordre_rapport"], kind="stable")
+            .drop(columns=["_ordre_rapport"])
+            .reset_index(drop=True)
+        )
         savings_display["explication"] = savings_display.get(
             "commentaire",
             pd.Series("", index=savings_display.index),
@@ -16978,6 +17428,24 @@ def _mpesa_savings_prepare_positions(
     frame["currency_code"] = clean_text(frame["currency_code"]).str.upper().replace("", "NON RENSEIGNEE")
     for column in ["product_id", "product_name", "product_description", "account_type", "status", "is_interest_calculated"]:
         frame[column] = clean_text(frame[column])
+    account_key = clean_identifier(frame["savings_id"])
+    fallback_parts = pd.DataFrame(
+        {
+            "client": clean_identifier(frame["customer_id"]).where(
+                clean_identifier(frame["customer_id"]).ne(""),
+                _mpesa_client_phone_key(frame["msisdn"].where(frame["msisdn"].notna(), frame["msisdn1"])),
+            ),
+            "devise": frame["currency_code"],
+            "famille": frame["famille_epargne"],
+            "produit": clean_text(frame["product_name"]).where(
+                clean_text(frame["product_name"]).ne(""),
+                clean_text(frame["product_id"]),
+            ),
+            "ligne": pd.Series(range(len(frame)), index=frame.index).astype("string"),
+        }
+    ).astype("string").fillna("")
+    fallback_key = fallback_parts.agg("|".join, axis=1)
+    frame["savings_account_key"] = account_key.where(account_key.ne(""), fallback_key)
     for column in ["balance", "interest_earned", "voda_interest", "fees_due", "locked_balance"]:
         frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
     for column in [
@@ -25235,7 +25703,8 @@ MPESA_DIRECTION_PRIORITY_SHEETS = {
     "Clients_Acquisition",
     "Nouveaux_Clients_Actifs",
     "Clients_Actifs",
-    "Clients_Sans_Mouvement",
+    "Clients_Inactifs",
+    "Clients_Sans_Produit",
     "Clients_Multi_Produits",
     "Clients_Tranches",
     "Clients_Qualite",
@@ -25323,6 +25792,7 @@ MPESA_CLIENT_COCKPIT_SHEETS = {
     "Nouveaux_Non_Actives",
     "Clients_Sans_Mouvement",
     "Clients_Inactifs",
+    "Clients_Sans_Produit",
     "Clients_Multi_Produits",
     "DAT_Sans_Credit",
 }
@@ -25698,6 +26168,65 @@ MPESA_CLIENT_SANS_MOUVEMENT_COLUMNS = [
     "nombre_dat",
 ]
 
+MPESA_CLIENT_INACTIFS_COLUMNS = [
+    "date_situation",
+    "id_client",
+    "numero_client",
+    "nom_client",
+    "date_creation_compte",
+    "date_premiere_operation_periode",
+    "devise",
+    "statut_inactivite",
+    "lecture_inactivite",
+    "seuil_inactivite_jours",
+    "jours_observes_periode",
+    "jours_historique_charge",
+    "date_derniere_operation",
+    "jours_depuis_derniere_operation",
+    "nombre_operations",
+    "nombre_periodes_actives",
+    "solde_compte_ouvert",
+    "solde_dat",
+    "encours_credit",
+    "segment_produit",
+    "segment_client",
+    "statut_confiance",
+    "nombre_comptes_ouverts_positifs",
+    "nombre_credits_actifs",
+    "nombre_dat_positifs",
+    "nombre_comptes_ouverts",
+    "nombre_credits",
+    "nombre_dat",
+]
+
+MPESA_CLIENT_SANS_PRODUIT_COLUMNS = [
+    "date_situation",
+    "id_client",
+    "numero_client",
+    "nom_client",
+    "date_creation_compte",
+    "date_premiere_operation_periode",
+    "devise",
+    "statut_usage",
+    "lecture_usage",
+    "date_derniere_operation",
+    "jours_depuis_derniere_operation",
+    "nombre_operations",
+    "nombre_periodes_actives",
+    "nombre_total_operations",
+    "solde_compte_ouvert",
+    "solde_dat",
+    "encours_credit",
+    "nombre_comptes_ouverts",
+    "nombre_dat",
+    "nombre_credits",
+    "nombre_comptes_ouverts_positifs",
+    "nombre_dat_positifs",
+    "nombre_credits_actifs",
+    "presence_transaction",
+    "statut_confiance",
+]
+
 MPESA_CLIENT_DAT_SANS_CREDIT_COLUMNS = [
     "date_situation",
     "id_client",
@@ -25728,6 +26257,8 @@ MPESA_CLIENT_OPERATIONAL_SHEET_COLUMN_ORDERS: dict[str, list[str]] = {
     "Nouveaux_Clients_Actifs": MPESA_CLIENT_DECISIONAL_COLUMNS,
     "Clients_Multi_Produits": MPESA_CLIENT_DECISIONAL_COLUMNS,
     "Clients_Sans_Mouvement": MPESA_CLIENT_SANS_MOUVEMENT_COLUMNS,
+    "Clients_Inactifs": MPESA_CLIENT_INACTIFS_COLUMNS,
+    "Clients_Sans_Produit": MPESA_CLIENT_SANS_PRODUIT_COLUMNS,
     "Clients_Tranches": [
         "date_situation",
         "famille_encours",
@@ -25808,6 +26339,38 @@ MPESA_CLIENT_OPERATIONAL_SHEET_DROP_COLUMNS: dict[str, set[str]] = {
         "actif_periode",
         "nouveau_client",
         "nouveau_client_actif",
+        "historique_insuffisant",
+        "inactif_observe",
+        "multi_produits",
+    },
+    "Clients_Inactifs": {
+        "numero_telephone",
+        "methode_rapprochement",
+        "sources_client",
+        "presence_epargne",
+        "presence_dat",
+        "presence_credit",
+        "presence_transaction",
+        "sans_mouvement_periode",
+        "actif_periode",
+        "nouveau_client",
+        "nouveau_client_actif",
+        "historique_insuffisant",
+        "inactif_observe",
+        "multi_produits",
+    },
+    "Clients_Sans_Produit": {
+        "numero_telephone",
+        "methode_rapprochement",
+        "sources_client",
+        "presence_epargne",
+        "presence_dat",
+        "presence_credit",
+        "sans_produit_observe",
+        "actif_periode",
+        "nouveau_client",
+        "nouveau_client_actif",
+        "sans_mouvement_periode",
         "historique_insuffisant",
         "inactif_observe",
         "multi_produits",
@@ -26920,7 +27483,7 @@ def _ensure_operational_client_number_column(frame: pd.DataFrame) -> pd.DataFram
         target_column = "numero_client"
 
     priority_columns: list[Any] = []
-    for candidate in ["customer_id", "id_client", target_column, name_column]:
+    for candidate in ["date_situation", "id_client", target_column, name_column]:
         column = normalized_columns.get(candidate) if candidate != target_column else target_column
         if column in result.columns and column not in priority_columns:
             priority_columns.append(column)
@@ -26996,6 +27559,13 @@ def _apply_operational_sheet_contract(frame: pd.DataFrame, sheet_name: str) -> p
 
     ordered_columns = MPESA_OPERATIONAL_SHEET_COLUMN_ORDERS.get(sheet_name)
     if ordered_columns:
+        if (
+            sheet_name in MPESA_OPERATIONAL_PRIORITY_SHEETS
+            or sheet_name in MPESA_CUSTOMER_EXTRACT_OPERATIONAL_SHEETS
+        ):
+            for expected_column in ordered_columns:
+                if expected_column not in result.columns:
+                    result[expected_column] = pd.NA
         columns_by_key = {_normalize_export_column_key(column): column for column in result.columns}
         selected_columns: list[Any] = []
         for expected_column in ordered_columns:
@@ -27331,6 +27901,7 @@ def create_excel_export(
         ("clients_nouveaux_clients_non_actives", "Nouveaux_Non_Actives"),
         ("clients_clients_sans_mouvement", "Clients_Sans_Mouvement"),
         ("clients_clients_inactifs_observes", "Clients_Inactifs"),
+        ("clients_clients_sans_produit_observe", "Clients_Sans_Produit"),
         ("clients_clients_multi_produits", "Clients_Multi_Produits"),
         ("clients_clients_dat_sans_credit_actif", "DAT_Sans_Credit"),
         ("risque_synthese", "Synthese_risque"),
