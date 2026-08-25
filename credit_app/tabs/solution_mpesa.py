@@ -48,7 +48,9 @@ from credit_app.services.mpesa_analysis import (
     build_large_dat_summary,
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
+    build_g2_provider_report,
     build_g2_retention_report,
+    build_g2_top_movements_by_currency,
     build_g2_transaction_time_analysis,
     build_turbo_only_g2_transactions,
     build_load_report,
@@ -88,6 +90,7 @@ from credit_app.services.mpesa_analysis import (
     enrich_transactions_with_g2_customer_names,
     enrich_turbo_proxy_with_g2_history,
     enrich_turbo_with_g2_customer_names,
+    exclude_g2_provider_transactions,
     filter_g2_transactions_by_completion_time,
     filter_g2_transactions_by_direction,
     numeric_column,
@@ -696,6 +699,19 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
         return text or "NON RENSEIGNEE"
 
     def _numeric_sum(frame: pd.DataFrame, column: str) -> float:
+        fallback_columns = {
+            "comptes_solde_positif": "nombre_comptes",
+            "nombre_comptes_actifs_positifs": "nombre_comptes",
+            "solde_positif_total": "solde_total",
+            "nombre_credits_encours_positif": "nombre_credits",
+            "encours_credits_positifs_total": "encours_total",
+        }
+        if (
+            isinstance(frame, pd.DataFrame)
+            and column not in frame.columns
+            and fallback_columns.get(column) in frame.columns
+        ):
+            column = str(fallback_columns[column])
         if frame.empty or column not in frame.columns:
             return 0.0
         return float(pd.to_numeric(frame[column], errors="coerce").fillna(0).sum())
@@ -721,12 +737,18 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
             "nouveaux numeros clients": "Nouveaux numeros de telephone apparus dans Customers dans la periode comparee.",
             "comptes clients avec produit dat positif et produit credit actif": "Comptes clients portant un produit DAT strictement superieur a zero et un produit credit actif.",
             "comptes clients avec produit dat positif": "Comptes clients portant au moins un produit DAT dont le solde est strictement superieur a zero.",
+            "comptes clients avec produit d epargne ouverte positif": "Comptes clients portant au moins un produit d'epargne ouverte dont le solde est strictement superieur a zero.",
             "produits dat comptes bloques a la date d arrete": "Nombre de produits DAT ou comptes bloques presents dans la position a date de fin.",
+            "produits dat actifs avec solde positif a la date d arrete": "Nombre de produits DAT ou comptes bloques actifs dont le solde est strictement superieur a zero.",
             "nombre de produits dat comptes bloques avec solde positif a la date d arrete": "Nombre de produits DAT ou comptes bloques dont le solde est strictement superieur a zero a la date de fin.",
             "encours des produits dat comptes bloques a la date d arrete": "Montant bloque dans les produits DAT a la date de fin, par devise.",
+            "encours des produits dat actifs a la date d arrete": "Montant bloque dans les produits DAT actifs a solde strictement positif, par devise.",
+            "nombre de produits dat crees sur la periode": "Nombre de produits DAT crees ou actives pendant la periode analysee.",
             "montant des nouveaux produits dat sur la periode": "Montant des produits DAT crees ou actives pendant la periode analysee.",
             "produits d epargne ouverts a la date d arrete": "Nombre de produits d'epargne ouverts presents dans la position a date de fin.",
+            "produits d epargne ouverte actifs avec solde positif a la date d arrete": "Nombre de produits d'epargne ouverte actifs dont le solde est strictement superieur a zero.",
             "encours des produits d epargne ouverts a la date d arrete": "Solde des produits d'epargne ouverts a la date de fin, par devise.",
+            "encours des produits d epargne ouverte actifs a la date d arrete": "Solde positif des produits d'epargne ouverte actifs a la date de fin, par devise.",
             "nouveaux produits d epargne ouverte sur la periode": "Produits d'epargne ouverte crees ou actives pendant la periode analysee.",
             "nouveaux produits d epargne ouverte": "Produits d'epargne ouverte crees ou actives pendant la periode comparee.",
             "encours des produits d epargne ouverte crees actives": "Solde instantane des produits d'epargne ouverte crees ou actives dans la periode comparee.",
@@ -737,7 +759,9 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
             "dat arrivant a echeance": "DAT positifs dont l'echeance arrive dans l'horizon de preparation.",
             "encours dat arrivant a echeance": "Montant bloque des DAT positifs arrivant bientot a echeance.",
             "produits credit a la date d arrete": "Nombre de produits credit presents dans la position credit a date de fin.",
+            "produits credit en cours avec encours positif a la date d arrete": "Nombre de produits credit dont l'encours est strictement superieur a zero a la date de fin.",
             "encours des produits credit a la date d arrete": "Montant restant du portefeuille credit a la date de fin.",
+            "encours des produits credit en cours a la date d arrete": "Volume des credits qui courent encore, c'est-a-dire les credits avec encours strictement positif.",
             "montant des nouveaux produits credit sur la periode": "Montant des credits crees pendant la periode analysee.",
             "taux de conversion dat en credit": "Part des comptes clients avec produit DAT positif qui ont aussi un produit credit actif.",
             "produits credit en retard a la date d arrete": "Nombre de produits credit ayant au moins un jour de retard a la date de fin.",
@@ -876,51 +900,51 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
         savings_rows.extend(
             [
                 {
-                    "indicateur_operationnel": "Nombre de produits DAT / comptes bloques a la date d'arrete",
-                    "devise": currency,
-                    "valeur": _numeric_sum(stock_dat, "nombre_comptes"),
-                    "nature": "Nombre",
-                    "commentaire": "Position globale des produits DAT et comptes bloques a la date d'arrete.",
-                },
-                {
-                    "indicateur_operationnel": "Nombre de produits DAT / comptes bloques avec solde positif a la date d'arrete",
+                    "indicateur_operationnel": "Produits DAT actifs avec solde positif a la date d'arrete",
                     "devise": currency,
                     "valeur": _numeric_sum(stock_dat, "comptes_solde_positif"),
                     "nature": "Nombre",
                     "commentaire": "Produits DAT dont le solde est strictement superieur a zero a la date d'arrete.",
                 },
                 {
-                    "indicateur_operationnel": "Encours des produits DAT / comptes bloques a la date d'arrete",
+                    "indicateur_operationnel": "Encours des produits DAT actifs a la date d'arrete",
                     "devise": currency,
-                    "valeur": _numeric_sum(stock_dat, "solde_total"),
+                    "valeur": _numeric_sum(stock_dat, "solde_positif_total"),
                     "nature": "Montant",
                     "commentaire": "Montant bloque disponible pour le suivi du portefeuille DAT.",
                 },
                 {
+                    "indicateur_operationnel": "Nombre de produits DAT crees sur la periode",
+                    "devise": currency,
+                    "valeur": _numeric_sum(period_dat, "comptes_solde_positif"),
+                    "nature": "Nombre",
+                    "commentaire": "Produits DAT crees ou actives entre la date de debut et la date de fin.",
+                },
+                {
                     "indicateur_operationnel": "Montant des nouveaux produits DAT sur la periode",
                     "devise": currency,
-                    "valeur": _numeric_sum(period_dat, "solde_total"),
+                    "valeur": _numeric_sum(period_dat, "solde_positif_total"),
                     "nature": "Montant",
                     "commentaire": "Nouveaux comptes bloques observes entre la date de debut et la date de fin.",
                 },
                 {
-                    "indicateur_operationnel": "Nombre de produits d'epargne ouverts a la date d'arrete",
+                    "indicateur_operationnel": "Produits d'epargne ouverte actifs avec solde positif a la date d'arrete",
                     "devise": currency,
-                    "valeur": _numeric_sum(stock_open, "nombre_comptes"),
+                    "valeur": _numeric_sum(stock_open, "comptes_solde_positif"),
                     "nature": "Nombre",
-                    "commentaire": "Position globale des produits d'epargne ouverte a la date d'arrete.",
+                    "commentaire": "Produits d'epargne ouverte dont le solde est strictement superieur a zero.",
                 },
                 {
-                    "indicateur_operationnel": "Encours des produits d'epargne ouverts a la date d'arrete",
+                    "indicateur_operationnel": "Encours des produits d'epargne ouverte actifs a la date d'arrete",
                     "devise": currency,
-                    "valeur": _numeric_sum(stock_open, "solde_total"),
+                    "valeur": _numeric_sum(stock_open, "solde_positif_total"),
                     "nature": "Montant",
-                    "commentaire": "Solde disponible sur les comptes ouverts.",
+                    "commentaire": "Solde strictement positif disponible sur les comptes ouverts.",
                 },
                 {
                     "indicateur_operationnel": "Nouveaux produits d'epargne ouverte sur la periode",
                     "devise": currency,
-                    "valeur": _numeric_sum(period_open, "nombre_comptes"),
+                    "valeur": _numeric_sum(period_open, "comptes_solde_positif"),
                     "nature": "Nombre",
                     "commentaire": "Produits d'epargne ouverte crees ou actives sur la periode.",
                 },
@@ -961,18 +985,18 @@ def _build_statistics_operational_excel_report(report_view: dict[str, Any]) -> d
         credit_rows.extend(
             [
                 {
-                    "indicateur_operationnel": "Nombre de produits credit a la date d'arrete",
+                    "indicateur_operationnel": "Produits credit en cours avec encours positif a la date d'arrete",
                     "devise": currency,
-                    "valeur": _numeric_sum(stock_credit, "nombre_credits"),
+                    "valeur": _numeric_sum(stock_credit, "nombre_credits_encours_positif"),
                     "nature": "Nombre",
-                    "commentaire": "Position globale du portefeuille credit a la date d'arrete.",
+                    "commentaire": "Credits qui courent encore : encours strictement superieur a zero.",
                 },
                 {
-                    "indicateur_operationnel": "Encours des produits credit a la date d'arrete",
+                    "indicateur_operationnel": "Encours des produits credit en cours a la date d'arrete",
                     "devise": currency,
-                    "valeur": _numeric_sum(stock_credit, "encours_total"),
+                    "valeur": _numeric_sum(stock_credit, "encours_credits_positifs_total"),
                     "nature": "Montant",
-                    "commentaire": "Encours total du portefeuille credit a la date d'arrete.",
+                    "commentaire": "Volume des credits qui courent encore a la date d'arrete.",
                 },
                 {
                     "indicateur_operationnel": "Montant des nouveaux produits credit sur la periode",
@@ -1293,7 +1317,8 @@ def _enrich_turbo_proxy_with_g2_history_cached(
 ) -> pd.DataFrame:
     """Réutilise l'enrichissement G2 tant que le proxy et le rapport G2 ne changent pas."""
     turbo_proxy = _build_turbo_only_g2_transactions_cached(prepared)
-    return enrich_turbo_proxy_with_g2_history(turbo_proxy, prepared.g2_transactions)
+    g2_control = exclude_g2_provider_transactions(prepared.g2_transactions)
+    return enrich_turbo_proxy_with_g2_history(turbo_proxy, g2_control)
 
 
 @st.cache_data(
@@ -1377,10 +1402,6 @@ def _build_mpesa_statistics_report_cached(
     comparison_period: str,
     dat_maturity_horizon_days: int,
 ) -> dict[str, Any]:
-    operation_journal = _build_turbo_operation_events_cached(prepared)
-    historical_operation_journal = _build_turbo_operation_events_cached(
-        historical_prepared
-    )
     scoped_prepared = _prepared_data_as_of(prepared, date_end)
     scoped_historical_prepared = _prepared_data_as_of(
         historical_prepared,
@@ -1394,12 +1415,9 @@ def _build_mpesa_statistics_report_cached(
         frequency=frequency,
         comparison_period=comparison_period,
         dat_maturity_horizon_days=dat_maturity_horizon_days,
-        turbo_events=operation_journal["events"],
-        turbo_transaction_lines=operation_journal["lines"],
         historical_prepared=scoped_historical_prepared,
-        historical_turbo_events=historical_operation_journal["events"],
-        historical_turbo_transaction_lines=historical_operation_journal["lines"],
         total_loaded_clients_override=total_loaded_clients,
+        include_transaction_metrics=False,
     )
 
 
@@ -4731,6 +4749,8 @@ def _render_g2_report_export(
     daily_detail: pd.DataFrame,
     daily_anomalies: pd.DataFrame,
     g2_dat: pd.DataFrame,
+    top_mouvements_devise: pd.DataFrame | None = None,
+    provider_report: dict[str, pd.DataFrame] | None = None,
     retention_report: dict[str, pd.DataFrame],
     transaction_time_report: dict[str, pd.DataFrame],
     date_start: Any | None,
@@ -4747,6 +4767,9 @@ def _render_g2_report_export(
         "rapport_journalier_comptages": daily_comptages,
         "rapport_journalier_synthese": daily_synthese,
         "rapport_journalier_detail": daily_detail,
+        "top_mouvements_devise": top_mouvements_devise
+        if isinstance(top_mouvements_devise, pd.DataFrame)
+        else pd.DataFrame(),
         "transactions_par_jour": transaction_time_report.get("par_jour", pd.DataFrame()),
         "transactions_par_jour_semaine": transaction_time_report.get("par_jour_semaine", pd.DataFrame()),
         "transactions_par_heure": transaction_time_report.get("par_heure", pd.DataFrame()),
@@ -4754,6 +4777,16 @@ def _render_g2_report_export(
         "retention_mensuelle": retention_report.get("mensuelle", pd.DataFrame()),
         "retention_detail": retention_report.get("detail_clients", pd.DataFrame()),
     }
+    provider_report = provider_report or {}
+    for provider_key in [
+        "provider_synthese",
+        "provider_top_mouvements",
+        "provider_detail",
+        "provider_statuts",
+    ]:
+        provider_frame = provider_report.get(provider_key, pd.DataFrame())
+        if isinstance(provider_frame, pd.DataFrame) and not provider_frame.empty:
+            export_report[provider_key] = provider_frame
     if turbo_only:
         export_report.update(
             {
@@ -4775,6 +4808,15 @@ def _render_g2_report_export(
     word_report["rapport_journalier_anomalies"] = daily_anomalies
     word_report["g2_dat"] = g2_dat
     word_report["rapport_journalier_pivot"] = daily_pivot
+    word_report["top_mouvements_devise"] = export_report["top_mouvements_devise"]
+    for provider_key in [
+        "provider_synthese",
+        "provider_top_mouvements",
+        "provider_detail",
+        "provider_statuts",
+    ]:
+        if provider_key in export_report:
+            word_report[provider_key] = export_report[provider_key]
     word_report["analysis_date_start"] = date_start
     word_report["analysis_date_end"] = date_end
     word_report["analysis_source_label"] = source_label
@@ -4810,7 +4852,92 @@ def _render_g2_report_export(
         "Le Word est entierement en A4 portrait, annexe Transactions comprise; "
         "l'Excel conserve uniquement les syntheses, comptages, details et controles indispensables "
         "avec une mise en page d'impression en portrait."
+        )
+
+
+def _render_provider_12118_report(provider_report: dict[str, pd.DataFrame] | None) -> bool:
+    if not isinstance(provider_report, dict):
+        return False
+    provider_summary = provider_report.get("provider_synthese", pd.DataFrame())
+    provider_top = provider_report.get("provider_top_mouvements", pd.DataFrame())
+    provider_detail = provider_report.get("provider_detail", pd.DataFrame())
+    if not isinstance(provider_summary, pd.DataFrame) or provider_summary.empty:
+        return False
+
+    render_panel_title("Rapport Provider 12118")
+    provider_summary_view = provider_summary.rename(
+        columns={
+            "currency_code": "Devise",
+            "sens_flux": "Sens",
+            "nombre_operations": "Nombre d'operations",
+            "nombre_clients": "Nombre de clients",
+            "montant_total": "Montant total",
+        }
     )
+    provider_summary_columns = [
+        "Devise",
+        "Sens",
+        "Nombre d'operations",
+        "Nombre de clients",
+        "Montant total",
+    ]
+    provider_summary_view = provider_summary_view[
+        [column for column in provider_summary_columns if column in provider_summary_view.columns]
+    ].copy()
+    _mpesa_dataframe(provider_summary_view, width="stretch", hide_index=True)
+    if isinstance(provider_top, pd.DataFrame) and not provider_top.empty:
+        with st.expander("Afficher le Top 5 Provider par devise", expanded=False):
+            provider_top_view = provider_top.rename(
+                columns={
+                    "rang": "Rang",
+                    "currency_code": "Devise",
+                    "sens_flux": "Sens",
+                    "date": "Date",
+                    "receipt_no": "Reference",
+                    "phone_prefixe": "Numero client",
+                    "Nom_client": "Nom client",
+                    "details_rapport": "Operation",
+                    "montant": "Montant",
+                    "transaction_status": "Statut",
+                    "fichier_source_g2": "Fichier source",
+                }
+            )
+            _mpesa_dataframe(provider_top_view, width="stretch", hide_index=True)
+    if isinstance(provider_detail, pd.DataFrame) and not provider_detail.empty:
+        render_panel_title("Transactions")
+        provider_detail_view = provider_detail.rename(
+            columns={
+                "date": "Date",
+                "receipt_no": "Reference",
+                "currency_code": "Devise",
+                "sens_flux": "Sens",
+                "montant": "Montant",
+                "opposite_party": "Nom client",
+                "phone_prefixe": "Numero client",
+                "reason_type": "Type de raison",
+                "transaction_status": "Statut",
+                "balance_numeric": "Solde",
+                "fichier_source_g2": "Fichier source",
+            }
+        )
+        provider_detail_columns = [
+            "Date",
+            "Reference",
+            "Devise",
+            "Sens",
+            "Numero client",
+            "Nom client",
+            "Type de raison",
+            "Statut",
+            "Solde",
+            "Fichier source",
+            "Montant",
+        ]
+        provider_detail_view = provider_detail_view[
+            [column for column in provider_detail_columns if column in provider_detail_view.columns]
+        ].copy()
+        _mpesa_dataframe(provider_detail_view, width="stretch", hide_index=True)
+    return True
 
 
 def _render_g2_transaction_time_analysis(
@@ -5096,7 +5223,8 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     source_date_label = "Completion Time"
     analysis_prepared = prepared
     analysis_mode_label = "Rapport G2 seul"
-    g2_available = not prepared.g2_transactions.empty
+    g2_control_transactions = exclude_g2_provider_transactions(prepared.g2_transactions)
+    g2_available = not g2_control_transactions.empty
     turbo_proxy = _build_turbo_only_g2_transactions_cached(prepared)
     mode_key = ""
     mode_options: list[str] = []
@@ -5308,6 +5436,18 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         f"{len(filtered_g2)} operation(s) [{source_label}] dans le perimetre "
         f"{period_text} - {direction_label.lower()}."
     )
+    provider_source = prepared.g2_transactions.copy()
+    if not provider_source.empty and date_start is not None and date_end is not None:
+        provider_source = filter_g2_transactions_by_completion_time(
+            provider_source,
+            date_start,
+            date_end,
+            time_start,
+            time_end,
+        )
+    provider_source = filter_g2_transactions_by_direction(provider_source, selected_directions)
+    provider_report = build_g2_provider_report(provider_source, top_n=5)
+    provider_rendered = _render_provider_12118_report(provider_report)
     latest_complete_turbo_date = _latest_complete_turbo_date(prepared)
     weekly_g2_dat_end = (
         min(pd.Timestamp(date_end).normalize(), latest_complete_turbo_date)
@@ -5347,6 +5487,9 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     daily_comptages = daily_report.get("comptages", pd.DataFrame())
     daily_statuts = daily_report.get("statuts", pd.DataFrame())
     daily_anomalies = daily_report.get("anomalies", pd.DataFrame())
+    top_mouvements_devise = daily_report.get("top_mouvements_devise", pd.DataFrame())
+    if not isinstance(top_mouvements_devise, pd.DataFrame) or top_mouvements_devise.empty:
+        top_mouvements_devise = build_g2_top_movements_by_currency(daily_detail, top_n=5)
     transaction_time_report = build_g2_transaction_time_analysis(daily_detail)
     retention_report = build_g2_retention_report(filtered_prepared, daily_detail=daily_detail)
 
@@ -5471,8 +5614,112 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             )
             _mpesa_dataframe(classified_summary, width="stretch", hide_index=True)
 
+        if not top_mouvements_devise.empty:
+            render_panel_title(f"Top 5 des plus gros mouvements par devise [{source_label}]")
+            top_view = top_mouvements_devise.rename(
+                columns={
+                    "rang": "Rang",
+                    "currency_code": "Devise",
+                    "sens_flux": "Sens",
+                    "date": "Date",
+                    "receipt_no": "Reference",
+                    "phone_prefixe": "Numero client",
+                    "Nom_client": "Nom client",
+                    "details_rapport": "Operation",
+                    "montant": "Montant",
+                    "transaction_status": "Statut",
+                    "statut_rapprochement": "Controle",
+                    "fichier_source_g2": "Fichier source",
+                }
+            )
+            _mpesa_dataframe(top_view, width="stretch", hide_index=True)
+            st.caption(
+                "Classement calcule apres application des criteres de date, d'heure et de sens. "
+                "Chaque devise est classee separement."
+            )
+
         with st.expander("Afficher la synthese detaillee en colonnes", expanded=False):
             _mpesa_dataframe(daily_pivot, width="stretch", hide_index=True)
+
+    provider_summary = provider_report.get("provider_synthese", pd.DataFrame())
+    provider_top = provider_report.get("provider_top_mouvements", pd.DataFrame())
+    provider_detail = provider_report.get("provider_detail", pd.DataFrame())
+    if not provider_rendered and isinstance(provider_summary, pd.DataFrame) and not provider_summary.empty:
+        render_panel_title("Rapport Provider 12118")
+        provider_summary_view = provider_summary.rename(
+            columns={
+                "currency_code": "Devise",
+                "sens_flux": "Sens",
+                "nombre_operations": "Nombre d'operations",
+                "nombre_clients": "Nombre de clients",
+                "montant_total": "Montant total",
+                "montant_moyen": "Montant moyen",
+                "montant_max": "Plus gros montant",
+                "premiere_operation": "Premiere operation",
+                "derniere_operation": "Derniere operation",
+            }
+        )
+        _mpesa_dataframe(provider_summary_view, width="stretch", hide_index=True)
+        st.caption(
+            "Le Provider 12118 est lu depuis les rapports G2 charges dans le meme emplacement. "
+            "Il est restitue separement, sans rapprochement Receipt No/ref_no et sans addition aux montants Solution Numérique."
+        )
+        if isinstance(provider_detail, pd.DataFrame) and not provider_detail.empty:
+            render_panel_title("Transactions")
+            provider_detail_view = provider_detail.rename(
+                columns={
+                    "date": "Date",
+                    "receipt_no": "Reference",
+                    "currency_code": "Devise",
+                    "sens_flux": "Sens",
+                    "montant": "Montant",
+                    "opposite_party": "Contrepartie",
+                    "phone_prefixe": "Numero client",
+                    "Nom_client": "Nom client",
+                    "details": "Details",
+                    "reason_type": "Type de raison",
+                    "transaction_status": "Statut",
+                    "balance_numeric": "Solde",
+                    "fichier_source_g2": "Fichier source",
+                }
+            )
+            provider_detail_columns = [
+                "Date",
+                "Reference",
+                "Devise",
+                "Sens",
+                "Montant",
+                "Numero client",
+                "Nom client",
+                "Contrepartie",
+                "Details",
+                "Type de raison",
+                "Statut",
+                "Solde",
+                "Fichier source",
+            ]
+            provider_detail_view = provider_detail_view[
+                [column for column in provider_detail_columns if column in provider_detail_view.columns]
+            ].copy()
+            _mpesa_dataframe(provider_detail_view, width="stretch", hide_index=True)
+        if isinstance(provider_top, pd.DataFrame) and not provider_top.empty:
+            with st.expander("Afficher le Top 5 Provider par devise", expanded=False):
+                provider_top_view = provider_top.rename(
+                    columns={
+                        "rang": "Rang",
+                        "currency_code": "Devise",
+                        "sens_flux": "Sens",
+                        "date": "Date",
+                        "receipt_no": "Reference",
+                        "phone_prefixe": "Numero client",
+                        "Nom_client": "Nom client",
+                        "details_rapport": "Operation",
+                        "montant": "Montant",
+                        "transaction_status": "Statut",
+                        "fichier_source_g2": "Fichier source",
+                    }
+                )
+                _mpesa_dataframe(provider_top_view, width="stretch", hide_index=True)
 
     _render_g2_transaction_time_analysis(transaction_time_report, source_label)
 
@@ -5653,6 +5900,8 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
             daily_detail=daily_detail,
             daily_anomalies=daily_anomalies,
             g2_dat=g2_dat,
+            top_mouvements_devise=top_mouvements_devise,
+            provider_report=provider_report,
             retention_report=retention_report,
             transaction_time_report=transaction_time_report,
             date_start=period_start,
@@ -5791,6 +6040,8 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         daily_detail=daily_detail,
         daily_anomalies=daily_anomalies,
         g2_dat=g2_dat,
+        top_mouvements_devise=top_mouvements_devise,
+        provider_report=provider_report,
         retention_report=retention_report,
         transaction_time_report=transaction_time_report,
         date_start=period_start,
@@ -9348,9 +9599,9 @@ def _render_statistics_tab(
     render_summary_box(
         "Statistiques Solution Numérique",
         [
-            "Les statistiques financieres et commerciales sont calculees depuis les sources Solution Numérique.",
+            "Les statistiques se concentrent sur les encours à date issus des positions Solution Numérique.",
             "Les rapports G2 M-Pesa et Clients_Perfect restent facultatifs : ils enrichissent ou controlent, sans modifier les montants.",
-            "Le chiffre d'affaires affiche est observe et non certifie : il reprend les produits financiers detectables, separes par devise.",
+            "Les transactions lourdes restent traitées dans Finance et comptabilité ou Solution Numérique / M-Pesa; cet onglet évite les analyses redondantes.",
         ],
     )
 
@@ -9596,23 +9847,12 @@ def _render_statistics_tab(
 
     overview = report_view.get("vue_ensemble", pd.DataFrame())
     client_indicators = report_view.get("clients_indicateurs", pd.DataFrame())
-    activity = report_view.get("activite_evolution", pd.DataFrame())
-    growth = report_view.get("clients_croissance", pd.DataFrame())
-    turnover = report_view.get("chiffre_affaires", pd.DataFrame())
     portfolio = report_view.get("epargne_dat_portefeuille", pd.DataFrame())
     portfolio_period = report_view.get("epargne_dat_portefeuille_periode", pd.DataFrame())
     credit_summary = report_view.get("credit_synthese", pd.DataFrame())
     credit_summary_period = report_view.get("credit_synthese_periode", pd.DataFrame())
-    top_clients = report_view.get("clients_volume_top", pd.DataFrame())
-    regular_deposits_summary = report_view.get("depots_reguliers_synthese", pd.DataFrame())
-    regular_deposits_clients = report_view.get("depots_reguliers_clients", pd.DataFrame())
     source_priority = report_view.get("priorite_sources", pd.DataFrame())
     weekly_comparison = report_view.get("comparaison_hebdomadaire", pd.DataFrame())
-    g2_coverage = report_view.get("g2_couverture", pd.DataFrame())
-    g2_quality = report_view.get("g2_qualite_rapprochement", pd.DataFrame())
-    g2_statuses = report_view.get("g2_statuts", pd.DataFrame())
-    g2_unmatched = report_view.get("g2_non_rapprochees", pd.DataFrame())
-    g2_weekly = report_view.get("g2_comparaison_hebdomadaire", pd.DataFrame())
 
     def _sum_column(frame: pd.DataFrame, column: str) -> float:
         if frame.empty or column not in frame.columns:
@@ -9679,12 +9919,7 @@ def _render_statistics_tab(
             "Comptes clients connus à la date de fin",
             first_row.get("clients_turbo_connus", 0),
         )
-        active_clients = _client_indicator_value(
-            "Comptes clients actifs sur la période",
-            first_row.get("clients_turbo_actifs", 0),
-        )
-        render_kpi_cards(
-            [
+        client_cards: list[tuple[str, str, str, str]] = [
                 (
                     "Comptes clients du fichier Customers",
                     _format_count(loaded_clients),
@@ -9697,61 +9932,38 @@ def _render_statistics_tab(
                     "Comptes clients crees avant ou a la date de fin du rapport",
                     "blue",
                 ),
+        ]
+        if (
+            isinstance(client_indicators, pd.DataFrame)
+            and not client_indicators.empty
+            and client_indicators["indicateur"].astype(str).eq(
+                "Comptes clients avec produit d'épargne ouverte positif"
+            ).any()
+        ):
+            open_positive_clients = _client_indicator_value(
+                "Comptes clients avec produit d'épargne ouverte positif",
+                0,
+            )
+            client_cards.append(
                 (
-                    "Comptes clients actifs",
-                    _format_count(active_clients),
-                    "Au moins une operation sur la periode",
+                    "Comptes clients avec épargne ouverte positive",
+                    _format_count(open_positive_clients),
+                    "Comptes clients ayant au moins un produit d'épargne ouverte avec solde > 0",
                     "green",
-                ),
-                (
-                    "Taux d'activite",
-                    _safe_rate(active_clients, known_clients),
-                    "Comptes clients actifs / comptes clients connus",
-                    "red",
-                ),
-            ]
-        )
-        if not activity.empty and {"periode_analyse", "currency_code", "nombre_clients"}.issubset(activity.columns):
-            clients_chart = px.line(
-                activity,
-                x="periode_analyse",
-                y="nombre_clients",
-                color="currency_code",
-                markers=True,
-                labels={
-                    "periode_analyse": "Periode",
-                    "nombre_clients": "Clients actifs",
-                    "currency_code": "Devise",
+                )
+            )
+        render_kpi_cards(client_cards)
+        if isinstance(client_indicators, pd.DataFrame) and not client_indicators.empty:
+            _mpesa_dataframe(
+                client_indicators,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "indicateur": st.column_config.TextColumn("Indicateur", pinned=True),
+                    "valeur": st.column_config.NumberColumn("Valeur", format="%d"),
+                    "definition": st.column_config.TextColumn("Explication"),
                 },
             )
-            style_standard_line(clients_chart, height=410, tickangle=-20)
-            st.markdown("**Clients actifs par periode**")
-            st.caption("Clients avec au moins une operation sur la periode filtree.")
-            st_plot(
-                clients_chart,
-                key="mpesa_statistics_active_clients_trend",
-                height=410,
-            )
-        if not growth.empty:
-            growth_chart = px.line(
-                growth,
-                x="periode",
-                y="clients_turbo_cumules",
-                markers=True,
-                labels={"periode": "Periode", "clients_turbo_cumules": "Clients cumules"},
-            )
-            style_standard_line(growth_chart, height=390, tickangle=-20)
-            st.markdown("**Evolution du nombre de clients**")
-            st.caption(
-                "Base Customers lorsqu'elle est disponible, sinon premiere observation dans les sources de la Solution Numérique."
-            )
-            st_plot(
-                growth_chart,
-                key="mpesa_statistics_customer_growth",
-                height=390,
-            )
-            with st.expander("Afficher la table de croissance clients", expanded=False):
-                _mpesa_dataframe(growth, width="stretch", hide_index=True)
 
     with st.expander("2. Comptes ouverts et comptes bloques", expanded=False):
         st.caption(
@@ -9771,15 +9983,15 @@ def _render_statistics_tab(
             fixed_accounts = portfolio.loc[family.eq("DAT")]
             account_cards: list[tuple[str, str, str, str]] = [
                 (
-                    "Comptes ouverts",
-                    _format_count(_sum_column(open_accounts, "nombre_comptes")),
-                    "Nombre global de produits d'epargne ouverte",
+                    "Comptes ouverts actifs > 0",
+                    _format_count(_sum_column(open_accounts, "comptes_solde_positif")),
+                    "Produits d'epargne ouverte avec solde strictement positif",
                     "blue",
                 ),
                 (
-                    "Comptes bloques / DAT",
-                    _format_count(_sum_column(fixed_accounts, "nombre_comptes")),
-                    "Nombre global de produits DAT / comptes bloques",
+                    "DAT actifs > 0",
+                    _format_count(_sum_column(fixed_accounts, "comptes_solde_positif")),
+                    "Produits DAT / comptes bloques avec solde strictement positif",
                     "navy",
                 ),
             ]
@@ -9792,15 +10004,15 @@ def _render_statistics_tab(
                     account_cards.extend(
                         [
                             (
-                                f"Solde comptes ouverts [{currency}]",
-                                _format_amount(_sum_column(currency_open, "solde_total")),
-                                "Epargne ouverte, sans total multidevise",
+                                f"Encours comptes ouverts > 0 [{currency}]",
+                                _format_amount(_sum_column(currency_open, "solde_positif_total")),
+                                "Solde positif d'epargne ouverte, sans total multidevise",
                                 "green",
                             ),
                             (
-                                f"Solde comptes bloques [{currency}]",
-                                _format_amount(_sum_column(currency_fixed, "solde_total")),
-                                "DAT / comptes bloques, sans total multidevise",
+                                f"Encours DAT > 0 [{currency}]",
+                                _format_amount(_sum_column(currency_fixed, "solde_positif_total")),
+                                "Solde positif DAT / comptes bloques, sans total multidevise",
                                 "orange",
                             ),
                         ]
@@ -9810,11 +10022,14 @@ def _render_statistics_tab(
                 portfolio,
                 width="stretch",
                 hide_index=True,
-                column_config={
-                    "currency_code": st.column_config.TextColumn("Devise", pinned=True),
-                    "solde_total": st.column_config.NumberColumn("Solde total", format="%.2f"),
-                },
-            )
+                    column_config={
+                        "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                        "comptes_solde_positif": st.column_config.NumberColumn("Comptes > 0", format="%d"),
+                        "clients_solde_positif": st.column_config.NumberColumn("Clients > 0", format="%d"),
+                        "solde_positif_total": st.column_config.NumberColumn("Encours positif", format="%.2f"),
+                        "solde_total": st.column_config.NumberColumn("Solde total", format="%.2f"),
+                    },
+                )
             if isinstance(portfolio_period, pd.DataFrame) and not portfolio_period.empty:
                 st.markdown("**Comptes crees ou actives sur la periode**")
                 st.caption(
@@ -9831,6 +10046,7 @@ def _render_statistics_tab(
                         "nombre_comptes": st.column_config.NumberColumn("Comptes", format="%d"),
                         "comptes_solde_positif": st.column_config.NumberColumn("Comptes positifs", format="%d"),
                         "clients": st.column_config.NumberColumn("Clients", format="%d"),
+                        "solde_positif_total": st.column_config.NumberColumn("Encours positif", format="%.2f"),
                         "solde_total": st.column_config.NumberColumn("Solde instantane", format="%.2f"),
                         "perimetre_encours": st.column_config.TextColumn("Perimetre"),
                     },
@@ -9851,9 +10067,9 @@ def _render_statistics_tab(
         else:
             credit_cards: list[tuple[str, str, str, str]] = [
                 (
-                    "Credits",
-                    _format_count(_sum_column(credit_summary, "nombre_credits")),
-                    "Nombre global de credits",
+                    "Crédits en cours > 0",
+                    _format_count(_sum_column(credit_summary, "nombre_credits_encours_positif")),
+                    "Produits crédit dont l'encours est strictement positif",
                     "navy",
                 )
             ]
@@ -9865,14 +10081,8 @@ def _render_statistics_tab(
                     credit_cards.extend(
                         [
                             (
-                                f"Montant accorde [{currency}]",
-                                _format_amount(row.get("montant_credits", 0)),
-                                "Somme loan_amount, sans total multidevise",
-                                "blue",
-                            ),
-                            (
-                                f"Encours credit [{currency}]",
-                                _format_amount(encours_total),
+                                f"Encours crédits en cours [{currency}]",
+                                _format_amount(row.get("encours_credits_positifs_total", encours_total)),
                                 "Position credit a date",
                                 "orange",
                             ),
@@ -9891,6 +10101,8 @@ def _render_statistics_tab(
                 hide_index=True,
                 column_config={
                     "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                    "nombre_credits_encours_positif": st.column_config.NumberColumn("Crédits en cours > 0", format="%d"),
+                    "encours_credits_positifs_total": st.column_config.NumberColumn("Encours crédits > 0", format="%.2f"),
                 },
             )
             if isinstance(credit_summary_period, pd.DataFrame) and not credit_summary_period.empty:
@@ -9907,6 +10119,46 @@ def _render_statistics_tab(
                         "currency_code": st.column_config.TextColumn("Devise", pinned=True),
                     },
                 )
+
+    render_panel_title("Export")
+    start_token = pd.Timestamp(selected_start_date).strftime("%Y%m%d")
+    end_token = pd.Timestamp(selected_end_date).strftime("%Y%m%d")
+    try:
+        word_bytes = create_mpesa_statistics_word(report_view)
+        st.download_button(
+            "Telecharger le rapport statistiques Word",
+            data=word_bytes,
+            file_name=f"rapport_statistiques_solution_numerique_{start_token}_{end_token}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            width="content",
+            key=f"mpesa_statistics_word_{start_token}_{end_token}",
+        )
+    except RuntimeError as exc:
+        st.warning(str(exc))
+    statistics_excel_report = _build_statistics_operational_excel_report(report_view)
+    for key in [
+        "clients_operationnels",
+        "epargne_sans_credit_actif",
+        "dat_arrivant_echeance",
+        "dat_conversion_credit",
+    ]:
+        value = report_view.get(key)
+        if isinstance(value, pd.DataFrame) and not value.empty:
+            statistics_excel_report[key] = value
+    _render_excel_export_on_demand(
+        export_report=statistics_excel_report,
+        prepare_label="Préparer le détail statistiques Excel",
+        download_label="Télécharger le détail statistiques Excel",
+        file_name=f"detail_statistiques_solution_numerique_{start_token}_{end_token}.xlsx",
+        key=f"mpesa_statistics_excel_{start_token}_{end_token}",
+        print_orientation="portrait",
+        width="content",
+        help=(
+            "Prépare le classeur Excel détaillé uniquement quand vous en avez besoin. "
+            "Cela évite de ralentir l'affichage du rapport statistiques."
+        ),
+    )
+    return
 
     with st.expander("4. Transactions", expanded=False):
         st.caption(
@@ -10926,8 +11178,9 @@ def render_solution_mpesa_tab() -> None:
                 key="mpesa_g2_file",
                 accept_multiple_files=True,
                 help=(
-                    "Chargez ensemble les rapports M-Pesa d'entrées 1441 et de sorties 15558. Sans rapport G2, "
-                    "les analyses encore démontrables utilisent uniquement Transactions Solution Numérique."
+                    "Chargez ensemble les rapports M-Pesa d'entrées 1441, de sorties 15558 et, si disponible, "
+                    "le rapport Provider 12118. Sans rapport G2, les analyses encore démontrables utilisent "
+                    "uniquement Transactions Solution Numérique."
                 ),
             )
     with optional_right:
@@ -11007,8 +11260,9 @@ def render_solution_mpesa_tab() -> None:
                     "Fichier": "Rapports G2 [M-Pesa]",
                     "Importance": "Facultatif utile",
                     "Pourquoi": (
-                        "Sert surtout à enrichir le nom client et contrôler les écritures. "
-                        "Ne doit pas piloter les montants."
+                        "Sert surtout à enrichir le nom client, contrôler les écritures 1441/15558 "
+                        "et restituer le rapport Provider 12118 lorsqu'il est chargé. "
+                        "Ne doit pas piloter les montants Solution Numérique."
                     ),
                     "Colonnes attendues": (
                         "Receipt No., Completion Time, Initiation Time, Details, Transaction Status, "

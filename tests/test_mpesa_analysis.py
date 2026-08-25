@@ -22,7 +22,9 @@ from credit_app.services.mpesa_analysis import (
     build_filtered_turbo_balance_report,
     build_g2_daily_savings_report,
     build_g2_dat_crosscheck,
+    build_g2_provider_report,
     build_g2_retention_report,
+    build_g2_top_movements_by_currency,
     build_g2_transaction_time_analysis,
     build_turbo_only_g2_transactions,
     build_mpesa_dat_maturity_analysis,
@@ -1219,6 +1221,189 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(result.loc["OUTPUT-001", "montant_sortie"]), 75.0)
         self.assertEqual(result.loc["ENTRY-001", "fichier_source_g2"], "ORG_1441.xlsx")
         self.assertEqual(result.loc["OUTPUT-001", "fichier_source_g2"], "ORG_15558.xlsx")
+
+    def test_prepare_g2_transactions_identifies_provider_12118(self) -> None:
+        raw = pd.DataFrame(
+            [
+                {
+                    "Receipt No.": "PROV-001",
+                    "Completion Time": "24-08-2026 15:00:00",
+                    "Transaction Status": "Completed",
+                    "Currency": "USD",
+                    "Paid In": 100,
+                    "Opposite Party": "2306507 - CLIENT PROVIDER",
+                    "Reason Type": "Business withdrawal Child Different Hierarchy Money Provider",
+                    "fichier_source_g2": "ORG_12118__All_20260824151929.xlsx",
+                }
+            ]
+        )
+
+        result = prepare_g2_transactions(raw).iloc[0]
+
+        self.assertEqual(result["compte_g2"], "12118")
+        self.assertEqual(result["categorie_rapport_g2"], "Rapport Provider 12118")
+        self.assertEqual(result["sens_flux"], "Entree")
+
+    def test_g2_top_movements_keeps_top_five_per_currency_after_filters(self) -> None:
+        detail = pd.DataFrame(
+            [
+                {
+                    "receipt_no": f"CDF-{index}",
+                    "currency_code": "CDF",
+                    "sens_flux": "Entree",
+                    "montant": amount,
+                    "date": f"2026-08-{index + 1:02d}",
+                    "incluse_synthese": True,
+                }
+                for index, amount in enumerate([10, 900, 20, 800, 30, 700, 40])
+            ]
+            + [
+                {
+                    "receipt_no": "USD-001",
+                    "currency_code": "USD",
+                    "sens_flux": "Sortie",
+                    "montant": 50,
+                    "date": "2026-08-01",
+                    "incluse_synthese": True,
+                },
+                {
+                    "receipt_no": "USD-IGNORED",
+                    "currency_code": "USD",
+                    "sens_flux": "Sortie",
+                    "montant": 5000,
+                    "date": "2026-08-01",
+                    "incluse_synthese": False,
+                },
+            ]
+        )
+
+        result = build_g2_top_movements_by_currency(detail, top_n=5)
+        cdf = result.loc[result["currency_code"].eq("CDF")]
+        usd = result.loc[result["currency_code"].eq("USD")]
+
+        self.assertEqual(len(cdf), 5)
+        self.assertEqual(float(cdf.iloc[0]["montant"]), 900.0)
+        self.assertNotIn("USD-IGNORED", set(result["receipt_no"]))
+        self.assertEqual(len(usd), 1)
+
+    def test_g2_provider_report_uses_existing_g2_upload_and_keeps_currencies_separate(self) -> None:
+        raw = pd.DataFrame(
+            [
+                {
+                    "Receipt No.": "PROV-CDF-IN",
+                    "Completion Time": "24-08-2026 09:00:00",
+                    "Transaction Status": "Completed",
+                    "Currency": "CDF",
+                    "Paid In": 1_000_000,
+                    "Reason Type": "Business withdrawal Child Different Hierarchy Money Provider",
+                    "Opposite Party": "2306507 - CLIENT A",
+                    "fichier_source_g2": "ORG_12118__All.xlsx",
+                },
+                {
+                    "Receipt No.": "PROV-CDF-OUT",
+                    "Completion Time": "24-08-2026 10:00:00",
+                    "Transaction Status": "Completed",
+                    "Currency": "CDF",
+                    "Withdrawn": -250_000,
+                    "Reason Type": "Business Deposit HO Diff Hierarchy with commission Money Provider",
+                    "Opposite Party": "2306508 - CLIENT B",
+                    "fichier_source_g2": "ORG_12118__All.xlsx",
+                },
+                {
+                    "Receipt No.": "PROV-USD-IN",
+                    "Completion Time": "24-08-2026 11:00:00",
+                    "Transaction Status": "Completed",
+                    "Currency": "USD",
+                    "Paid In": 100,
+                    "Reason Type": "Business withdrawal Child Different Hierarchy Money Provider",
+                    "Opposite Party": "2306509 - CLIENT C",
+                    "fichier_source_g2": "ORG_12118__All.xlsx",
+                },
+                {
+                    "Receipt No.": "G2-NON-PROVIDER",
+                    "Completion Time": "24-08-2026 12:00:00",
+                    "Transaction Status": "Completed",
+                    "Currency": "CDF",
+                    "Paid In": 999,
+                    "Reason Type": "BisouBisouC2B",
+                    "Opposite Party": "243811111111 - CLIENT D",
+                    "fichier_source_g2": "ORG_1441__All.xlsx",
+                },
+            ]
+        )
+        prepared = prepare_g2_transactions(raw)
+
+        report = build_g2_provider_report(prepared)
+        summary = report["provider_synthese"].set_index(["currency_code", "sens_flux"])
+
+        self.assertEqual(float(summary.loc[("CDF", "Entree"), "montant_total"]), 1_000_000.0)
+        self.assertEqual(float(summary.loc[("CDF", "Sortie"), "montant_total"]), 250_000.0)
+        self.assertEqual(float(summary.loc[("USD", "Entree"), "montant_total"]), 100.0)
+        self.assertNotIn("G2-NON-PROVIDER", set(report["provider_detail"]["receipt_no"]))
+
+    def test_g2_daily_report_excludes_provider_from_turbo_reconciliation(self) -> None:
+        g2 = prepare_g2_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "Receipt No.": "PROVIDER-ONLY",
+                        "Completion Time": "24-08-2026 09:00:00",
+                        "Transaction Status": "Completed",
+                        "Currency": "CDF",
+                        "Paid In": 1_000_000,
+                        "Reason Type": "Business withdrawal Child Different Hierarchy Money Provider",
+                        "Opposite Party": "2306507 - PROVIDER AGENT",
+                        "fichier_source_g2": "ORG_12118__All.xlsx",
+                    }
+                ]
+            )
+        )
+        transactions = prepare_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "id": 1,
+                        "customer_id": 10,
+                        "msisdn1": "243811111111",
+                        "account_type": "NORMAL SAVINGS",
+                        "reference_id": "SA-1",
+                        "currency_code": "CDF",
+                        "dr": 0,
+                        "cr": 1_000_000,
+                        "bal_before": 0,
+                        "bal_after": 1_000_000,
+                        "ref_no": "PROVIDER-ONLY",
+                        "description": "Epargne depot",
+                        "created_at": "2026-08-24 09:00:00",
+                    }
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=transactions,
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            customers=pd.DataFrame(),
+            load_report=pd.DataFrame(),
+            g2_transactions=g2,
+        )
+
+        daily = build_g2_daily_savings_report(prepared)
+        provider = build_g2_provider_report(g2)
+
+        detail = daily["detail"]
+        self.assertFalse(detail.empty)
+        self.assertEqual(
+            set(detail["source_analytique"]),
+            {"Solution Numérique seule"},
+        )
+        self.assertEqual(
+            set(detail["statut_rapprochement"]),
+            {"Non applicable - Solution Numérique seule"},
+        )
+        self.assertNotIn("ORG_12118__All.xlsx", set(detail["fichier_source_g2"]))
+        self.assertFalse(provider["provider_synthese"].empty)
 
     def test_g2_count_summary_keeps_currencies_separate_and_fills_missing_categories(self) -> None:
         detail = pd.DataFrame(
@@ -5854,10 +6039,10 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("1. Clients", word_text)
         self.assertIn("2. Épargnes et DAT", word_text)
         self.assertIn("3. Crédits", word_text)
-        self.assertIn("Produits DAT / comptes bloqués à la date d'arrêté", word_text)
-        self.assertIn("Encours des produits d'épargne ouverts à la date d'arrêté", word_text)
-        self.assertIn("Produits crédit à la date d'arrêté", word_text)
-        self.assertIn("Encours des produits crédit à la date d'arrêté", word_text)
+        self.assertIn("Produits DAT actifs avec solde positif à la date d'arrêté", word_text)
+        self.assertIn("Encours des produits d'épargne ouverte actifs à la date d'arrêté", word_text)
+        self.assertIn("Produits crédit en cours avec encours positif à la date d'arrêté", word_text)
+        self.assertIn("Encours des produits crédit en cours à la date d'arrêté", word_text)
         self.assertIn("Taux de conversion DAT en crédit", word_text)
         self.assertNotIn("4. Transactions", word_text)
         self.assertNotIn("Régularité des dépôts", word_text)
@@ -6889,19 +7074,19 @@ class MpesaAnalysisTests(unittest.TestCase):
 
         self.assertIn("Les montants restent toujours séparés par devise", word_text)
         self.assertIn(
-            "Encours des produits d'épargne ouverts à la date d'arrêté | Solde des comptes d'épargne ouverts. | CDF | 100.00",
+            "Encours des produits d'épargne ouverte actifs à la date d'arrêté | Solde strictement positif des produits d'épargne ouverte. | CDF | 100.00",
             word_text,
         )
         self.assertIn(
-            "Encours des produits d'épargne ouverts à la date d'arrêté | Solde des comptes d'épargne ouverts. | USD | 10.00",
+            "Encours des produits d'épargne ouverte actifs à la date d'arrêté | Solde strictement positif des produits d'épargne ouverte. | USD | 10.00",
             word_text,
         )
         self.assertIn(
-            "Encours des produits crédit à la date d'arrêté | Encours total du portefeuille crédit à la date d'arrêté. | CDF | 60.00",
+            "Encours des produits crédit en cours à la date d'arrêté | Volume des crédits qui courent encore à la date d'arrêté. | CDF | 60.00",
             word_text,
         )
         self.assertIn(
-            "Encours des produits crédit à la date d'arrêté | Encours total du portefeuille crédit à la date d'arrêté. | USD | 8.00",
+            "Encours des produits crédit en cours à la date d'arrêté | Volume des crédits qui courent encore à la date d'arrêté. | USD | 8.00",
             word_text,
         )
         self.assertNotIn("Volume transactionnel observe", word_text)
