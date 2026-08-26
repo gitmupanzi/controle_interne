@@ -5993,8 +5993,17 @@ class MpesaAnalysisTests(unittest.TestCase):
             int(client_indicators.loc["Comptes clients du fichier Customers chargé", "valeur"]),
             2,
         )
-        self.assertGreater(float(overview["volume_total_transactions"]), 0)
-        self.assertEqual(float(overview["chiffre_affaires_observe"]), 15.0)
+        self.assertEqual(float(overview["volume_total_transactions"]), 0.0)
+        self.assertEqual(float(overview["chiffre_affaires_observe"]), 0.0)
+        self.assertTrue(report["chiffre_affaires"].empty)
+        self.assertNotIn(
+            "volume_transactions",
+            set(report["comparaison_hebdomadaire"].get("indicator_key", pd.Series(dtype=str))),
+        )
+        self.assertNotIn(
+            "chiffre_affaires_observe",
+            set(report["comparaison_hebdomadaire"].get("indicator_key", pd.Series(dtype=str))),
+        )
 
         growth = report["clients_croissance"]
         self.assertEqual(int(growth.iloc[-1]["clients_turbo_cumules"]), 1)
@@ -6003,14 +6012,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("epargne_dat_portefeuille_periode", report)
         self.assertIn("credit_synthese_periode", report)
         self.assertIn("depots_reguliers_synthese", report)
-        self.assertFalse(report["depots_reguliers_synthese"].empty)
-        regular_deposits = report["depots_reguliers_clients"].set_index(
-            ["customer_id", "currency_code"]
-        )
-        self.assertEqual(
-            float(regular_deposits.loc[("CLIENT-ANALYSE", "CDF"), "montant_depots"]),
-            100.0,
-        )
+        self.assertTrue(report["depots_reguliers_synthese"].empty)
         self.assertEqual(report["perimetre_annuel"], "Ensemble des années")
 
         document = Document(BytesIO(create_mpesa_statistics_word(report)))
@@ -6099,40 +6101,16 @@ class MpesaAnalysisTests(unittest.TestCase):
         credits = build_mpesa_credit_cockpit(prepared, **common_kwargs)
         clients = build_mpesa_clients_report(prepared, **common_kwargs)
 
-        stats_flow = statistics["chiffre_affaires"].set_index("currency_code").loc["CDF"]
         finance_flow = finance["flux_synthese"].set_index("currency_code").loc["CDF"]
         savings_flow = savings["flux_synthese"].set_index("currency_code").loc["CDF"]
         credits_production = credits["production_synthese"].set_index("currency_code").loc["CDF"]
         credits_repayments = credits["remboursements_synthese"].set_index("currency_code").loc["CDF"]
 
-        for column in [
-            "nombre_operations",
-            "nombre_clients",
-            "montant_entrees",
-            "montant_sorties",
-            "depots_epargne_courante",
-            "depots_dat",
-            "nouveaux_credits_decaissements",
-            "remboursements_observes",
-        ]:
-            self.assertEqual(float(stats_flow[column]), float(finance_flow[column]))
-
-        self.assertEqual(
-            float(stats_flow["depots_epargne_courante"]),
-            float(savings_flow["montant_depots_compte_ouvert"]),
-        )
-        self.assertEqual(
-            float(stats_flow["depots_dat"]),
-            float(savings_flow["montant_depots_dat"]),
-        )
-        self.assertEqual(
-            float(stats_flow["nouveaux_credits_decaissements"]),
-            float(credits_production["montant_decaisse_turbo"]),
-        )
-        self.assertEqual(
-            float(stats_flow["remboursements_observes"]),
-            float(credits_repayments["montant_rembourse"]),
-        )
+        self.assertFalse(finance_flow.empty)
+        self.assertFalse(savings_flow.empty)
+        self.assertFalse(credits_production.empty)
+        self.assertFalse(credits_repayments.empty)
+        self.assertTrue(statistics["chiffre_affaires"].empty)
         self.assertEqual(
             float(savings_flow["montant_remboursements_depuis_compte_ouvert"]),
             0.0,
@@ -6173,7 +6151,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         )
         self.assertEqual(
             int(stats_overview["clients_turbo_actifs_devise"]),
-            int(stats_flow["nombre_clients"]),
+            int(finance_flow["nombre_clients"]),
         )
 
     def test_mpesa_clients_report_ignores_unknown_currency_when_client_has_known_currency(self) -> None:
@@ -6751,16 +6729,28 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(float(savings_without_credit["valeur_semaine_courante"]), 25.0)
         self.assertEqual(float(savings_without_credit["valeur_semaine_precedente"]), 10.0)
 
-        volume_cdf = indexed.loc[("volume_transactions", "CDF")]
-        volume_usd = indexed.loc[("volume_transactions", "USD")]
+        self.assertNotIn(("volume_transactions", "CDF"), indexed.index)
+        self.assertNotIn(("chiffre_affaires_observe", "CDF"), indexed.index)
+
+        comparison_with_volume = build_mpesa_weekly_comparison(
+            prepared,
+            as_of_date="2026-07-22",
+            comparison_period="7 jours glissants",
+            turbo_events=events,
+            turbo_transaction_lines=lines,
+            include_transaction_volume_metrics=True,
+        )
+        indexed_with_volume = comparison_with_volume.set_index(["indicator_key", "currency_code"])
+        volume_cdf = indexed_with_volume.loc[("volume_transactions", "CDF")]
+        volume_usd = indexed_with_volume.loc[("volume_transactions", "USD")]
         self.assertEqual(float(volume_cdf["valeur_semaine_courante"]), 300.0)
         self.assertEqual(float(volume_cdf["valeur_semaine_precedente"]), 100.0)
         self.assertEqual(float(volume_usd["valeur_semaine_courante"]), 5.0)
         self.assertEqual(float(volume_usd["valeur_semaine_precedente"]), 0.0)
         self.assertTrue(pd.isna(volume_usd["evolution_pct"]))
 
-        turnover_cdf = indexed.loc[("chiffre_affaires_observe", "CDF")]
-        turnover_usd = indexed.loc[("chiffre_affaires_observe", "USD")]
+        turnover_cdf = indexed_with_volume.loc[("chiffre_affaires_observe", "CDF")]
+        turnover_usd = indexed_with_volume.loc[("chiffre_affaires_observe", "USD")]
         self.assertEqual(float(turnover_cdf["valeur_semaine_courante"]), 30.0)
         self.assertEqual(float(turnover_cdf["valeur_semaine_precedente"]), 10.0)
         self.assertEqual(float(turnover_usd["valeur_semaine_courante"]), 2.0)
@@ -6986,14 +6976,8 @@ class MpesaAnalysisTests(unittest.TestCase):
             pd.Timestamp(clients["date_fin_semaine_precedente"]),
             pd.Timestamp("2025-09-30"),
         )
-        cdf_volume = indexed.loc[("volume_transactions", "CDF")]
-        usd_volume = indexed.loc[("volume_transactions", "USD")]
-        self.assertEqual(float(cdf_volume["valeur_semaine_courante"]), 160.0)
-        self.assertEqual(float(cdf_volume["valeur_semaine_precedente"]), 100.0)
-        self.assertEqual(float(cdf_volume["evolution_pct"]), 60.0)
-        self.assertEqual(float(usd_volume["valeur_semaine_courante"]), 10.0)
-        self.assertEqual(float(usd_volume["valeur_semaine_precedente"]), 0.0)
-        self.assertTrue(pd.isna(usd_volume["evolution_pct"]))
+        self.assertNotIn(("volume_transactions", "CDF"), indexed.index)
+        self.assertNotIn(("volume_transactions", "USD"), indexed.index)
         self.assertTrue(
             comparison["periode_comparaison"]
             .eq("Même période de l'année précédente")
@@ -8787,25 +8771,12 @@ class MpesaAnalysisTests(unittest.TestCase):
         summary = report["synthese"].set_index(
             ["indicator_key", "currency_code"]
         )
-        cdf_volume = summary.loc[("volume_transactions", "CDF")]
-        usd_volume = summary.loc[("volume_transactions", "USD")]
-        self.assertAlmostEqual(float(cdf_volume["valeur_prevue_horizon"]), 4_500.0)
-        self.assertAlmostEqual(float(usd_volume["valeur_prevue_horizon"]), 45.0)
-        self.assertLess(float(cdf_volume["wape_pct"]), 0.01)
-        self.assertEqual(cdf_volume["qualite_modele"], "Bonne")
+        self.assertNotIn(("volume_transactions", "CDF"), summary.index)
+        self.assertNotIn(("volume_transactions", "USD"), summary.index)
         volume_forecast = report["previsions"].loc[
             report["previsions"]["indicator_key"].eq("volume_transactions")
         ]
-        self.assertEqual(
-            volume_forecast.groupby("currency_code")["date"].nunique().to_dict(),
-            {"CDF": 30, "USD": 30},
-        )
-        self.assertTrue(
-            volume_forecast["borne_basse"].le(volume_forecast["prevision"]).all()
-        )
-        self.assertTrue(
-            volume_forecast["borne_haute"].ge(volume_forecast["prevision"]).all()
-        )
+        self.assertTrue(volume_forecast.empty)
 
     def test_mpesa_forecast_dat_schedule_is_deterministic(self) -> None:
         dates = pd.date_range("2026-01-01", periods=120, freq="D")
@@ -9661,6 +9632,80 @@ class TestLoanSavingsReconciliation(unittest.TestCase):
         self.assertIn("Epargne_Detail", workbook.sheet_names)
         exported = pd.read_excel(workbook, sheet_name="Epargne_Detail")
         self.assertIn("numero_compte", exported.columns)
+
+    def test_incomplete_open_savings_are_reported_without_counting_as_product(self) -> None:
+        savings = pd.DataFrame(
+            [
+                {
+                    "id": "OS-INCOMPLETE",
+                    "savings_id": "OS-INCOMPLETE",
+                    "customer_id": "C1",
+                    "msisdn1": "0811111111",
+                    "product_name": "Open Savings",
+                    "product_description": "Current account",
+                    "currency_code": "USD",
+                    "balance": 0,
+                    "status": "Active",
+                    "created_at": "2026-08-24 10:00:00",
+                    "updated_at": "2026-08-24 10:00:00",
+                },
+                {
+                    "id": "OS-REAL",
+                    "savings_id": "OS-REAL",
+                    "customer_id": "C2",
+                    "msisdn1": "0822222222",
+                    "product_name": "Open Savings",
+                    "product_description": "Current account",
+                    "currency_code": "USD",
+                    "balance": 25,
+                    "status": "Active",
+                    "created_at": "2026-08-24 10:00:00",
+                    "updated_at": "2026-08-24 10:05:00",
+                },
+            ]
+        )
+        customers = pd.DataFrame(
+            [
+                {"customer_id": "C1", "msisdn1": "0811111111", "created_at": "2026-08-24"},
+                {"customer_id": "C2", "msisdn1": "0822222222", "created_at": "2026-08-24"},
+            ]
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=prepare_current_savings(savings),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            customers=prepare_customers(customers),
+            load_report=pd.DataFrame(),
+        )
+
+        savings_report = build_mpesa_savings_cockpit(
+            prepared,
+            date_start="2026-08-24",
+            date_end="2026-08-24",
+        )
+        quality = savings_report["qualite_donnees"].set_index("controle")
+        self.assertEqual(
+            int(quality.loc["Comptes Open Savings potentiellement incomplets", "valeur"]),
+            1,
+        )
+        portfolio = savings_report["portefeuille_synthese"].set_index(["currency_code", "famille_epargne"])
+        self.assertEqual(float(portfolio.loc[("USD", "Compte ouvert"), "nombre_comptes"]), 1.0)
+        self.assertEqual(float(portfolio.loc[("USD", "Compte ouvert"), "encours_actuel"]), 25.0)
+        anomalies = savings_report["anomalies_open_savings"]
+        self.assertEqual(len(anomalies), 1)
+        self.assertIn("motif_anomalie_epargne", anomalies.columns)
+
+        clients_report = build_mpesa_clients_report(
+            prepared,
+            date_start="2026-08-24",
+            date_end="2026-08-24",
+        )
+        without_product = clients_report["listes_action"]["clients_sans_produit_observe"]
+        self.assertIn("C1", set(without_product["customer_id"].astype(str)))
+        self.assertNotIn("C2", set(without_product["customer_id"].astype(str)))
+        clients_anomalies = clients_report["listes_action"]["comptes_open_savings_incomplets"]
+        self.assertEqual(len(clients_anomalies), 1)
 
 
 if __name__ == "__main__":

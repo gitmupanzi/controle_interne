@@ -61,7 +61,7 @@ Colonnes attendues :
 | `currency_code` | Devise de lecture. Les montants ne sont jamais totalisés entre devises. |
 | `nouveau_client`, `nouveau_compte_ouvert_periode`, `nouveau_dat_periode` | Nature de la nouveauté observée : nouveau numero client, nouveau produit d'epargne ouverte ou nouveau produit DAT. |
 | `actif_periode`, `statut_activation` | Indique si le compte client ou le produit a eu au moins une transaction consolidée. |
-| `nombre_transactions`, `volume_transactions_observe` | Activité issue de `Transactions`, au grain d'événement métier consolidé. |
+| `nombre_transactions` | Activité issue de `Transactions`, au grain d'événement métier consolidé. Ne pas utiliser `Transactions` pour produire un volume monétaire global lorsque l'export peut être plafonné. |
 | `solde_compte_ouvert`, `solde_dat` | Positions issues de `Savings Account`, séparées par devise. |
 
 G2 peut enrichir le nom du client, mais ne calcule ni activité, ni solde, ni montant.

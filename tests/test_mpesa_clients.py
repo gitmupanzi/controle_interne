@@ -5,6 +5,7 @@ from credit_app.display_columns import prepare_dataframe_for_display
 from credit_app.services.mpesa_analysis import (
     MpesaPreparedData,
     build_mpesa_clients_report,
+    identify_incomplete_open_savings_accounts,
     prepare_current_savings,
 )
 
@@ -81,6 +82,37 @@ def _sample_prepared() -> MpesaPreparedData:
 def _kpi_value(report: dict, indicator: str) -> float:
     kpi = report["kpi"]
     return float(kpi.loc[kpi["indicateur"].eq(indicator), "valeur"].iloc[0])
+
+
+def test_identifies_only_open_savings_accounts_matching_all_four_criteria():
+    savings = pd.DataFrame(
+        [
+            {
+                "savings_id": "SUSPECT",
+                "customer_id": "C1",
+                "account_type": "NORMAL SAVINGS",
+                "product_name": " Open Savings ",
+                "status": " active ",
+                "balance": 0,
+                "created_at": "2026-08-24 08:00:00",
+                "updated_at": "2026-08-24 08:00:00",
+            },
+            {
+                "savings_id": "ACTIVE",
+                "customer_id": "C2",
+                "account_type": "NORMAL SAVINGS",
+                "product_name": "Open Savings",
+                "status": "Active",
+                "balance": 0,
+                "created_at": "2026-08-24 08:00:00",
+                "updated_at": "2026-08-24 08:00:01",
+            },
+        ]
+    )
+
+    anomalies = identify_incomplete_open_savings_accounts(savings)
+
+    assert anomalies["savings_id"].tolist() == ["SUSPECT"]
 
 
 def test_clients_report_counts_reference_active_and_activation():

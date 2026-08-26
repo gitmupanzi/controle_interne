@@ -1837,7 +1837,6 @@ MPESA_CLIENT_PRIORITY_COLUMNS: tuple[str, ...] = (
     "presence_transaction",
     "nombre_operations",
     "nombre_transactions",
-    "volume_transactions_observe",
     "nombre_periodes_actives",
     "date_premiere_transaction",
     "date_derniere_transaction",
@@ -4679,6 +4678,21 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
             key_prefix="mpesa_savings_quality_filter",
         )
         _mpesa_dataframe(quality_view, width="stretch", hide_index=True)
+        open_savings_anomalies = cockpit.get("anomalies_open_savings", pd.DataFrame())
+        render_panel_title("Comptes Open Savings potentiellement incomplets")
+        st.caption(
+            "Signal de revue : compte actif a solde nul, cree et mis a jour au meme instant. "
+            "Le compte reste inclus dans le stock Savings Account."
+        )
+        if open_savings_anomalies.empty:
+            st.success("Aucun compte Open Savings ne correspond aux quatre criteres.")
+        else:
+            anomaly_view = _apply_local_multiselect_filters(
+                open_savings_anomalies,
+                _with_phone_filter_columns("id_client", "devise", "statut_compte", "produit_epargne"),
+                key_prefix="mpesa_savings_open_savings_anomaly_filter",
+            )
+            _mpesa_dataframe(anomaly_view, width="stretch", hide_index=True)
         catalogue = cockpit.get("catalogue_kpi", pd.DataFrame())
         with st.expander("Catalogue KPI et limites", expanded=False):
             _mpesa_dataframe(catalogue, width="stretch", hide_index=True)
@@ -4710,6 +4724,7 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
         "epargne_dat_detail": cockpit.get("dat_detail", pd.DataFrame()),
         "epargne_dat_echeances": cockpit.get("dat_echeances_detail", pd.DataFrame()),
         "epargne_qualite_donnees": cockpit.get("qualite_donnees", pd.DataFrame()),
+        "epargne_anomalies_open_savings": cockpit.get("anomalies_open_savings", pd.DataFrame()),
     }
     for name in [
         "dat_sans_credit_actif",
@@ -5463,7 +5478,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     _render_weekly_comparison(
         g2_dat_weekly_comparison,
         blocks=["Comptes", "Transactions"],
-        indicator_keys=["nouveaux_dat", "depots_dat", "operations_turbo", "volume_transactions"],
+        indicator_keys=["nouveaux_dat", "depots_dat", "operations_turbo"],
         title="Comparaison temporelle utile au contrôle G2 / DAT",
     )
     if filtered_g2.empty:
@@ -6656,20 +6671,6 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
             st.info("Aucun telephone G2 valide ne permet de mesurer la concentration.")
         else:
             _mpesa_dataframe(concentration_summary, width="stretch", hide_index=True)
-            top_clients = concentration_clients.loc[concentration_clients["rang_volume"].le(10)].copy()
-            if not top_clients.empty:
-                fig = px.bar(
-                    top_clients.sort_values("volume_total"),
-                    x="volume_total",
-                    y="phone_prefixe",
-                    color="currency_code",
-                    facet_col="currency_code",
-                    facet_col_wrap=2,
-                    orientation="h",
-                    labels={"volume_total": "Volume entrees + sorties", "phone_prefixe": "Telephone", "currency_code": "Devise"},
-                )
-                style_standard_horizontal_bar(fig, height=max(380, 30 * len(top_clients)))
-                st_plot(fig, key="mpesa_pilotage_concentration", height=max(380, 30 * len(top_clients)))
             with st.expander("Afficher le classement complet des clients", expanded=False):
                 _mpesa_dataframe(concentration_clients, width="stretch", hide_index=True)
 
@@ -8327,21 +8328,6 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
             st.info("Aucune operation dans la periode.")
         else:
             _mpesa_dataframe(concentration_summary, width="stretch", hide_index=True)
-            top_clients = concentration_clients.loc[
-                concentration_clients["rang_volume"].le(10)
-            ].copy()
-            if not top_clients.empty:
-                fig = px.bar(
-                    top_clients.sort_values("volume_total"),
-                    x="volume_total",
-                    y="customer_id",
-                    color="currency_code",
-                    facet_col="currency_code",
-                    facet_col_wrap=2,
-                    labels={"volume_total": "Volume", "customer_id": "Client", "currency_code": "Devise"},
-                )
-                style_standard_horizontal_bar(fig, height=420)
-                st_plot(fig, key="mpesa_turbo_transaction_concentration", height=420)
 
         render_panel_title("Alertes et controles prioritaires")
         alerts = report_view.get("alertes_transactions", pd.DataFrame())
@@ -9228,6 +9214,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
     segments_produits = report.get("segments_produits", pd.DataFrame())
     encours_clients_tranches = report.get("encours_clients_tranches", pd.DataFrame())
     dat_without_credit = report.get("dat_sans_credit_actif", pd.DataFrame())
+    open_savings_anomalies = report.get("anomalies_open_savings", pd.DataFrame())
     data_quality = report.get("qualite_donnees", pd.DataFrame())
     action_lists = report.get("listes_action", {})
 
@@ -9295,6 +9282,20 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
             else:
                 st.error(f"{len(alerts)} contrôle(s) client nécessitent une vérification.")
             _mpesa_dataframe(data_quality, width="stretch", hide_index=True)
+        render_panel_title("Comptes Open Savings potentiellement incomplets")
+        st.caption(
+            "Signal de revue : compte actif a solde nul, cree et mis a jour au meme instant. "
+            "Le compte reste inclus dans le stock Savings Account."
+        )
+        if open_savings_anomalies.empty:
+            st.success("Aucun compte Open Savings ne correspond aux quatre criteres.")
+        else:
+            anomaly_view = _apply_local_multiselect_filters(
+                open_savings_anomalies,
+                _with_phone_filter_columns("id_client", "devise", "statut_compte", "produit_epargne"),
+                key_prefix="mpesa_clients_open_savings_anomaly_filter",
+            )
+            _mpesa_dataframe(anomaly_view, width="stretch", hide_index=True)
 
     with activity_activation_tab:
         render_panel_title("Activité et inactivité observées")
@@ -9355,7 +9356,6 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
             "actif_periode",
             "statut_activation",
             "nombre_transactions",
-            "volume_transactions_observe",
             "date_premiere_transaction",
             "date_derniere_transaction",
             "nouveaux_compte_ouvert_periode",
@@ -9554,6 +9554,7 @@ def _render_clients_tab(prepared: MpesaPreparedData) -> None:
         "clients_acquisition_activation": acquisition,
         "clients_tranches_encours": encours_clients_tranches,
         "clients_qualite_donnees": data_quality,
+        "clients_anomalies_open_savings": open_savings_anomalies,
     }
     for key in [
         "clients_actifs",
@@ -10159,403 +10160,6 @@ def _render_statistics_tab(
         ),
     )
     return
-
-    with st.expander("4. Transactions", expanded=False):
-        st.caption(
-            "Ce bloc analyse l'activite transactionnelle : volume, chiffre d'affaires observe, operations et concentration client."
-        )
-        _render_weekly_comparison(
-            weekly_comparison,
-            blocks=["Transactions"],
-            selected_currencies=selected_currencies,
-            title="Comparaison des transactions",
-        )
-        total_operations = _sum_column(overview, "operations")
-        transaction_cards: list[tuple[str, str, str, str]] = [
-            (
-                "Operations",
-                _format_count(total_operations),
-                "Evenements consolides sur la periode",
-                "green",
-            )
-        ]
-        if not overview.empty:
-            for _, row in overview.iterrows():
-                currency = str(row.get("currency_code", "")).strip() or "Devise"
-                transaction_cards.append(
-                    (
-                        f"Volume total [{currency}]",
-                        _format_amount(row.get("volume_total_transactions", 0)),
-                        "Entrees + sorties observees",
-                        "orange",
-                    )
-                )
-                transaction_cards.append(
-                    (
-                        f"CA observe [{currency}]",
-                        _format_amount(row.get("chiffre_affaires_observe", 0)),
-                        "Interets + penalites + part Bisou",
-                        "green",
-                    )
-                )
-        render_kpi_cards(transaction_cards)
-        if not activity.empty and {"periode_analyse", "currency_code", "volume_total_transactions"}.issubset(activity.columns):
-            chart = px.line(
-                activity,
-                x="periode_analyse",
-                y="volume_total_transactions",
-                color="currency_code",
-                markers=True,
-                labels={
-                    "periode_analyse": "Periode",
-                    "volume_total_transactions": "Volume total",
-                    "currency_code": "Devise",
-                },
-            )
-            style_standard_line(chart, height=430, tickangle=-20)
-            st.markdown("**Volume total des transactions par periode**")
-            st.caption("Entrees + sorties observees dans Transactions, separees par devise.")
-            st_plot(
-                chart,
-                key="mpesa_statistics_activity_trend",
-                height=430,
-            )
-        if not turnover.empty:
-            st.markdown("**Chiffre d'affaires observe et volume**")
-            st.caption(
-                "Le chiffre d'affaires observe est indicatif : interets + penalites + part Bisou detectes dans Transactions."
-            )
-            _mpesa_dataframe(
-                turnover,
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "currency_code": st.column_config.TextColumn("Devise", pinned=True),
-                    "volume_total_transactions": st.column_config.NumberColumn("Volume total", format="%.2f"),
-                    "chiffre_affaires_observe": st.column_config.NumberColumn("CA observe", format="%.2f"),
-                },
-            )
-        if isinstance(regular_deposits_summary, pd.DataFrame) and not regular_deposits_summary.empty:
-            st.markdown("**Régularité des dépôts sur compte ouvert**")
-            st.caption(
-                "Score = nombre de jours avec dépôt / nombre de jours de la période. "
-                "Le calcul utilise les événements consolidés de Transactions et reste séparé par devise."
-            )
-            regular_cards: list[tuple[str, str, str, str]] = []
-            for currency, group in regular_deposits_summary.groupby("currency_code", dropna=False):
-                clients_count = _sum_column(group, "clients")
-                deposit_amount = _sum_column(group, "montant_depots")
-                regular_count = _sum_column(
-                    group.loc[
-                        group["categorie_regularite"].astype(str).isin(
-                            ["Très régulier", "Régulier"]
-                        )
-                    ],
-                    "clients",
-                )
-                regular_cards.extend(
-                    [
-                        (
-                            f"Déposants [{currency}]",
-                            _format_count(clients_count),
-                            "Clients avec au moins un dépôt sur compte ouvert",
-                            "blue",
-                        ),
-                        (
-                            f"Déposants réguliers [{currency}]",
-                            _format_count(regular_count),
-                            "Catégories Très régulier et Régulier",
-                            "green",
-                        ),
-                        (
-                            f"Montant déposé [{currency}]",
-                            _format_amount(deposit_amount),
-                            "Dépôts compte ouvert, sans total multidevise",
-                            "orange",
-                        ),
-                    ]
-                )
-            render_kpi_cards(regular_cards)
-            _mpesa_dataframe(
-                regular_deposits_summary,
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "currency_code": st.column_config.TextColumn("Devise", pinned=True),
-                    "categorie_regularite": st.column_config.TextColumn("Catégorie"),
-                    "clients": st.column_config.NumberColumn("Clients", format="%d"),
-                    "nombre_depots": st.column_config.NumberColumn("Dépôts", format="%d"),
-                    "jours_avec_depot_moyen": st.column_config.NumberColumn("Jours avec dépôt moyen", format="%.2f"),
-                    "montant_depots": st.column_config.NumberColumn("Montant déposé", format="%.2f"),
-                    "score_regularite_moyen_pct": st.column_config.NumberColumn("Score moyen", format="%.2f%%"),
-                    "depot_moyen": st.column_config.NumberColumn("Dépôt moyen", format="%.2f"),
-                },
-            )
-            if isinstance(regular_deposits_clients, pd.DataFrame) and not regular_deposits_clients.empty:
-                with st.expander("Afficher les clients qui déposent régulièrement", expanded=False):
-                    _mpesa_dataframe(
-                        regular_deposits_clients.head(int(top_n_clients)),
-                        width="stretch",
-                        hide_index=True,
-                        column_config={
-                            "rang_regularite": st.column_config.NumberColumn("Rang", format="%d"),
-                            "customer_id": st.column_config.TextColumn("Client", pinned=True),
-                            "nom_client": st.column_config.TextColumn("Nom client"),
-                            "telephone": st.column_config.TextColumn("Téléphone"),
-                            "currency_code": st.column_config.TextColumn("Devise"),
-                            "nombre_depots": st.column_config.NumberColumn("Dépôts", format="%d"),
-                            "jours_avec_depot": st.column_config.NumberColumn("Jours avec dépôt", format="%d"),
-                            "montant_depots": st.column_config.NumberColumn("Montant déposé", format="%.2f"),
-                            "depot_moyen": st.column_config.NumberColumn("Dépôt moyen", format="%.2f"),
-                            "score_regularite_pct": st.column_config.NumberColumn("Score régularité", format="%.2f%%"),
-                            "categorie_regularite": st.column_config.TextColumn("Catégorie"),
-                        },
-                    )
-        if not top_clients.empty:
-            st.markdown("**Top clients par volume de transactions**")
-            top_view = top_clients.sort_values(["currency_code", "rang_volume"]).head(
-                int(top_n_clients)
-            )
-            _mpesa_dataframe(
-                top_view,
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "currency_code": st.column_config.TextColumn("Devise", pinned=True),
-                    "volume_total": st.column_config.NumberColumn("Volume total", format="%.2f"),
-                },
-            )
-
-        with st.container(border=True):
-            render_panel_title("Qualité du rapprochement G2")
-            coverage_label = (
-                str(g2_coverage.iloc[0].get("couverture_g2", "G2 absent"))
-                if isinstance(g2_coverage, pd.DataFrame) and not g2_coverage.empty
-                else "G2 absent"
-            )
-            st.caption(
-                f"Couverture : {coverage_label}. "
-                "G2 enrichit l'identité du client et contrôle les écritures; "
-                "les montants et les KPI financiers restent calculés exclusivement depuis la Solution Numérique."
-            )
-            if not isinstance(g2_quality, pd.DataFrame) or g2_quality.empty:
-                st.info(
-                    "Chargez les relevés G2 1441 et 15558 pour mesurer la qualité "
-                    "du rapprochement des entrées et des sorties."
-                )
-            else:
-                comparable_categories = [
-                    "Entrées et remboursements [1441]",
-                    "Sorties B2C [15558]",
-                ]
-                comparable = g2_quality.loc[
-                    g2_quality["categorie"].astype(str).isin(comparable_categories)
-                ]
-                completed_count = _sum_column(comparable, "operations_terminees")
-                matched_count = _sum_column(comparable, "operations_rapprochees")
-                entry_quality = comparable.loc[
-                    comparable["categorie"].astype(str).eq(
-                        "Entrées et remboursements [1441]"
-                    )
-                ]
-                output_quality = comparable.loc[
-                    comparable["categorie"].astype(str).eq(
-                        "Sorties B2C [15558]"
-                    )
-                ]
-                entry_completed = _sum_column(entry_quality, "operations_terminees")
-                entry_matched = _sum_column(entry_quality, "operations_rapprochees")
-                output_completed = _sum_column(output_quality, "operations_terminees")
-                output_matched = _sum_column(output_quality, "operations_rapprochees")
-                loan_requests = _sum_column(
-                    g2_quality.loc[
-                        g2_quality["categorie"].astype(str).eq(
-                            "Versements de prêts [15558]"
-                        )
-                    ],
-                    "operations_terminees",
-                )
-                render_kpi_cards(
-                    [
-                        (
-                            "Opérations G2 terminées",
-                            _format_count(completed_count),
-                            "Entrées/remboursements 1441 et sorties B2C 15558 comparables",
-                            "navy",
-                        ),
-                        (
-                            "Taux de rapprochement global",
-                            _safe_rate(matched_count, completed_count),
-                            "Opérations comparables retrouvées dans la Solution Numérique",
-                            "green",
-                        ),
-                        (
-                            "Rapprochement des entrées",
-                            _safe_rate(entry_matched, entry_completed),
-                            "Receipt No. G2 = ref_no",
-                            "blue",
-                        ),
-                        (
-                            "Rapprochement des sorties B2C",
-                            _safe_rate(output_matched, output_completed),
-                            "Téléphone + devise + montant + heure",
-                            "orange",
-                        ),
-                        (
-                            "Versements de prêts G2",
-                            _format_count(loan_requests),
-                            "Contrôle séparé : brut, intérêt observé et net G2",
-                            "navy",
-                        ),
-                    ]
-                )
-                _render_weekly_comparison(
-                    g2_weekly,
-                    blocks=["Qualité G2"],
-                    selected_currencies=selected_currencies,
-                    title="Évolution comparative de la qualité G2",
-                )
-                st.markdown("**Qualité par circuit et par devise**")
-                _mpesa_dataframe(
-                    g2_quality,
-                    width="stretch",
-                    hide_index=True,
-                    column_config={
-                        "categorie": st.column_config.TextColumn(
-                            "Circuit G2",
-                            pinned=True,
-                        ),
-                        "currency_code": st.column_config.TextColumn("Devise"),
-                        "operations_g2": st.column_config.NumberColumn(
-                            "Opérations",
-                            format="%d",
-                        ),
-                        "operations_terminees": st.column_config.NumberColumn(
-                            "Terminées",
-                            format="%d",
-                        ),
-                        "operations_rapprochees": st.column_config.NumberColumn(
-                            "Rapprochées",
-                            format="%d",
-                        ),
-                        "operations_non_rapprochees": st.column_config.NumberColumn(
-                            "Non rapprochées",
-                            format="%d",
-                        ),
-                        "taux_rapprochement_pct": st.column_config.NumberColumn(
-                            "Taux de rapprochement",
-                            format="%.2f%%",
-                        ),
-                        "controle_attendu": st.column_config.TextColumn(
-                            "Contrôle attendu"
-                        ),
-                    },
-                )
-                if isinstance(g2_statuses, pd.DataFrame) and not g2_statuses.empty:
-                    st.markdown("**Statuts G2 par devise**")
-                    _mpesa_dataframe(
-                        g2_statuses,
-                        width="stretch",
-                        hide_index=True,
-                        column_config={
-                            "currency_code": st.column_config.TextColumn(
-                                "Devise",
-                                pinned=True,
-                            ),
-                            "statut_g2": st.column_config.TextColumn("Statut G2"),
-                            "nombre_operations": st.column_config.NumberColumn(
-                                "Opérations",
-                                format="%d",
-                            ),
-                            "part_pct": st.column_config.NumberColumn(
-                                "Part",
-                                format="%.2f%%",
-                            ),
-                        },
-                    )
-                if isinstance(g2_unmatched, pd.DataFrame) and not g2_unmatched.empty:
-                    _render_alert_banner(
-                        f"{len(g2_unmatched)} opération(s) G2 terminée(s) et "
-                        "comparable(s) reste(nt) à rapprocher avec la Solution Numérique."
-                    )
-                    _mpesa_dataframe(
-                        g2_unmatched.head(500),
-                        width="stretch",
-                        hide_index=True,
-                        column_config={
-                            "date": st.column_config.DatetimeColumn(
-                                "Date G2",
-                                format="DD/MM/YYYY HH:mm:ss",
-                            ),
-                            "receipt_no": st.column_config.TextColumn(
-                                "Receipt No.",
-                                pinned=True,
-                            ),
-                            "categorie": st.column_config.TextColumn("Circuit"),
-                            "currency_code": st.column_config.TextColumn("Devise"),
-                            "opposite_party": st.column_config.TextColumn(
-                                "Contrepartie"
-                            ),
-                            "montant": st.column_config.NumberColumn(
-                                "Montant G2 de contrôle",
-                                format="%.2f",
-                            ),
-                            "statut_rapprochement": st.column_config.TextColumn(
-                                "Statut"
-                            ),
-                            "methode_rapprochement_turbo": st.column_config.TextColumn(
-                                "Méthode"
-                            ),
-                            "fichier_source_g2": st.column_config.TextColumn(
-                                "Fichier G2"
-                            ),
-                        },
-                    )
-                else:
-                    st.success(
-                        "Aucune opération G2 terminée et comparable ne reste "
-                        "non rapprochée dans le périmètre filtré.",
-                        icon=":material/check_circle:",
-                    )
-
-    render_panel_title("Export")
-    start_token = pd.Timestamp(selected_start_date).strftime("%Y%m%d")
-    end_token = pd.Timestamp(selected_end_date).strftime("%Y%m%d")
-    try:
-        word_bytes = create_mpesa_statistics_word(report_view)
-        st.download_button(
-            "Telecharger le rapport statistiques Word",
-            data=word_bytes,
-            file_name=f"rapport_statistiques_solution_numerique_{start_token}_{end_token}.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            width="content",
-            key=f"mpesa_statistics_word_{start_token}_{end_token}",
-        )
-    except RuntimeError as exc:
-        st.warning(str(exc))
-    statistics_excel_report = _build_statistics_operational_excel_report(report_view)
-    for key in [
-        "clients_operationnels",
-        "epargne_sans_credit_actif",
-        "dat_arrivant_echeance",
-        "dat_conversion_credit",
-    ]:
-        value = report_view.get(key)
-        if isinstance(value, pd.DataFrame) and not value.empty:
-            statistics_excel_report[key] = value
-    _render_excel_export_on_demand(
-        export_report=statistics_excel_report,
-        prepare_label="Préparer le détail statistiques Excel",
-        download_label="Télécharger le détail statistiques Excel",
-        file_name=f"detail_statistiques_solution_numerique_{start_token}_{end_token}.xlsx",
-        key=f"mpesa_statistics_excel_{start_token}_{end_token}",
-        print_orientation="portrait",
-        width="content",
-        help=(
-            "Prépare le classeur Excel détaillé uniquement quand vous en avez besoin. "
-            "Cela évite de ralentir l'affichage du rapport statistiques."
-        ),
-    )
 
 
 def _forecast_period_label(frequency: str) -> str:
