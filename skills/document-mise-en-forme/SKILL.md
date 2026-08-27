@@ -503,6 +503,10 @@ Règles :
 - éviter les cellules fusionnées dans les tableaux de données ;
 - ne pas réduire la police sous 9 pt sauf nécessité exceptionnelle ;
 - utiliser une section paysage si le tableau est trop large.
+- lorsqu'un tableau doit être imprimé ou diffusé, l'ajuster à la largeur utile de la page plutôt que de laisser une largeur partielle qui provoque des retours à la ligne inutiles ;
+- attribuer des largeurs proportionnelles au contenu : colonnes courtes compactes, colonnes descriptives plus larges ;
+- empêcher les retours à la ligne sur les petites colonnes lorsque le contenu est court et stable (`N°`, `Rang`, `Devise`, `Sens`, `Date`, `Référence`, `Numéro client`, `Montant`) ;
+- conserver le retour à la ligne naturel sur les colonnes longues comme `Nom client`, `Observation`, `Commentaire` ou `Description`, sauf instruction contraire.
 
 Éviter qu'une ligne importante soit coupée entre deux pages.
 

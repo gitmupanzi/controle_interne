@@ -1336,10 +1336,104 @@ class MpesaAnalysisTests(unittest.TestCase):
         report = build_g2_provider_report(prepared)
         summary = report["provider_synthese"].set_index(["currency_code", "sens_flux"])
 
-        self.assertEqual(float(summary.loc[("CDF", "Entree"), "montant_total"]), 1_000_000.0)
-        self.assertEqual(float(summary.loc[("CDF", "Sortie"), "montant_total"]), 250_000.0)
-        self.assertEqual(float(summary.loc[("USD", "Entree"), "montant_total"]), 100.0)
+        self.assertEqual(float(summary.loc[("CDF", "Retrait"), "montant_total"]), 1_000_000.0)
+        self.assertEqual(float(summary.loc[("CDF", "Dépôt"), "montant_total"]), 250_000.0)
+        self.assertEqual(float(summary.loc[("USD", "Retrait"), "montant_total"]), 100.0)
         self.assertNotIn("G2-NON-PROVIDER", set(report["provider_detail"]["receipt_no"]))
+
+    def test_g2_provider_word_uses_provider_vocabulary_and_operational_columns(self) -> None:
+        from docx import Document
+
+        raw = pd.DataFrame(
+            [
+                {
+                    "Receipt No.": "PROV-CDF-IN",
+                    "Completion Time": "24-08-2026 09:00:00",
+                    "Transaction Status": "Completed",
+                    "Currency": "CDF",
+                    "Paid In": 1_000_000,
+                    "Reason Type": "Business withdrawal Child Different Hierarchy Money Provider",
+                    "Opposite Party": "2306507 - CLIENT A",
+                    "fichier_source_g2": "ORG_12118__All.xlsx",
+                },
+                {
+                    "Receipt No.": "PROV-CDF-OUT",
+                    "Completion Time": "24-08-2026 10:00:00",
+                    "Transaction Status": "Completed",
+                    "Currency": "CDF",
+                    "Withdrawn": -250_000,
+                    "Reason Type": "Business Deposit HO Diff Hierarchy with commission Money Provider",
+                    "Opposite Party": "2306508 - CLIENT B",
+                    "fichier_source_g2": "ORG_12118__All.xlsx",
+                },
+            ]
+        )
+        report = build_g2_provider_report(prepare_g2_transactions(raw))
+        report.update(
+            {
+                "rapport_journalier_pivot": pd.DataFrame(),
+                "rapport_journalier_synthese": pd.DataFrame(),
+                "rapport_journalier_detail": pd.DataFrame(),
+                "g2_dat": pd.DataFrame(),
+                "retention_mensuelle": pd.DataFrame(),
+                "analysis_date_start": pd.Timestamp("2026-08-24 00:00:00"),
+                "analysis_date_end": pd.Timestamp("2026-08-24 23:59:00"),
+            }
+        )
+
+        content = create_g2_dat_word(
+            report,
+            period_text="du 24/08/2026 au 24/08/2026",
+            direction_label="Entrées",
+            generated_at=pd.Timestamp("2026-08-24 18:00:00"),
+        )
+        document = Document(BytesIO(content))
+        paragraphs_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        headers = [[cell.text for cell in table.rows[0].cells] for table in document.tables]
+        table_text = "\n".join(
+            cell.text
+            for table in document.tables
+            for row in table.rows
+            for cell in row.cells
+        )
+
+        self.assertIn(["Devise", "Sens", "Nb operations", "Montant total"], headers)
+        self.assertIn(
+            ["Rang", "Devise", "Sens", "Date", "Reference", "Numero client", "Nom client", "Montant"],
+            headers,
+        )
+        self.assertIn(
+            ["Date", "Reference", "Devise", "Sens", "Numero client", "Nom client", "Montant"],
+            headers,
+        )
+        provider_tables = {
+            tuple(cell.text for cell in table.rows[0].cells): table
+            for table in document.tables
+            if table.rows
+        }
+        top_table = provider_tables[
+            ("Rang", "Devise", "Sens", "Date", "Reference", "Numero client", "Nom client", "Montant")
+        ]
+        top_width_sum = sum(cell.width.cm for cell in top_table.rows[0].cells if cell.width)
+        self.assertAlmostEqual(top_width_sum, 18.39, places=1)
+        detail_table = provider_tables[
+            ("Date", "Reference", "Devise", "Sens", "Numero client", "Nom client", "Montant")
+        ]
+        detail_width_sum = sum(cell.width.cm for cell in detail_table.rows[0].cells if cell.width)
+        self.assertAlmostEqual(detail_width_sum, 17.0, places=1)
+        summary_table = provider_tables[("Devise", "Sens", "Nb operations", "Montant total")]
+        summary_widths = [round(cell.width.cm, 1) for cell in summary_table.rows[0].cells if cell.width]
+        self.assertEqual(summary_widths[-1], 3.0)
+        self.assertIn("Retrait", table_text)
+        self.assertIn("Dépôt", table_text)
+        self.assertIn("Sens : Retrait", paragraphs_text)
+        self.assertNotIn("Synthese executive", paragraphs_text)
+        self.assertNotIn("Synthese des flux", paragraphs_text)
+        self.assertNotIn("Principales operations", paragraphs_text)
+        self.assertNotIn("Top 5 des plus gros mouvements par devise", paragraphs_text)
+        self.assertNotIn("Nb clients", table_text)
+        self.assertNotIn("Type de raison", table_text)
+        self.assertNotIn("Statut", table_text)
 
     def test_g2_daily_report_excludes_provider_from_turbo_reconciliation(self) -> None:
         g2 = prepare_g2_transactions(

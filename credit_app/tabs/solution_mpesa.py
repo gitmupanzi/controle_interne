@@ -4885,7 +4885,6 @@ def _render_provider_12118_report(provider_report: dict[str, pd.DataFrame] | Non
             "currency_code": "Devise",
             "sens_flux": "Sens",
             "nombre_operations": "Nombre d'operations",
-            "nombre_clients": "Nombre de clients",
             "montant_total": "Montant total",
         }
     )
@@ -4893,7 +4892,6 @@ def _render_provider_12118_report(provider_report: dict[str, pd.DataFrame] | Non
         "Devise",
         "Sens",
         "Nombre d'operations",
-        "Nombre de clients",
         "Montant total",
     ]
     provider_summary_view = provider_summary_view[
@@ -4911,12 +4909,22 @@ def _render_provider_12118_report(provider_report: dict[str, pd.DataFrame] | Non
                     "receipt_no": "Reference",
                     "phone_prefixe": "Numero client",
                     "Nom_client": "Nom client",
-                    "details_rapport": "Operation",
                     "montant": "Montant",
-                    "transaction_status": "Statut",
-                    "fichier_source_g2": "Fichier source",
                 }
             )
+            provider_top_columns = [
+                "Rang",
+                "Devise",
+                "Sens",
+                "Date",
+                "Reference",
+                "Numero client",
+                "Nom client",
+                "Montant",
+            ]
+            provider_top_view = provider_top_view[
+                [column for column in provider_top_columns if column in provider_top_view.columns]
+            ].copy()
             _mpesa_dataframe(provider_top_view, width="stretch", hide_index=True)
     if isinstance(provider_detail, pd.DataFrame) and not provider_detail.empty:
         render_panel_title("Transactions")
@@ -4929,10 +4937,6 @@ def _render_provider_12118_report(provider_report: dict[str, pd.DataFrame] | Non
                 "montant": "Montant",
                 "opposite_party": "Nom client",
                 "phone_prefixe": "Numero client",
-                "reason_type": "Type de raison",
-                "transaction_status": "Statut",
-                "balance_numeric": "Solde",
-                "fichier_source_g2": "Fichier source",
             }
         )
         provider_detail_columns = [
@@ -4942,10 +4946,6 @@ def _render_provider_12118_report(provider_report: dict[str, pd.DataFrame] | Non
             "Sens",
             "Numero client",
             "Nom client",
-            "Type de raison",
-            "Statut",
-            "Solde",
-            "Fichier source",
             "Montant",
         ]
         provider_detail_view = provider_detail_view[
@@ -5666,14 +5666,18 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                 "currency_code": "Devise",
                 "sens_flux": "Sens",
                 "nombre_operations": "Nombre d'operations",
-                "nombre_clients": "Nombre de clients",
                 "montant_total": "Montant total",
-                "montant_moyen": "Montant moyen",
-                "montant_max": "Plus gros montant",
-                "premiere_operation": "Premiere operation",
-                "derniere_operation": "Derniere operation",
             }
         )
+        provider_summary_columns = [
+            "Devise",
+            "Sens",
+            "Nombre d'operations",
+            "Montant total",
+        ]
+        provider_summary_view = provider_summary_view[
+            [column for column in provider_summary_columns if column in provider_summary_view.columns]
+        ].copy()
         _mpesa_dataframe(provider_summary_view, width="stretch", hide_index=True)
         st.caption(
             "Le Provider 12118 est lu depuis les rapports G2 charges dans le meme emplacement. "
@@ -5688,14 +5692,8 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                     "currency_code": "Devise",
                     "sens_flux": "Sens",
                     "montant": "Montant",
-                    "opposite_party": "Contrepartie",
+                    "opposite_party": "Nom client",
                     "phone_prefixe": "Numero client",
-                    "Nom_client": "Nom client",
-                    "details": "Details",
-                    "reason_type": "Type de raison",
-                    "transaction_status": "Statut",
-                    "balance_numeric": "Solde",
-                    "fichier_source_g2": "Fichier source",
                 }
             )
             provider_detail_columns = [
@@ -5703,15 +5701,9 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                 "Reference",
                 "Devise",
                 "Sens",
-                "Montant",
                 "Numero client",
                 "Nom client",
-                "Contrepartie",
-                "Details",
-                "Type de raison",
-                "Statut",
-                "Solde",
-                "Fichier source",
+                "Montant",
             ]
             provider_detail_view = provider_detail_view[
                 [column for column in provider_detail_columns if column in provider_detail_view.columns]
@@ -5728,12 +5720,22 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
                         "receipt_no": "Reference",
                         "phone_prefixe": "Numero client",
                         "Nom_client": "Nom client",
-                        "details_rapport": "Operation",
                         "montant": "Montant",
-                        "transaction_status": "Statut",
-                        "fichier_source_g2": "Fichier source",
                     }
                 )
+                provider_top_columns = [
+                    "Rang",
+                    "Devise",
+                    "Sens",
+                    "Date",
+                    "Reference",
+                    "Numero client",
+                    "Nom client",
+                    "Montant",
+                ]
+                provider_top_view = provider_top_view[
+                    [column for column in provider_top_columns if column in provider_top_view.columns]
+                ].copy()
                 _mpesa_dataframe(provider_top_view, width="stretch", hide_index=True)
 
     _render_g2_transaction_time_analysis(transaction_time_report, source_label)

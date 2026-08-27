@@ -5084,6 +5084,15 @@ def build_g2_provider_report(
     provider["sens_flux"] = clean_text(
         provider.get("sens_flux", pd.Series("Indetermine", index=provider.index))
     ).replace("", "Indetermine")
+    provider_sens_normalized = provider["sens_flux"].apply(normalize_label)
+    provider["sens_flux"] = np.select(
+        [
+            provider_sens_normalized.eq("entree"),
+            provider_sens_normalized.eq("sortie"),
+        ],
+        ["Retrait", "Dépôt"],
+        default=provider["sens_flux"],
+    )
     provider["montant"] = numeric_column(provider, "transaction_amount_numeric").abs()
     provider["phone_prefixe"] = normalize_phone(
         provider.get("phone_prefixe", pd.Series(pd.NA, index=provider.index, dtype="string"))
@@ -5094,8 +5103,8 @@ def build_g2_provider_report(
         provider["Nom_client"] = pd.NA
     provider["details_rapport"] = provider["sens_flux"].map(
         {
-            "Entree": "Entree Provider",
-            "Sortie": "Sortie Provider",
+            "Retrait": "Retrait",
+            "Dépôt": "Dépôt",
         }
     ).fillna("Mouvement Provider")
     for column in detail_columns:
@@ -22851,14 +22860,12 @@ def build_g2_dat_pdf_html(
                 "currency_code",
                 "sens_flux",
                 "nombre_operations",
-                "nombre_clients",
                 "montant_total",
             ],
             {
                 "currency_code": "Devise",
                 "sens_flux": "Sens",
                 "nombre_operations": "Nb operations",
-                "nombre_clients": "Nb clients",
                 "montant_total": "Montant total",
             },
             limit=200,
@@ -22896,8 +22903,6 @@ def build_g2_dat_pdf_html(
                 "sens_flux",
                 "phone_prefixe",
                 "opposite_party",
-                "reason_type",
-                "transaction_status",
                 "montant",
             ],
             {
@@ -22907,8 +22912,6 @@ def build_g2_dat_pdf_html(
                 "sens_flux": "Sens",
                 "phone_prefixe": "Numero client",
                 "opposite_party": "Nom client",
-                "reason_type": "Type de raison",
-                "transaction_status": "Statut",
                 "montant": "Montant",
             },
             limit=200,
@@ -26183,6 +26186,31 @@ def create_g2_dat_word(
         classified = classified.loc[
             ~classified["details_rapport"].astype("string").str.startswith("Total ", na=False)
         ]
+    provider_summary_for_layout = word_report.get("provider_synthese", pd.DataFrame())
+    has_provider_only = (
+        isinstance(provider_summary_for_layout, pd.DataFrame)
+        and not provider_summary_for_layout.empty
+        and (not isinstance(daily_pivot, pd.DataFrame) or daily_pivot.empty)
+        and (not isinstance(classified, pd.DataFrame) or classified.empty)
+        and (not isinstance(transaction_detail, pd.DataFrame) or transaction_detail.empty)
+    )
+    word_direction_label = direction_label
+    if has_provider_only:
+        normalized_direction_label = normalize_label(direction_label)
+        if normalized_direction_label in {"entree", "entrees"} or normalized_direction_label.startswith("entr"):
+            word_direction_label = "Retrait"
+        elif normalized_direction_label in {"sortie", "sorties"} or normalized_direction_label.startswith("sort"):
+            word_direction_label = "Dépôt"
+        else:
+            provider_senses = (
+                clean_text(provider_summary_for_layout.get("sens_flux", pd.Series(dtype="string")))
+                .replace("", pd.NA)
+                .dropna()
+                .drop_duplicates()
+                .tolist()
+            )
+            if len(provider_senses) == 1:
+                word_direction_label = str(provider_senses[0])
 
     document = Document()
     section = document.sections[0]
@@ -26191,8 +26219,8 @@ def create_g2_dat_word(
     section.page_height = Cm(29.7)
     section.top_margin = Cm(1.2)
     section.bottom_margin = Cm(1.2)
-    section.left_margin = Cm(2.0)
-    section.right_margin = Cm(2.0)
+    section.left_margin = Cm(1.3 if has_provider_only else 2.0)
+    section.right_margin = Cm(1.3 if has_provider_only else 2.0)
     section.start_type = WD_SECTION.NEW_PAGE
 
     styles = document.styles
@@ -26210,6 +26238,12 @@ def create_g2_dat_word(
         shading = OxmlElement("w:shd")
         shading.set(qn("w:fill"), fill)
         cell_properties.append(shading)
+
+    def set_cell_no_wrap(cell: Any) -> None:
+        cell_properties = cell._tc.get_or_add_tcPr()
+        if cell_properties.find(qn("w:noWrap")) is None:
+            no_wrap = OxmlElement("w:noWrap")
+            cell_properties.append(no_wrap)
 
     header = document.add_table(rows=2, cols=2)
     header.alignment = WD_TABLE_ALIGNMENT.CENTER
@@ -26250,7 +26284,7 @@ def create_g2_dat_word(
     criteria_rows = [
         ("Date du :", period_start_text),
         ("Au :", period_end_text),
-        ("Sens :", direction_label),
+        ("Sens :", word_direction_label),
         ("Source :", source_display_label),
         ("Généré le :", f"{generated_at:%d/%m/%Y}"),
     ]
@@ -26275,12 +26309,13 @@ def create_g2_dat_word(
     meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
     meta.paragraph_format.space_after = Pt(7)
     meta_run = meta.add_run(
-        f"Rapport d'analyse des flux| Sens : {direction_label} | Source : {source_display_label}"
+        f"Rapport d'analyse des flux | Sens : {word_direction_label} | Source : {source_display_label}"
     )
     meta_run.font.size = Pt(8.5)
     meta_run.font.color.rgb = RGBColor(93, 113, 135)
 
-    document.add_heading("Synthese executive", level=1)
+    if not has_provider_only:
+        document.add_heading("Synthese executive", level=1)
 
     def add_summary_bullet(label: str, text: str) -> None:
         paragraph = document.add_paragraph(style="List Bullet")
@@ -26288,6 +26323,9 @@ def create_g2_dat_word(
         bold_run = paragraph.add_run(f"{label}. ")
         bold_run.bold = True
         paragraph.add_run(text)
+
+    if has_provider_only:
+        add_summary_bullet = lambda label, text: None
 
     add_summary_bullet("Activite", context["active_text"])
     if context["status_text"]:
@@ -26306,15 +26344,27 @@ def create_g2_dat_word(
         font_size: float = 8,
         amount_decimals: int = 2,
         column_widths_cm: dict[str, float] | None = None,
+        fit_to_window_cm: float | None = None,
+        no_wrap_columns: set[str] | None = None,
     ) -> Any | None:
         present = [column for column in columns if column in frame.columns]
         if frame.empty or not present:
             document.add_paragraph("Aucune donnee disponible.")
             return None
+        effective_widths_cm = column_widths_cm
+        if column_widths_cm and fit_to_window_cm:
+            current_width = sum(column_widths_cm.get(column, 0) for column in present)
+            if current_width > 0:
+                scale = fit_to_window_cm / current_width
+                effective_widths_cm = {
+                    column: column_widths_cm[column] * scale
+                    for column in present
+                    if column in column_widths_cm
+                }
         table = document.add_table(rows=1, cols=len(present))
         table.style = "Table Grid"
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
-        table.autofit = column_widths_cm is None
+        table.autofit = effective_widths_cm is None
         header_properties = table.rows[0]._tr.get_or_add_trPr()
         repeat_header = OxmlElement("w:tblHeader")
         repeat_header.set(qn("w:val"), "true")
@@ -26322,14 +26372,20 @@ def create_g2_dat_word(
         for index, column in enumerate(present):
             cell = table.rows[0].cells[index]
             cell.text = labels.get(column, column)
-            if column_widths_cm and column in column_widths_cm:
-                cell.width = Cm(column_widths_cm[column])
+            if effective_widths_cm and column in effective_widths_cm:
+                table.columns[index].width = Cm(effective_widths_cm[column])
+                cell.width = Cm(effective_widths_cm[column])
+            if no_wrap_columns and column in no_wrap_columns:
+                set_cell_no_wrap(cell)
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
             set_cell_shading(cell, "1F4E78")
             for run in cell.paragraphs[0].runs:
                 run.bold = True
                 run.font.color.rgb = RGBColor(255, 255, 255)
                 run.font.size = Pt(font_size)
+                run.font.name = "Aptos"
+                run._element.rPr.rFonts.set(qn("w:ascii"), "Aptos")
+                run._element.rPr.rFonts.set(qn("w:hAnsi"), "Aptos")
         for _, row in frame[present].iterrows():
             cells = table.add_row().cells
             for index, column in enumerate(present):
@@ -26349,15 +26405,26 @@ def create_g2_dat_word(
                 else:
                     text = "-" if pd.isna(value) else str(value)
                 cells[index].text = text
-                if column_widths_cm and column in column_widths_cm:
-                    cells[index].width = Cm(column_widths_cm[column])
+                if effective_widths_cm and column in effective_widths_cm:
+                    cells[index].width = Cm(effective_widths_cm[column])
+                if no_wrap_columns and column in no_wrap_columns:
+                    set_cell_no_wrap(cells[index])
                 cells[index].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
                 for paragraph in cells[index].paragraphs:
                     paragraph.paragraph_format.space_after = Pt(0)
                     for run in paragraph.runs:
                         run.font.size = Pt(font_size)
+                        run.font.name = "Aptos"
+                        run._element.rPr.rFonts.set(qn("w:ascii"), "Aptos")
+                        run._element.rPr.rFonts.set(qn("w:hAnsi"), "Aptos")
         document.add_paragraph().paragraph_format.space_after = Pt(0)
         return table
+
+    provider_document_add_heading = document.add_heading
+    provider_document_add_table = add_table
+    if has_provider_only:
+        document.add_heading = lambda *args, **kwargs: document.add_paragraph()
+        add_table = lambda *args, **kwargs: None
 
     document.add_heading(f"Synthese des flux {flow_display_label} par devise", level=1)
     add_table(
@@ -26416,6 +26483,10 @@ def create_g2_dat_word(
         },
     )
 
+    if has_provider_only:
+        document.add_heading = provider_document_add_heading
+        add_table = provider_document_add_table
+
     provider_summary = word_report.get("provider_synthese", pd.DataFrame())
     if isinstance(provider_summary, pd.DataFrame) and not provider_summary.empty:
         document.add_heading("Provider 12118", level=1)
@@ -26425,17 +26496,27 @@ def create_g2_dat_word(
                 "currency_code",
                 "sens_flux",
                 "nombre_operations",
-                "nombre_clients",
                 "montant_total",
             ],
             {
                 "currency_code": "Devise",
                 "sens_flux": "Sens",
                 "nombre_operations": "Nb operations",
-                "nombre_clients": "Nb clients",
                 "montant_total": "Montant total",
             },
-            font_size=7.2,
+            font_size=7,
+            column_widths_cm={
+                "currency_code": 1.2,
+                "sens_flux": 1.4,
+                "nombre_operations": 2.4,
+                "montant_total": 3.0,
+            },
+            no_wrap_columns={
+                "currency_code",
+                "sens_flux",
+                "nombre_operations",
+                "montant_total",
+            },
         )
         provider_top = word_report.get("provider_top_mouvements", pd.DataFrame())
         if isinstance(provider_top, pd.DataFrame) and not provider_top.empty:
@@ -26462,7 +26543,26 @@ def create_g2_dat_word(
                     "Nom_client": "Nom client",
                     "montant": "Montant",
                 },
-                font_size=7.2,
+                font_size=6.5,
+                column_widths_cm={
+                    "rang": 1.02,
+                    "currency_code": 1.17,
+                    "sens_flux": 1.21,
+                    "date": 2.5,
+                    "receipt_no": 2.14,
+                    "phone_prefixe": 1.85,
+                    "Nom_client": 6.25,
+                    "montant": 2.25,
+                },
+                no_wrap_columns={
+                    "rang",
+                    "currency_code",
+                    "sens_flux",
+                    "date",
+                    "receipt_no",
+                    "phone_prefixe",
+                    "montant",
+                },
             )
         provider_detail = word_report.get("provider_detail", pd.DataFrame())
         if isinstance(provider_detail, pd.DataFrame) and not provider_detail.empty:
@@ -26477,8 +26577,6 @@ def create_g2_dat_word(
                     "sens_flux",
                     "phone_prefixe",
                     "opposite_party",
-                    "reason_type",
-                    "transaction_status",
                     "montant",
                 ],
                 {
@@ -26488,11 +26586,27 @@ def create_g2_dat_word(
                     "sens_flux": "Sens",
                     "phone_prefixe": "Numero client",
                     "opposite_party": "Nom client",
-                    "reason_type": "Type de raison",
-                    "transaction_status": "Statut",
                     "montant": "Montant",
                 },
-                font_size=6.7,
+                font_size=6.5,
+                column_widths_cm={
+                    "date": 2.5,
+                    "receipt_no": 1.9,
+                    "currency_code": 0.75,
+                    "sens_flux": 0.9,
+                    "phone_prefixe": 1.85,
+                    "opposite_party": 7.0,
+                    "montant": 2.1,
+                },
+                fit_to_window_cm=17.0,
+                no_wrap_columns={
+                    "date",
+                    "receipt_no",
+                    "currency_code",
+                    "sens_flux",
+                    "phone_prefixe",
+                    "montant",
+                },
             )
 
     if context["has_retention"]:
