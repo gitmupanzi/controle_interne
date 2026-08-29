@@ -9,6 +9,19 @@ L'onglet Statistiques est organisé en blocs repliables :
 3. Crédits ;
 4. Transactions.
 
+Le rapport Word conserve une lecture décisionnelle en quatre blocs :
+
+1. Comparaison avec la période précédente ;
+2. Clients ;
+3. Épargnes et DAT ;
+4. Crédits.
+
+Dans ces blocs, la section **Flux entrants observés sur la période** distingue les
+entrées DAT, les entrées sur comptes ouverts et les remboursements observés. Les
+montants viennent des événements consolidés de `Transactions Solution Numérique`,
+suivent exclusivement la période validée dans Statistiques et restent séparés par
+devise. Ils décrivent des flux et ne doivent pas être interprétés comme des encours.
+
 ## Vocabulaire métier du rapport
 
 Dans le rapport statistique, le mot `compte client` désigne le numéro de téléphone normalisé. C'est la clé terrain la plus simple pour rapprocher les fichiers de la Solution Numérique et, à terme, Perfect Vision.
@@ -62,6 +75,8 @@ Les indicateurs de stock sont lus à la date de fin, qui est la date d'arrêté 
 - l'encours crédit en retard correspond à l'encours de ces crédits en retard ;
 - le taux de portefeuille à risque PAR 30 correspond à l'encours en retard de 30 jours ou plus rapporté à l'encours total de la devise.
 
+Pour les indicateurs décisionnels d'épargne et de DAT, un produit est considéré comme réellement actif lorsqu'il a un solde non nul, un statut actif et une date de mise à jour différente de la date de création. Cette règle évite de compter comme vrais produits les lignes techniques créées automatiquement au démarrage du parcours client, notamment les comptes ouverts à solde nul qui n'ont jamais évolué.
+
 Ces indicateurs restent toujours séparés par devise pour les montants. Les nombres de comptes clients ou de produits peuvent être consolidés, mais les USD et les CDF ne doivent pas être additionnés dans un même montant.
 
 ## Comparaisons
@@ -71,6 +86,8 @@ Les indicateurs peuvent être comparés :
 - à une période précédente variable : 7 jours, 15 jours, un mois ou autre période définie.
 
 Les comparaisons annuelles N-1 ne sont plus affichées dans l'onglet `Statistiques`. L'objectif est de garder un écran plus opérationnel, centré sur la période analysée, la période précédente et les indicateurs de portefeuille à date.
+
+Dans le rapport Word, le bloc `Comparaison avec la periode precedente` reste volontairement court. Il conserve les indicateurs utiles a la decision : comptes clients, produits d'epargne ouverte, produits DAT / comptes bloques, epargnes ou DAT sans credit, DAT arrivant a echeance, taux de conversion DAT en credit, nouveaux produits credit et montant des nouveaux credits. Les volumes transactionnels, le chiffre d'affaires observe, les operations brutes, les remboursements observes et les depots DAT issus de `Transactions` restent hors de ce bloc.
 
 ## Projections
 

@@ -6,6 +6,7 @@ import unittest
 
 from openpyxl import load_workbook
 import pandas as pd
+from docx import Document
 
 from credit_app.services.mpesa_analysis import (
     MpesaPreparedData,
@@ -6248,6 +6249,49 @@ class MpesaAnalysisTests(unittest.TestCase):
             int(finance_flow["nombre_clients"]),
         )
 
+    def test_mpesa_statistics_flow_entries_match_finance_by_currency(self) -> None:
+        prepared = _sample_customer_transaction_analysis_data()
+        journal = build_turbo_operation_events(prepared.transactions)
+        kwargs = {
+            "date_start": "2026-07-01",
+            "date_end": "2026-07-05",
+            "frequency": "Jour",
+            "turbo_events": journal["events"],
+            "turbo_transaction_lines": journal["lines"],
+        }
+
+        finance = build_mpesa_turbo_financial_analysis(prepared, **kwargs)
+        statistics = build_mpesa_statistics_report(
+            prepared,
+            include_transaction_metrics=False,
+            include_transaction_flow_summary=True,
+            **kwargs,
+        )
+
+        finance_flow = finance["flux_synthese"].set_index("currency_code")
+        statistics_flow = statistics["flux_entrees_periode"].set_index("currency_code")
+        for currency in finance_flow.index:
+            for column in [
+                "depots_dat",
+                "depots_epargne_courante",
+                "remboursements_observes",
+            ]:
+                self.assertEqual(
+                    float(statistics_flow.loc[currency, column]),
+                    float(finance_flow.loc[currency, column]),
+                )
+
+        word = Document(BytesIO(create_mpesa_statistics_word(statistics)))
+        word_text = "\n".join(
+            [paragraph.text for paragraph in word.paragraphs]
+            + [
+                " | ".join(cell.text for cell in row.cells)
+                for table in word.tables
+                for row in table.rows
+            ]
+        )
+        self.assertIn("Flux entrants observés sur la période", word_text)
+
     def test_mpesa_clients_report_ignores_unknown_currency_when_client_has_known_currency(self) -> None:
         phone = "243817066094"
         events = pd.DataFrame(
@@ -6389,6 +6433,99 @@ class MpesaAnalysisTests(unittest.TestCase):
         )
         self.assertEqual(
             int(report["dat_arrivant_echeance"].iloc[0]["nombre_dat_arrivant_echeance"]),
+            2,
+        )
+
+    def test_mpesa_statistics_counts_only_real_active_savings_for_decision_kpis(self) -> None:
+        savings = prepare_savings_accounts(
+            pd.DataFrame(
+                [
+                    {
+                        "customer_id": "C1",
+                        "msisdn1": "243810000001",
+                        "product_name": "Fixed Account",
+                        "currency_code": "CDF",
+                        "balance": 100,
+                        "status": "Active",
+                        "account_type": "FIXED SAVINGS",
+                        "created_at": "2026-08-01 08:00:00",
+                        "updated_at": "2026-08-02 08:00:00",
+                        "date_approved": "2026-08-01",
+                        "date_activated": "2026-08-01",
+                        "maturity_date": "2026-09-01",
+                    },
+                    {
+                        "customer_id": "C2",
+                        "msisdn1": "243810000002",
+                        "product_name": "Fixed Account",
+                        "currency_code": "CDF",
+                        "balance": 200,
+                        "status": "Active",
+                        "account_type": "FIXED SAVINGS",
+                        "created_at": "2026-08-01 08:00:00",
+                        "updated_at": "2026-08-01 08:00:00",
+                        "date_approved": "2026-08-01",
+                        "date_activated": "2026-08-01",
+                        "maturity_date": "2026-09-01",
+                    },
+                    {
+                        "customer_id": "C3",
+                        "msisdn1": "243810000003",
+                        "product_name": "Open Savings",
+                        "currency_code": "CDF",
+                        "balance": 50,
+                        "status": "Active",
+                        "account_type": "NORMAL SAVINGS",
+                        "created_at": "2026-08-03 08:00:00",
+                        "updated_at": "2026-08-04 08:00:00",
+                    },
+                    {
+                        "customer_id": "C4",
+                        "msisdn1": "243810000004",
+                        "product_name": "Open Savings",
+                        "currency_code": "CDF",
+                        "balance": 0,
+                        "status": "Active",
+                        "account_type": "NORMAL SAVINGS",
+                        "created_at": "2026-08-03 08:00:00",
+                        "updated_at": "2026-08-04 08:00:00",
+                    },
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=savings.loc[savings["account_type"].eq("NORMAL SAVINGS")].copy(),
+            fixed_savings=savings.loc[savings["account_type"].eq("FIXED SAVINGS")].copy(),
+            loans=pd.DataFrame(),
+            load_report={},
+            g2_transactions=pd.DataFrame(),
+            customers=pd.DataFrame(),
+            perfect_clients=pd.DataFrame(),
+        )
+
+        report = build_mpesa_statistics_report(
+            prepared,
+            date_start="2026-08-01",
+            date_end="2026-08-28",
+        )
+        portfolio = report["epargne_dat_portefeuille"].set_index(
+            ["currency_code", "famille"]
+        )
+        client_rows = report["clients_operationnels"].set_index("indicateur")
+
+        self.assertEqual(int(portfolio.loc[("CDF", "DAT"), "comptes_solde_positif"]), 1)
+        self.assertEqual(float(portfolio.loc[("CDF", "DAT"), "solde_positif_total"]), 100.0)
+        self.assertEqual(
+            int(portfolio.loc[("CDF", "Compte ouvert"), "comptes_solde_positif"]),
+            1,
+        )
+        self.assertEqual(
+            float(portfolio.loc[("CDF", "Compte ouvert"), "solde_positif_total"]),
+            50.0,
+        )
+        self.assertEqual(
+            int(client_rows.loc["Comptes clients avec histoire d'épargne active", "valeur"]),
             2,
         )
 
@@ -6816,15 +6953,17 @@ class MpesaAnalysisTests(unittest.TestCase):
         dat_maturity_amount = indexed.loc[("encours_dat_bientot_echus", "CDF")]
         self.assertEqual(float(dat_maturity_amount["valeur_semaine_courante"]), 100.0)
         self.assertEqual(float(dat_maturity_amount["valeur_semaine_precedente"]), 50.0)
-        dat_credit_conversion = indexed.loc[("taux_conversion_dat_credit", "CDF")]
-        self.assertEqual(float(dat_credit_conversion["valeur_semaine_courante"]), 100.0)
-        self.assertEqual(float(dat_credit_conversion["valeur_semaine_precedente"]), 100.0)
         savings_without_credit = indexed.loc[("encours_epargne_sans_credit", "USD")]
         self.assertEqual(float(savings_without_credit["valeur_semaine_courante"]), 25.0)
         self.assertEqual(float(savings_without_credit["valeur_semaine_precedente"]), 10.0)
 
+        self.assertNotIn(("taux_conversion_dat_credit", "CDF"), indexed.index)
         self.assertNotIn(("volume_transactions", "CDF"), indexed.index)
         self.assertNotIn(("chiffre_affaires_observe", "CDF"), indexed.index)
+        self.assertEqual(
+            ["Clients", "Comptes DAT", "Comptes ouverts", "Crédits", "Transactions"],
+            list(dict.fromkeys(comparison["bloc"].astype(str))),
+        )
 
         comparison_with_volume = build_mpesa_weekly_comparison(
             prepared,

@@ -5,6 +5,7 @@ from datetime import time
 from html import escape as html_escape
 import hashlib
 from io import BytesIO
+from pathlib import Path
 import re
 import unicodedata
 from typing import Any, Literal
@@ -444,8 +445,11 @@ def _prepared_data_as_of(
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=16)
-def _read_excel_bytes(file_bytes: bytes, file_name: str) -> pd.DataFrame:
+MPESA_EXCEL_DISK_CACHE_VERSION = "v1"
+MPESA_EXCEL_DISK_CACHE_DIR = Path(".cache") / "solution_numerique" / "excel_frames"
+
+
+def _read_excel_file_bytes_uncached(file_bytes: bytes, file_name: str) -> pd.DataFrame:
     if not file_bytes:
         return pd.DataFrame()
     try:
@@ -463,6 +467,61 @@ def _read_excel_bytes(file_bytes: bytes, file_name: str) -> pd.DataFrame:
                 f"Impossible de lire `{file_name}` : {openpyxl_exc} "
                 f"(lecture rapide : {calamine_exc})"
             ) from openpyxl_exc
+
+
+def _excel_disk_cache_paths(file_bytes: bytes) -> tuple[Path, Path]:
+    digest = hashlib.sha256(file_bytes).hexdigest()
+    stem = f"{MPESA_EXCEL_DISK_CACHE_VERSION}_{digest}"
+    return (
+        MPESA_EXCEL_DISK_CACHE_DIR / f"{stem}.parquet",
+        MPESA_EXCEL_DISK_CACHE_DIR / f"{stem}.pkl",
+    )
+
+
+def _read_excel_from_disk_cache(file_bytes: bytes) -> pd.DataFrame | None:
+    parquet_path, pickle_path = _excel_disk_cache_paths(file_bytes)
+    if parquet_path.exists():
+        try:
+            return pd.read_parquet(parquet_path)
+        except Exception:
+            pass
+    if pickle_path.exists():
+        try:
+            return pd.read_pickle(pickle_path)
+        except Exception:
+            pass
+    return None
+
+
+def _write_excel_disk_cache(file_bytes: bytes, frame: pd.DataFrame) -> None:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return
+    try:
+        MPESA_EXCEL_DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+    parquet_path, pickle_path = _excel_disk_cache_paths(file_bytes)
+    if parquet_path.exists() or pickle_path.exists():
+        return
+    try:
+        frame.to_parquet(parquet_path, index=False)
+        return
+    except Exception:
+        pass
+    try:
+        frame.to_pickle(pickle_path)
+    except Exception:
+        return
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def _read_excel_bytes(file_bytes: bytes, file_name: str) -> pd.DataFrame:
+    cached = _read_excel_from_disk_cache(file_bytes)
+    if cached is not None:
+        return cached
+    frame = _read_excel_file_bytes_uncached(file_bytes, file_name)
+    _write_excel_disk_cache(file_bytes, frame)
+    return frame
 
 
 def _uploaded_dataframe(uploaded_file: Any) -> pd.DataFrame:
@@ -1402,6 +1461,7 @@ def _build_mpesa_statistics_report_cached(
     comparison_period: str,
     dat_maturity_horizon_days: int,
 ) -> dict[str, Any]:
+    operation_journal = _build_turbo_operation_events_cached(prepared)
     scoped_prepared = _prepared_data_as_of(prepared, date_end)
     scoped_historical_prepared = _prepared_data_as_of(
         historical_prepared,
@@ -1418,6 +1478,9 @@ def _build_mpesa_statistics_report_cached(
         historical_prepared=scoped_historical_prepared,
         total_loaded_clients_override=total_loaded_clients,
         include_transaction_metrics=False,
+        include_transaction_flow_summary=True,
+        turbo_events=operation_journal["events"],
+        turbo_transaction_lines=operation_journal["lines"],
     )
 
 
@@ -3853,7 +3916,7 @@ def _render_dat_repayment_schedule(prepared: MpesaPreparedData) -> None:
     )
     _render_weekly_comparison(
         dat_weekly_comparison,
-        blocks=["Comptes"],
+        blocks=["Comptes DAT"],
         indicator_keys=["nouveaux_dat", "depots_dat"],
         title="Évolution comparative des DAT",
     )
@@ -4328,7 +4391,7 @@ def _render_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) 
             weekly_date,
             _selected_mpesa_comparison_period(),
         ),
-        blocks=["Comptes"],
+        blocks=["Comptes ouverts", "Comptes DAT"],
         indicator_keys=["clients_epargnants", "nouveaux_comptes_ouverts", "nouveaux_dat", "depots_epargne", "depots_dat"],
         title="Evolution comparative de l'epargne",
         help_text=(
@@ -5477,7 +5540,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
     )
     _render_weekly_comparison(
         g2_dat_weekly_comparison,
-        blocks=["Comptes", "Transactions"],
+        blocks=["Comptes DAT", "Transactions"],
         indicator_keys=["nouveaux_dat", "depots_dat", "operations_turbo"],
         title="Comparaison temporelle utile au contrôle G2 / DAT",
     )
@@ -6083,6 +6146,23 @@ def _render_perfect_client_tab(prepared: MpesaPreparedData) -> None:
             "Les operations proviennent de la Solution Numérique/G2 : Clients_Perfect contient l'identite du client, pas ses operations financieres.",
         ],
     )
+    data_token = _prepared_data_state_token(prepared)
+    applied_filters_key = f"mpesa_perfect_client_applied_filters_{data_token}"
+    with st.form(f"mpesa_perfect_client_filters_{data_token}", border=True):
+        st.caption(
+            "Validez l'actualisation pour lancer le rapprochement des populations et des operations."
+        )
+        perfect_client_submitted = st.form_submit_button(
+            "Actualiser Perfect Client",
+            type="primary",
+            icon=":material/refresh:",
+        )
+    if perfect_client_submitted:
+        st.session_state[applied_filters_key] = {"validated": True}
+    if not st.session_state.get(applied_filters_key):
+        _render_deferred_analysis_notice("l'onglet Perfect Client")
+        return
+
     report = build_perfect_client_crosscheck(prepared)
     summary = report.get("synthese", pd.DataFrame())
     operations = report.get("operations", pd.DataFrame())
@@ -6772,26 +6852,6 @@ def _render_management_dashboard_legacy(prepared: MpesaPreparedData) -> None:
 @st.fragment
 def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData) -> None:
     credit_name_lookup = _build_credit_customer_name_lookup(prepared)
-    loans_weekly_comparison = _build_mpesa_weekly_comparison_cached(
-        prepared,
-        _latest_complete_turbo_date(prepared),
-        _selected_mpesa_comparison_period(),
-    )
-    _render_weekly_comparison(
-        loans_weekly_comparison,
-        blocks=["Credits"],
-        indicator_keys=[
-            "nouveaux_credits",
-            "montant_nouveaux_credits",
-            "remboursements_credits",
-        ],
-        title="Evolution comparative des credits",
-        help_text=(
-            "Ce bloc compare la production, les remboursements et les volumes de credit "
-            "avec la periode de reference. Il aide a voir la tendance du portefeuille sans "
-            "melanger les devises."
-        ),
-    )
     if report is not None:
         render_panel_title("Credits du client")
         _render_block_help(
@@ -6943,6 +7003,32 @@ def _render_loans_tab(report: dict[str, Any] | None, prepared: MpesaPreparedData
             f"{pd.Timestamp(date_end):%d/%m/%Y}, frequence {frequency}.",
             icon=":material/check_circle:",
         )
+
+    comparison_anchor = min(
+        pd.Timestamp(date_end).normalize(),
+        _latest_complete_turbo_date(prepared),
+    )
+    loans_weekly_comparison = _build_mpesa_weekly_comparison_cached(
+        prepared,
+        comparison_anchor,
+        _selected_mpesa_comparison_period(),
+        date_start=pd.Timestamp(date_start).normalize(),
+    )
+    _render_weekly_comparison(
+        loans_weekly_comparison,
+        blocks=["Crédits"],
+        indicator_keys=[
+            "nouveaux_credits",
+            "montant_nouveaux_credits",
+            "remboursements_credits",
+        ],
+        title="Evolution comparative des credits",
+        help_text=(
+            "Ce bloc compare la production, les remboursements et les volumes de credit "
+            "avec la periode de reference. Il aide a voir la tendance du portefeuille sans "
+            "melanger les devises."
+        ),
+    )
 
     cockpit = _build_mpesa_credit_cockpit_cached(
         prepared,
@@ -7848,6 +7934,7 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
         ],
     )
 
+    data_token = _prepared_data_state_token(prepared)
     with st.form("mpesa_finance_turbo_filters"):
         start_col, end_col, frequency_col = st.columns([1.0, 1.0, 1.0])
         with start_col:
@@ -7938,16 +8025,53 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
                 "signalée comme importante pour revue."
             ),
         )
-        st.form_submit_button("Actualiser l'analyse", type="primary")
+        finance_submitted = st.form_submit_button("Actualiser l'analyse", type="primary")
 
-    date_start = selected_start_date
-    date_end = selected_end_date
-    if date_start > date_end:
+    applied_filters_key = f"mpesa_finance_turbo_applied_filters_{data_token}"
+    applied_at_key = f"mpesa_finance_turbo_applied_at_{data_token}"
+    if finance_submitted:
+        if selected_start_date > selected_end_date:
+            st.error(
+                "La date de début doit être antérieure ou égale à la date de fin.",
+                icon=":material/error:",
+            )
+            return
+        st.session_state[applied_filters_key] = {
+            "date_start": selected_start_date,
+            "date_end": selected_end_date,
+            "frequency": frequency,
+            "fractionation_cdf": fractionation_cdf,
+            "fractionation_usd": fractionation_usd,
+            "important_cdf": important_cdf,
+            "important_usd": important_usd,
+        }
+        st.session_state[applied_at_key] = pd.Timestamp.now()
+
+    applied_filters = st.session_state.get(applied_filters_key)
+    if not applied_filters:
+        _render_deferred_analysis_notice("l'onglet Finance et comptabilité")
+        return
+
+    date_start = applied_filters.get("date_start", default_start)
+    date_end = applied_filters.get("date_end", default_end)
+    if pd.Timestamp(date_start) > pd.Timestamp(date_end):
         st.error(
             "La date de début doit être antérieure ou égale à la date de fin.",
             icon=":material/error:",
         )
         return
+    frequency = applied_filters.get("frequency", "Mois")
+    fractionation_cdf = applied_filters.get("fractionation_cdf", 14_000_000.0)
+    fractionation_usd = applied_filters.get("fractionation_usd", 5_000.0)
+    important_cdf = applied_filters.get("important_cdf", 28_000_000.0)
+    important_usd = applied_filters.get("important_usd", 10_000.0)
+    if finance_submitted:
+        st.success(
+            f"Parametres Finance et comptabilité appliques : "
+            f"{pd.Timestamp(date_start):%d/%m/%Y} - "
+            f"{pd.Timestamp(date_end):%d/%m/%Y}, frequence {frequency}.",
+            icon=":material/check_circle:",
+        )
 
     dat_interest_rate = float(
         st.session_state.get(
@@ -8009,7 +8133,7 @@ def _render_finance_turbo_tab(prepared: MpesaPreparedData) -> None:
     )
     _render_weekly_comparison(
         weekly_comparison,
-        blocks=["Clients", "Comptes", "Credits", "Transactions"],
+        blocks=["Clients", "Comptes DAT", "Comptes ouverts", "Crédits", "Transactions"],
         selected_currencies=selected_currencies,
     )
     sources = report_view.get("sources", pd.DataFrame())
@@ -9848,6 +9972,28 @@ def _render_statistics_tab(
     )
     report_view = _filter_pilotage_currencies(report, selected_currencies)
 
+    flow_entries = report_view.get("flux_entrees_periode", pd.DataFrame())
+    if isinstance(flow_entries, pd.DataFrame) and not flow_entries.empty:
+        st.subheader("Flux entrants observés sur la période")
+        st.caption(
+            "Flux issus des événements consolidés de Transactions Solution Numérique; "
+            "les montants restent séparés par devise et ne constituent pas des encours."
+        )
+        _mpesa_dataframe(
+            flow_entries,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "currency_code": st.column_config.TextColumn("Devise", pinned=True),
+                "nombre_operations": st.column_config.NumberColumn("Opérations", format="%d"),
+                "nombre_clients": st.column_config.NumberColumn("Comptes clients", format="%d"),
+                "montant_entrees": st.column_config.NumberColumn("Entrées totales", format="%.2f"),
+                "depots_dat": st.column_config.NumberColumn("DAT", format="%.2f"),
+                "depots_epargne_courante": st.column_config.NumberColumn("Comptes ouverts", format="%.2f"),
+                "remboursements_observes": st.column_config.NumberColumn("Remboursements", format="%.2f"),
+            },
+        )
+
     overview = report_view.get("vue_ensemble", pd.DataFrame())
     client_indicators = report_view.get("clients_indicateurs", pd.DataFrame())
     portfolio = report_view.get("epargne_dat_portefeuille", pd.DataFrame())
@@ -9974,7 +10120,7 @@ def _render_statistics_tab(
         )
         _render_weekly_comparison(
             weekly_comparison,
-            blocks=["Comptes"],
+            blocks=["Comptes DAT", "Comptes ouverts"],
             selected_currencies=selected_currencies,
             title="Comparaison des comptes",
         )
@@ -10061,7 +10207,7 @@ def _render_statistics_tab(
         )
         _render_weekly_comparison(
             weekly_comparison,
-            blocks=["Credits"],
+            blocks=["Crédits"],
             selected_currencies=selected_currencies,
             title="Comparaison des crédits",
         )
@@ -10265,16 +10411,6 @@ def _render_forecast_tab(prepared: MpesaPreparedData) -> None:
     st.session_state.setdefault("mpesa_forecast_frequency", "Semaine")
     st.session_state.setdefault("mpesa_forecast_confidence", 80)
     st.session_state.setdefault("mpesa_forecast_dat_rate", DEFAULT_DAT_ANNUAL_INTEREST_RATE_PCT)
-    st.session_state.setdefault(
-        applied_key,
-        {
-            "reference_date": st.session_state[reference_key],
-            "horizon_days": st.session_state["mpesa_forecast_horizon"],
-            "frequency": st.session_state["mpesa_forecast_frequency"],
-            "confidence_level": st.session_state["mpesa_forecast_confidence"],
-            "annual_interest_rate_pct": st.session_state["mpesa_forecast_dat_rate"],
-        },
-    )
 
     with st.form(f"mpesa_forecast_filters_{scope_key}", border=True):
         reference_col, horizon_col, frequency_col, confidence_col, rate_col = st.columns(
@@ -10362,7 +10498,10 @@ def _render_forecast_tab(prepared: MpesaPreparedData) -> None:
             "annual_interest_rate_pct": st.session_state["mpesa_forecast_dat_rate"],
         }
 
-    filters = st.session_state[applied_key]
+    filters = st.session_state.get(applied_key)
+    if not filters:
+        _render_deferred_analysis_notice("l'onglet Projections")
+        return
     reference_date = pd.Timestamp(filters["reference_date"]).normalize()
     horizon_days = int(filters["horizon_days"])
     frequency = str(filters["frequency"])

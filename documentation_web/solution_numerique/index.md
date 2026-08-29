@@ -71,3 +71,20 @@ Turbo / Solution Numérique constitue la source opérationnelle principale. G2 e
     Tests automatisés, jeux de test métier et limites des données.
   </a>
 </div>
+
+## Cadre de lecture Direction et conformite
+
+Pour garder les analyses fiables, il faut toujours distinguer quatre lectures :
+
+| Lecture | Question | Source principale |
+|---|---|---|
+| Stock a date | Quelle est la situation a la date d'arrete ? | `Savings Account` pour epargne/DAT, `Loans Account` pour credits |
+| Flux de periode | Qu'est-ce qui a bouge entre deux dates ? | `Transactions`, avec prudence si l'export est plafonne |
+| Identite et controle | Quel est le nom du client et l'ecriture est-elle rapprochable ? | G2, sans recalculer les montants |
+| Qualite / conformite | Quels signaux doivent etre verifies par un agent ? | Controles internes, alertes, anomalies et data gaps |
+
+Les indicateurs doivent afficher ou documenter la devise, la date de situation ou la periode, la definition et la limite de lecture. Les montants CDF et USD ne sont jamais additionnes dans un meme chiffre decisionnel. Les alertes restent des signaux de revue humaine : elles ne remplacent pas la decision operationnelle ni la certification comptable.
+
+## Performance et chargement des fichiers
+
+Les fichiers Excel volumineux sont lus avec un lecteur rapide lorsque l'environnement le permet, puis mis en cache technique local. Ce cache sert uniquement a accelerer les relectures du meme fichier; il est regenerable, non versionne et ne remplace jamais les sources metier. Les analyses lourdes doivent rester declenchees par bouton d'actualisation ou par preparation explicite d'export.
