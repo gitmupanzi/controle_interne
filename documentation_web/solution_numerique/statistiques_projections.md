@@ -16,8 +16,8 @@ Le rapport Word conserve une lecture décisionnelle en quatre blocs :
 3. Épargnes et DAT ;
 4. Crédits.
 
-Dans le Word, le premier bloc couvre la comparaison entre deux périodes. Le bloc
-**Flux observés sur la période** restitue ensuite deux lectures séparées :
+Dans le Word, le premier bloc couvre la comparaison entre deux périodes. Deux
+sous-blocs de flux restituent ensuite les mouvements de période :
 
 - les **flux entrants** : entrées DAT, entrées sur comptes ouverts et remboursements observés, sans colonnes de comptage `Opérations` ni `Comptes clients` dans le Word ;
 - les **flux sortants** : sorties totales, retraits d'épargne, décaissements crédits et flux net.
@@ -102,9 +102,9 @@ Dans le rapport Word, le bloc `Comparaison avec la periode precedente` reste vol
 
 Pour garder le Word lisible par la Direction, les blocs de stock sont aussi resserres :
 
-- `Clients` : comptes clients connus, comptes clients avec histoire d'epargne active, comptes clients ayant a la fois un DAT positif et un credit actif ;
+- `Clients` : comptes clients recensés dans le référentiel clients, comptes clients connus à la date d'arrêté, numéros de téléphone observés sur la période, comptes clients avec histoire d'épargne active, comptes clients ayant à la fois un DAT positif et un crédit actif ;
 - `Epargnes et DAT` : encours DAT, encours d'epargne ouverte, nombre de DAT arrivant a echeance et encours DAT arrivant a echeance ;
-- `Credits` : encours credit, nombre de credits en retard, encours credit en retard et PAR 30.
+- `Credits` : encours credit, nombre de credits en retard, encours credit en retard, PAR 30 et taux de conversion DAT en crédit.
 
 Les autres details restent disponibles dans les cockpits Excel et les onglets specialises.
 

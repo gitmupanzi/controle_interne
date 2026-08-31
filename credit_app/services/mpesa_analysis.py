@@ -12024,7 +12024,7 @@ def build_mpesa_statistics_report(
             turbo_events=turbo_events,
             turbo_transaction_lines=turbo_transaction_lines,
         )
-        events = pd.DataFrame()
+        events = finance.get("operations_turbo", pd.DataFrame()).copy()
         lines = pd.DataFrame()
     else:
         finance = {}
@@ -12052,7 +12052,7 @@ def build_mpesa_statistics_report(
     total_known_clients = int(customer_reference["client_key"].nunique()) if not customer_reference.empty else 0
     active_clients = (
         int(_mpesa_statistics_client_key(events, prefer_phone=True).replace("", pd.NA).nunique())
-        if include_transaction_metrics and not events.empty
+        if not events.empty
         else None
     )
     active_clients_by_currency: dict[str, int] = {}
@@ -12785,6 +12785,7 @@ def create_mpesa_statistics_word(
         run.bold = True
         run.font.size = Pt(10)
         run.font.color.rgb = RGBColor(24, 63, 91)
+        return paragraph
 
     def add_table(frame: pd.DataFrame, labels: dict[str, str], *, max_rows: int = 30) -> None:
         if not isinstance(frame, pd.DataFrame) or frame.empty:
@@ -13169,14 +13170,110 @@ def create_mpesa_statistics_word(
         max_rows=20,
     )
 
+    def _observed_phone_count_for_period() -> int:
+        operations_frame = statistics_report.get("operations_turbo", pd.DataFrame())
+        if isinstance(operations_frame, pd.DataFrame) and not operations_frame.empty:
+            phone_columns = [
+                column
+                for column in [
+                    "numero_telephone",
+                    "telephone",
+                    "msisdn1",
+                    "msisdn",
+                    "phone_number",
+                    "mobile_number",
+                    "numero_client",
+                ]
+                if column in operations_frame.columns
+            ]
+            if phone_columns:
+                scoped_operations = operations_frame.copy()
+                date_columns = [
+                    column
+                    for column in ["created_at", "date_operation", "date", "operation_date"]
+                    if column in scoped_operations.columns
+                ]
+                if date_columns and pd.notna(start_date) and pd.notna(end_date):
+                    operation_dates = pd.to_datetime(scoped_operations[date_columns[0]], errors="coerce")
+                    period_start = pd.to_datetime(start_date, errors="coerce")
+                    period_end = pd.to_datetime(end_date, errors="coerce")
+                    if pd.notna(period_end) and period_end == period_end.normalize():
+                        period_end = period_end + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+                    scoped_operations = scoped_operations.loc[
+                        operation_dates.notna()
+                        & operation_dates.between(period_start, period_end)
+                    ].copy()
+                return int(
+                    normalize_phone(clean_text(scoped_operations[phone_columns[0]]))
+                    .replace("", pd.NA)
+                    .dropna()
+                    .nunique()
+                )
+        overview_frame = statistics_report.get("vue_ensemble", pd.DataFrame())
+        if isinstance(overview_frame, pd.DataFrame) and not overview_frame.empty:
+            for column in ["clients_turbo_actifs_global", "clients_turbo_actifs"]:
+                if column in overview_frame.columns:
+                    value = pd.to_numeric(overview_frame[column], errors="coerce").fillna(0).max()
+                    return int(value)
+        return 0
+
     add_title("1. Clients")
     if isinstance(client_operational_frame, pd.DataFrame) and not client_operational_frame.empty:
         client_display = client_operational_frame.copy()
+    else:
+        overview_frame = statistics_report.get("vue_ensemble", pd.DataFrame())
+        operations_frame = statistics_report.get("operations_turbo", pd.DataFrame())
+        fallback_rows: list[dict[str, Any]] = []
+        if isinstance(overview_frame, pd.DataFrame) and not overview_frame.empty:
+            loaded_clients = _safe_float(
+                pd.to_numeric(
+                    overview_frame.get("clients_turbo_charges", pd.Series(dtype=float)),
+                    errors="coerce",
+                ).fillna(0).max()
+            )
+            known_clients = _safe_float(
+                pd.to_numeric(
+                    overview_frame.get("clients_turbo_connus", pd.Series(dtype=float)),
+                    errors="coerce",
+                ).fillna(0).max()
+            )
+            observed_clients = _safe_float(
+                pd.to_numeric(
+                    overview_frame.get("clients_turbo_actifs", pd.Series(dtype=float)),
+                    errors="coerce",
+                ).fillna(0).max()
+            )
+            observed_clients = float(_observed_phone_count_for_period())
+            fallback_rows.extend(
+                [
+                    {
+                        "indicateur": "Comptes clients recensés dans le référentiel clients",
+                        "valeur": loaded_clients,
+                        "commentaire": "Comptes clients distincts du fichier Customers chargé; un compte client correspond au numéro de téléphone.",
+                    },
+                    {
+                        "indicateur": "Comptes clients connus à la date d'arrêté",
+                        "valeur": known_clients,
+                        "commentaire": "Comptes clients créés avant ou à la date de fin.",
+                    },
+                    {
+                        "indicateur": "Nombre de numéros de téléphone observés sur la période",
+                        "valeur": observed_clients,
+                        "commentaire": "Numéros de téléphone ayant au moins une opération observée sur la période filtrée.",
+                    },
+                ]
+            )
+        client_display = pd.DataFrame(fallback_rows)
+    if isinstance(client_display, pd.DataFrame) and not client_display.empty:
         client_stock_indicators = {
             "comptes clients recenses dans customers",
+            "comptes clients recenses dans le referentiel clients",
             "comptes clients du fichier customers charge",
             "comptes clients connus a la date d arrete",
             "comptes clients connus a la date de fin",
+            "nombre de numeros de telephone observes sur la periode",
+            "comptes clients actifs sur la periode",
+            "comptes clients actifs",
             "comptes clients avec histoire d epargne active",
             "comptes clients avec produit dat positif et produit credit actif",
         }
@@ -13188,7 +13285,59 @@ def create_mpesa_statistics_word(
                 {
                     "Comptes clients du fichier Customers chargé": "Comptes clients recensés dans le référentiel clients",
                     "Comptes clients recensés dans Customers": "Comptes clients recensés dans le référentiel clients",
+                    "Comptes clients connus à la date de fin": "Comptes clients connus à la date d'arrêté",
+                    "Comptes clients actifs sur la période": "Nombre de numéros de téléphone observés sur la période",
+                    "Comptes clients actifs": "Nombre de numéros de téléphone observés sur la période",
                 }
+            )
+            observed_key = "nombre de numeros de telephone observes sur la periode"
+            observed_phone_count = _observed_phone_count_for_period()
+            existing_keys = client_display["indicateur"].apply(_indicator_key)
+            observed_mask = existing_keys.eq(observed_key)
+            observed_comment = "Numéros de téléphone ayant au moins une opération observée sur la période filtrée."
+            if observed_mask.any():
+                client_display.loc[observed_mask, "valeur"] = observed_phone_count
+                if "commentaire" in client_display.columns:
+                    client_display.loc[observed_mask, "commentaire"] = observed_comment
+            else:
+                observed_row = pd.DataFrame(
+                    [
+                        {
+                            "indicateur": "Nombre de numéros de téléphone observés sur la période",
+                            "valeur": observed_phone_count,
+                            "commentaire": observed_comment,
+                        }
+                    ]
+                )
+                known_keys = client_display["indicateur"].apply(_indicator_key)
+                insert_after = (
+                    int(known_keys[known_keys.eq("comptes clients connus a la date d arrete")].index[0])
+                    if known_keys.eq("comptes clients connus a la date d arrete").any()
+                    else min(1, len(client_display) - 1)
+                )
+                client_display = pd.concat(
+                    [
+                        client_display.iloc[: insert_after + 1],
+                        observed_row,
+                        client_display.iloc[insert_after + 1 :],
+                    ],
+                    ignore_index=True,
+                )
+        if "indicateur" in client_display.columns:
+            client_order = {
+                "comptes clients recenses dans le referentiel clients": 10,
+                "comptes clients connus a la date d arrete": 20,
+                "nombre de numeros de telephone observes sur la periode": 30,
+                "comptes clients avec histoire d epargne active": 40,
+                "comptes clients avec produit dat positif et produit credit actif": 50,
+            }
+            client_display["_ordre_rapport"] = (
+                client_display["indicateur"].apply(_indicator_key).map(client_order).fillna(999)
+            )
+            client_display = (
+                client_display.sort_values("_ordre_rapport", kind="stable")
+                .drop(columns=["_ordre_rapport"])
+                .reset_index(drop=True)
             )
         client_display["explication"] = client_display.get(
             "commentaire",
@@ -13380,157 +13529,6 @@ def create_mpesa_statistics_word(
     document.save(buffer)
     buffer.seek(0)
     return buffer.getvalue()
-
-    add_title("Regles de source")
-    add_text(
-        "Cette lecture evite une confusion importante : les encours sont des stocks arretes "
-        "dans les fichiers de position, tandis que les transactions expliquent les flux de la periode."
-    )
-    source_rule_rows = pd.DataFrame(
-        [
-            {
-                "analyse": "Encours credits a une date",
-                "source": "Loans Account",
-                "role": "Position credit : solde, encours, statut, echeance, interets, frais et penalites disponibles.",
-            },
-            {
-                "analyse": "Encours epargnes et DAT a une date",
-                "source": "Savings Account",
-                "role": "Position epargne : compte ouvert, compte bloque / DAT, solde, produit, statut et echeance.",
-            },
-            {
-                "analyse": "Repli epargne si Savings Account complet absent",
-                "source": "Customers with Current Savings Account / Customers with Fixed Savings Account",
-                "role": "Vues resumees acceptees en compatibilite; elles ne remplacent pas la source complete lorsqu'elle est chargee.",
-            },
-            {
-                "analyse": "Flux de periode",
-                "source": "Transactions",
-                "role": "Mouvements observes : depots, retraits, remboursements, decaissements et operations DAT.",
-            },
-            {
-                "analyse": "Identite et controle",
-                "source": "G2 et Perfect facultatifs",
-                "role": "Enrichissement du nom client et preuve de rapprochement; pas de recalcul des montants.",
-            },
-        ]
-    )
-    add_table(
-        source_rule_rows,
-        {"analyse": "Analyse", "source": "Source", "role": "Role dans le rapport"},
-        max_rows=10,
-    )
-
-    add_title("Synthese executive")
-    overview = statistics_report.get("vue_ensemble", pd.DataFrame())
-    if isinstance(overview, pd.DataFrame):
-        overview = overview.copy()
-    client_indicators_frame = statistics_report.get("clients_indicateurs", pd.DataFrame())
-    activity_frame = statistics_report.get("activite_evolution", pd.DataFrame())
-    growth_frame = statistics_report.get("clients_croissance", pd.DataFrame())
-    turnover_frame = statistics_report.get("chiffre_affaires", pd.DataFrame())
-    portfolio_frame = statistics_report.get("epargne_dat_portefeuille", pd.DataFrame())
-    portfolio_period_frame = statistics_report.get(
-        "epargne_dat_portefeuille_periode",
-        pd.DataFrame(),
-    )
-    credit_frame = statistics_report.get("credit_synthese", pd.DataFrame())
-    credit_period_frame = statistics_report.get("credit_synthese_periode", pd.DataFrame())
-    regular_deposits_summary_frame = statistics_report.get(
-        "depots_reguliers_synthese",
-        pd.DataFrame(),
-    )
-    g2_coverage_frame = statistics_report.get("g2_couverture", pd.DataFrame())
-    g2_quality_frame = statistics_report.get("g2_qualite_rapprochement", pd.DataFrame())
-    g2_status_frame = statistics_report.get("g2_statuts", pd.DataFrame())
-    g2_unmatched_frame = statistics_report.get("g2_non_rapprochees", pd.DataFrame())
-    g2_weekly_frame = statistics_report.get(
-        "g2_comparaison_hebdomadaire",
-        pd.DataFrame(),
-    )
-    add_text(
-        "Principe de lecture : les nombres de clients ou d'operations peuvent etre consolides, "
-        "mais aucun montant n'est totalise entre devises. Les volumes, soldes, credits et chiffre d'affaires "
-        "sont toujours lus devise par devise."
-    )
-    if isinstance(overview, pd.DataFrame) and not overview.empty:
-        total_operations = _as_numeric(overview.get("operations", pd.Series(dtype=float))).sum()
-        first_row = overview.iloc[0]
-        def _client_indicator(label: str, fallback: Any = 0) -> float:
-            if (
-                isinstance(client_indicators_frame, pd.DataFrame)
-                and not client_indicators_frame.empty
-                and {"indicateur", "valeur"}.issubset(client_indicators_frame.columns)
-            ):
-                matches = client_indicators_frame.loc[
-                    client_indicators_frame["indicateur"].astype(str).eq(label)
-                ]
-                if not matches.empty:
-                    return _safe_float(matches.iloc[0].get("valeur", 0))
-            return _safe_float(fallback)
-
-        known_clients_summary = _client_indicator(
-            "Clients connus a la date de fin",
-            first_row.get("clients_turbo_connus", 0),
-        )
-        loaded_clients_summary = max(
-            _client_indicator(
-                "Clients du fichier Customers charge",
-                first_row.get("clients_turbo_charges", 0),
-            ),
-            float(
-                _as_numeric(overview.get("clients_turbo_charges", pd.Series(dtype=float))).max()
-            )
-            if "clients_turbo_charges" in overview.columns
-            else 0.0,
-            known_clients_summary,
-        )
-        active_clients_summary = _client_indicator(
-            "Clients actifs sur la periode",
-            first_row.get("clients_turbo_actifs", 0),
-        )
-        if "clients_turbo_charges" in overview.columns:
-            overview.loc[:, "clients_turbo_charges"] = loaded_clients_summary
-        summary_rows = [
-            {"indicateur": "Clients du fichier Customers charge", "devise": "-", "valeur": _pdf_number(loaded_clients_summary, decimals=0)},
-            {"indicateur": "Clients connus a la date de fin", "devise": "-", "valeur": _pdf_number(known_clients_summary, decimals=0)},
-            {"indicateur": "Clients actifs", "devise": "-", "valeur": _pdf_number(active_clients_summary, decimals=0)},
-            {"indicateur": "Operations", "devise": "-", "valeur": _pdf_number(total_operations, decimals=0)},
-        ]
-        for _, row in overview.iterrows():
-            currency = _currency_label(row.get("currency_code", ""))
-            summary_rows.extend(
-                [
-                    {
-                        "indicateur": "Clients actifs",
-                        "devise": currency,
-                        "valeur": _pdf_number(row.get("clients_turbo_actifs_devise", 0), decimals=0),
-                    },
-                    {
-                        "indicateur": "Operations",
-                        "devise": currency,
-                        "valeur": _pdf_number(row.get("operations", 0), decimals=0),
-                    },
-                    {
-                        "indicateur": "Volume transactionnel observe",
-                        "devise": currency,
-                        "valeur": _pdf_number(row.get("volume_total_transactions", 0), decimals=2),
-                    },
-                    {
-                        "indicateur": "Chiffre d'affaires observe",
-                        "devise": currency,
-                        "valeur": _pdf_number(row.get("chiffre_affaires_observe", 0), decimals=2),
-                    },
-                ]
-            )
-        summary_table = pd.DataFrame(summary_rows)
-        add_table(
-            summary_table,
-            {"indicateur": "Indicateur", "devise": "Devise", "valeur": "Valeur"},
-            max_rows=30,
-        )
-    else:
-        document.add_paragraph("Aucune synthese disponible avec le perimetre filtre.")
 
     weekly_comparison = statistics_report.get("comparaison_hebdomadaire", pd.DataFrame())
     if isinstance(weekly_comparison, pd.DataFrame) and not weekly_comparison.empty:
@@ -13969,7 +13967,7 @@ def create_mpesa_statistics_word(
         (
             "Commentaire : "
             f"le portefeuille observe compte {_pdf_number(credit_count, decimals=0)} credit(s) "
-            f"pour {_pdf_number(credit_clients, decimals=0)} client(s). Les montants restent presentes par devise "
+            f"pour {_pdf_number(credit_clients, decimals=0)} client(s). Les montants restent toujours séparés par devise "
             "afin de ne pas additionner CDF et USD."
         ),
         bold_prefix="Commentaire :",
@@ -14024,18 +14022,6 @@ def create_mpesa_statistics_word(
                         "valeur": _pdf_number(currency_operations, decimals=0),
                         "ratio_ou_variation": "Transactions consolidees",
                     },
-                    {
-                        "analyse": "Volume transactionnel observé",
-                        "devise": currency,
-                        "valeur": _pdf_number(currency_volume, decimals=2),
-                        "ratio_ou_variation": "Montant par devise",
-                    },
-                    {
-                        "analyse": "Chiffre d'affaires observé",
-                        "devise": currency,
-                        "valeur": _pdf_number(currency_turnover, decimals=2),
-                        "ratio_ou_variation": _percent(currency_turnover, currency_volume),
-                    },
                 ]
             )
     if isinstance(activity_frame, pd.DataFrame) and not activity_frame.empty and {"currency_code", "periode_analyse", "volume_total_transactions"}.issubset(activity_frame.columns):
@@ -14065,7 +14051,7 @@ def create_mpesa_statistics_word(
         (
             "Commentaire : "
             f"{_pdf_number(total_operations, decimals=0)} operation(s) consolidee(s) sont observees sur la periode. "
-            "Le volume transactionnel, le chiffre d'affaires observe et les tendances sont lus devise par devise."
+            "Les tendances et le volume d'activite restent analyses devise par devise."
         ),
         bold_prefix="Commentaire :",
     )
@@ -14074,9 +14060,7 @@ def create_mpesa_statistics_word(
         add_text(
             (
                 f"Commentaire {currency} : "
-                f"{row.get('operations')} operation(s), volume {row.get('volume')}, "
-                f"chiffre d'affaires observe {row.get('chiffre_affaires')} "
-                f"({row.get('ratio')} du volume transactionnel observe)."
+                f"{row.get('operations')} operation(s) observees dans la periode."
             ),
             bold_prefix=f"Commentaire {currency} :",
         )
@@ -14119,20 +14103,6 @@ def create_mpesa_statistics_word(
             },
             max_rows=20,
         )
-    add_table(
-        turnover_frame,
-        {
-            "currency_code": "Devise",
-            "montant_entrees": "Entrees",
-            "montant_sorties": "Sorties",
-            "volume_total_transactions": "Volume total",
-            "interets_credit_observes": "Interets",
-            "penalites_observees": "Penalites",
-            "part_bisou_observee": "Part Bisou",
-            "chiffre_affaires_observe": "CA observe",
-        },
-    )
-
     add_title("4.1 Qualité du rapprochement G2")
     if isinstance(g2_coverage_frame, pd.DataFrame) and not g2_coverage_frame.empty:
         coverage_row = g2_coverage_frame.iloc[0]

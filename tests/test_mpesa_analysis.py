@@ -6133,6 +6133,8 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertIn("1. Clients", word_text)
         self.assertIn("2. Épargnes et DAT", word_text)
         self.assertIn("3. Crédits", word_text)
+        headings = [paragraph.text for paragraph in document.paragraphs if paragraph.text]
+        self.assertEqual(headings[-1], "3. Crédits")
         self.assertNotIn("Produits DAT actifs avec solde positif à la date d'arrêté", word_text)
         self.assertIn("Encours des produits d'épargne ouverte actifs à la date d'arrêté", word_text)
         self.assertNotIn("Produits crédit en cours avec encours positif à la date d'arrêté", word_text)
@@ -6147,6 +6149,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("Régularité des dépôts", word_text)
         self.assertNotIn("Qualité du rapprochement G2", word_text)
         self.assertNotIn("Sources et importance", word_text)
+        self.assertNotIn("Regles de source", word_text)
         self.assertNotIn("Annexe 1. Vue d'ensemble", word_text)
         self.assertNotIn("Annexe 3. Definitions", word_text)
         self.assertNotIn("Solution Numérique uniquement", word_text)
@@ -6162,6 +6165,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             )
         ]
         self.assertGreaterEqual(len(stock_tables), 2)
+        compact_analysis_tables = stock_tables
         client_tables = [
             table
             for table in document.tables
@@ -6294,6 +6298,24 @@ class MpesaAnalysisTests(unittest.TestCase):
         finance_flow = finance["flux_synthese"].set_index("currency_code")
         statistics_flow = statistics["flux_entrees_periode"].set_index("currency_code")
         statistics_outputs = statistics["flux_sorties_periode"].set_index("currency_code")
+        self.assertFalse(statistics["operations_turbo"].empty)
+        observed_phone_count = (
+            statistics["operations_turbo"]["telephone"].astype(str).replace("", pd.NA).dropna().nunique()
+        )
+        self.assertGreater(observed_phone_count, 0)
+        self.assertEqual(
+            int(statistics["vue_ensemble"]["clients_turbo_actifs_global"].max()),
+            int(observed_phone_count),
+        )
+        word_text = "\n".join(
+            " | ".join(cell.text for cell in row.cells)
+            for table in Document(BytesIO(create_mpesa_statistics_word(statistics))).tables
+            for row in table.rows
+        )
+        self.assertIn(
+            f"Nombre de numéros de téléphone observés sur la période | Numéros de téléphone ayant au moins une opération observée sur la période filtrée. | {observed_phone_count}",
+            word_text,
+        )
         for currency in finance_flow.index:
             for column in [
                 "depots_dat",
@@ -6345,7 +6367,7 @@ class MpesaAnalysisTests(unittest.TestCase):
                 for row in table.rows
             ]
         )
-        self.assertIn("Flux observés sur la période", word_text)
+        self.assertNotIn("Flux observés sur la période", word_text)
         self.assertIn("Flux entrants observés sur la période", word_text)
         self.assertIn("Flux sortants observés sur la période", word_text)
         self.assertIn(
@@ -7356,7 +7378,6 @@ class MpesaAnalysisTests(unittest.TestCase):
             ]
         )
 
-        self.assertIn("Les montants restent toujours séparés par devise", word_text)
         self.assertIn(
             "Encours des produits d'épargne ouverte actifs à la date d'arrêté | Solde strictement positif des produits d'épargne ouverte. | CDF | 100.00",
             word_text,
@@ -7376,6 +7397,65 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertNotIn("Volume transactionnel observe", word_text)
         self.assertNotIn("Chiffre d'affaires observe", word_text)
         self.assertNotIn("110.00", word_text)
+
+    def test_mpesa_statistics_word_adds_observed_phone_count_in_executive_summary(self) -> None:
+        from docx import Document
+
+        report = {
+            "date_debut": pd.Timestamp("2026-08-22 00:00:00"),
+            "date_fin": pd.Timestamp("2026-08-28 23:59:59"),
+            "frequence": "Semaine",
+            "vue_ensemble": pd.DataFrame(
+                [
+                    {
+                        "currency_code": "CDF",
+                        "clients_turbo_connus": 5,
+                        "clients_turbo_actifs": 3,
+                        "operations": 10,
+                        "volume_total_transactions": 200.0,
+                        "chiffre_affaires_observe": 15.0,
+                    }
+                ]
+            ),
+            "clients_reference": pd.DataFrame(
+                [
+                    {"client_key": "243812345678", "date_creation": "2026-08-23 09:00:00"},
+                    {"client_key": "243812345679", "date_creation": "2026-08-25 14:00:00"},
+                    {"client_key": "243812345680", "date_creation": "2026-08-26 08:00:00"},
+                    {"client_key": "243812345681", "date_creation": "2026-08-29 12:00:00"},
+                ]
+            ),
+            "operations_turbo": pd.DataFrame(
+                [
+                    {"created_at": "2026-08-23 09:00:00", "numero_telephone": "+243812345678"},
+                    {"created_at": "2026-08-23 10:00:00", "numero_telephone": "+243812345678"},
+                    {"created_at": "2026-08-25 14:00:00", "numero_telephone": "+243812345679"},
+                    {"created_at": "2026-08-26 08:00:00", "numero_telephone": "+243812345680"},
+                    {"created_at": "2026-08-26 08:30:00", "numero_telephone": "+243812345682"},
+                    {"created_at": "2026-08-29 12:00:00", "numero_telephone": "+243812345681"},
+                ]
+            ),
+            "epargne_dat_portefeuille": pd.DataFrame(),
+            "credit_synthese": pd.DataFrame(),
+            "priorite_sources": pd.DataFrame(),
+            "definitions": pd.DataFrame(),
+        }
+
+        document = Document(BytesIO(create_mpesa_statistics_word(report)))
+        word_text = "\n".join(
+            [paragraph.text for paragraph in document.paragraphs]
+            + [
+                " | ".join(cell.text for cell in row.cells)
+                for table in document.tables
+                for row in table.rows
+            ]
+        )
+
+        self.assertIn("Nombre de numéros de téléphone observés sur la période", word_text)
+        self.assertIn(
+            "Nombre de numéros de téléphone observés sur la période | Numéros de téléphone ayant au moins une opération observée sur la période filtrée. | 4",
+            word_text,
+        )
 
     def test_turbo_financial_analysis_uses_one_event_grain_and_never_g2_amounts(self) -> None:
         prepared = _sample_customer_transaction_analysis_data()
