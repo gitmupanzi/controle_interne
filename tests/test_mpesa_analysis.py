@@ -33,6 +33,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_management_dashboard,
     build_mpesa_clients_report,
     build_mpesa_credit_cockpit,
+    build_mpesa_customer_period_summary,
     build_mpesa_digital_risk_analysis,
     build_mpesa_savings_cockpit,
     build_mpesa_comparison_windows,
@@ -8543,6 +8544,93 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(flow_tables), 2)
         self.assertEqual(flow_tables[0].rows[1].cells[0].text, "CDF")
         self.assertEqual(flow_tables[0].rows[2].cells[0].text, "USD")
+
+    def test_g2_dat_word_includes_customer_creation_count_aligned_with_statistics(self) -> None:
+        from docx import Document
+
+        customers = prepare_customers(
+            pd.DataFrame(
+                [
+                    {"customer_id": "1", "msisdn1": "243811111111", "created_at": "2026-07-05 09:00:00"},
+                    {"customer_id": "2", "msisdn1": "243822222222", "created_at": "2026-07-20 10:00:00"},
+                    {"customer_id": "3", "msisdn1": "243833333333", "created_at": "2026-08-01 08:00:00"},
+                ]
+            )
+        )
+        prepared = MpesaPreparedData(
+            transactions=pd.DataFrame(),
+            current_savings=pd.DataFrame(),
+            fixed_savings=pd.DataFrame(),
+            loans=pd.DataFrame(),
+            customers=customers,
+            load_report=pd.DataFrame(),
+        )
+        customer_summary = build_mpesa_customer_period_summary(
+            prepared,
+            date_start=pd.Timestamp("2026-07-01 00:00:00"),
+            date_end=pd.Timestamp("2026-07-31 23:59:59"),
+        )
+        statistics = build_mpesa_statistics_report(
+            prepared,
+            date_start="2026-07-01",
+            date_end="2026-07-31",
+            comparison_period="Période filtrée",
+            include_transaction_metrics=False,
+        )
+        weekly = statistics["comparaison_hebdomadaire"]
+        new_clients = weekly.loc[weekly["indicator_key"].eq("nouveaux_clients")]
+        self.assertFalse(new_clients.empty)
+        self.assertEqual(int(new_clients.iloc[0]["valeur_semaine_courante"]), 2)
+        self.assertEqual(
+            int(
+                customer_summary.loc[
+                    customer_summary["indicateur"].eq(
+                        "Nombre de numéros de téléphone observés sur la période"
+                    ),
+                    "valeur",
+                ].iloc[0]
+            ),
+            int(new_clients.iloc[0]["valeur_semaine_courante"]),
+        )
+
+        content = create_g2_dat_word(
+            {
+                "analysis_source_label": "Solution Numérique",
+                "analysis_date_start": pd.Timestamp("2026-07-01 00:00:00"),
+                "analysis_date_end": pd.Timestamp("2026-07-31 23:59:59"),
+                "rapport_journalier_pivot": pd.DataFrame(
+                    [
+                        {
+                            "currency_code": "CDF",
+                            "nombre_entrees": 1,
+                            "montant_total_entrees": 1000,
+                            "nombre_sorties": 0,
+                            "montant_total_sorties": 0,
+                            "solde_net_flux": 1000,
+                        }
+                    ]
+                ),
+                "rapport_journalier_synthese": pd.DataFrame(),
+                "rapport_journalier_detail": pd.DataFrame(),
+                "retention_mensuelle": pd.DataFrame(),
+                "g2_dat": pd.DataFrame(),
+                "clients_periode": customer_summary,
+            },
+            period_text="du 01/07/2026 au 31/07/2026",
+            direction_label="Tous",
+            generated_at=pd.Timestamp("2026-08-01 10:00:00"),
+        )
+        document = Document(BytesIO(content))
+        table_text = "\n".join(
+            " | ".join(cell.text for cell in row.cells)
+            for table in document.tables
+            for row in table.rows
+        )
+        self.assertIn("Synthese clients", "\n".join(paragraph.text for paragraph in document.paragraphs))
+        self.assertIn(
+            "Nombre de numéros de téléphone observés sur la période | 2 | Numéros de téléphone créés dans Customers sur l'intervalle analysé.",
+            table_text,
+        )
 
     def test_g2_dat_word_labels_turbo_only_source_without_simulating_g2_controls(self) -> None:
         from docx import Document

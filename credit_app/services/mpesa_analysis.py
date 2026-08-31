@@ -7988,6 +7988,76 @@ def count_mpesa_loaded_customers(prepared: MpesaPreparedData) -> int:
     return int(reference["client_key"].nunique())
 
 
+def build_mpesa_customer_period_summary(
+    prepared: MpesaPreparedData,
+    *,
+    date_start: Any | None = None,
+    date_end: Any | None = None,
+) -> pd.DataFrame:
+    """Resume les numeros clients crees dans le referentiel Customers sur une periode.
+
+    La logique reprend le referentiel statistique : Customers est prioritaire,
+    une ligne client est dedupliquee par numero/client, puis la premiere date de
+    creation connue sert au filtre de periode.
+    """
+
+    columns = ["indicateur", "valeur", "commentaire"]
+    reference = _mpesa_customer_reference(prepared)
+    if reference.empty or not {"client_key", "date_creation"}.issubset(reference.columns):
+        return pd.DataFrame(columns=columns)
+
+    customer_dates = pd.to_datetime(reference["date_creation"], errors="coerce")
+    period_start = pd.to_datetime(date_start, errors="coerce")
+    period_end = pd.to_datetime(date_end, errors="coerce")
+    if pd.isna(period_start):
+        period_start = customer_dates.dropna().min() if customer_dates.notna().any() else pd.NaT
+    if pd.isna(period_end):
+        period_end = customer_dates.dropna().max() if customer_dates.notna().any() else pd.NaT
+    if pd.isna(period_start) or pd.isna(period_end):
+        return pd.DataFrame(columns=columns)
+    if period_start > period_end:
+        period_start, period_end = period_end, period_start
+
+    period_end_inclusive = pd.Timestamp(period_end)
+    if period_end_inclusive == period_end_inclusive.normalize():
+        period_end_inclusive = (
+            period_end_inclusive + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+        )
+    created_on_period = reference.loc[
+        customer_dates.notna()
+        & customer_dates.ge(pd.Timestamp(period_start))
+        & customer_dates.le(period_end_inclusive)
+    ].copy()
+    known_at_end = reference.loc[
+        customer_dates.isna() | customer_dates.le(period_end_inclusive)
+    ].copy()
+    source_label = (
+        "Customers chargé"
+        if isinstance(prepared.customers, pd.DataFrame) and not prepared.customers.empty
+        else "sources observées"
+    )
+    return pd.DataFrame(
+        [
+            {
+                "indicateur": "Comptes clients recensés dans le référentiel clients",
+                "valeur": count_mpesa_loaded_customers(prepared),
+                "commentaire": f"Numéros clients distincts issus du référentiel {source_label}.",
+            },
+            {
+                "indicateur": "Comptes clients connus à la date de fin",
+                "valeur": int(known_at_end["client_key"].nunique()) if not known_at_end.empty else 0,
+                "commentaire": "Numéros clients créés avant ou à la date de fin de l'analyse.",
+            },
+            {
+                "indicateur": "Nombre de numéros de téléphone observés sur la période",
+                "valeur": int(created_on_period["client_key"].nunique()) if not created_on_period.empty else 0,
+                "commentaire": "Numéros de téléphone créés dans Customers sur l'intervalle analysé.",
+            },
+        ],
+        columns=columns,
+    )
+
+
 def _mpesa_statistics_first_date(frame: pd.DataFrame, *columns: str) -> pd.Series:
     """Retourne la premiere date exploitable parmi plusieurs colonnes."""
     if not isinstance(frame, pd.DataFrame) or frame.empty:
@@ -26549,6 +26619,35 @@ def create_g2_dat_word(
     if has_provider_only:
         document.add_heading = lambda *args, **kwargs: document.add_paragraph()
         add_table = lambda *args, **kwargs: None
+
+    customer_period_summary = word_report.get("clients_periode", pd.DataFrame())
+    if (
+        not has_provider_only
+        and isinstance(customer_period_summary, pd.DataFrame)
+        and not customer_period_summary.empty
+    ):
+        customer_period_summary = customer_period_summary.copy()
+        if "valeur" in customer_period_summary.columns:
+            customer_period_summary["valeur"] = pd.to_numeric(
+                customer_period_summary["valeur"], errors="coerce"
+            ).fillna(0).map(lambda value: _pdf_number(value, decimals=0))
+        document.add_heading("Synthese clients", level=1)
+        add_table(
+            customer_period_summary,
+            ["indicateur", "valeur", "commentaire"],
+            {
+                "indicateur": "Indicateur operationnel",
+                "valeur": "Valeur",
+                "commentaire": "Explication",
+            },
+            font_size=8,
+            column_widths_cm={
+                "indicateur": 5.5,
+                "valeur": 2.0,
+                "commentaire": 10.5,
+            },
+            no_wrap_columns={"valeur"},
+        )
 
     document.add_heading(f"Synthese des flux {flow_display_label} par devise", level=1)
     add_table(

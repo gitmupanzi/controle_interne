@@ -57,6 +57,7 @@ from credit_app.services.mpesa_analysis import (
     build_load_report,
     build_mpesa_accounting_analysis,
     build_mpesa_clients_report,
+    build_mpesa_customer_period_summary,
     build_mpesa_dat_maturity_analysis,
     build_mpesa_savings_cockpit,
     build_loan_savings_reconciliation,
@@ -4828,6 +4829,7 @@ def _render_g2_report_export(
     daily_anomalies: pd.DataFrame,
     g2_dat: pd.DataFrame,
     top_mouvements_devise: pd.DataFrame | None = None,
+    customer_period_summary: pd.DataFrame | None = None,
     provider_report: dict[str, pd.DataFrame] | None = None,
     retention_report: dict[str, pd.DataFrame],
     transaction_time_report: dict[str, pd.DataFrame],
@@ -4887,6 +4889,11 @@ def _render_g2_report_export(
     word_report["g2_dat"] = g2_dat
     word_report["rapport_journalier_pivot"] = daily_pivot
     word_report["top_mouvements_devise"] = export_report["top_mouvements_devise"]
+    word_report["clients_periode"] = (
+        customer_period_summary
+        if isinstance(customer_period_summary, pd.DataFrame)
+        else pd.DataFrame()
+    )
     for provider_key in [
         "provider_synthese",
         "provider_top_mouvements",
@@ -5510,6 +5517,11 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         if date_start is not None and date_end is not None and time_start is not None and time_end is not None
         else "sur toute la periode disponible"
     )
+    customer_period_summary = build_mpesa_customer_period_summary(
+        prepared,
+        date_start=period_start,
+        date_end=period_end,
+    )
     st.caption(
         f"{len(filtered_g2)} operation(s) [{source_label}] dans le perimetre "
         f"{period_text} - {direction_label.lower()}."
@@ -6121,6 +6133,7 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         daily_anomalies=daily_anomalies,
         g2_dat=g2_dat,
         top_mouvements_devise=top_mouvements_devise,
+        customer_period_summary=customer_period_summary,
         provider_report=provider_report,
         retention_report=retention_report,
         transaction_time_report=transaction_time_report,
