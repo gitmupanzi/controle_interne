@@ -12116,6 +12116,12 @@ def build_mpesa_statistics_report(
         for column in [
             "montant_entrees",
             "montant_sorties",
+            "flux_net",
+            "depots_dat",
+            "depots_epargne_courante",
+            "retraits_epargne",
+            "nouveaux_credits_decaissements",
+            "remboursements_observes",
             "interets_credit_observes",
             "penalites_observees",
             "nombre_operations",
@@ -12157,6 +12163,32 @@ def build_mpesa_statistics_report(
                 "depots_dat",
                 "depots_epargne_courante",
                 "remboursements_observes",
+            ]
+        )
+
+    flow_outputs = flow_summary.copy()
+    if not flow_outputs.empty:
+        flow_outputs = flow_outputs[
+            [
+                column
+                for column in [
+                    "currency_code",
+                    "montant_sorties",
+                    "retraits_epargne",
+                    "nouveaux_credits_decaissements",
+                    "flux_net",
+                ]
+                if column in flow_outputs.columns
+            ]
+        ].sort_values("currency_code").reset_index(drop=True)
+    else:
+        flow_outputs = pd.DataFrame(
+            columns=[
+                "currency_code",
+                "montant_sorties",
+                "retraits_epargne",
+                "nouveaux_credits_decaissements",
+                "flux_net",
             ]
         )
 
@@ -12450,6 +12482,7 @@ def build_mpesa_statistics_report(
         "frequence": frequency,
         "source_flux_entrees": "Transactions [Solution Numérique]",
         "flux_entrees_periode": flow_entries,
+        "flux_sorties_periode": flow_outputs,
         "periode_comparaison": comparison_period,
         "horizon_echeances_dat_jours": dat_maturity_horizon_days,
         "perimetre_annuel": prepared.year_scope_label,
@@ -12643,6 +12676,17 @@ def create_mpesa_statistics_word(
         repeat_header.set(qn("w:val"), "true")
         row_properties.append(repeat_header)
 
+    def set_cell_width(cell: Any, width_cm: float) -> None:
+        width = Cm(width_cm)
+        cell.width = width
+        cell_properties = cell._tc.get_or_add_tcPr()
+        table_cell_width = cell_properties.first_child_found_in("w:tcW")
+        if table_cell_width is None:
+            table_cell_width = OxmlElement("w:tcW")
+            cell_properties.append(table_cell_width)
+        table_cell_width.set(qn("w:type"), "dxa")
+        table_cell_width.set(qn("w:w"), str(int(width.twips)))
+
     header = document.add_table(rows=2, cols=2)
     header.alignment = WD_TABLE_ALIGNMENT.CENTER
     header.autofit = False
@@ -12686,16 +12730,16 @@ def create_mpesa_statistics_word(
     title.paragraph_format.space_after = Pt(6)
     title.add_run("Rapport statistiques - Solution Numérique")
 
-    intro = document.add_paragraph()
-    intro.paragraph_format.space_after = Pt(6)
-    intro.add_run(
-        "Ce rapport restitue les statistiques operationnelles issues de la Solution Numérique. "
-        "Source des montants : Solution Numérique uniquement. "
-        "G2 et Perfect sont des sources facultatives d'enrichissement ou de controle; "
-        "ils ne modifient pas les montants, les soldes, les DAT ni les credits. "
-        "Les positions a date et les flux de periode sont volontairement separes afin "
-        "d'eviter de confondre un encours observe avec un mouvement transactionnel."
-    )
+    def add_text(text: str, *, bold_prefix: str | None = None) -> None:
+        paragraph = document.add_paragraph()
+        paragraph.paragraph_format.space_after = Pt(3)
+        if bold_prefix and text.startswith(bold_prefix):
+            prefix = paragraph.add_run(bold_prefix)
+            prefix.bold = True
+            prefix.font.size = Pt(8.5)
+            paragraph.add_run(text[len(bold_prefix):]).font.size = Pt(8.5)
+        else:
+            paragraph.add_run(text).font.size = Pt(8.5)
 
     def format_value(value: Any, column: str) -> str:
         if _is_empty_text(value):
@@ -12720,7 +12764,12 @@ def create_mpesa_statistics_word(
                 "part_",
                 "encours",
                 "depot",
+                "entree",
+                "sortie",
+                "retrait",
                 "remboursement",
+                "decaissement",
+                "flux_net",
             ]
         ):
             return _pdf_number(value, decimals=2)
@@ -12750,6 +12799,49 @@ def create_mpesa_statistics_word(
             return
         display_columns = ["_numero_ligne", *columns]
         display_labels = {"_numero_ligne": "N°", **labels}
+        width_profiles: dict[tuple[str, ...], list[float]] = {
+            (
+                "_numero_ligne",
+                "bloc",
+                "indicateur",
+                "explication",
+                "devise",
+                "periode_courante",
+                "periode_precedente",
+                "evolution",
+            ): [0.80, 2.01, 2.99, 8.18, 2.99, 2.99, 2.76, 1.60],
+            (
+                "_numero_ligne",
+                "currency_code",
+                "montant_entrees",
+                "depots_dat",
+                "depots_epargne_courante",
+                "remboursements_observes",
+            ): [0.80, 2.99, 2.99, 2.99, 2.99, 2.99],
+            (
+                "_numero_ligne",
+                "currency_code",
+                "montant_sorties",
+                "retraits_epargne",
+                "nouveaux_credits_decaissements",
+                "flux_net",
+            ): [0.80, 1.31, 2.18, 2.40, 3.14, 3.99],
+            (
+                "_numero_ligne",
+                "indicateur",
+                "explication",
+                "valeur",
+            ): [0.80, 7.25, 9.92, 2.03],
+            (
+                "_numero_ligne",
+                "indicateur",
+                "explication",
+                "devise",
+                "valeur",
+                "type_valeur",
+            ): [0.80, 7.25, 7.52, 1.31, 2.03, 1.44],
+        }
+        column_widths = width_profiles.get(tuple(display_columns))
         table = document.add_table(rows=1, cols=len(display_columns))
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
         table.style = "Table Grid"
@@ -12757,8 +12849,10 @@ def create_mpesa_statistics_word(
         set_repeat_header(table.rows[0])
         for index, column in enumerate(display_columns):
             cell = table.rows[0].cells[index]
-            if column == "_numero_ligne":
-                cell.width = Cm(0.8)
+            if column_widths and index < len(column_widths):
+                set_cell_width(cell, column_widths[index])
+            elif column == "_numero_ligne":
+                set_cell_width(cell, 0.8)
             cell.text = display_labels[column]
             cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
             set_cell_shading(cell, "1F2937")
@@ -12772,8 +12866,10 @@ def create_mpesa_statistics_word(
             row_cells = table.add_row().cells
             for index, column in enumerate(display_columns):
                 value = row_number if column == "_numero_ligne" else source_row.get(column)
-                if column == "_numero_ligne":
-                    row_cells[index].width = Cm(0.8)
+                if column_widths and index < len(column_widths):
+                    set_cell_width(row_cells[index], column_widths[index])
+                elif column == "_numero_ligne":
+                    set_cell_width(row_cells[index], 0.8)
                 row_cells[index].text = format_value(value, column)
                 row_cells[index].vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
                 for paragraph in row_cells[index].paragraphs:
@@ -12838,17 +12934,6 @@ def create_mpesa_statistics_word(
     def _comment_amount(value: Any, *, decimals: int = 2) -> str:
         return _pdf_number(_safe_float(value), decimals=decimals)
 
-    def add_text(text: str, *, bold_prefix: str | None = None) -> None:
-        paragraph = document.add_paragraph()
-        paragraph.paragraph_format.space_after = Pt(3)
-        if bold_prefix and text.startswith(bold_prefix):
-            prefix = paragraph.add_run(bold_prefix)
-            prefix.bold = True
-            prefix.font.size = Pt(8.5)
-            paragraph.add_run(text[len(bold_prefix):]).font.size = Pt(8.5)
-        else:
-            paragraph.add_run(text).font.size = Pt(8.5)
-
     def add_bullet(text: str) -> None:
         paragraph = document.add_paragraph()
         paragraph.paragraph_format.left_indent = Cm(0.35)
@@ -12865,6 +12950,10 @@ def create_mpesa_statistics_word(
     def _currency_label(value: Any) -> str:
         text = str(value).strip().upper()
         return text or "NON RENSEIGNEE"
+
+    def _indicator_key(label: Any) -> str:
+        normalized = normalize_label(label)
+        return re.sub(r"[^a-z0-9]+", " ", normalized).strip()
 
     def _format_operational_value(value: Any, *, value_type: str = "nombre") -> str:
         if value_type == "pct":
@@ -12932,9 +13021,10 @@ def create_mpesa_statistics_word(
         if not isinstance(frame, pd.DataFrame) or frame.empty:
             return pd.DataFrame()
         result = frame.copy()
-        if "currency_code" in result.columns:
+        currency_column = "currency_code" if "currency_code" in result.columns else "devise" if "devise" in result.columns else None
+        if currency_column:
             result = result.loc[
-                clean_text(result["currency_code"]).str.upper().eq(_currency_label(currency))
+                clean_text(result[currency_column]).str.upper().eq(_currency_label(currency))
             ].copy()
         elif "devise" in result.columns:
             result = result.loc[
@@ -12954,32 +13044,26 @@ def create_mpesa_statistics_word(
     credit_period_frame = statistics_report.get("credit_synthese_periode", pd.DataFrame())
     weekly_comparison = statistics_report.get("comparaison_hebdomadaire", pd.DataFrame())
     flow_entries_frame = statistics_report.get("flux_entrees_periode", pd.DataFrame())
-
-    add_title("Synthèse opérationnelle")
-    add_text(
-        "Ce rapport privilégie les indicateurs utiles au pilotage du portefeuille. "
-        "Dans la Solution Numérique, un compte client correspond au numéro de téléphone; "
-        "ce compte peut porter plusieurs produits financiers : épargne ouverte, DAT et crédit. "
-        "Les encours sont lus à la date d'arrêté depuis les positions d'épargne et de crédit; "
-        "les créations de comptes ou de crédits sont lues sur la période analysée. "
-        "Les montants restent toujours séparés par devise."
-    )
+    flow_outputs_frame = statistics_report.get("flux_sorties_periode", pd.DataFrame())
 
     if isinstance(weekly_comparison, pd.DataFrame) and not weekly_comparison.empty:
         add_title("Comparaison avec la période précédente")
         comparable = weekly_comparison.copy()
         decision_indicator_keys = {
             "nouveaux_clients",
-            "nouveaux_comptes_ouverts",
-            "encours_epargne_ouverte_creee",
             "nouveaux_dat",
             "encours_epargne_bloquee_creee",
-            "clients_epargne_sans_credit",
-            "encours_epargne_sans_credit",
             "dat_bientot_echus_volume",
-            "encours_dat_bientot_echus",
             "nouveaux_credits",
             "montant_nouveaux_credits",
+        }
+        decision_indicator_order = {
+            "nouveaux_clients": 10,
+            "nouveaux_dat": 20,
+            "encours_epargne_bloquee_creee": 30,
+            "dat_bientot_echus_volume": 40,
+            "nouveaux_credits": 50,
+            "montant_nouveaux_credits": 60,
         }
         excluded_keys = {
             "volume_transactions",
@@ -13006,16 +13090,17 @@ def create_mpesa_statistics_word(
             comparable = comparable.loc[
                 ~normalized_indicator.str.contains("remboursement|depot", na=False)
             ].copy()
-        if comparable.empty:
-            add_text(
-                "Aucun indicateur operationnel comparable et suffisamment pertinent "
-                "n'est disponible pour la periode precedente."
+        if "indicator_key" in comparable.columns and not comparable.empty:
+            comparable["_ordre_direction"] = (
+                comparable["indicator_key"].map(decision_indicator_order).fillna(999)
             )
-        else:
-            add_text(
-                "Lecture : ce bloc conserve uniquement les comparaisons utiles a la decision "
-                "sur les comptes clients, les produits d'epargne/DAT et les credits. "
-                "Les volumes transactionnels bruts ne sont pas repris dans ce rapport."
+            sort_columns = ["_ordre_direction"]
+            if "currency_code" in comparable.columns:
+                sort_columns.append("currency_code")
+            comparable = (
+                comparable.sort_values(sort_columns, kind="stable")
+                .drop(columns=["_ordre_direction"])
+                .reset_index(drop=True)
             )
         comparison_rows: list[dict[str, Any]] = []
         for _, row in comparable.iterrows():
@@ -13059,17 +13144,10 @@ def create_mpesa_statistics_word(
         )
 
     add_title("Flux entrants observés sur la période")
-    add_text(
-        "Les montants ci-dessous proviennent des événements consolidés de Transactions "
-        "Solution Numérique. Ils mesurent des flux de période et non des encours; "
-        "les devises restent séparées."
-    )
     add_table(
         flow_entries_frame,
         {
             "currency_code": "Devise",
-            "nombre_operations": "Opérations",
-            "nombre_clients": "Comptes clients",
             "montant_entrees": "Entrées totales",
             "depots_dat": "DAT",
             "depots_epargne_courante": "Comptes ouverts",
@@ -13078,20 +13156,49 @@ def create_mpesa_statistics_word(
         max_rows=20,
     )
 
+    add_title("Flux sortants observés sur la période")
+    add_table(
+        flow_outputs_frame,
+        {
+            "currency_code": "Devise",
+            "montant_sorties": "Sorties totales",
+            "retraits_epargne": "Retraits épargne",
+            "nouveaux_credits_decaissements": "Décaissements crédits",
+            "flux_net": "Flux net",
+        },
+        max_rows=20,
+    )
+
     add_title("1. Clients")
     if isinstance(client_operational_frame, pd.DataFrame) and not client_operational_frame.empty:
         client_display = client_operational_frame.copy()
+        client_stock_indicators = {
+            "comptes clients recenses dans customers",
+            "comptes clients du fichier customers charge",
+            "comptes clients connus a la date d arrete",
+            "comptes clients connus a la date de fin",
+            "comptes clients avec histoire d epargne active",
+            "comptes clients avec produit dat positif et produit credit actif",
+        }
+        if "indicateur" in client_display.columns:
+            client_display = client_display.loc[
+                client_display["indicateur"].apply(_indicator_key).isin(client_stock_indicators)
+            ].copy()
+            client_display["indicateur"] = client_display["indicateur"].replace(
+                {
+                    "Comptes clients du fichier Customers chargé": "Comptes clients recensés dans le référentiel clients",
+                    "Comptes clients recensés dans Customers": "Comptes clients recensés dans le référentiel clients",
+                }
+            )
         client_display["explication"] = client_display.get(
             "commentaire",
             pd.Series("", index=client_display.index),
         )
-        client_display["devise"] = "-"
         add_table(
             client_display,
             {
                 "indicateur": "Indicateur opérationnel",
                 "explication": "Explication",
-                "devise": "Devise",
                 "valeur": "Valeur",
             },
             max_rows=20,
@@ -13115,19 +13222,10 @@ def create_mpesa_statistics_word(
     )
     for currency in currencies:
         stock_dat = _row_lookup(portfolio_frame, currency=currency, family="DAT")
-        period_dat = _row_lookup(portfolio_period_frame, currency=currency, family="DAT")
         stock_open = _row_lookup(portfolio_frame, currency=currency, family="Compte ouvert")
-        period_open = _row_lookup(portfolio_period_frame, currency=currency, family="Compte ouvert")
         maturing = _row_lookup(dat_maturing_frame, currency=currency)
         savings_rows.extend(
             [
-                {
-                    "indicateur": "Produits DAT actifs avec solde positif à la date d'arrêté",
-                    "devise": currency,
-                    "valeur": _number_value(stock_dat, "comptes_solde_positif"),
-                    "type_valeur": "Nombre",
-                    "commentaire": "Produits DAT / comptes bloqués dont le solde est strictement supérieur à zéro.",
-                },
                 {
                     "indicateur": "Encours des produits DAT actifs à la date d'arrêté",
                     "devise": currency,
@@ -13136,39 +13234,11 @@ def create_mpesa_statistics_word(
                     "commentaire": "Somme des soldes DAT strictement positifs à la date d'arrêté.",
                 },
                 {
-                    "indicateur": "Nombre de produits DAT créés sur la période",
-                    "devise": currency,
-                    "valeur": _number_value(period_dat, "comptes_solde_positif"),
-                    "type_valeur": "Nombre",
-                    "commentaire": "Produits DAT créés ou activés entre la date de début et la date de fin.",
-                },
-                {
-                    "indicateur": "Montant des nouveaux produits DAT sur la période",
-                    "devise": currency,
-                    "valeur": _number_value(period_dat, "solde_positif_total"),
-                    "type_valeur": "Montant",
-                    "commentaire": "DAT créés ou activés entre la date de début et la date de fin.",
-                },
-                {
-                    "indicateur": "Produits d'épargne ouverte actifs avec solde positif à la date d'arrêté",
-                    "devise": currency,
-                    "valeur": _number_value(stock_open, "comptes_solde_positif"),
-                    "type_valeur": "Nombre",
-                    "commentaire": "Produits d'épargne ouverte dont le solde est strictement supérieur à zéro.",
-                },
-                {
                     "indicateur": "Encours des produits d'épargne ouverte actifs à la date d'arrêté",
                     "devise": currency,
                     "valeur": _number_value(stock_open, "solde_positif_total"),
                     "type_valeur": "Montant",
                     "commentaire": "Solde strictement positif des produits d'épargne ouverte.",
-                },
-                {
-                    "indicateur": "Nouveaux produits d'épargne ouverte sur la période",
-                    "devise": currency,
-                    "valeur": _number_value(period_open, "comptes_solde_positif"),
-                    "type_valeur": "Nombre",
-                    "commentaire": "Produits d'épargne ouverte créés ou activés sur la période.",
                 },
                 {
                     "indicateur": "DAT arrivant à échéance",
@@ -13190,24 +13260,14 @@ def create_mpesa_statistics_word(
     if not savings_display.empty:
         def _savings_report_order(label: Any) -> int:
             text = str(label or "").lower()
-            if "produits dat actifs" in text:
-                return 0
             if "encours des produits dat actifs" in text:
-                return 1
-            if "nombre de produits dat" in text:
-                return 2
-            if "nouveaux produits dat" in text:
-                return 3
-            if "produits d" in text and "pargne ouverte actifs" in text:
-                return 4
+                return 0
             if "encours des produits d" in text and "pargne ouverte actifs" in text:
-                return 5
-            if "nouveaux produits d" in text and "pargne ouverte" in text:
-                return 6
+                return 1
             if "dat arrivant" in text and "encours" not in text:
-                return 7
+                return 2
             if "encours dat arrivant" in text:
-                return 8
+                return 3
             return 50
 
         savings_display["_ordre_rapport"] = savings_display["indicateur"].map(_savings_report_order)
@@ -13240,30 +13300,15 @@ def create_mpesa_statistics_word(
     credit_rows: list[dict[str, Any]] = []
     for currency in currencies:
         stock_credit = _row_lookup(credit_frame, currency=currency)
-        period_credit = _row_lookup(credit_period_frame, currency=currency)
-        conversion = _row_lookup(dat_conversion_frame, currency=currency)
+        conversion_dat_credit = _row_lookup(dat_conversion_frame, currency=currency)
         credit_rows.extend(
             [
-                {
-                    "indicateur": "Produits crédit en cours avec encours positif à la date d'arrêté",
-                    "devise": currency,
-                    "valeur": _number_value(stock_credit, "nombre_credits_encours_positif"),
-                    "type_valeur": "Nombre",
-                    "commentaire": "Crédits qui courent encore : encours strictement supérieur à zéro.",
-                },
                 {
                     "indicateur": "Encours des produits crédit en cours à la date d'arrêté",
                     "devise": currency,
                     "valeur": _number_value(stock_credit, "encours_credits_positifs_total"),
                     "type_valeur": "Montant",
                     "commentaire": "Volume des crédits qui courent encore à la date d'arrêté.",
-                },
-                {
-                    "indicateur": "Montant des nouveaux produits crédit sur la période",
-                    "devise": currency,
-                    "valeur": _number_value(period_credit, "montant_credits"),
-                    "type_valeur": "Montant",
-                    "commentaire": "Crédits créés sur la période analysée.",
                 },
                 {
                     "indicateur": "Produits crédit en retard à la date d'arrêté",
@@ -13289,9 +13334,9 @@ def create_mpesa_statistics_word(
                 {
                     "indicateur": "Taux de conversion DAT en crédit",
                     "devise": currency,
-                    "valeur": _first_number(conversion, "taux_conversion_dat_credit_pct"),
+                    "valeur": _first_number(conversion_dat_credit, "taux_conversion_dat_credit_pct"),
                     "type_valeur": "Pourcentage",
-                    "commentaire": "Comptes clients avec produit DAT positif ayant aussi un produit crédit actif.",
+                    "commentaire": "Part des comptes clients avec DAT positif qui ont aussi un crédit actif dans la même devise.",
                 },
             ]
         )

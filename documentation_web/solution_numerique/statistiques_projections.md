@@ -16,11 +16,19 @@ Le rapport Word conserve une lecture décisionnelle en quatre blocs :
 3. Épargnes et DAT ;
 4. Crédits.
 
-Dans ces blocs, la section **Flux entrants observés sur la période** distingue les
-entrées DAT, les entrées sur comptes ouverts et les remboursements observés. Les
-montants viennent des événements consolidés de `Transactions Solution Numérique`,
-suivent exclusivement la période validée dans Statistiques et restent séparés par
-devise. Ils décrivent des flux et ne doivent pas être interprétés comme des encours.
+Dans le Word, le premier bloc couvre la comparaison entre deux périodes. Le bloc
+**Flux observés sur la période** restitue ensuite deux lectures séparées :
+
+- les **flux entrants** : entrées DAT, entrées sur comptes ouverts et remboursements observés, sans colonnes de comptage `Opérations` ni `Comptes clients` dans le Word ;
+- les **flux sortants** : sorties totales, retraits d'épargne, décaissements crédits et flux net.
+
+Ces flux restent des mouvements de période. Les trois blocs `Clients`, `Épargnes
+et DAT` et `Crédits` restent, eux, des positions à date : ils lisent uniquement
+les encours et situations arrêtées à la date de fin.
+
+Dans les tableaux Word, tous les montants de flux sont présentés avec un
+séparateur de milliers et deux décimales afin de faciliter la lecture par la
+Direction.
 
 ## Vocabulaire métier du rapport
 
@@ -67,10 +75,13 @@ Le rapport Word `Statistiques` est conçu pour la Direction. Il est présenté e
 
 Les libellés du rapport doivent rester métier. On parle donc de `position d'épargne`, `position DAT`, `position crédit`, `produits crédit`, `encours crédit`, `crédits en retard` et `portefeuille à risque`, plutôt que d'afficher les noms techniques des fichiers d'import dans les tableaux de décision.
 
-Les indicateurs de stock sont lus à la date de fin, qui est la date d'arrêté :
+Les indicateurs de stock sont lus à la date de fin, qui est la date d'arrêté. Dans
+les blocs `Clients`, `Épargnes et DAT` et `Crédits`, le rapport ne répète pas les
+créations ou mouvements de la période, car cette lecture est déjà portée par le bloc
+`Comparaison avec la période précédente`.
 
 - les produits DAT et les produits d'épargne ouverte sont mesurés à la date de fin ;
-- le taux de conversion DAT en crédit mesure les comptes clients ayant un DAT positif et un crédit actif, rapportés aux comptes clients ayant un DAT positif ;
+- les comptes clients avec histoire d'épargne active sont les numéros clients ayant au moins un produit d'épargne ou DAT actif, avec solde non nul et date de mise à jour différente de la date de création ;
 - les crédits en retard comptent les produits crédit ayant au moins un jour de retard à la date de fin ;
 - l'encours crédit en retard correspond à l'encours de ces crédits en retard ;
 - le taux de portefeuille à risque PAR 30 correspond à l'encours en retard de 30 jours ou plus rapporté à l'encours total de la devise.
@@ -87,7 +98,15 @@ Les indicateurs peuvent être comparés :
 
 Les comparaisons annuelles N-1 ne sont plus affichées dans l'onglet `Statistiques`. L'objectif est de garder un écran plus opérationnel, centré sur la période analysée, la période précédente et les indicateurs de portefeuille à date.
 
-Dans le rapport Word, le bloc `Comparaison avec la periode precedente` reste volontairement court. Il conserve les indicateurs utiles a la decision : comptes clients, produits d'epargne ouverte, produits DAT / comptes bloques, epargnes ou DAT sans credit, DAT arrivant a echeance, taux de conversion DAT en credit, nouveaux produits credit et montant des nouveaux credits. Les volumes transactionnels, le chiffre d'affaires observe, les operations brutes, les remboursements observes et les depots DAT issus de `Transactions` restent hors de ce bloc.
+Dans le rapport Word, le bloc `Comparaison avec la periode precedente` reste volontairement court. Il conserve seulement les indicateurs qui declenchent une lecture de pilotage : nouveaux numeros clients, nouveaux produits DAT / comptes bloques, montant des nouveaux produits DAT / comptes bloques, DAT arrivant a echeance, nouveaux produits credit et montant des nouveaux produits credit. Le taux de conversion DAT en credit n'est pas repris comme comparaison de periode, car il se lit mieux comme une position de portefeuille a la date d'arrete. Les volumes transactionnels, le chiffre d'affaires observe, les operations brutes, les remboursements observes et les depots DAT issus de `Transactions` restent hors de ce bloc.
+
+Pour garder le Word lisible par la Direction, les blocs de stock sont aussi resserres :
+
+- `Clients` : comptes clients connus, comptes clients avec histoire d'epargne active, comptes clients ayant a la fois un DAT positif et un credit actif ;
+- `Epargnes et DAT` : encours DAT, encours d'epargne ouverte, nombre de DAT arrivant a echeance et encours DAT arrivant a echeance ;
+- `Credits` : encours credit, nombre de credits en retard, encours credit en retard et PAR 30.
+
+Les autres details restent disponibles dans les cockpits Excel et les onglets specialises.
 
 ## Projections
 

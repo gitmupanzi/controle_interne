@@ -6120,51 +6120,74 @@ class MpesaAnalysisTests(unittest.TestCase):
             ]
         )
         self.assertIn("Rapport statistiques - Solution Numérique", word_text)
-        self.assertIn("Synthèse opérationnelle", word_text)
+        self.assertNotIn("Synthèse opérationnelle", word_text)
         self.assertIn("Comparaison avec la période précédente", word_text)
-        self.assertIn("Comptes clients recensés dans Customers", word_text)
         self.assertIn(
-            "Comptes clients recensés dans Customers | Comptes clients distincts du fichier Customers chargé; un compte client correspond au numéro de téléphone. | - | 2",
+            "Comptes clients connus à la date d'arrêté | Comptes clients créés avant ou à la date de fin. | 1",
             word_text,
         )
-        self.assertIn(
-            "Comptes clients connus à la date d'arrêté | Comptes clients créés avant ou à la date de fin. | - | 1",
-            word_text,
-        )
+        self.assertIn("Comptes clients recensés dans le référentiel clients", word_text)
+        self.assertNotIn("Comptes clients recensés dans Customers", word_text)
         self.assertIn("Indicateur | Explication | Devise", word_text)
         self.assertIn("Comptes clients avec produit DAT positif et produit crédit actif", word_text)
         self.assertIn("1. Clients", word_text)
         self.assertIn("2. Épargnes et DAT", word_text)
         self.assertIn("3. Crédits", word_text)
-        self.assertIn("Produits DAT actifs avec solde positif à la date d'arrêté", word_text)
+        self.assertNotIn("Produits DAT actifs avec solde positif à la date d'arrêté", word_text)
         self.assertIn("Encours des produits d'épargne ouverte actifs à la date d'arrêté", word_text)
-        self.assertIn("Produits crédit en cours avec encours positif à la date d'arrêté", word_text)
+        self.assertNotIn("Produits crédit en cours avec encours positif à la date d'arrêté", word_text)
         self.assertIn("Encours des produits crédit en cours à la date d'arrêté", word_text)
+        self.assertNotIn("Comptes clients avec produit d'épargne ouverte positif", word_text)
+        self.assertNotIn("Comptes clients avec produit DAT positif |", word_text)
         self.assertIn("Taux de conversion DAT en crédit", word_text)
+        self.assertNotIn("Flux observés sur la période", word_text)
+        self.assertIn("Flux entrants observés sur la période", word_text)
+        self.assertIn("Flux sortants observés sur la période", word_text)
         self.assertNotIn("4. Transactions", word_text)
         self.assertNotIn("Régularité des dépôts", word_text)
         self.assertNotIn("Qualité du rapprochement G2", word_text)
         self.assertNotIn("Sources et importance", word_text)
         self.assertNotIn("Annexe 1. Vue d'ensemble", word_text)
         self.assertNotIn("Annexe 3. Definitions", word_text)
-        self.assertIn("Solution Numérique uniquement", word_text)
+        self.assertNotIn("Solution Numérique uniquement", word_text)
         self.assertNotIn("Comparaison avec la même période de l'année précédente", word_text)
         self.assertNotIn("comparaison_annee_precedente", report)
         self.assertNotIn("Graphiques de synthese", word_text)
         self.assertNotIn("Remboursements observés", word_text)
-        compact_analysis_tables = [
+        stock_tables = [
             table
             for table in document.tables
             if {"Indicateur opérationnel", "Devise", "Valeur"}.issubset(
                 {cell.text for cell in table.rows[0].cells}
             )
         ]
-        self.assertGreaterEqual(len(compact_analysis_tables), 3)
+        self.assertGreaterEqual(len(stock_tables), 2)
+        client_tables = [
+            table
+            for table in document.tables
+            if {"Indicateur opérationnel", "Explication", "Valeur"}.issubset(
+                {cell.text for cell in table.rows[0].cells}
+            )
+            and "Devise" not in {cell.text for cell in table.rows[0].cells}
+        ]
+        self.assertEqual(len(client_tables), 1)
+        comparison_tables = [
+            table
+            for table in document.tables
+            if {"Bloc", "Indicateur", "Période analysée", "Période précédente"}.issubset(
+                {cell.text for cell in table.rows[0].cells}
+            )
+        ]
+        self.assertEqual(len(comparison_tables), 1)
+        self.assertLessEqual(len(comparison_tables[0].rows) - 1, 8)
         client_analysis_rows = [
             " | ".join(cell.text for cell in row.cells)
-            for row in compact_analysis_tables[0].rows
+            for row in client_tables[0].rows
         ]
         self.assertTrue(
+            any("Comptes clients connus à la date d'arrêté" in row for row in client_analysis_rows)
+        )
+        self.assertFalse(
             any("Nouveaux numéros clients créés sur la période" in row for row in client_analysis_rows)
         )
         self.assertNotIn(
@@ -6270,6 +6293,7 @@ class MpesaAnalysisTests(unittest.TestCase):
 
         finance_flow = finance["flux_synthese"].set_index("currency_code")
         statistics_flow = statistics["flux_entrees_periode"].set_index("currency_code")
+        statistics_outputs = statistics["flux_sorties_periode"].set_index("currency_code")
         for currency in finance_flow.index:
             for column in [
                 "depots_dat",
@@ -6280,6 +6304,37 @@ class MpesaAnalysisTests(unittest.TestCase):
                     float(statistics_flow.loc[currency, column]),
                     float(finance_flow.loc[currency, column]),
                 )
+            for column in [
+                "montant_sorties",
+                "retraits_epargne",
+                "nouveaux_credits_decaissements",
+                "flux_net",
+            ]:
+                self.assertEqual(
+                    float(statistics_outputs.loc[currency, column]),
+                    float(finance_flow.loc[currency, column]),
+                )
+
+        if not statistics["flux_entrees_periode"].empty:
+            statistics["flux_entrees_periode"] = statistics["flux_entrees_periode"].copy()
+            for column in ["montant_entrees", "depots_dat"]:
+                statistics["flux_entrees_periode"][column] = pd.to_numeric(
+                    statistics["flux_entrees_periode"][column],
+                    errors="coerce",
+                ).astype(float)
+            first_entry_index = statistics["flux_entrees_periode"].index[0]
+            statistics["flux_entrees_periode"].loc[first_entry_index, "montant_entrees"] = 1234567.89
+            statistics["flux_entrees_periode"].loc[first_entry_index, "depots_dat"] = 9876543.21
+        if not statistics["flux_sorties_periode"].empty:
+            statistics["flux_sorties_periode"] = statistics["flux_sorties_periode"].copy()
+            for column in ["retraits_epargne", "flux_net"]:
+                statistics["flux_sorties_periode"][column] = pd.to_numeric(
+                    statistics["flux_sorties_periode"][column],
+                    errors="coerce",
+                ).astype(float)
+            first_output_index = statistics["flux_sorties_periode"].index[0]
+            statistics["flux_sorties_periode"].loc[first_output_index, "retraits_epargne"] = 1234567.89
+            statistics["flux_sorties_periode"].loc[first_output_index, "flux_net"] = 9876543.21
 
         word = Document(BytesIO(create_mpesa_statistics_word(statistics)))
         word_text = "\n".join(
@@ -6290,7 +6345,19 @@ class MpesaAnalysisTests(unittest.TestCase):
                 for row in table.rows
             ]
         )
+        self.assertIn("Flux observés sur la période", word_text)
         self.assertIn("Flux entrants observés sur la période", word_text)
+        self.assertIn("Flux sortants observés sur la période", word_text)
+        self.assertIn(
+            "Devise | Entrées totales | DAT | Comptes ouverts | Remboursements",
+            word_text,
+        )
+        self.assertNotIn(
+            "Devise | Opérations | Comptes clients | Entrées totales",
+            word_text,
+        )
+        self.assertIn("1 234 567.89", word_text)
+        self.assertIn("9 876 543.21", word_text)
 
     def test_mpesa_clients_report_ignores_unknown_currency_when_client_has_known_currency(self) -> None:
         phone = "243817066094"
