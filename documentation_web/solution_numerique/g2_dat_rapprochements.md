@@ -23,7 +23,7 @@ Quand les transactions de la Solution Numérique sont chargées, l'onglet `Solut
 
 Le rapport Word reprend le mode choisi dans les critères et dans la synthèse de contrôle afin que l'export corresponde exactement au visuel.
 
-Le Word ajoute aussi une synthèse client avant la synthèse des flux. Le compteur `Nombre de numéros de téléphone observés sur la période` est calculé depuis le référentiel `Customers`, dédupliqué par numéro client, puis filtré sur la date de création du compte client. Sur une même période, ce chiffre doit concorder avec l'indicateur `Nouveaux numéros clients` de l'onglet `Statistiques`. Il ne dépend pas du portefeuille crédit.
+Le Word ajoute aussi une synthèse client avant la synthèse des flux. Le compteur `Nombre de numéros de téléphone observés sur la période` est calculé en croisant les numéros créés dans le référentiel `Customers` sur la période avec les numéros ayant au moins une transaction dans la même période. Sur une même période, ce chiffre doit concorder avec le même indicateur de l'onglet `Statistiques`. Il ne dépend pas du portefeuille crédit.
 
 En mode `Solution Numérique + rapport G2`, le commentaire de contrôle du Word doit rester chiffré : opérations rapprochées sur le total, pourcentage de rapprochement, rapprochements exacts, rapprochements avec écart, opérations non rapprochées et anomalies. Cela permet de retrouver rapidement une lecture du type `100/100 rapprochées, 0 anomalie` lorsque tout est cohérent.
 

@@ -72,6 +72,7 @@ from credit_app.services.mpesa_analysis import (
     enrich_turbo_with_g2_customer_names,
     filter_g2_transactions_by_completion_time,
     filter_g2_transactions_by_direction,
+    normalize_label,
     numeric_column,
     prepare_current_savings,
     prepare_customers,
@@ -6314,7 +6315,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             for row in table.rows
         )
         self.assertIn(
-            f"Nombre de numéros de téléphone observés sur la période | Numéros de téléphone ayant au moins une opération observée sur la période filtrée. | {observed_phone_count}",
+            "Nombre de numéros de téléphone observés sur la période | Numéros de téléphone créés dans Customers et ayant au moins une transaction sur la période filtrée. | 0",
             word_text,
         )
         for currency in finance_flow.index:
@@ -7454,7 +7455,7 @@ class MpesaAnalysisTests(unittest.TestCase):
 
         self.assertIn("Nombre de numéros de téléphone observés sur la période", word_text)
         self.assertIn(
-            "Nombre de numéros de téléphone observés sur la période | Numéros de téléphone ayant au moins une opération observée sur la période filtrée. | 4",
+            "Nombre de numéros de téléphone observés sur la période | Numéros de téléphone créés dans Customers et ayant au moins une transaction sur la période filtrée. | 3",
             word_text,
         )
 
@@ -8557,8 +8558,44 @@ class MpesaAnalysisTests(unittest.TestCase):
                 ]
             )
         )
+        transactions = prepare_transactions(
+            pd.DataFrame(
+                [
+                    {
+                        "id": 1,
+                        "customer_id": "1",
+                        "msisdn1": "243811111111",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "TX-NEW-ACTIVE",
+                        "currency_code": "CDF",
+                        "dr": 100,
+                        "cr": 0,
+                        "bal_before": 0,
+                        "bal_after": 100,
+                        "ref_no": "TX-NEW-ACTIVE",
+                        "description": "M-Pesa Compte",
+                        "created_at": "2026-07-05 09:30:00",
+                    },
+                    {
+                        "id": 2,
+                        "customer_id": "3",
+                        "msisdn1": "243833333333",
+                        "account_type": "MPESA ACCOUNT",
+                        "reference_id": "TX-OUTSIDE-CREATION",
+                        "currency_code": "CDF",
+                        "dr": 50,
+                        "cr": 0,
+                        "bal_before": 0,
+                        "bal_after": 50,
+                        "ref_no": "TX-OUTSIDE-CREATION",
+                        "description": "M-Pesa Compte",
+                        "created_at": "2026-07-10 10:00:00",
+                    },
+                ]
+            )
+        )
         prepared = MpesaPreparedData(
-            transactions=pd.DataFrame(),
+            transactions=transactions,
             current_savings=pd.DataFrame(),
             fixed_savings=pd.DataFrame(),
             loans=pd.DataFrame(),
@@ -8575,22 +8612,31 @@ class MpesaAnalysisTests(unittest.TestCase):
             date_start="2026-07-01",
             date_end="2026-07-31",
             comparison_period="Période filtrée",
-            include_transaction_metrics=False,
+            include_transaction_metrics=True,
         )
         weekly = statistics["comparaison_hebdomadaire"]
         new_clients = weekly.loc[weekly["indicator_key"].eq("nouveaux_clients")]
         self.assertFalse(new_clients.empty)
         self.assertEqual(int(new_clients.iloc[0]["valeur_semaine_courante"]), 2)
+        client_operational = statistics["clients_operationnels"]
+        observed_clients = client_operational.loc[
+            client_operational["indicateur"].apply(normalize_label).eq(
+                "nombre de numeros de telephone observes sur la periode"
+            ),
+            "valeur",
+        ]
+        self.assertFalse(observed_clients.empty)
+        self.assertEqual(int(observed_clients.iloc[0]), 1)
         self.assertEqual(
             int(
                 customer_summary.loc[
-                    customer_summary["indicateur"].eq(
-                        "Nombre de numéros de téléphone observés sur la période"
+                    customer_summary["indicateur"].apply(normalize_label).eq(
+                        "nombre de numeros de telephone observes sur la periode"
                     ),
                     "valeur",
                 ].iloc[0]
             ),
-            int(new_clients.iloc[0]["valeur_semaine_courante"]),
+            int(observed_clients.iloc[0]),
         )
 
         content = create_g2_dat_word(
@@ -8621,16 +8667,22 @@ class MpesaAnalysisTests(unittest.TestCase):
             generated_at=pd.Timestamp("2026-08-01 10:00:00"),
         )
         document = Document(BytesIO(content))
+        headings = [paragraph.text for paragraph in document.paragraphs]
         table_text = "\n".join(
             " | ".join(cell.text for cell in row.cells)
             for table in document.tables
             for row in table.rows
         )
-        self.assertIn("Synthese clients", "\n".join(paragraph.text for paragraph in document.paragraphs))
+        self.assertIn("Synthese clients", "\n".join(headings))
+        self.assertLess(
+            headings.index("Principales operations"),
+            headings.index("Synthese clients"),
+        )
         self.assertIn(
-            "Nombre de numéros de téléphone observés sur la période | 2 | Numéros de téléphone créés dans Customers sur l'intervalle analysé.",
+            "Nombre de numéros de téléphone observés sur la période | 1",
             table_text,
         )
+        self.assertIn("Indicateur operationnel | Valeur", table_text)
 
     def test_g2_dat_word_labels_turbo_only_source_without_simulating_g2_controls(self) -> None:
         from docx import Document

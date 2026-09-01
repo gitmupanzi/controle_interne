@@ -7988,20 +7988,112 @@ def count_mpesa_loaded_customers(prepared: MpesaPreparedData) -> int:
     return int(reference["client_key"].nunique())
 
 
+def count_mpesa_customer_numbers_observed_on_period(
+    prepared: MpesaPreparedData,
+    *,
+    date_start: Any | None = None,
+    date_end: Any | None = None,
+    turbo_events: pd.DataFrame | None = None,
+) -> int:
+    """Compte les numeros crees dans Customers et ayant transige sur la meme periode."""
+
+    if not isinstance(prepared.customers, pd.DataFrame) or prepared.customers.empty:
+        return 0
+
+    customer_reference = _mpesa_customer_reference(prepared)
+    if customer_reference.empty or not {"client_key", "date_creation"}.issubset(customer_reference.columns):
+        return 0
+
+    customer_dates = pd.to_datetime(customer_reference["date_creation"], errors="coerce")
+    period_start = pd.to_datetime(date_start, errors="coerce")
+    period_end = pd.to_datetime(date_end, errors="coerce")
+    if pd.isna(period_start):
+        period_start = customer_dates.dropna().min() if customer_dates.notna().any() else pd.NaT
+    if pd.isna(period_end):
+        period_end = customer_dates.dropna().max() if customer_dates.notna().any() else pd.NaT
+    if pd.isna(period_start) or pd.isna(period_end):
+        return 0
+    if period_start > period_end:
+        period_start, period_end = period_end, period_start
+
+    period_start = pd.Timestamp(period_start)
+    period_end_inclusive = pd.Timestamp(period_end)
+    if period_end_inclusive == period_end_inclusive.normalize():
+        period_end_inclusive = (
+            period_end_inclusive + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+        )
+
+    created_clients = set(
+        clean_identifier(
+            customer_reference.loc[
+                customer_dates.notna()
+                & customer_dates.ge(period_start)
+                & customer_dates.le(period_end_inclusive),
+                "client_key",
+            ]
+        )
+        .replace("", pd.NA)
+        .dropna()
+        .astype(str)
+    )
+    if not created_clients:
+        return 0
+
+    if isinstance(turbo_events, pd.DataFrame) and not turbo_events.empty:
+        transaction_source = turbo_events.copy()
+    elif isinstance(prepared.transactions, pd.DataFrame) and not prepared.transactions.empty:
+        transaction_source = prepared.transactions.copy()
+    else:
+        transaction_source = pd.DataFrame()
+    if transaction_source.empty:
+        return 0
+
+    date_column = next(
+        (
+            column
+            for column in ["created_at", "date_operation", "date", "operation_date"]
+            if column in transaction_source.columns
+        ),
+        "",
+    )
+    if not date_column:
+        return 0
+    transaction_dates = pd.to_datetime(transaction_source[date_column], errors="coerce")
+    transaction_source = transaction_source.loc[
+        transaction_dates.notna()
+        & transaction_dates.ge(period_start)
+        & transaction_dates.le(period_end_inclusive)
+    ].copy()
+    if transaction_source.empty:
+        return 0
+
+    active_clients = set(
+        clean_identifier(_mpesa_statistics_client_key(transaction_source, prefer_phone=True))
+        .replace("", pd.NA)
+        .dropna()
+        .astype(str)
+    )
+    return len(created_clients & active_clients)
+
+
 def build_mpesa_customer_period_summary(
     prepared: MpesaPreparedData,
     *,
     date_start: Any | None = None,
     date_end: Any | None = None,
+    turbo_events: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """Resume les numeros clients crees dans le referentiel Customers sur une periode.
+    """Resume les numeros clients crees et actifs dans le referentiel Customers.
 
     La logique reprend le referentiel statistique : Customers est prioritaire,
-    une ligne client est dedupliquee par numero/client, puis la premiere date de
-    creation connue sert au filtre de periode.
+    une ligne client est dedupliquee par numero/client. Le compteur observe sur
+    la periode exige aussi une transaction dans le meme intervalle.
     """
 
     columns = ["indicateur", "valeur", "commentaire"]
+    if not isinstance(prepared.customers, pd.DataFrame) or prepared.customers.empty:
+        return pd.DataFrame(columns=columns)
+
     reference = _mpesa_customer_reference(prepared)
     if reference.empty or not {"client_key", "date_creation"}.issubset(reference.columns):
         return pd.DataFrame(columns=columns)
@@ -8023,11 +8115,6 @@ def build_mpesa_customer_period_summary(
         period_end_inclusive = (
             period_end_inclusive + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
         )
-    created_on_period = reference.loc[
-        customer_dates.notna()
-        & customer_dates.ge(pd.Timestamp(period_start))
-        & customer_dates.le(period_end_inclusive)
-    ].copy()
     known_at_end = reference.loc[
         customer_dates.isna() | customer_dates.le(period_end_inclusive)
     ].copy()
@@ -8036,7 +8123,13 @@ def build_mpesa_customer_period_summary(
         if isinstance(prepared.customers, pd.DataFrame) and not prepared.customers.empty
         else "sources observées"
     )
-    return pd.DataFrame(
+    observed_on_period = count_mpesa_customer_numbers_observed_on_period(
+        prepared,
+        date_start=period_start,
+        date_end=period_end,
+        turbo_events=turbo_events,
+    )
+    summary = pd.DataFrame(
         [
             {
                 "indicateur": "Comptes clients recensés dans le référentiel clients",
@@ -8050,12 +8143,18 @@ def build_mpesa_customer_period_summary(
             },
             {
                 "indicateur": "Nombre de numéros de téléphone observés sur la période",
-                "valeur": int(created_on_period["client_key"].nunique()) if not created_on_period.empty else 0,
-                "commentaire": "Numéros de téléphone créés dans Customers sur l'intervalle analysé.",
+                "valeur": int(observed_on_period),
+                "commentaire": "Numéros de téléphone créés dans Customers et ayant au moins une transaction sur l'intervalle analysé.",
             },
         ],
         columns=columns,
     )
+    if not summary.empty and "commentaire" in summary.columns:
+        summary.loc[summary.index[-1], "commentaire"] = (
+            "Numéros de téléphone créés dans Customers et ayant au moins une "
+            "transaction sur l'intervalle analysé."
+        )
+    return summary
 
 
 def _mpesa_statistics_first_date(frame: pd.DataFrame, *columns: str) -> pd.Series:
@@ -8293,6 +8392,7 @@ def _mpesa_statistics_operational_client_summary(
     known_clients: int,
     active_clients: int | None,
     new_clients: int,
+    observed_phone_count: int | None = None,
     savings_stock_detail: pd.DataFrame,
     active_loans_detail: pd.DataFrame,
 ) -> pd.DataFrame:
@@ -8425,6 +8525,19 @@ def _mpesa_statistics_operational_client_summary(
         ),
         min(2, len(rows) - 1),
     )
+    if observed_phone_count is not None:
+        rows.insert(
+            insert_after + 1,
+            {
+                "indicateur": "Nombre de numéros de téléphone observés sur la période",
+                "valeur": int(observed_phone_count),
+                "commentaire": (
+                    "Numéros de téléphone créés dans Customers et ayant au moins "
+                    "une transaction sur la période filtrée."
+                ),
+            },
+        )
+        insert_after += 1
     rows.insert(
         insert_after + 1,
         {
@@ -8438,6 +8551,7 @@ def _mpesa_statistics_operational_client_summary(
         },
     )
     result = pd.DataFrame(rows)
+    active_clients = None
     if active_clients is not None:
         rows = list(result.to_dict("records"))
         rows.insert(
@@ -12402,11 +12516,17 @@ def build_mpesa_statistics_report(
                 "client_key",
             ].nunique()
         )
+    observed_phone_count = count_mpesa_customer_numbers_observed_on_period(
+        prepared,
+        date_start=start_date,
+        date_end=end_date,
+    )
     clients_operational = _mpesa_statistics_operational_client_summary(
         loaded_clients=total_loaded_clients,
         known_clients=total_known_clients,
         active_clients=active_clients,
         new_clients=new_clients_count,
+        observed_phone_count=observed_phone_count,
         savings_stock_detail=savings_stock_detail,
         active_loans_detail=active_loans_detail,
     )
@@ -13045,6 +13165,7 @@ def create_mpesa_statistics_word(
             "comptes clients actifs": "Comptes clients ayant au moins une operation metier consolidee pendant la periode.",
             "nouveaux numeros clients crees sur la periode": "Nouveaux numeros de telephone apparus dans Customers entre la date de debut et la date de fin.",
             "nouveaux numeros clients": "Nouveaux numeros de telephone apparus dans Customers dans la periode comparee.",
+            "nombre de numeros de telephone observes sur la periode": "Numéros de téléphone créés dans Customers et ayant au moins une transaction sur la période filtrée.",
             "comptes clients avec histoire d epargne active": "Comptes clients ayant au moins un produit d'epargne ouverte ou DAT actif, avec solde non nul et date de mise a jour differente de la date de creation.",
             "comptes clients avec produit dat positif et produit credit actif": "Comptes clients portant un produit DAT strictement superieur a zero et un produit credit actif.",
             "comptes clients avec produit dat positif": "Comptes clients portant au moins un produit DAT dont le solde est strictement superieur a zero.",
@@ -13241,7 +13362,89 @@ def create_mpesa_statistics_word(
     )
 
     def _observed_phone_count_for_period() -> int:
+        if isinstance(client_operational_frame, pd.DataFrame) and not client_operational_frame.empty:
+            indicator_series = client_operational_frame.get(
+                "indicateur",
+                pd.Series("", index=client_operational_frame.index),
+            ).apply(normalize_label)
+            observed_rows = client_operational_frame.loc[
+                indicator_series.eq("nombre de numeros de telephone observes sur la periode")
+            ]
+            if not observed_rows.empty and "valeur" in observed_rows.columns:
+                value = pd.to_numeric(observed_rows["valeur"], errors="coerce").dropna()
+                if not value.empty:
+                    return int(value.iloc[0])
         operations_frame = statistics_report.get("operations_turbo", pd.DataFrame())
+        client_reference_frame = statistics_report.get("clients_reference", pd.DataFrame())
+        if (
+            isinstance(client_reference_frame, pd.DataFrame)
+            and not client_reference_frame.empty
+            and isinstance(operations_frame, pd.DataFrame)
+            and not operations_frame.empty
+            and {"client_key", "date_creation"}.issubset(client_reference_frame.columns)
+        ):
+            period_start = pd.to_datetime(start_date, errors="coerce")
+            period_end = pd.to_datetime(end_date, errors="coerce")
+            if pd.notna(period_start) and pd.notna(period_end):
+                if period_start > period_end:
+                    period_start, period_end = period_end, period_start
+                period_end_inclusive = pd.Timestamp(period_end)
+                if period_end_inclusive == period_end_inclusive.normalize():
+                    period_end_inclusive = (
+                        period_end_inclusive
+                        + pd.Timedelta(days=1)
+                        - pd.Timedelta(microseconds=1)
+                    )
+                reference_dates = pd.to_datetime(
+                    client_reference_frame["date_creation"], errors="coerce"
+                )
+                created_keys = set(
+                    clean_identifier(
+                        client_reference_frame.loc[
+                            reference_dates.notna()
+                            & reference_dates.ge(pd.Timestamp(period_start))
+                            & reference_dates.le(period_end_inclusive),
+                            "client_key",
+                        ]
+                    )
+                    .replace("", pd.NA)
+                    .dropna()
+                    .astype(str)
+                )
+                date_columns = [
+                    column
+                    for column in ["created_at", "date_operation", "date", "operation_date"]
+                    if column in operations_frame.columns
+                ]
+                phone_columns = [
+                    column
+                    for column in [
+                        "numero_telephone",
+                        "telephone",
+                        "msisdn1",
+                        "msisdn",
+                        "phone_number",
+                        "mobile_number",
+                        "numero_client",
+                    ]
+                    if column in operations_frame.columns
+                ]
+                if created_keys and date_columns and phone_columns:
+                    operation_dates = pd.to_datetime(
+                        operations_frame[date_columns[0]], errors="coerce"
+                    )
+                    scoped_operations = operations_frame.loc[
+                        operation_dates.notna()
+                        & operation_dates.ge(pd.Timestamp(period_start))
+                        & operation_dates.le(period_end_inclusive)
+                    ].copy()
+                    active_keys = set(
+                        normalize_phone(clean_text(scoped_operations[phone_columns[0]]))
+                        .replace("", pd.NA)
+                        .dropna()
+                        .astype(str)
+                    )
+                    return len(created_keys & active_keys)
         if isinstance(operations_frame, pd.DataFrame) and not operations_frame.empty:
             phone_columns = [
                 column
@@ -13329,7 +13532,7 @@ def create_mpesa_statistics_word(
                     {
                         "indicateur": "Nombre de numéros de téléphone observés sur la période",
                         "valeur": observed_clients,
-                        "commentaire": "Numéros de téléphone ayant au moins une opération observée sur la période filtrée.",
+                        "commentaire": "Numéros de téléphone créés dans Customers et ayant au moins une transaction sur la période filtrée.",
                     },
                 ]
             )
@@ -13364,7 +13567,11 @@ def create_mpesa_statistics_word(
             observed_phone_count = _observed_phone_count_for_period()
             existing_keys = client_display["indicateur"].apply(_indicator_key)
             observed_mask = existing_keys.eq(observed_key)
-            observed_comment = "Numéros de téléphone ayant au moins une opération observée sur la période filtrée."
+            observed_comment = "Numéros de téléphone créés dans Customers et ayant au moins une transaction sur la période filtrée."
+            observed_comment = (
+                "Numéros de téléphone créés dans Customers et ayant au moins "
+                "une transaction sur la période filtrée."
+            )
             if observed_mask.any():
                 client_display.loc[observed_mask, "valeur"] = observed_phone_count
                 if "commentaire" in client_display.columns:
@@ -26620,12 +26827,14 @@ def create_g2_dat_word(
         document.add_heading = lambda *args, **kwargs: document.add_paragraph()
         add_table = lambda *args, **kwargs: None
 
-    customer_period_summary = word_report.get("clients_periode", pd.DataFrame())
-    if (
-        not has_provider_only
-        and isinstance(customer_period_summary, pd.DataFrame)
-        and not customer_period_summary.empty
-    ):
+    def add_customer_period_summary() -> None:
+        customer_period_summary = word_report.get("clients_periode", pd.DataFrame())
+        if (
+            has_provider_only
+            or not isinstance(customer_period_summary, pd.DataFrame)
+            or customer_period_summary.empty
+        ):
+            return
         customer_period_summary = customer_period_summary.copy()
         if "valeur" in customer_period_summary.columns:
             customer_period_summary["valeur"] = pd.to_numeric(
@@ -26634,17 +26843,15 @@ def create_g2_dat_word(
         document.add_heading("Synthese clients", level=1)
         add_table(
             customer_period_summary,
-            ["indicateur", "valeur", "commentaire"],
+            ["indicateur", "valeur"],
             {
                 "indicateur": "Indicateur operationnel",
                 "valeur": "Valeur",
-                "commentaire": "Explication",
             },
             font_size=8,
             column_widths_cm={
-                "indicateur": 5.5,
+                "indicateur": 10.0,
                 "valeur": 2.0,
-                "commentaire": 10.5,
             },
             no_wrap_columns={"valeur"},
         )
@@ -26664,6 +26871,7 @@ def create_g2_dat_word(
         ["currency_code", "sens_flux", "details_rapport", "nombre", "montant"],
         {"currency_code": "Devise", "sens_flux": "Sens", "details_rapport": "Operation", "nombre": "Nombre", "montant": "Montant"},
     )
+    add_customer_period_summary()
     top_movements = word_report.get("top_mouvements_devise", pd.DataFrame())
     if not isinstance(top_movements, pd.DataFrame) or top_movements.empty:
         top_movements = build_g2_top_movements_by_currency(transaction_detail, top_n=5)
