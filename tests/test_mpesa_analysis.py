@@ -6315,6 +6315,10 @@ class MpesaAnalysisTests(unittest.TestCase):
             for row in table.rows
         )
         self.assertIn(
+            f"Numéros clients distincts | Numéros de téléphone distincts ayant au moins une transaction Solution Numérique dans la période filtrée. | {observed_phone_count}",
+            word_text,
+        )
+        self.assertIn(
             "Nombre de numéros de téléphone observés sur la période | Numéros de téléphone créés dans Customers et ayant au moins une transaction sur la période filtrée. | 0",
             word_text,
         )
@@ -7454,6 +7458,10 @@ class MpesaAnalysisTests(unittest.TestCase):
         )
 
         self.assertIn("Nombre de numéros de téléphone observés sur la période", word_text)
+        self.assertIn(
+            "Numéros clients distincts | Numéros de téléphone distincts ayant au moins une transaction Solution Numérique dans la période filtrée. | 4",
+            word_text,
+        )
         self.assertIn(
             "Nombre de numéros de téléphone observés sur la période | Numéros de téléphone créés dans Customers et ayant au moins une transaction sur la période filtrée. | 3",
             word_text,
@@ -8619,6 +8627,14 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertFalse(new_clients.empty)
         self.assertEqual(int(new_clients.iloc[0]["valeur_semaine_courante"]), 2)
         client_operational = statistics["clients_operationnels"]
+        distinct_clients = client_operational.loc[
+            client_operational["indicateur"].apply(normalize_label).eq(
+                "numeros clients distincts"
+            ),
+            "valeur",
+        ]
+        self.assertFalse(distinct_clients.empty)
+        self.assertEqual(int(distinct_clients.iloc[0]), 2)
         observed_clients = client_operational.loc[
             client_operational["indicateur"].apply(normalize_label).eq(
                 "nombre de numeros de telephone observes sur la periode"
@@ -8631,6 +8647,17 @@ class MpesaAnalysisTests(unittest.TestCase):
             int(
                 customer_summary.loc[
                     customer_summary["indicateur"].apply(normalize_label).eq(
+                        "numeros clients distincts"
+                    ),
+                    "valeur",
+                ].iloc[0]
+            ),
+            int(distinct_clients.iloc[0]),
+        )
+        self.assertEqual(
+            int(
+                customer_summary.loc[
+                    customer_summary["indicateur"].apply(normalize_label).eq(
                         "nombre de numeros de telephone observes sur la periode"
                     ),
                     "valeur",
@@ -8638,6 +8665,11 @@ class MpesaAnalysisTests(unittest.TestCase):
             ),
             int(observed_clients.iloc[0]),
         )
+        excel_content = create_excel_export({"clients_periode": customer_summary})
+        with pd.ExcelFile(BytesIO(excel_content)) as workbook:
+            self.assertIn("Synthese_Clients", workbook.sheet_names)
+            excel_summary = pd.read_excel(workbook, sheet_name="Synthese_Clients")
+        self.assertIn("Numéros clients distincts", set(excel_summary["indicateur"]))
 
         content = create_g2_dat_word(
             {
@@ -8678,6 +8710,7 @@ class MpesaAnalysisTests(unittest.TestCase):
             headings.index("Principales operations"),
             headings.index("Synthese clients"),
         )
+        self.assertIn("Numéros clients distincts | 2", table_text)
         self.assertIn(
             "Nombre de numéros de téléphone observés sur la période | 1",
             table_text,

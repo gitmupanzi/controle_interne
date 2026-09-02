@@ -7988,6 +7988,86 @@ def count_mpesa_loaded_customers(prepared: MpesaPreparedData) -> int:
     return int(reference["client_key"].nunique())
 
 
+def _mpesa_transaction_client_number_key(frame: pd.DataFrame) -> pd.Series:
+    """Retourne le numéro client normalisé porté par les transactions."""
+
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return pd.Series(dtype="string")
+    keys = pd.Series("", index=frame.index, dtype="string")
+    for column in [
+        "numero_telephone",
+        "telephone",
+        "msisdn1",
+        "msisdn",
+        "phone_number",
+        "mobile_number",
+        "numero_client",
+    ]:
+        if column not in frame.columns:
+            continue
+        candidate = _mpesa_client_phone_key(frame[column])
+        missing = keys.fillna("").str.strip().eq("")
+        keys.loc[missing] = candidate.loc[missing]
+    return clean_identifier(keys)
+
+
+def count_mpesa_distinct_customer_numbers_on_period(
+    prepared: MpesaPreparedData,
+    *,
+    date_start: Any | None = None,
+    date_end: Any | None = None,
+    turbo_events: pd.DataFrame | None = None,
+) -> int:
+    """Compte les numéros clients distincts ayant transigé sur la période."""
+
+    if isinstance(turbo_events, pd.DataFrame) and not turbo_events.empty:
+        transaction_source = turbo_events.copy()
+    elif isinstance(prepared.transactions, pd.DataFrame) and not prepared.transactions.empty:
+        transaction_source = prepared.transactions.copy()
+    else:
+        return 0
+
+    date_column = next(
+        (
+            column
+            for column in ["created_at", "date_operation", "date", "operation_date"]
+            if column in transaction_source.columns
+        ),
+        "",
+    )
+    if not date_column:
+        return 0
+    transaction_dates = pd.to_datetime(transaction_source[date_column], errors="coerce")
+    period_start = pd.to_datetime(date_start, errors="coerce")
+    period_end = pd.to_datetime(date_end, errors="coerce")
+    if pd.isna(period_start):
+        period_start = transaction_dates.dropna().min() if transaction_dates.notna().any() else pd.NaT
+    if pd.isna(period_end):
+        period_end = transaction_dates.dropna().max() if transaction_dates.notna().any() else pd.NaT
+    if pd.isna(period_start) or pd.isna(period_end):
+        return 0
+    if period_start > period_end:
+        period_start, period_end = period_end, period_start
+    period_end_inclusive = pd.Timestamp(period_end)
+    if period_end_inclusive == period_end_inclusive.normalize():
+        period_end_inclusive = (
+            period_end_inclusive + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+        )
+    transaction_source = transaction_source.loc[
+        transaction_dates.notna()
+        & transaction_dates.ge(pd.Timestamp(period_start))
+        & transaction_dates.le(period_end_inclusive)
+    ].copy()
+    if transaction_source.empty:
+        return 0
+    return int(
+        _mpesa_transaction_client_number_key(transaction_source)
+        .replace("", pd.NA)
+        .dropna()
+        .nunique()
+    )
+
+
 def count_mpesa_customer_numbers_observed_on_period(
     prepared: MpesaPreparedData,
     *,
@@ -8068,7 +8148,7 @@ def count_mpesa_customer_numbers_observed_on_period(
         return 0
 
     active_clients = set(
-        clean_identifier(_mpesa_statistics_client_key(transaction_source, prefer_phone=True))
+        _mpesa_transaction_client_number_key(transaction_source)
         .replace("", pd.NA)
         .dropna()
         .astype(str)
@@ -8091,8 +8171,26 @@ def build_mpesa_customer_period_summary(
     """
 
     columns = ["indicateur", "valeur", "commentaire"]
+    distinct_customer_numbers = count_mpesa_distinct_customer_numbers_on_period(
+        prepared,
+        date_start=date_start,
+        date_end=date_end,
+        turbo_events=turbo_events,
+    )
     if not isinstance(prepared.customers, pd.DataFrame) or prepared.customers.empty:
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(
+            [
+                {
+                    "indicateur": "Numéros clients distincts",
+                    "valeur": int(distinct_customer_numbers),
+                    "commentaire": (
+                        "Numéros de téléphone distincts ayant au moins une transaction "
+                        "Solution Numérique sur l'intervalle analysé."
+                    ),
+                }
+            ],
+            columns=columns,
+        )
 
     reference = _mpesa_customer_reference(prepared)
     if reference.empty or not {"client_key", "date_creation"}.issubset(reference.columns):
@@ -8140,6 +8238,14 @@ def build_mpesa_customer_period_summary(
                 "indicateur": "Comptes clients connus à la date de fin",
                 "valeur": int(known_at_end["client_key"].nunique()) if not known_at_end.empty else 0,
                 "commentaire": "Numéros clients créés avant ou à la date de fin de l'analyse.",
+            },
+            {
+                "indicateur": "Numéros clients distincts",
+                "valeur": int(distinct_customer_numbers),
+                "commentaire": (
+                    "Numéros de téléphone distincts ayant au moins une transaction "
+                    "Solution Numérique sur l'intervalle analysé."
+                ),
             },
             {
                 "indicateur": "Nombre de numéros de téléphone observés sur la période",
@@ -8392,6 +8498,7 @@ def _mpesa_statistics_operational_client_summary(
     known_clients: int,
     active_clients: int | None,
     new_clients: int,
+    distinct_customer_numbers: int | None = None,
     observed_phone_count: int | None = None,
     savings_stock_detail: pd.DataFrame,
     active_loans_detail: pd.DataFrame,
@@ -8525,6 +8632,21 @@ def _mpesa_statistics_operational_client_summary(
         ),
         min(2, len(rows) - 1),
     )
+    if distinct_customer_numbers is None:
+        distinct_customer_numbers = active_clients
+    if distinct_customer_numbers is not None:
+        rows.insert(
+            insert_after + 1,
+            {
+                "indicateur": "Numéros clients distincts",
+                "valeur": int(distinct_customer_numbers),
+                "commentaire": (
+                    "Numéros de téléphone distincts ayant au moins une transaction "
+                    "Solution Numérique sur la période filtrée."
+                ),
+            },
+        )
+        insert_after += 1
     if observed_phone_count is not None:
         rows.insert(
             insert_after + 1,
@@ -8550,20 +8672,7 @@ def _mpesa_statistics_operational_client_summary(
             ),
         },
     )
-    result = pd.DataFrame(rows)
-    active_clients = None
-    if active_clients is not None:
-        rows = list(result.to_dict("records"))
-        rows.insert(
-            2,
-            {
-                "indicateur": "Comptes clients actifs sur la période",
-                "valeur": int(active_clients),
-                "commentaire": "Comptes clients ayant au moins une opération sur la période.",
-            },
-        )
-        result = pd.DataFrame(rows)
-    return result
+    return pd.DataFrame(rows)
 
 
 def _mpesa_statistics_savings_without_active_credit(
@@ -12516,16 +12625,24 @@ def build_mpesa_statistics_report(
                 "client_key",
             ].nunique()
         )
+    distinct_customer_numbers = count_mpesa_distinct_customer_numbers_on_period(
+        prepared,
+        date_start=start_date,
+        date_end=end_date,
+        turbo_events=events,
+    )
     observed_phone_count = count_mpesa_customer_numbers_observed_on_period(
         prepared,
         date_start=start_date,
         date_end=end_date,
+        turbo_events=events,
     )
     clients_operational = _mpesa_statistics_operational_client_summary(
         loaded_clients=total_loaded_clients,
         known_clients=total_known_clients,
         active_clients=active_clients,
         new_clients=new_clients_count,
+        distinct_customer_numbers=distinct_customer_numbers,
         observed_phone_count=observed_phone_count,
         savings_stock_detail=savings_stock_detail,
         active_loans_detail=active_loans_detail,
@@ -13165,6 +13282,7 @@ def create_mpesa_statistics_word(
             "comptes clients actifs": "Comptes clients ayant au moins une operation metier consolidee pendant la periode.",
             "nouveaux numeros clients crees sur la periode": "Nouveaux numeros de telephone apparus dans Customers entre la date de debut et la date de fin.",
             "nouveaux numeros clients": "Nouveaux numeros de telephone apparus dans Customers dans la periode comparee.",
+            "numeros clients distincts": "Numéros de téléphone distincts ayant au moins une transaction Solution Numérique dans la période filtrée.",
             "nombre de numeros de telephone observes sur la periode": "Numéros de téléphone créés dans Customers et ayant au moins une transaction sur la période filtrée.",
             "comptes clients avec histoire d epargne active": "Comptes clients ayant au moins un produit d'epargne ouverte ou DAT actif, avec solde non nul et date de mise a jour differente de la date de creation.",
             "comptes clients avec produit dat positif et produit credit actif": "Comptes clients portant un produit DAT strictement superieur a zero et un produit credit actif.",
@@ -13361,6 +13479,51 @@ def create_mpesa_statistics_word(
         max_rows=20,
     )
 
+    def _distinct_customer_numbers_for_period() -> int:
+        if isinstance(client_operational_frame, pd.DataFrame) and not client_operational_frame.empty:
+            indicator_series = client_operational_frame.get(
+                "indicateur",
+                pd.Series("", index=client_operational_frame.index),
+            ).apply(normalize_label)
+            distinct_rows = client_operational_frame.loc[
+                indicator_series.eq("numeros clients distincts")
+            ]
+            if not distinct_rows.empty and "valeur" in distinct_rows.columns:
+                value = pd.to_numeric(distinct_rows["valeur"], errors="coerce").dropna()
+                if not value.empty:
+                    return int(value.iloc[0])
+        operations_frame = statistics_report.get("operations_turbo", pd.DataFrame())
+        if isinstance(operations_frame, pd.DataFrame) and not operations_frame.empty:
+            scoped_operations = operations_frame.copy()
+            date_columns = [
+                column
+                for column in ["created_at", "date_operation", "date", "operation_date"]
+                if column in scoped_operations.columns
+            ]
+            if date_columns and pd.notna(start_date) and pd.notna(end_date):
+                operation_dates = pd.to_datetime(scoped_operations[date_columns[0]], errors="coerce")
+                period_start = pd.to_datetime(start_date, errors="coerce")
+                period_end = pd.to_datetime(end_date, errors="coerce")
+                if pd.notna(period_end) and period_end == period_end.normalize():
+                    period_end = period_end + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+                scoped_operations = scoped_operations.loc[
+                    operation_dates.notna()
+                    & operation_dates.between(period_start, period_end)
+                ].copy()
+            return int(
+                _mpesa_transaction_client_number_key(scoped_operations)
+                .replace("", pd.NA)
+                .dropna()
+                .nunique()
+            )
+        overview_frame = statistics_report.get("vue_ensemble", pd.DataFrame())
+        if isinstance(overview_frame, pd.DataFrame) and not overview_frame.empty:
+            for column in ["clients_turbo_actifs_global", "clients_turbo_actifs"]:
+                if column in overview_frame.columns:
+                    value = pd.to_numeric(overview_frame[column], errors="coerce").fillna(0).max()
+                    return int(value)
+        return 0
+
     def _observed_phone_count_for_period() -> int:
         if isinstance(client_operational_frame, pd.DataFrame) and not client_operational_frame.empty:
             indicator_series = client_operational_frame.get(
@@ -13445,49 +13608,9 @@ def create_mpesa_statistics_word(
                         .astype(str)
                     )
                     return len(created_keys & active_keys)
-        if isinstance(operations_frame, pd.DataFrame) and not operations_frame.empty:
-            phone_columns = [
-                column
-                for column in [
-                    "numero_telephone",
-                    "telephone",
-                    "msisdn1",
-                    "msisdn",
-                    "phone_number",
-                    "mobile_number",
-                    "numero_client",
-                ]
-                if column in operations_frame.columns
-            ]
-            if phone_columns:
-                scoped_operations = operations_frame.copy()
-                date_columns = [
-                    column
-                    for column in ["created_at", "date_operation", "date", "operation_date"]
-                    if column in scoped_operations.columns
-                ]
-                if date_columns and pd.notna(start_date) and pd.notna(end_date):
-                    operation_dates = pd.to_datetime(scoped_operations[date_columns[0]], errors="coerce")
-                    period_start = pd.to_datetime(start_date, errors="coerce")
-                    period_end = pd.to_datetime(end_date, errors="coerce")
-                    if pd.notna(period_end) and period_end == period_end.normalize():
-                        period_end = period_end + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
-                    scoped_operations = scoped_operations.loc[
-                        operation_dates.notna()
-                        & operation_dates.between(period_start, period_end)
-                    ].copy()
-                return int(
-                    normalize_phone(clean_text(scoped_operations[phone_columns[0]]))
-                    .replace("", pd.NA)
-                    .dropna()
-                    .nunique()
-                )
-        overview_frame = statistics_report.get("vue_ensemble", pd.DataFrame())
-        if isinstance(overview_frame, pd.DataFrame) and not overview_frame.empty:
-            for column in ["clients_turbo_actifs_global", "clients_turbo_actifs"]:
-                if column in overview_frame.columns:
-                    value = pd.to_numeric(overview_frame[column], errors="coerce").fillna(0).max()
-                    return int(value)
+        # Sans Customers, on ne peut pas prouver qu'un numéro a été créé dans
+        # la période. Le compteur transactionnel distinct reste disponible dans
+        # l'indicateur séparé « Numéros clients distincts ».
         return 0
 
     add_title("1. Clients")
@@ -13510,12 +13633,7 @@ def create_mpesa_statistics_word(
                     errors="coerce",
                 ).fillna(0).max()
             )
-            observed_clients = _safe_float(
-                pd.to_numeric(
-                    overview_frame.get("clients_turbo_actifs", pd.Series(dtype=float)),
-                    errors="coerce",
-                ).fillna(0).max()
-            )
+            distinct_clients = float(_distinct_customer_numbers_for_period())
             observed_clients = float(_observed_phone_count_for_period())
             fallback_rows.extend(
                 [
@@ -13528,6 +13646,11 @@ def create_mpesa_statistics_word(
                         "indicateur": "Comptes clients connus à la date d'arrêté",
                         "valeur": known_clients,
                         "commentaire": "Comptes clients créés avant ou à la date de fin.",
+                    },
+                    {
+                        "indicateur": "Numéros clients distincts",
+                        "valeur": distinct_clients,
+                        "commentaire": "Numéros de téléphone distincts ayant au moins une transaction Solution Numérique dans la période filtrée.",
                     },
                     {
                         "indicateur": "Nombre de numéros de téléphone observés sur la période",
@@ -13544,6 +13667,7 @@ def create_mpesa_statistics_word(
             "comptes clients du fichier customers charge",
             "comptes clients connus a la date d arrete",
             "comptes clients connus a la date de fin",
+            "numeros clients distincts",
             "nombre de numeros de telephone observes sur la periode",
             "comptes clients actifs sur la periode",
             "comptes clients actifs",
@@ -13559,10 +13683,43 @@ def create_mpesa_statistics_word(
                     "Comptes clients du fichier Customers chargé": "Comptes clients recensés dans le référentiel clients",
                     "Comptes clients recensés dans Customers": "Comptes clients recensés dans le référentiel clients",
                     "Comptes clients connus à la date de fin": "Comptes clients connus à la date d'arrêté",
-                    "Comptes clients actifs sur la période": "Nombre de numéros de téléphone observés sur la période",
-                    "Comptes clients actifs": "Nombre de numéros de téléphone observés sur la période",
+                    "Comptes clients actifs sur la période": "Numéros clients distincts",
+                    "Comptes clients actifs": "Numéros clients distincts",
                 }
             )
+            distinct_key = "numeros clients distincts"
+            distinct_customer_numbers = _distinct_customer_numbers_for_period()
+            existing_keys = client_display["indicateur"].apply(_indicator_key)
+            distinct_mask = existing_keys.eq(distinct_key)
+            distinct_comment = "Numéros de téléphone distincts ayant au moins une transaction Solution Numérique dans la période filtrée."
+            if distinct_mask.any():
+                client_display.loc[distinct_mask, "valeur"] = distinct_customer_numbers
+                if "commentaire" in client_display.columns:
+                    client_display.loc[distinct_mask, "commentaire"] = distinct_comment
+            else:
+                distinct_row = pd.DataFrame(
+                    [
+                        {
+                            "indicateur": "Numéros clients distincts",
+                            "valeur": distinct_customer_numbers,
+                            "commentaire": distinct_comment,
+                        }
+                    ]
+                )
+                known_keys = client_display["indicateur"].apply(_indicator_key)
+                insert_after = (
+                    int(known_keys[known_keys.eq("comptes clients connus a la date d arrete")].index[0])
+                    if known_keys.eq("comptes clients connus a la date d arrete").any()
+                    else min(1, len(client_display) - 1)
+                )
+                client_display = pd.concat(
+                    [
+                        client_display.iloc[: insert_after + 1],
+                        distinct_row,
+                        client_display.iloc[insert_after + 1 :],
+                    ],
+                    ignore_index=True,
+                )
             observed_key = "nombre de numeros de telephone observes sur la periode"
             observed_phone_count = _observed_phone_count_for_period()
             existing_keys = client_display["indicateur"].apply(_indicator_key)
@@ -13604,9 +13761,10 @@ def create_mpesa_statistics_word(
             client_order = {
                 "comptes clients recenses dans le referentiel clients": 10,
                 "comptes clients connus a la date d arrete": 20,
-                "nombre de numeros de telephone observes sur la periode": 30,
-                "comptes clients avec histoire d epargne active": 40,
-                "comptes clients avec produit dat positif et produit credit actif": 50,
+                "numeros clients distincts": 30,
+                "nombre de numeros de telephone observes sur la periode": 40,
+                "comptes clients avec histoire d epargne active": 50,
+                "comptes clients avec produit dat positif et produit credit actif": 60,
             }
             client_display["_ordre_rapport"] = (
                 client_display["indicateur"].apply(_indicator_key).map(client_order).fillna(999)
@@ -29171,6 +29329,7 @@ def create_excel_export(
         ("rapport_journalier_comptages", "Rapport_Journalier_Comptages"),
         ("rapport_journalier_vertical", "Rapport_Journalier_Vertical"),
         ("rapport_journalier_synthese", "Rapport_Journalier_Synthese"),
+        ("clients_periode", "Synthese_Clients"),
         ("statuts_g2", "Statuts_G2"),
         ("statuts_turbo", "Statuts_Turbo"),
         ("rapport_journalier_detail", "Rapport_Journalier_Detail"),

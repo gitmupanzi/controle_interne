@@ -4857,6 +4857,8 @@ def _render_g2_report_export(
         "retention_mensuelle": retention_report.get("mensuelle", pd.DataFrame()),
         "retention_detail": retention_report.get("detail_clients", pd.DataFrame()),
     }
+    if isinstance(customer_period_summary, pd.DataFrame) and not customer_period_summary.empty:
+        export_report["clients_periode"] = customer_period_summary
     provider_report = provider_report or {}
     for provider_key in [
         "provider_synthese",
@@ -4889,11 +4891,7 @@ def _render_g2_report_export(
     word_report["g2_dat"] = g2_dat
     word_report["rapport_journalier_pivot"] = daily_pivot
     word_report["top_mouvements_devise"] = export_report["top_mouvements_devise"]
-    word_report["clients_periode"] = (
-        customer_period_summary
-        if isinstance(customer_period_summary, pd.DataFrame)
-        else pd.DataFrame()
-    )
+    word_report["clients_periode"] = export_report.get("clients_periode", pd.DataFrame())
     for provider_key in [
         "provider_synthese",
         "provider_top_mouvements",
