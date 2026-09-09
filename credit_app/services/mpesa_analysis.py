@@ -22871,6 +22871,40 @@ def _pdf_number(value: Any, *, decimals: int = 0) -> str:
     if pd.isna(number):
         return "-"
     return f"{number:,.{decimals}f}".replace(",", " ")
+
+
+def _dat_subscription_duration_label(row: Any) -> str:
+    """Retourne la duree lisible du DAT: 1, 3, 6, 9, 12 mois si identifiable."""
+    for column in ("product_name", "product_description"):
+        text = str(row.get(column, "") or "")
+        match = re.search(r"\b(1|3|6|9|12)\s*(?:month|months|mois|m)\b", text, flags=re.IGNORECASE)
+        if match:
+            return f"{int(match.group(1))} mois"
+    value = pd.to_numeric(
+        pd.Series([row.get("duree_contractuelle_mois_estimee")]),
+        errors="coerce",
+    ).iloc[0]
+    if pd.isna(value):
+        approved = pd.to_datetime(row.get("date_approved"), errors="coerce")
+        maturity = pd.to_datetime(row.get("maturity_date"), errors="coerce")
+        if pd.isna(approved) or pd.isna(maturity) or maturity < approved:
+            return "-"
+        value = (maturity.normalize() - approved.normalize()).days / (365.0 / 12.0)
+    standard_terms = [1, 3, 6, 9, 12]
+    closest = min(standard_terms, key=lambda term: abs(term - float(value)))
+    if abs(closest - float(value)) <= 0.4:
+        return f"{closest} mois"
+    return f"≈ {float(value):.1f} mois".replace(".", ",")
+
+
+def _with_dat_subscription_duration(frame: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return frame
+    result = frame.copy()
+    result["duree_souscription_dat"] = result.apply(_dat_subscription_duration_label, axis=1)
+    return result
+
+
 def _retention_svg(monthly: pd.DataFrame) -> str:
     if monthly.empty:
         return ""
@@ -24031,6 +24065,7 @@ def create_customer_statement_word(
 
     active_dat = analysis_frame("dat_en_cours_client")
     if not minimal and not active_dat.empty:
+        active_dat = _with_dat_subscription_duration(active_dat)
         situation_dates = pd.to_datetime(active_dat.get("date_situation"), errors="coerce").dropna()
         dat_title = "DAT en cours"
         if not situation_dates.empty:
@@ -24041,6 +24076,7 @@ def create_customer_statement_word(
             [
                 "savings_id",
                 "date_approved",
+                "duree_souscription_dat",
                 "maturity_date",
                 "jours_avant_echeance",
                 "currency_code",
@@ -24051,6 +24087,7 @@ def create_customer_statement_word(
             {
                 "savings_id": "DAT",
                 "date_approved": "Souscription",
+                "duree_souscription_dat": "Durée DAT",
                 "maturity_date": "Échéance",
                 "jours_avant_echeance": "Jours restants",
                 "currency_code": "Devise",
@@ -24058,7 +24095,7 @@ def create_customer_statement_word(
                 "situation_dat_client": "Situation",
                 "capital_plus_interet_estime": "Capital + intérêt estimé",
             },
-            [2.2, 2.1, 2.1, 1.4, 1.3, 2.3, 3.0, 3.2],
+            [2.0, 1.9, 1.5, 1.9, 1.3, 1.2, 2.2, 2.8, 2.9],
         )
 
     active_credits = analysis_frame("credit_en_cours_client")
@@ -24195,14 +24232,14 @@ def create_customer_statement_word(
             [2.6, 3.2, 1.2, 3.2, 3.4, 3.8],
         )
 
+    statement_columns = [column for column in CUSTOMER_STATEMENT_COLUMNS if column != "compte"]
     add_analysis_title("Detail des transactions")
-    table = document.add_table(rows=1, cols=len(CUSTOMER_STATEMENT_COLUMNS))
+    table = document.add_table(rows=1, cols=len(statement_columns))
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
     labels = {
         "date": "Date",
-        "compte": "Compte",
         "receipt_no": "Référence",
         "devise": "Devise",
         "description": "Description",
@@ -24212,16 +24249,15 @@ def create_customer_statement_word(
     }
     widths = {
         "date": 1.8,
-        "compte": 1.1,
         "receipt_no": 2.3,
         "devise": 1.1,
-        "description": 5.4,
-        "entree": 1.7,
-        "sortie": 1.7,
-        "solde": 2.4,
+        "description": 6.1,
+        "entree": 1.8,
+        "sortie": 1.8,
+        "solde": 2.5,
     }
     set_repeat_header(table.rows[0])
-    for index, column in enumerate(CUSTOMER_STATEMENT_COLUMNS):
+    for index, column in enumerate(statement_columns):
         cell = table.rows[0].cells[index]
         cell.text = labels[column]
         cell.width = Cm(widths[column])
@@ -24235,7 +24271,7 @@ def create_customer_statement_word(
 
     for _, row in detail_transactions.iterrows():
         cells = table.add_row().cells
-        for index, column in enumerate(CUSTOMER_STATEMENT_COLUMNS):
+        for index, column in enumerate(statement_columns):
             value = row.get(column)
             row_currency = str(row.get("devise", currency_text)).upper()
             row_decimals = 0 if row_currency == "CDF" else 2
@@ -24600,6 +24636,7 @@ def create_customer_statement_pdf(
 
     active_dat = analysis_frame("dat_en_cours_client")
     if not minimal and not active_dat.empty:
+        active_dat = _with_dat_subscription_duration(active_dat)
         situation_dates = pd.to_datetime(active_dat.get("date_situation"), errors="coerce").dropna()
         dat_title = "DAT en cours"
         if not situation_dates.empty:
@@ -24608,6 +24645,7 @@ def create_customer_statement_pdf(
         dat_headers = [
             "DAT",
             "Souscription",
+            "Durée DAT",
             "Échéance",
             "Jours restants",
             "Devise",
@@ -24626,6 +24664,7 @@ def create_customer_statement_pdf(
             values = [
                 dat_row.get("savings_id", "-"),
                 f"{approved:%d/%m/%Y}" if pd.notna(approved) else "-",
+                dat_row.get("duree_souscription_dat", "-"),
                 f"{maturity:%d/%m/%Y}" if pd.notna(maturity) else "-",
                 _pdf_number(dat_row.get("jours_avant_echeance"), decimals=0),
                 row_currency,
@@ -24646,13 +24685,14 @@ def create_customer_statement_pdf(
             dat_rows,
             colWidths=[
                 2.2 * cm,
-                2.0 * cm,
-                2.0 * cm,
+                1.9 * cm,
+                1.4 * cm,
+                1.9 * cm,
                 1.2 * cm,
                 1.1 * cm,
-                2.1 * cm,
-                3.2 * cm,
+                2.0 * cm,
                 3.0 * cm,
+                2.8 * cm,
             ],
             repeatRows=1,
         )
@@ -24660,8 +24700,8 @@ def create_customer_statement_pdf(
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F2937")),
             ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#B7C1CC")),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ALIGN", (3, 1), (5, -1), "RIGHT"),
-            ("ALIGN", (7, 1), (7, -1), "RIGHT"),
+            ("ALIGN", (4, 1), (6, -1), "RIGHT"),
+            ("ALIGN", (8, 1), (8, -1), "RIGHT"),
             ("LEFTPADDING", (0, 0), (-1, -1), 2.2),
             ("RIGHTPADDING", (0, 0), (-1, -1), 2.2),
             ("TOPPADDING", (0, 0), (-1, -1), 2.5),
@@ -24844,7 +24884,6 @@ def create_customer_statement_pdf(
 
     labels = [
         "Date",
-        "Compte",
         "Référence",
         "Devise",
         "Description",
@@ -24859,16 +24898,16 @@ def create_customer_statement_pdf(
         date_value = pd.to_datetime(row.get("date"), errors="coerce")
         values = [
             f"{date_value:%d/%m/%Y}" if pd.notna(date_value) else "-",
-            row.get("compte", "-"), row.get("receipt_no", "-"), row_currency,
+            row.get("receipt_no", "-"), row_currency,
             row.get("description", "-"), row.get("entree"), row.get("sortie"), row.get("solde"),
         ]
         formatted: list[Any] = []
         for index, value in enumerate(values):
-            if index in {5, 6}:
+            if index in {4, 5}:
                 numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
                 text_value = "" if pd.isna(numeric) or float(numeric) == 0 else _pdf_number(numeric, decimals=decimals)
                 formatted.append(Paragraph(text_value, amount_style))
-            elif index == 7:
+            elif index == 6:
                 formatted.append(Paragraph(_pdf_number(value, decimals=decimals), amount_style))
             else:
                 formatted.append(Paragraph(escape("-" if _is_empty_text(value) else str(value)), body_style))
@@ -24877,13 +24916,12 @@ def create_customer_statement_pdf(
         detail_rows,
         colWidths=[
             1.7 * cm,
-            1.0 * cm,
             2.3 * cm,
             1.0 * cm,
-            6.3 * cm,
-            1.6 * cm,
-            1.6 * cm,
-            2.7 * cm,
+            7.4 * cm,
+            1.7 * cm,
+            1.7 * cm,
+            2.8 * cm,
         ],
         repeatRows=1,
     )
@@ -25138,12 +25176,14 @@ def create_customer_client_statement_word(
             all_currencies=all_currencies,
         )
         if not active_dat.empty:
+            active_dat = _with_dat_subscription_duration(active_dat)
             add_title("DAT en cours")
             add_table(
                 active_dat,
                 {
                     "savings_id": "DAT",
                     "date_approved": "Souscription",
+                    "duree_souscription_dat": "Durée DAT",
                     "maturity_date": "Échéance",
                     "jours_avant_echeance": "Jours restants",
                     "currency_code": "Devise",
@@ -25152,12 +25192,13 @@ def create_customer_client_statement_word(
                 },
                 {
                     "savings_id": 2.6,
-                    "date_approved": 2.2,
-                    "maturity_date": 2.2,
+                    "date_approved": 2.0,
+                    "duree_souscription_dat": 1.5,
+                    "maturity_date": 2.0,
                     "jours_avant_echeance": 1.5,
                     "currency_code": 1.2,
-                    "balance": 2.5,
-                    "capital_plus_interet_estime": 3.2,
+                    "balance": 2.4,
+                    "capital_plus_interet_estime": 3.0,
                 },
             )
 
@@ -25403,19 +25444,21 @@ def create_customer_client_statement_pdf(
             currency=currency_text,
             all_currencies=all_currencies,
         )
+        active_dat = _with_dat_subscription_duration(active_dat)
         append_table(
             "DAT en cours",
             active_dat,
             {
                 "savings_id": "DAT",
                 "date_approved": "Souscription",
+                "duree_souscription_dat": "Durée DAT",
                 "maturity_date": "Échéance",
                 "jours_avant_echeance": "Jours restants",
                 "currency_code": "Devise",
                 "balance": "Capital bloqué",
                 "capital_plus_interet_estime": "Capital + intérêt estimé",
             },
-            [2.7, 2.3, 2.3, 2.2, 1.2, 2.8, 3.6],
+            [2.5, 2.1, 1.5, 2.1, 1.9, 1.1, 2.5, 3.2],
         )
 
     append_table(
@@ -26955,7 +26998,14 @@ def create_g2_dat_word(
                     text = f"{float(value):.1f}%" if pd.notna(value) else "-"
                 elif column in {"retenu_m1", "retenu_90j"}:
                     text = "-" if pd.isna(value) else "Oui" if bool(value) else "Non"
-                elif column in {"date", "compte_cree", "premiere_operation", "derniere_operation"}:
+                elif column in {
+                    "date",
+                    "compte_cree",
+                    "premiere_operation",
+                    "derniere_operation",
+                    "date_creation_client",
+                    "premiere_transaction_periode",
+                }:
                     date_value = pd.to_datetime(value, errors="coerce")
                     text = f"{date_value:%d/%m/%Y %H:%M:%S}" if pd.notna(date_value) else "-"
                 elif column == "premier_retour":
@@ -26995,23 +27045,42 @@ def create_g2_dat_word(
             return
         customer_period_summary = customer_period_summary.copy()
         if "valeur" in customer_period_summary.columns:
-            customer_period_summary["valeur"] = pd.to_numeric(
-                customer_period_summary["valeur"], errors="coerce"
-            ).fillna(0).map(lambda value: _pdf_number(value, decimals=0))
+            def format_summary_value(value: Any) -> str:
+                if isinstance(value, str) and value.strip():
+                    return value
+                numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+                return _pdf_number(numeric, decimals=0) if pd.notna(numeric) else "-"
+
+            customer_period_summary["valeur"] = customer_period_summary["valeur"].map(format_summary_value)
+        summary_columns = ["indicateur", "valeur"]
+        summary_labels = {
+            "indicateur": "Indicateur operationnel",
+            "valeur": "Valeur",
+        }
+        summary_widths = {
+            "indicateur": 7.0,
+            "valeur": 2.0,
+        }
+        for column, label, width in [
+            ("date_creation_client", "Date creation", 2.4),
+            ("premiere_transaction_periode", "Premiere transaction", 2.8),
+            ("duree", "Duree", 1.7),
+        ]:
+            if (
+                column in customer_period_summary.columns
+                and customer_period_summary[column].astype("string").fillna("").str.strip().ne("").any()
+            ):
+                summary_columns.append(column)
+                summary_labels[column] = label
+                summary_widths[column] = width
         document.add_heading("Synthese clients", level=1)
         add_table(
             customer_period_summary,
-            ["indicateur", "valeur"],
-            {
-                "indicateur": "Indicateur operationnel",
-                "valeur": "Valeur",
-            },
-            font_size=8,
-            column_widths_cm={
-                "indicateur": 10.0,
-                "valeur": 2.0,
-            },
-            no_wrap_columns={"valeur"},
+            summary_columns,
+            summary_labels,
+            font_size=7.2,
+            column_widths_cm=summary_widths,
+            no_wrap_columns={"valeur", "date_creation_client", "premiere_transaction_periode", "duree"},
         )
 
     document.add_heading(f"Synthese des flux {flow_display_label} par devise", level=1)
