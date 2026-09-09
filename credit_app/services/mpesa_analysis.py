@@ -354,6 +354,7 @@ G2_CLASSIFIED_TRANSACTION_COLUMNS = [
     "receipt_no",
     "currency_code",
     "details_rapport",
+    "statut_rapprochement",
     "opposite_party",
     "duree",
     "compte_cree",
@@ -27061,18 +27062,17 @@ def create_g2_dat_word(
             "indicateur": 7.0,
             "valeur": 2.0,
         }
-        for column, label, width in [
-            ("date_creation_client", "Date creation", 2.4),
-            ("premiere_transaction_periode", "Premiere transaction", 2.8),
-            ("duree", "Duree", 1.7),
-        ]:
-            if (
-                column in customer_period_summary.columns
-                and customer_period_summary[column].astype("string").fillna("").str.strip().ne("").any()
-            ):
-                summary_columns.append(column)
-                summary_labels[column] = label
-                summary_widths[column] = width
+        if "indicateur" in customer_period_summary.columns:
+            recent_mask = (
+                customer_period_summary["indicateur"]
+                .astype("string")
+                .fillna("")
+                .str.contains("Taux de clients", case=False, na=False)
+            )
+            if recent_mask.any():
+                customer_period_summary.loc[recent_mask, "indicateur"] = (
+                    "Taux clients récents actifs (création Customers <= 30 jours)"
+                )
         document.add_heading("Synthese clients", level=1)
         add_table(
             customer_period_summary,
@@ -27080,7 +27080,7 @@ def create_g2_dat_word(
             summary_labels,
             font_size=7.2,
             column_widths_cm=summary_widths,
-            no_wrap_columns={"valeur", "date_creation_client", "premiere_transaction_periode", "duree"},
+            no_wrap_columns={"valeur"},
         )
 
     document.add_heading(f"Synthese des flux {flow_display_label} par devise", level=1)
@@ -27298,10 +27298,12 @@ def create_g2_dat_word(
         detail_section.right_margin = Cm(2.0)
         document.add_heading("Transactions", level=1)
         # detail_caption.paragraph_format.space_after = Pt(4)
+        transaction_labels = {column: column for column in G2_CLASSIFIED_TRANSACTION_COLUMNS}
+        transaction_labels["statut_rapprochement"] = "Controle Turbo/G2"
         add_table(
             detail,
             G2_CLASSIFIED_TRANSACTION_COLUMNS,
-            {column: column for column in G2_CLASSIFIED_TRANSACTION_COLUMNS},
+            transaction_labels,
             font_size=4.8,
             amount_decimals=2,
             column_widths_cm={
@@ -27309,6 +27311,7 @@ def create_g2_dat_word(
                 "receipt_no": 1.55,
                 "currency_code": 1.05,
                 "details_rapport": 1.65,
+                "statut_rapprochement": 1.6,
                 "opposite_party": 4.0,
                 "duree": 1.05,
                 "compte_cree": 1.9,
