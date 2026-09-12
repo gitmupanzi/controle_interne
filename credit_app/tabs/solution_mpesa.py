@@ -4845,6 +4845,8 @@ def _render_g2_report_export(
     render_panel_title(f"7. Export du rapport [{source_label}]")
     turbo_only = source_label == "Turbo"
     export_report = {
+        # Invalide les anciens Word/Excel en cache sans retirer les données de contrôle.
+        "download_layout_version": "sans_colonne_controle_turbo_g2_v1",
         "rapport_journalier_comptages": daily_comptages,
         "rapport_journalier_synthese": daily_synthese,
         "rapport_journalier_detail": daily_detail,

@@ -8436,7 +8436,7 @@ class MpesaAnalysisTests(unittest.TestCase):
         self.assertEqual(len(classified_tables), 1)
         self.assertEqual(
             [cell.text for cell in classified_tables[0].rows[0].cells],
-            G2_CLASSIFIED_TRANSACTION_COLUMNS,
+            [column for column in G2_CLASSIFIED_TRANSACTION_COLUMNS if column != "statut_rapprochement"],
         )
         self.assertEqual(classified_tables[0].rows[1].cells[2].text, "CDF")
         self.assertEqual(classified_tables[0].rows[2].cells[2].text, "USD")

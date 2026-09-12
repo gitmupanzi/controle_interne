@@ -27350,11 +27350,15 @@ def create_g2_dat_word(
         detail_section.right_margin = Cm(2.0)
         document.add_heading("Transactions", level=1)
         # detail_caption.paragraph_format.space_after = Pt(4)
-        transaction_labels = {column: column for column in G2_CLASSIFIED_TRANSACTION_COLUMNS}
-        transaction_labels["statut_rapprochement"] = "Controle Turbo/G2"
+        # Le statut reste dans les données de contrôle, pas dans le rapport téléchargé.
+        transaction_columns = [
+            column for column in G2_CLASSIFIED_TRANSACTION_COLUMNS
+            if column != "statut_rapprochement"
+        ]
+        transaction_labels = {column: column for column in transaction_columns}
         add_table(
             detail,
-            G2_CLASSIFIED_TRANSACTION_COLUMNS,
+            transaction_columns,
             transaction_labels,
             font_size=4.8,
             amount_decimals=2,
@@ -27363,7 +27367,6 @@ def create_g2_dat_word(
                 "receipt_no": 1.55,
                 "currency_code": 1.05,
                 "details_rapport": 1.65,
-                "statut_rapprochement": 1.6,
                 "opposite_party": 4.0,
                 "duree": 1.05,
                 "compte_cree": 1.9,
@@ -29647,6 +29650,8 @@ def create_excel_export(
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         for sheet_name, frame in sheets.items():
             safe_frame = frame if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+            if sheet_name in {"Rapport_Journalier_Detail", "Rapport_G2_Detail"}:
+                safe_frame = safe_frame.drop(columns=["statut_rapprochement"], errors="ignore")
             if sheet_name == "DAT_En_Cours" and "jours_avant_echeance" in safe_frame.columns:
                 safe_frame = safe_frame.rename(columns={"jours_avant_echeance": "Jours restants"})
             safe_frame = prepare_dataframe_for_display(safe_frame, enabled=rename_user_columns)
