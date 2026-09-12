@@ -58,6 +58,7 @@ from credit_app.services.mpesa_analysis import (
     build_mpesa_accounting_analysis,
     build_mpesa_clients_report,
     build_mpesa_customer_period_summary,
+    build_mpesa_recent_customer_activity_summary,
     build_mpesa_dat_maturity_analysis,
     build_mpesa_savings_cockpit,
     build_loan_savings_reconciliation,
@@ -5520,6 +5521,13 @@ def _render_g2_dat_tab(report: dict[str, Any] | None, prepared: MpesaPreparedDat
         date_start=period_start,
         date_end=period_end,
     )
+    customer_period_summary = pd.concat([
+        customer_period_summary,
+        build_mpesa_recent_customer_activity_summary(
+            prepared, date_start=period_start, date_end=period_end,
+            directions=selected_directions,
+        ),
+    ], ignore_index=True)
     st.caption(
         f"{len(filtered_g2)} operation(s) [{source_label}] dans le perimetre "
         f"{period_text} - {direction_label.lower()}."

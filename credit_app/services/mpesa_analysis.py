@@ -8157,6 +8157,58 @@ def count_mpesa_customer_numbers_observed_on_period(
     return len(created_clients & active_clients)
 
 
+def build_mpesa_recent_customer_activity_summary(
+    prepared: MpesaPreparedData,
+    *,
+    date_start: Any | None = None,
+    date_end: Any | None = None,
+    directions: Iterable[str] | None = None,
+) -> pd.DataFrame:
+    """Part des transacteurs dont Customers précède la première activité de 0–30 jours.
+
+    Même grain et borne inclusive que le rapport imf_BB : téléphone normalisé,
+    première transaction du périmètre, création Customers la plus ancienne.
+    Les sources manquantes ne sont jamais remplacées par Savings/Loans/G2.
+    """
+    label = "Taux clients récents actifs (création Customers <= 30 jours)"
+    tx = filter_g2_transactions_by_direction(prepared.transactions, directions)
+    dates = pd.to_datetime(tx.get("created_at", pd.Series(pd.NaT, index=tx.index)), errors="coerce")
+    mask = dates.notna()
+    if date_start is not None:
+        mask &= dates.ge(pd.Timestamp(date_start))
+    if date_end is not None:
+        mask &= dates.le(pd.Timestamp(date_end))
+    tx = tx.loc[mask].copy()
+    tx["client_key"] = normalize_phone(tx.get("msisdn1", pd.Series("", index=tx.index)))
+    tx["first_transaction"] = dates.loc[mask]
+    first_tx = tx.dropna(subset=["client_key"]).groupby("client_key")["first_transaction"].min()
+    denominator = len(first_tx)
+    customers = prepared.customers.copy() if isinstance(prepared.customers, pd.DataFrame) else pd.DataFrame()
+    customers["client_key"] = normalize_phone(customers.get("msisdn1", pd.Series("", index=customers.index)))
+    customers["creation"] = pd.to_datetime(customers.get("created_at", pd.Series(pd.NaT, index=customers.index)), errors="coerce")
+    creation = customers.dropna(subset=["client_key", "creation"]).groupby("client_key")["creation"].min()
+    matched = creation.reindex(first_tx.index)
+    age = first_tx - matched
+    recent = int((age.ge(pd.Timedelta(0)) & age.le(pd.Timedelta(days=30))).sum())
+    missing = int(matched.isna().sum())
+    calculable = denominator > 0 and matched.notna().any()
+    value = f"{100 * recent / denominator:.2f} % ({recent} / {denominator})" if calculable else "Non calculable"
+    comment = (
+        "Clients distincts créés dans Customers entre 0 et 30 jours inclus avant leur première transaction "
+        "de la période, rapportés à tous les numéros transacteurs de cette période. "
+        "Un client est compté une fois, même dans plusieurs devises. "
+        "Les dates Customers absentes restent au dénominateur et sont exclues du numérateur. "
+        "Le résultat décrit uniquement les transactions importées, potentiellement partielles."
+    )
+    if not calculable:
+        comment += " Aucune transaction exploitable ou aucune date Customers correspondante : taux indisponible."
+    return pd.DataFrame([
+        {"indicateur": label, "valeur": value, "commentaire": comment},
+        {"indicateur": "Clients transacteurs sans date de création Customers exploitable", "valeur": missing,
+         "commentaire": "Inclus dans le dénominateur, exclus du numérateur faute de date fiable."},
+    ])
+
+
 def build_mpesa_customer_period_summary(
     prepared: MpesaPreparedData,
     *,

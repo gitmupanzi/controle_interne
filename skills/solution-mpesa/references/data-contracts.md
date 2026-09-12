@@ -470,6 +470,17 @@ Cas réel de validation du cycle DAT dans `bdd Solution M_PESA` : le téléphone
 
 ## Conditions d'interprétation
 
+### Taux de clients récents actifs
+
+- Le rapport Solution Numérique / M-Pesa ajoute cet indicateur à `clients_periode`, partagé par le Word (`Synthese clients`) et l'Excel (`Synthese_Clients`). Le service dédié est `build_mpesa_recent_customer_activity_summary`.
+- Dénominateur : numéros `msisdn1` normalisés distincts ayant une transaction Turbo datée dans la période appliquée. Un numéro présent dans plusieurs devises n'est compté qu'une fois.
+- Numérateur : parmi ces numéros, la première transaction de la période survient entre 0 et 30 jours inclus après la création `Customers.created_at`. En cas de plusieurs créations pour un numéro, retenir la plus ancienne date exploitable. Les bornes sont comparées à la seconde, sans arrondir l'âge en jours.
+- Les créations absentes restent au dénominateur, sont exclues du numérateur et font l'objet d'un compteur séparé. Sans transaction exploitable ou sans aucune création correspondante, afficher `Non calculable`, pas un faux taux nul.
+- Savings, Loans, Perfect et G2 ne remplacent jamais Customers pour dater la création. Le taux décrit uniquement les transactions importées, éventuellement partielles, et s'affiche sous la forme `42.86 % (99 / 231)`.
+- Régression : `python -m pytest tests/test_mpesa_recent_customers.py -q`. Pour tester des classeurs locaux sans les modifier, définir `MPESA_QA_INPUT_DIR` vers leur dossier avant cette commande.
+
+### Autres règles
+
 - Sans solde d'ouverture, le mouvement cumulé M-PESA n'est pas un solde réel.
 - L'Extrait client affiche le solde d'ouverture et la clôture dans `Synthèse financière par devise` lorsqu'ils peuvent être observés depuis Turbo, Savings Account ou saisis dans l'onglet client. Le `Solde` du bloc `Détail des transactions` reprend `Ouverture`, puis suit les opérations affichées jusqu'à `Cloture`.
 - Une absence de correspondance est un résultat de contrôle, pas une ligne à supprimer.
