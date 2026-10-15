@@ -46,6 +46,8 @@ def read_lines(path: Path) -> list[str]:
 
 def extract_queries(path: Path) -> list[dict[str, Any]]:
     lines = read_lines(path)
+    # Les variantes autonomes CBS ne font jamais partie du profilage global historique.
+    lines = lines[:next((i for i, line in enumerate(lines) if line == "-- BEGIN IMF_BB CBS SOURCE CONTRACTS"), len(lines))]
     headers: list[tuple[int, int, str]] = []
     for index, line in enumerate(lines):
         match = QUERY_HEADER_PATTERN.match(line.strip(" /*"))

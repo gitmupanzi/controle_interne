@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import re
+from cbs_catalogue import CODES, BEGIN, select_query
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -39,8 +40,20 @@ def list_queries() -> None:
             print(f"{int(match.group(1)):03d} | {match.group(2)}")
 
 
-def print_query_number(query_number: int) -> None:
+def list_cbs_queries() -> None:
+    content = "\n".join(read_lines(QUERIES))
+    for code in CODES:
+        if f"-- BEGIN CBS {code}" in content:
+            print(f"{code} | Contrat source CBS autonome, prévisualisation par défaut")
+
+
+def print_query_number(query_number: str) -> None:
+    if str(query_number) in CODES:
+        print(select_query("\n".join(read_lines(QUERIES)), str(query_number)))
+        return
+    query_number = int(query_number)
     lines = read_lines(QUERIES)
+    lines = lines[:next((i for i, line in enumerate(lines) if line == BEGIN), len(lines))]
     headers: list[tuple[int, int, str]] = []
     for index, line in enumerate(lines):
         match = QUERY_HEADER_PATTERN.match(line.strip(" /*"))
@@ -63,13 +76,14 @@ def main() -> None:
     group.add_argument("--table", help="Nom exact ou partiel d'une table à chercher dans le schéma.")
     group.add_argument("--query", help="Terme métier, table ou colonne à chercher dans le catalogue et le schéma.")
     group.add_argument("--list-queries", action="store_true", help="Lister les titres numérotés du catalogue.")
-    group.add_argument("--number", type=int, help="Afficher une requete numerotee complete, y compris son SELECT final.")
+    group.add_argument("--number", help="Afficher une requete numerotee complete, y compris son SELECT final.")
     parser.add_argument("--context", type=int, default=8, help="Nombre de lignes de contexte.")
     parser.add_argument("--limit", type=int, default=12, help="Nombre maximal d'occurrences par fichier.")
     args = parser.parse_args()
 
     if args.list_queries:
         list_queries()
+        list_cbs_queries()
         return
     if args.number is not None:
         print_query_number(args.number)
